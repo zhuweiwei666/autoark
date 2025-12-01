@@ -1,88 +1,51 @@
 import winston from 'winston'
 import 'winston-daily-rotate-file'
-import path from 'path'
 
-const logDir = 'logs'
+const { combine, timestamp, printf, json, colorize } = winston.format
 
-// Define log formats
-const logFormat = winston.format.printf(
-  ({ timestamp, level, message, stack }) => {
-    return `${timestamp} [${level.toUpperCase()}]: ${stack || message}`
-  },
-)
+// Human-readable console format
+const consoleFormat = printf(({ timestamp, level, message }) => {
+  return `${timestamp} [${level.toUpperCase()}]: ${message}`
+})
 
-// Create the main logger instance
 const winstonLogger = winston.createLogger({
-  format: winston.format.combine(
-    winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
-    winston.format.errors({ stack: true }), // Log the full stack trace on error
-    logFormat,
-  ),
+  level: process.env.LOG_LEVEL || 'info',
+  format: combine(timestamp(), json()),
   transports: [
-    // Console transport
+    // 1. Pretty logs on console (for development)
     new winston.transports.Console({
-      format: winston.format.combine(winston.format.colorize(), logFormat),
+      format: combine(colorize(), timestamp(), consoleFormat),
     }),
-    // Error log - rotates daily
+
+    // 2. Daily rotating production logs
     new winston.transports.DailyRotateFile({
-      dirname: logDir,
-      filename: 'error-%DATE%.log',
+      dirname: 'logs',
+      filename: 'app-%DATE%.log',
       datePattern: 'YYYY-MM-DD',
-      level: 'error',
+      zippedArchive: true,
       maxSize: '20m',
       maxFiles: '14d',
-    }),
-    // Info log (combined) - rotates daily
-    new winston.transports.DailyRotateFile({
-      dirname: logDir,
-      filename: 'info-%DATE%.log',
-      datePattern: 'YYYY-MM-DD',
-      maxSize: '20m',
-      maxFiles: '14d',
+      format: combine(timestamp(), json()),
     }),
   ],
 })
 
-// Separate logger for Cron jobs
-export const cronLogger = winston.createLogger({
-  format: winston.format.combine(
-    winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
-    logFormat,
-  ),
-  transports: [
-    new winston.transports.Console({
-      format: winston.format.combine(winston.format.colorize(), logFormat),
-    }),
-    new winston.transports.DailyRotateFile({
-      dirname: logDir,
-      filename: 'cron-%DATE%.log',
-      datePattern: 'YYYY-MM-DD',
-      maxSize: '20m',
-      maxFiles: '30d',
-    }),
-  ],
-})
-
-// Wrapper to maintain compatibility with existing code and add timerLog
+// Extend the logger to support custom methods used in the codebase
 const logger = {
   ...winstonLogger,
-  info: (message: string, ...meta: any[]) =>
-    winstonLogger.info(message, ...meta),
-  warn: (message: string, ...meta: any[]) =>
-    winstonLogger.warn(message, ...meta),
-  error: (message: string, ...meta: any[]) =>
-    winstonLogger.error(message, ...meta),
-
+  info: (message: string, ...meta: any[]) => winstonLogger.info(message, ...meta),
+  warn: (message: string, ...meta: any[]) => winstonLogger.warn(message, ...meta),
+  error: (message: string, ...meta: any[]) => winstonLogger.error(message, ...meta),
+  
   // Custom timer log helper
   timerLog: (label: string, startTime: number) => {
     const duration = Date.now() - startTime
     winstonLogger.info(`[TIMER] ${label} - ${duration}ms`)
   },
-
-  // Helper to access cron logger
-  cron: (message: string, ...meta: any[]) => cronLogger.info(message, ...meta),
-  cronError: (message: string, ...meta: any[]) =>
-    cronLogger.error(message, ...meta),
+  
+  // Helper to access cron logger (mapping to info/error for now since we removed the separate cron logger)
+  cron: (message: string, ...meta: any[]) => winstonLogger.info(`[CRON] ${message}`, ...meta),
+  cronError: (message: string, ...meta: any[]) => winstonLogger.error(`[CRON] ${message}`, ...meta),
 }
 
 export default logger
