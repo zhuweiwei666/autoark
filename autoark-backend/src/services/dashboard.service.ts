@@ -40,7 +40,7 @@ export const getDaily = async (filters: DashboardFilters) => {
         clicks: { $sum: '$clicks' },
       },
     },
-    { $sort: { _id: 1 as 1 } },
+    { $sort: { _id: 1 as 1 } }, // Fix TS2769 sort type mismatch
     {
       $project: {
         _id: 0,
