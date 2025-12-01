@@ -8,7 +8,8 @@
     "start": "ts-node src/server.ts",
     "dev": "nodemon src/server.ts",
     "build": "tsc",
-    "lint": "eslint 'src/**/*.ts' --fix"
+    "lint": "eslint 'src/**/*.ts' --fix",
+    "webhook": "ts-node src/webhook.ts"
   },
   "keywords": [],
   "author": "",

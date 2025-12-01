@@ -12,3 +12,4 @@ router.get('/accounts/:id/ads', facebookController.getAds)
 router.get('/accounts/:id/insights/daily', facebookController.getInsightsDaily)
 
 export default router
+
