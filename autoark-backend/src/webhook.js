@@ -1,16 +1,24 @@
 const http = require("http");
 const crypto = require("crypto");
 const { exec } = require("child_process");
-const SECRET = "zww199976";
+
+const SECRET = "zww199976"; // GitHub Webhook Secret
 
 function verifySignature(signature, body) {
   if (!signature) return false;
+
   const expected =
     "sha256=" +
     crypto.createHmac("sha256", SECRET).update(body).digest("hex");
-  return (
-    crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))
-  );
+
+  try {
+    return crypto.timingSafeEqual(
+      Buffer.from(signature),
+      Buffer.from(expected)
+    );
+  } catch (err) {
+    return false;
+  }
 }
 
 const server = http.createServer((req, res) => {
@@ -23,15 +31,18 @@ const server = http.createServer((req, res) => {
   req.on("data", (chunk) => (body += chunk));
   req.on("end", () => {
     const signature = req.headers["x-hub-signature-256"];
+
     if (!verifySignature(signature, body)) {
+      console.log("❌ Webhook signature invalid");
       res.writeHead(403);
       return res.end("Invalid signature");
     }
 
-    console.log("Webhook verified. Running deploy script...");
-    exec("bash /root/auto-deploy.sh", (error, stdout, stderr) => {
-      if (error) {
-        console.error("Deploy failed:", error);
+    console.log("✅ Webhook verified. Triggering deploy...");
+
+    exec("/bin/bash /root/autoark/autoark-backend/auto-deploy.sh", (err, stdout, stderr) => {
+      if (err) {
+        console.error("Deploy failed:", err);
       }
       console.log("stdout:", stdout);
       console.log("stderr:", stderr);
@@ -43,6 +54,5 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(3001, () => {
-  console.log("GitHub Webhook Server Running on port 3001");
+  console.log("🚀 GitHub Webhook Server Running on port 3001");
 });
-
