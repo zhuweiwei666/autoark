@@ -64,8 +64,8 @@ export const runRulesForAdSet = async (adsetId: string, date?: string) => {
             adsetId: metrics.adsetId,
             campaignId: metrics.campaignId,
             metrics: {
-              cpi: metrics.cpiUsd,
-              roi: metrics.roiD0,
+              cpi: (metrics as any).cpiUsd,
+              roi: (metrics as any).roiD0,
               spend: metrics.spendUsd,
             },
           },

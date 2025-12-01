@@ -41,7 +41,7 @@ export const getDaily = async (filters: DashboardFilters) => {
         clicks: { $sum: '$clicks' },
       },
     },
-    { $sort: { _id: 1 } },
+    { $sort: { _id: 1 as 1 } },
     {
       $project: {
         _id: 0,
@@ -90,7 +90,7 @@ export const getByCountry = async (filters: DashboardFilters) => {
         revenueD0: { $sum: '$revenueD0' },
       },
     },
-    { $sort: { spendUsd: -1 } },
+    { $sort: { spendUsd: -1 as -1 } },
     {
       $project: {
         _id: 0,
@@ -129,7 +129,7 @@ export const getByAdSet = async (filters: DashboardFilters) => {
         revenueD0: { $sum: '$revenueD0' },
       },
     },
-    { $sort: { spendUsd: -1 } },
+    { $sort: { spendUsd: -1 as -1 } },
     {
       $project: {
         _id: 0,
