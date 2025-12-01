@@ -4,3 +4,7 @@
 - 修复 dashboard 聚合管道类型错误
 - 实现 Facebook 动态 Token 管理与自动账户发现功能
 - 完善 CI/CD 流程与测试框架配置
+### 2025-12-01
+- Updated: src/utils/logger.ts, src/middlewares/errorHandler.ts, src/app.ts
+- Reason: Implement global error handling middleware and Winston logging system (info/error/cron logs).
+
