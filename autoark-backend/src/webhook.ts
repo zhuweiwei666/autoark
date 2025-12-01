@@ -1,22 +1,52 @@
-import express from 'express'
+import express, { Request, Response } from 'express'
+import crypto from 'crypto'
 import { exec } from 'child_process'
 
 const app = express()
+const PORT = 3001
+const WEBHOOK_SECRET = 'zww199976'
 
-// GitHub webhook POST 接口
-app.post('/webhook', (req, res) => {
-  exec('bash /root/auto-deploy.sh', (err, stdout, stderr) => {
-    if (err) {
-      console.error('🚨 Deploy error:', err)
-      return res.status(500).send('Deploy failed')
+// Use raw body buffer for signature verification
+app.use(
+  express.json({
+    verify: (req: any, res, buf) => {
+      req.rawBody = buf
+    },
+  }),
+)
+
+app.post('/webhook', (req: Request, res: Response) => {
+  const signature = req.headers['x-hub-signature-256'] as string
+  const body = (req as any).rawBody
+
+  if (!signature || !body) {
+    console.error('Missing signature or body')
+    return res.status(403).json({ error: 'Missing signature or body' })
+  }
+
+  const hmac = crypto.createHmac('sha256', WEBHOOK_SECRET)
+  const digest = 'sha256=' + hmac.update(body).digest('hex')
+
+  if (signature !== digest) {
+    console.error('Invalid signature')
+    return res.status(403).json({ error: 'Invalid signature' })
+  }
+
+  console.log('✅ Webhook signature verified. Triggering deployment...')
+
+  exec('bash /root/auto-deploy.sh', (error, stdout, stderr) => {
+    if (error) {
+      console.error(`🚨 Exec error: ${error.message}`)
+      return res.status(500).json({ success: false, error: error.message })
     }
-    console.log('🚀 Deploy OK:', stdout)
-    res.send('Deploy triggered')
+    if (stderr) {
+      console.error(`⚠️ Stderr: ${stderr}`)
+    }
+    console.log(`🚀 Stdout: ${stdout}`)
+    res.json({ success: true, msg: 'Deploy triggered', output: stdout })
   })
 })
 
-// 监听 webhook 服务端口（不要和主服务冲突）
-app.listen(3001, () => {
-  console.log('Webhook server running on port 3001')
+app.listen(PORT, () => {
+  console.log(`Webhook server listening on port ${PORT}`)
 })
-
