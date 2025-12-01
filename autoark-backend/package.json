@@ -9,7 +9,7 @@
     "dev": "nodemon src/server.ts",
     "build": "tsc",
     "lint": "eslint 'src/**/*.ts' --fix",
-    "webhook": "ts-node src/webhook.ts"
+    "webhook": "node src/webhook.js"
   },
   "keywords": [],
   "author": "",
