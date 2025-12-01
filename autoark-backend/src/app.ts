@@ -8,6 +8,7 @@ import facebookSyncRoutes from './routes/facebook.sync.routes'
 import logger from './utils/logger'
 import initSyncCron from './cron/sync.cron'
 import initCronJobs from './cron' // Keep existing cron
+import { errorHandler } from './middlewares/errorHandler'
 
 dotenv.config()
 
@@ -47,17 +48,6 @@ app.get('/', (req, res) => {
 })
 
 // Global Error Handling Middleware
-app.use((err: any, req: Request, res: Response, next: NextFunction) => {
-  logger.error('Global Error Handler', err)
-
-  const statusCode = err.statusCode || 500
-  const message = err.message || 'Internal Server Error'
-
-  res.status(statusCode).json({
-    success: false,
-    message,
-    stack: process.env.NODE_ENV === 'production' ? undefined : err.stack,
-  })
-})
+app.use(errorHandler)
 
 export default app

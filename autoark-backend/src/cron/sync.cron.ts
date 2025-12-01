@@ -9,8 +9,20 @@ const initSyncCron = () => {
   logger.info(`Initializing Facebook Sync Cron with schedule: ${schedule}`)
 
   cron.schedule(schedule, async () => {
-    logger.info('Cron: Triggering Full Facebook Sync')
-    await fbSyncService.runFullSync()
+    const startTime = Date.now()
+    logger.cron(`[Sync] Triggering Full Facebook Sync`)
+
+    try {
+      await fbSyncService.runFullSync()
+      const duration = Date.now() - startTime
+      logger.cron(`[Sync] Full Facebook Sync Completed - ${duration}ms`)
+    } catch (error) {
+      const duration = Date.now() - startTime
+      logger.cronError(
+        `[Sync] Full Facebook Sync Failed - ${duration}ms`,
+        error,
+      )
+    }
   })
 }
 
