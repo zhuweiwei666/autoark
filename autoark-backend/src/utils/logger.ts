@@ -1,6 +1,11 @@
 import winston from 'winston'
 // Import winston-daily-rotate-file as a side-effect to extend winston.transports
-import 'winston-daily-rotate-file'
+// Use require() to ensure it works in all environments
+try {
+  require('winston-daily-rotate-file')
+} catch (e) {
+  console.warn('winston-daily-rotate-file not found, using console transport only')
+}
 
 const { combine, timestamp, printf, json, colorize } = winston.format
 
