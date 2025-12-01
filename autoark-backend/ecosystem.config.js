@@ -2,12 +2,13 @@ module.exports = {
   apps: [
     {
       name: 'autoark',
-      script: './dist/server.js',
+      script: '/root/autoark/autoark-backend/dist/server.js',
       cwd: '/root/autoark/autoark-backend',
       instances: 1,
       exec_mode: 'fork',
       env: {
         NODE_ENV: 'production',
+        NODE_PATH: '/root/autoark/autoark-backend/node_modules',
       },
       error_file: '/root/.pm2/logs/autoark-error.log',
       out_file: '/root/.pm2/logs/autoark-out.log',
