@@ -1,5 +1,6 @@
 import winston from 'winston'
-import DailyRotateFile from 'winston-daily-rotate-file'
+// Import winston-daily-rotate-file as a side-effect to extend winston.transports
+import 'winston-daily-rotate-file'
 
 const { combine, timestamp, printf, json, colorize } = winston.format
 
@@ -18,7 +19,7 @@ const winstonLogger = winston.createLogger({
     }),
 
     // 2. Daily rotating production logs
-    new DailyRotateFile({
+    new winston.transports.DailyRotateFile({
       dirname: 'logs',
       filename: 'app-%DATE%.log',
       datePattern: 'YYYY-MM-DD',
