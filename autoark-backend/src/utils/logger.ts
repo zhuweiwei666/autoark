@@ -1,10 +1,12 @@
 import winston from 'winston'
 // Import winston-daily-rotate-file as a side-effect to extend winston.transports
 // Use require() to ensure it works in all environments
+let hasDailyRotateFile = false
 try {
   require('winston-daily-rotate-file')
+  hasDailyRotateFile = true
 } catch (e) {
-  console.warn('winston-daily-rotate-file not found, using console transport only')
+  console.warn('winston-daily-rotate-file not found, using File transport instead')
 }
 
 const { combine, timestamp, printf, json, colorize } = winston.format
@@ -14,16 +16,17 @@ const consoleFormat = printf(({ timestamp, level, message }) => {
   return `${timestamp} [${level.toUpperCase()}]: ${message}`
 })
 
-const winstonLogger = winston.createLogger({
-  level: process.env.LOG_LEVEL || 'info',
-  format: combine(timestamp(), json()),
-  transports: [
-    // 1. Pretty logs on console (for development)
-    new winston.transports.Console({
-      format: combine(colorize(), timestamp(), consoleFormat),
-    }),
+// Build transports array
+const transports: winston.transport[] = [
+  // 1. Pretty logs on console (for development)
+  new winston.transports.Console({
+    format: combine(colorize(), timestamp(), consoleFormat),
+  }),
+]
 
-    // 2. Daily rotating production logs
+// 2. Daily rotating production logs (if available) or regular file transport
+if (hasDailyRotateFile && winston.transports.DailyRotateFile) {
+  transports.push(
     new winston.transports.DailyRotateFile({
       dirname: 'logs',
       filename: 'app-%DATE%.log',
@@ -33,7 +36,21 @@ const winstonLogger = winston.createLogger({
       maxFiles: '14d',
       format: combine(timestamp(), json()),
     }),
-  ],
+  )
+} else {
+  // Fallback to regular file transport
+  transports.push(
+    new winston.transports.File({
+      filename: 'logs/app.log',
+      format: combine(timestamp(), json()),
+    }),
+  )
+}
+
+const winstonLogger = winston.createLogger({
+  level: process.env.LOG_LEVEL || 'info',
+  format: combine(timestamp(), json()),
+  transports,
 })
 
 // Extend the logger to support custom methods used in the codebase
