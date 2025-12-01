@@ -41,10 +41,18 @@ cp .env.example .env
 
 编辑 `.env` 文件填入以下必要信息：
 
+- **MONGO_URI**: MongoDB Atlas 连接字符串
+  - 格式: `mongodb+srv://<username>:<password>@cluster0.mongodb.net/autoark?retryWrites=true&w=majority`
+  - 获取方式: 登录 MongoDB Atlas -> Connect -> Drivers -> Node.js -> Copy connection string
+- **FB_ACCESS_TOKEN**: Facebook Graph API 访问令牌
+  - 获取方式: Meta for Developers -> Tools -> Graph API Explorer -> Generate Token (需包含 `ads_read`, `read_insights` 权限)
+- **PORT**: 后端服务端口 (默认 3001)
+
+示例 `.env`:
 ```properties
 PORT=3001
-MONGO_URI=mongodb+srv://<user>:<password>@<cluster>.mongodb.net/autoark
-FB_ACCESS_TOKEN=<your_facebook_system_user_access_token>
+MONGO_URI=mongodb+srv://admin:securepassword@cluster0.xyz.mongodb.net/autoark
+FB_ACCESS_TOKEN=EAAB...
 ```
 
 ### 3. 启动开发服务器

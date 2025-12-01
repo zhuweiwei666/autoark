@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import mongoose from 'mongoose'
 
 const opsLogSchema = new mongoose.Schema({
   operator: String,
@@ -8,8 +8,7 @@ const opsLogSchema = new mongoose.Schema({
   after: Object,
   reason: String,
   related: Object,
-  createdAt: { type: Date, default: Date.now }
-});
+  createdAt: { type: Date, default: Date.now },
+})
 
-export default mongoose.model('OpsLog', opsLogSchema);
-
+export default mongoose.model('OpsLog', opsLogSchema)

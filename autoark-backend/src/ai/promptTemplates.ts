@@ -31,5 +31,4 @@ JSON Structure:
     }
   ]
 }
-`;
-
+`

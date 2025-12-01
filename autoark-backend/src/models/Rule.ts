@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import mongoose from 'mongoose'
 
 const ruleSchema = new mongoose.Schema({
   name: String,
@@ -7,8 +7,7 @@ const ruleSchema = new mongoose.Schema({
   scope: String,
   metric: String,
   operator: String,
-  value: Number
-});
+  value: Number,
+})
 
-export default mongoose.model('Rule', ruleSchema);
-
+export default mongoose.model('Rule', ruleSchema)

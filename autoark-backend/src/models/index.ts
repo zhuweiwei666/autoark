@@ -1,20 +1,8 @@
-import Account from "./Account";
-import Ad from "./Ad";
-import AdSet from "./AdSet";
-import Campaign from "./Campaign";
-import Creative from "./Creative";
-import MetricsDaily from "./MetricsDaily";
-import OpsLog from "./OpsLog";
-import Rule from "./Rule";
-
-export {
-  Account,
-  Ad,
-  AdSet,
-  Campaign,
-  Creative,
-  MetricsDaily,
-  OpsLog,
-  Rule
-};
-
+export { default as Account } from './Account'
+export { default as Ad } from './Ad'
+export { default as AdSet } from './AdSet'
+export { default as Campaign } from './Campaign'
+export { default as Creative } from './Creative'
+export { default as MetricsDaily } from './MetricsDaily'
+export { default as OpsLog } from './OpsLog'
+export { default as Rule } from './Rule'
