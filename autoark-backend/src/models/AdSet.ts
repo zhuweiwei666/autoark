@@ -1,17 +1,20 @@
 import mongoose from 'mongoose'
 
-const adsetSchema = new mongoose.Schema(
+const adSetSchema = new mongoose.Schema(
   {
-    channel: String,
+    adsetId: { type: String, required: true, unique: true },
     accountId: String,
     campaignId: String,
-    adsetId: String,
+    channel: { type: String, default: 'facebook' },
     name: String,
+    status: String,
     optimizationGoal: String,
     budget: Number,
+    created_time: Date,
+    updated_time: Date,
     raw: Object,
   },
   { timestamps: true },
 )
 
-export default mongoose.model('AdSet', adsetSchema)
+export default mongoose.model('AdSet', adSetSchema)

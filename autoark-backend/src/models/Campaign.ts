@@ -2,11 +2,14 @@ import mongoose from 'mongoose'
 
 const campaignSchema = new mongoose.Schema(
   {
-    channel: String,
+    campaignId: { type: String, required: true, unique: true },
     accountId: String,
-    campaignId: String,
+    channel: { type: String, default: 'facebook' },
     name: String,
+    status: String,
     objective: String,
+    created_time: Date,
+    updated_time: Date,
     raw: Object,
   },
   { timestamps: true },

@@ -2,19 +2,13 @@ import axios from 'axios'
 import dotenv from 'dotenv'
 import { MetricsDaily } from '../models' // Unified export
 import logger from '../utils/logger'
+import { getEffectiveAdAccounts } from './facebook.sync.service' // Import from sync service
+import { getFacebookAccessToken } from '../utils/fbToken'
 
 dotenv.config()
 
 const FB_API_VERSION = 'v18.0'
 const FB_BASE_URL = 'https://graph.facebook.com'
-
-const getAccessToken = () => {
-  const token = process.env.FB_ACCESS_TOKEN
-  if (!token) {
-    throw new Error('FB_ACCESS_TOKEN is not defined in environment variables')
-  }
-  return token
-}
 
 // Generic error handler helper
 const handleApiError = (context: string, error: any) => {
@@ -30,10 +24,11 @@ export const getAccountInfo = async (accountId: string) => {
   const startTime = Date.now()
   logger.info(`[Facebook API] getAccountInfo started for ${accountId}`)
   try {
+    const token = await getFacebookAccessToken()
     const url = `${FB_BASE_URL}/${FB_API_VERSION}/${accountId}`
     const res = await axios.get(url, {
       params: {
-        access_token: getAccessToken(),
+        access_token: token,
         fields: 'id,name,currency,timezone_name',
       },
     })
@@ -48,10 +43,11 @@ export const getCampaigns = async (accountId: string) => {
   const startTime = Date.now()
   logger.info(`[Facebook API] getCampaigns started for ${accountId}`)
   try {
+    const token = await getFacebookAccessToken()
     const url = `${FB_BASE_URL}/${FB_API_VERSION}/${accountId}/campaigns`
     const res = await axios.get(url, {
       params: {
-        access_token: getAccessToken(),
+        access_token: token,
         fields: 'id,name,objective,status,start_time,stop_time',
         limit: 1000, // Handle pagination in real prod
       },
@@ -67,10 +63,11 @@ export const getAdSets = async (accountId: string) => {
   const startTime = Date.now()
   logger.info(`[Facebook API] getAdSets started for ${accountId}`)
   try {
+    const token = await getFacebookAccessToken()
     const url = `${FB_BASE_URL}/${FB_API_VERSION}/${accountId}/adsets`
     const res = await axios.get(url, {
       params: {
-        access_token: getAccessToken(),
+        access_token: token,
         fields:
           'id,name,optimization_goal,billing_event,bid_amount,daily_budget,campaign_id,status,targeting',
         limit: 1000,
@@ -87,10 +84,11 @@ export const getAds = async (accountId: string) => {
   const startTime = Date.now()
   logger.info(`[Facebook API] getAds started for ${accountId}`)
   try {
+    const token = await getFacebookAccessToken()
     const url = `${FB_BASE_URL}/${FB_API_VERSION}/${accountId}/ads`
     const res = await axios.get(url, {
       params: {
-        access_token: getAccessToken(),
+        access_token: token,
         fields: 'id,name,status,creative{id},adset_id,campaign_id',
         limit: 1000,
       },
@@ -112,6 +110,7 @@ export const getInsightsDaily = async (
   const startTime = Date.now()
   logger.info(`[Facebook API] getInsightsDaily started for ${accountId}`)
   try {
+    const token = await getFacebookAccessToken()
     const url = `${FB_BASE_URL}/${FB_API_VERSION}/${accountId}/insights`
 
     // Requested fields
@@ -134,7 +133,7 @@ export const getInsightsDaily = async (
     ].join(',')
 
     const params: any = {
-      access_token: getAccessToken(),
+      access_token: token,
       level: 'ad',
       fields: fields,
       time_increment: 1, // Daily breakdown
@@ -232,3 +231,6 @@ export const getInsightsDaily = async (
     handleApiError('getInsightsDaily', error)
   }
 }
+
+// Re-export getEffectiveAdAccounts for convenience
+export { getEffectiveAdAccounts }

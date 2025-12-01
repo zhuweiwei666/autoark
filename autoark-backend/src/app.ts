@@ -4,12 +4,19 @@ import dotenv from 'dotenv'
 import connectDB from './config/db'
 import facebookRoutes from './routes/facebook.routes'
 import dashboardRoutes from './routes/dashboard.routes'
+import facebookSyncRoutes from './routes/facebook.sync.routes'
 import logger from './utils/logger'
+import initSyncCron from './cron/sync.cron'
+import initCronJobs from './cron' // Keep existing cron
 
 dotenv.config()
 
 // Connect to Database
 connectDB()
+
+// Initialize Crons
+initCronJobs()
+initSyncCron()
 
 const app = express()
 
@@ -32,6 +39,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 
 // Routes
 app.use('/facebook', facebookRoutes)
+app.use('/facebook', facebookSyncRoutes) // Mount sync routes under /facebook
 app.use('/dashboard', dashboardRoutes)
 
 app.get('/', (req, res) => {
