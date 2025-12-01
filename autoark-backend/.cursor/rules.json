@@ -1,0 +1,29 @@
+{
+  "rules": [
+    {
+      "id": "auto-devlog",
+      "pattern": ["src/**/*.ts", "src/**/*.js", "dist/**/*.js"],
+      "description": "每次修改代码前自动生成 devlog 变更记录文件",
+      "actions": [
+        {
+          "type": "append_file",
+          "file": ".devlog/devlog-${date}.md",
+          "content": "## Change @ ${datetime}\n- Changed file: ${file}\n- Reason: ${prompt}\n"
+        }
+      ]
+    },
+    {
+      "id": "auto-changelog",
+      "pattern": ["src/**/*.ts", "src/**/*.js"],
+      "description": "每次更新核心源码时自动写入 CHANGELOG.md",
+      "actions": [
+        {
+          "type": "append_file",
+          "file": "CHANGELOG.md",
+          "content": "### ${datetime}\n- Updated: ${file}\n- Reason: ${prompt}\n\n"
+        }
+      ]
+    }
+  ]
+}
+
