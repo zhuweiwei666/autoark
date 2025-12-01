@@ -103,10 +103,6 @@ const getByAdSet = async (filters) => {
         {
             $group: {
                 _id: '$adsetId',
-                // Ideally we should join with AdSet collection to get the name,
-                // but for now we assume we might group by ID.
-                // If names are needed, a $lookup would be required or storing name in MetricsDaily.
-                // Assuming we return ID for now.
                 spendUsd: { $sum: '$spendUsd' },
                 installs: { $sum: '$installs' },
                 revenueD0: { $sum: '$revenueD0' },

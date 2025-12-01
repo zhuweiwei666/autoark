@@ -1,12 +1,11 @@
+import { PipelineStage } from 'mongoose'
 import { MetricsDaily } from '../models'
 
 interface DashboardFilters {
   startDate: string
   endDate: string
   channel?: string
-  appPackageId?: string // Currently MetricsDaily doesn't have appPackageId directly, assuming filter by campaign or adset logic if needed, or if stored in raw/related.
-  // For now, we will filter by available fields. If appPackageId is needed, schema update is required.
-  // Ignoring appPackageId for now as it's not in the schema provided earlier.
+  appPackageId?: string
   country?: string
 }
 
@@ -29,7 +28,7 @@ const buildMatchStage = (filters: DashboardFilters) => {
 export const getDaily = async (filters: DashboardFilters) => {
   const match = buildMatchStage(filters)
 
-  const pipeline = [
+  const pipeline: PipelineStage[] = [
     { $match: match },
     {
       $group: {
@@ -80,7 +79,7 @@ export const getDaily = async (filters: DashboardFilters) => {
 export const getByCountry = async (filters: DashboardFilters) => {
   const match = buildMatchStage(filters)
 
-  const pipeline = [
+  const pipeline: PipelineStage[] = [
     { $match: match },
     {
       $group: {
@@ -115,15 +114,11 @@ export const getByCountry = async (filters: DashboardFilters) => {
 export const getByAdSet = async (filters: DashboardFilters) => {
   const match = buildMatchStage(filters)
 
-  const pipeline = [
+  const pipeline: PipelineStage[] = [
     { $match: match },
     {
       $group: {
         _id: '$adsetId',
-        // Ideally we should join with AdSet collection to get the name,
-        // but for now we assume we might group by ID.
-        // If names are needed, a $lookup would be required or storing name in MetricsDaily.
-        // Assuming we return ID for now.
         spendUsd: { $sum: '$spendUsd' },
         installs: { $sum: '$installs' },
         revenueD0: { $sum: '$revenueD0' },
