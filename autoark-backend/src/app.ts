@@ -41,6 +41,9 @@ app.use('/api/facebook', facebookRoutes)
 app.use('/api/facebook', facebookSyncRoutes)
 app.use('/api/dashboard', dashboardRoutes)
 
+// Dashboard UI (accessible at /dashboard)
+app.use('/dashboard', dashboardRoutes)
+
 app.get('/', (req, res) => {
   res.send('AutoArk Backend API is running')
 })
