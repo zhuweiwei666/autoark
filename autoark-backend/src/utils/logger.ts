@@ -25,9 +25,10 @@ const transports: winston.transport[] = [
 ]
 
 // 2. Daily rotating production logs (if available) or regular file transport
-if (hasDailyRotateFile && winston.transports.DailyRotateFile) {
+if (hasDailyRotateFile && (winston.transports as any).DailyRotateFile) {
+  const DailyRotateFile = (winston.transports as any).DailyRotateFile
   transports.push(
-    new winston.transports.DailyRotateFile({
+    new DailyRotateFile({
       dirname: 'logs',
       filename: 'app-%DATE%.log',
       datePattern: 'YYYY-MM-DD',
