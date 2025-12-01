@@ -44,8 +44,17 @@ const initSyncCron = () => {
     const schedule = `*/${interval} * * * *`;
     logger_1.default.info(`Initializing Facebook Sync Cron with schedule: ${schedule}`);
     node_cron_1.default.schedule(schedule, async () => {
-        logger_1.default.info('Cron: Triggering Full Facebook Sync');
-        await fbSyncService.runFullSync();
+        const startTime = Date.now();
+        logger_1.default.cron(`[Sync] Triggering Full Facebook Sync`);
+        try {
+            await fbSyncService.runFullSync();
+            const duration = Date.now() - startTime;
+            logger_1.default.cron(`[Sync] Full Facebook Sync Completed - ${duration}ms`);
+        }
+        catch (error) {
+            const duration = Date.now() - startTime;
+            logger_1.default.cronError(`[Sync] Full Facebook Sync Failed - ${duration}ms`, error);
+        }
     });
 };
 exports.default = initSyncCron;

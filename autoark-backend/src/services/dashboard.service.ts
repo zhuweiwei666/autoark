@@ -1,5 +1,8 @@
 import { PipelineStage } from 'mongoose'
-import { MetricsDaily } from '../models'
+import { MetricsDaily, Account, Campaign, Ad, SyncLog, OpsLog } from '../models'
+import mongoose from 'mongoose'
+
+// --- Existing Dashboard Service Logic ---
 
 interface DashboardFilters {
   startDate: string
@@ -40,7 +43,7 @@ export const getDaily = async (filters: DashboardFilters) => {
         clicks: { $sum: '$clicks' },
       },
     },
-    { $sort: { _id: 1 as const } }, // Fix TS2769 sort type mismatch
+    { $sort: { _id: 1 as 1 } },
     {
       $project: {
         _id: 0,
@@ -150,4 +153,50 @@ export const getByAdSet = async (filters: DashboardFilters) => {
   ]
 
   return await MetricsDaily.aggregate(pipeline)
+}
+
+// --- New Dashboard Service Methods for Read-Only Dashboard ---
+
+export async function getSystemHealth() {
+  let mongoConnected = false
+  try {
+    mongoConnected = mongoose.connection.readyState === 1
+  } catch (e) {
+    mongoConnected = false
+  }
+
+  const lastSync = await SyncLog.findOne().sort({ createdAt: -1 }).lean()
+
+  return {
+    serverTime: new Date(),
+    uptimeSeconds: process.uptime(),
+    mongoConnected,
+    lastSyncAt: lastSync?.createdAt ?? null,
+  }
+}
+
+export async function getFacebookOverview() {
+  const [accounts, campaigns, ads, lastSync] = await Promise.all([
+    Account.countDocuments(),
+    Campaign.countDocuments(),
+    Ad.countDocuments(),
+    SyncLog.findOne().sort({ createdAt: -1 }).lean(),
+  ])
+
+  return {
+    accounts,
+    campaigns,
+    ads,
+    lastSyncAt: lastSync?.createdAt ?? null,
+  }
+}
+
+export async function getCronLogs(limit = 50) {
+  const logs = await SyncLog.find().sort({ createdAt: -1 }).limit(limit).lean()
+  return logs
+}
+
+export async function getOpsLogs(limit = 50) {
+  const logs = await OpsLog.find().sort({ createdAt: -1 }).limit(limit).lean()
+  return logs
 }

@@ -59,3 +59,59 @@ export const getByAdSet = async (
     next(error)
   }
 }
+
+// --- New Handlers for Read-Only Dashboard ---
+
+export async function getSystemHealthHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  try {
+    const data = await dashboardService.getSystemHealth()
+    res.json({ success: true, data })
+  } catch (err) {
+    next(err)
+  }
+}
+
+export async function getFacebookOverviewHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  try {
+    const data = await dashboardService.getFacebookOverview()
+    res.json({ success: true, data })
+  } catch (err) {
+    next(err)
+  }
+}
+
+export async function getCronLogsHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  try {
+    const limit = Number(req.query.limit) || 50
+    const data = await dashboardService.getCronLogs(limit)
+    res.json({ success: true, data })
+  } catch (err) {
+    next(err)
+  }
+}
+
+export async function getOpsLogsHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  try {
+    const limit = Number(req.query.limit) || 50
+    const data = await dashboardService.getOpsLogs(limit)
+    res.json({ success: true, data })
+  } catch (err) {
+    next(err)
+  }
+}

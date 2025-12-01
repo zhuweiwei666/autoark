@@ -13,6 +13,7 @@ const facebook_sync_routes_1 = __importDefault(require("./routes/facebook.sync.r
 const logger_1 = __importDefault(require("./utils/logger"));
 const sync_cron_1 = __importDefault(require("./cron/sync.cron"));
 const cron_1 = __importDefault(require("./cron")); // Keep existing cron
+const errorHandler_1 = require("./middlewares/errorHandler");
 dotenv_1.default.config();
 // Connect to Database
 (0, db_1.default)();
@@ -41,14 +42,5 @@ app.get('/', (req, res) => {
     res.send('AutoArk Backend API is running');
 });
 // Global Error Handling Middleware
-app.use((err, req, res, next) => {
-    logger_1.default.error('Global Error Handler', err);
-    const statusCode = err.statusCode || 500;
-    const message = err.message || 'Internal Server Error';
-    res.status(statusCode).json({
-        success: false,
-        message,
-        stack: process.env.NODE_ENV === 'production' ? undefined : err.stack,
-    });
-});
+app.use(errorHandler_1.errorHandler);
 exports.default = app;

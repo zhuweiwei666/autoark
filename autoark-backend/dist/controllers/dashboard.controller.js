@@ -34,6 +34,10 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getByAdSet = exports.getByCountry = exports.getDaily = void 0;
+exports.getSystemHealthHandler = getSystemHealthHandler;
+exports.getFacebookOverviewHandler = getFacebookOverviewHandler;
+exports.getCronLogsHandler = getCronLogsHandler;
+exports.getOpsLogsHandler = getOpsLogsHandler;
 const dashboardService = __importStar(require("../services/dashboard.service"));
 const getFilters = (req) => {
     const { startDate, endDate, channel, country } = req.query;
@@ -81,3 +85,42 @@ const getByAdSet = async (req, res, next) => {
     }
 };
 exports.getByAdSet = getByAdSet;
+// --- New Handlers for Read-Only Dashboard ---
+async function getSystemHealthHandler(req, res, next) {
+    try {
+        const data = await dashboardService.getSystemHealth();
+        res.json({ success: true, data });
+    }
+    catch (err) {
+        next(err);
+    }
+}
+async function getFacebookOverviewHandler(req, res, next) {
+    try {
+        const data = await dashboardService.getFacebookOverview();
+        res.json({ success: true, data });
+    }
+    catch (err) {
+        next(err);
+    }
+}
+async function getCronLogsHandler(req, res, next) {
+    try {
+        const limit = Number(req.query.limit) || 50;
+        const data = await dashboardService.getCronLogs(limit);
+        res.json({ success: true, data });
+    }
+    catch (err) {
+        next(err);
+    }
+}
+async function getOpsLogsHandler(req, res, next) {
+    try {
+        const limit = Number(req.query.limit) || 50;
+        const data = await dashboardService.getOpsLogs(limit);
+        res.json({ success: true, data });
+    }
+    catch (err) {
+        next(err);
+    }
+}
