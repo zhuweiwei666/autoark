@@ -441,10 +441,19 @@ router.get('/', (_req, res) => {
       document.getElementById('dashboard-end-date').value = dashboardEndDate
     }
 
+    // 防抖函数
+    let dateFilterTimeout = null
     function applyDashboardDateFilter() {
-      dashboardStartDate = document.getElementById('dashboard-start-date').value
-      dashboardEndDate = document.getElementById('dashboard-end-date').value
-      loadDashboardData()
+      // 清除之前的定时器
+      if (dateFilterTimeout) {
+        clearTimeout(dateFilterTimeout)
+      }
+      // 300ms 防抖，避免频繁请求
+      dateFilterTimeout = setTimeout(() => {
+        dashboardStartDate = document.getElementById('dashboard-start-date').value
+        dashboardEndDate = document.getElementById('dashboard-end-date').value
+        loadDashboardData()
+      }, 300)
     }
 
     async function loadCoreMetrics() {
@@ -481,8 +490,13 @@ router.get('/', (_req, res) => {
         const { data } = await fetchJSON(url)
         
         const ctx = document.getElementById('spend-trend-chart')
+        
+        // 优化：如果图表已存在，只更新数据，不重建
         if (spendTrendChart) {
-          spendTrendChart.destroy()
+          spendTrendChart.data.labels = data.map(d => d.date)
+          spendTrendChart.data.datasets[0].data = data.map(d => d.spend || 0)
+          spendTrendChart.update('none') // 'none' 模式，无动画，更快
+          return
         }
         
         spendTrendChart = new Chart(ctx, {
@@ -531,12 +545,17 @@ router.get('/', (_req, res) => {
         const { data } = await fetchJSON(url)
         
         const ctx = document.getElementById('campaign-ranking-chart')
-        if (campaignRankingChart) {
-          campaignRankingChart.destroy()
-        }
         
         // 如果只有一个campaign，确保它排在最上面（反转顺序）
         const sortedData = data.length === 1 ? data : data.reverse()
+        
+        // 优化：如果图表已存在，只更新数据，不重建
+        if (campaignRankingChart) {
+          campaignRankingChart.data.labels = sortedData.map(d => (d.campaignName || d.campaignId || 'Unknown').substring(0, 20))
+          campaignRankingChart.data.datasets[0].data = sortedData.map(d => d.spend || 0)
+          campaignRankingChart.update('none') // 'none' 模式，无动画，更快
+          return
+        }
         
         campaignRankingChart = new Chart(ctx, {
           type: 'bar',
@@ -555,6 +574,7 @@ router.get('/', (_req, res) => {
             responsive: true,
             maintainAspectRatio: false,
             indexAxis: 'y',
+            animation: false, // 优化：禁用动画，提升性能
             plugins: {
               legend: {
                 labels: { color: '#cbd5e1' },
@@ -586,8 +606,13 @@ router.get('/', (_req, res) => {
         const { data } = await fetchJSON(url)
         
         const ctx = document.getElementById('country-ranking-chart')
+        
+        // 优化：如果图表已存在，只更新数据，不重建
         if (countryRankingChart) {
-          countryRankingChart.destroy()
+          countryRankingChart.data.labels = data.map(d => (d.accountName || d.accountId || 'Unknown').substring(0, 20))
+          countryRankingChart.data.datasets[0].data = data.map(d => d.spend || 0)
+          countryRankingChart.update('none') // 'none' 模式，无动画，更快
+          return
         }
         
         countryRankingChart = new Chart(ctx, {
@@ -607,6 +632,7 @@ router.get('/', (_req, res) => {
             responsive: true,
             maintainAspectRatio: false,
             indexAxis: 'y',
+            animation: false, // 优化：禁用动画，提升性能
             plugins: {
               legend: {
                 labels: { color: '#cbd5e1' },
@@ -651,7 +677,11 @@ router.get('/', (_req, res) => {
     }
 
     init()
-    setInterval(init, 60000)
+    // 优化：减少自动刷新频率，从60秒改为5分钟（300秒）
+    // 只刷新数据，不刷新系统健康等静态信息
+    setInterval(() => {
+      loadDashboardData()
+    }, 300000) // 5分钟刷新一次数据看板
   </script>
 </body>
 </html>

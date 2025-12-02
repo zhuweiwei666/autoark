@@ -314,6 +314,20 @@ export default function FacebookCampaignsPage() {
     loadColumnSettings()
   }, [])
 
+  // 优化：使用防抖，避免筛选时频繁请求
+  useEffect(() => {
+    // 跳过初始加载（初始加载由上面的 useEffect 处理）
+    const hasFilters = filters.name || filters.accountId || filters.status || filters.objective || filters.startDate || filters.endDate
+    if (!hasFilters) return
+
+    const timeoutId = setTimeout(() => {
+      loadCampaigns(1) // 筛选时重置到第一页
+    }, 500) // 500ms 防抖
+
+    return () => clearTimeout(timeoutId)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters.name, filters.accountId, filters.status, filters.objective, filters.startDate, filters.endDate])
+
   // 执行同步
   const handleSync = async () => {
     setSyncing(true)

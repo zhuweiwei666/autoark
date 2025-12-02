@@ -48,6 +48,20 @@ export default function FacebookAccountsPage() {
     loadAccounts()
   }, [])
 
+  // 优化：使用防抖，避免筛选时频繁请求
+  useEffect(() => {
+    // 跳过初始加载（初始加载由上面的 useEffect 处理）
+    const hasFilters = filters.optimizer || filters.status || filters.accountId || filters.name || filters.startDate || filters.endDate
+    if (!hasFilters) return
+
+    const timeoutId = setTimeout(() => {
+      loadAccounts(1) // 筛选时重置到第一页
+    }, 500) // 500ms 防抖
+
+    return () => clearTimeout(timeoutId)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters.optimizer, filters.status, filters.accountId, filters.name, filters.startDate, filters.endDate])
+
   // 执行同步
   const handleSync = async () => {
     setSyncing(true)

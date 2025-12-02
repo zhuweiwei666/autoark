@@ -62,7 +62,9 @@ const getCampaignsList = async (req, res, next) => {
             name: req.query.name,
             accountId: req.query.accountId,
             status: req.query.status,
-            objective: req.query.objective
+            objective: req.query.objective,
+            startDate: req.query.startDate,
+            endDate: req.query.endDate,
         };
         const result = await facebookCampaignsService.getCampaigns(filters, { page, limit, sortBy, sortOrder });
         res.json({
@@ -97,7 +99,9 @@ const getAccountsList = async (req, res, next) => {
             optimizer: req.query.optimizer,
             status: req.query.status,
             accountId: req.query.accountId,
-            name: req.query.name
+            name: req.query.name,
+            startDate: req.query.startDate,
+            endDate: req.query.endDate,
         };
         const result = await facebookAccountsService.getAccounts(filters, { page, limit });
         res.json({

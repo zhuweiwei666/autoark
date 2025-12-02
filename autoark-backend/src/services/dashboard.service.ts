@@ -211,49 +211,47 @@ export async function getCoreMetrics(startDate?: string, endDate?: string) {
   const yesterday = startDate ? new Date(new Date(startDate).getTime() - 24 * 60 * 60 * 1000).toISOString().split('T')[0] : new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().split('T')[0]
   const sevenDaysAgo = startDate || new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
 
-  // 今日数据
-  const todayData = await MetricsDaily.aggregate([
-    { $match: { date: today } },
-    {
-      $group: {
-        _id: null,
-        spend: { $sum: '$spendUsd' },
-        impressions: { $sum: '$impressions' },
-        clicks: { $sum: '$clicks' },
-        installs: { $sum: '$installs' },
-        purchase_value: { $sum: '$purchase_value' },
+  // 优化：合并查询，一次性获取所有需要的数据
+  const [todayData, yesterdayData, sevenDaysData] = await Promise.all([
+    MetricsDaily.aggregate([
+      { $match: { date: today } },
+      {
+        $group: {
+          _id: null,
+          spend: { $sum: '$spendUsd' },
+          impressions: { $sum: '$impressions' },
+          clicks: { $sum: '$clicks' },
+          installs: { $sum: '$installs' },
+          purchase_value: { $sum: '$purchase_value' },
+        },
       },
-    },
-  ])
-
-  // 昨日数据
-  const yesterdayData = await MetricsDaily.aggregate([
-    { $match: { date: yesterday } },
-    {
-      $group: {
-        _id: null,
-        spend: { $sum: '$spendUsd' },
-        impressions: { $sum: '$impressions' },
-        clicks: { $sum: '$clicks' },
-        installs: { $sum: '$installs' },
-        purchase_value: { $sum: '$purchase_value' },
+    ]),
+    MetricsDaily.aggregate([
+      { $match: { date: yesterday } },
+      {
+        $group: {
+          _id: null,
+          spend: { $sum: '$spendUsd' },
+          impressions: { $sum: '$impressions' },
+          clicks: { $sum: '$clicks' },
+          installs: { $sum: '$installs' },
+          purchase_value: { $sum: '$purchase_value' },
+        },
       },
-    },
-  ])
-
-  // 7日数据
-  const sevenDaysData = await MetricsDaily.aggregate([
-    { $match: { date: { $gte: sevenDaysAgo, $lte: today } } },
-    {
-      $group: {
-        _id: null,
-        spend: { $sum: '$spendUsd' },
-        impressions: { $sum: '$impressions' },
-        clicks: { $sum: '$clicks' },
-        installs: { $sum: '$installs' },
-        purchase_value: { $sum: '$purchase_value' },
+    ]),
+    MetricsDaily.aggregate([
+      { $match: { date: { $gte: sevenDaysAgo, $lte: today } } },
+      {
+        $group: {
+          _id: null,
+          spend: { $sum: '$spendUsd' },
+          impressions: { $sum: '$impressions' },
+          clicks: { $sum: '$clicks' },
+          installs: { $sum: '$installs' },
+          purchase_value: { $sum: '$purchase_value' },
+        },
       },
-    },
+    ]),
   ])
 
   const todayMetrics = todayData[0] || { spend: 0, impressions: 0, clicks: 0, installs: 0, purchase_value: 0 }
