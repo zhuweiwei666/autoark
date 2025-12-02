@@ -350,6 +350,7 @@ export default function FacebookAccountsPage() {
                       </td>
                     </tr>
                   ))
+                  })()
                 )}
               </tbody>
             </table>

@@ -334,8 +334,8 @@ export default function FacebookCampaignsPage() {
     setMessage(null)
     try {
       const result = await syncCampaigns()
-      setMessage({
-        type: 'success',
+      setMessage({ 
+        type: 'success', 
         text: `同步完成！成功: ${result.data.syncedCampaigns}个广告系列, ${result.data.syncedMetrics}个指标, 失败: ${result.data.errorCount}个`,
         errors: result.data.errors || [],
       })
@@ -420,8 +420,8 @@ export default function FacebookCampaignsPage() {
               className="px-5 py-2.5 bg-slate-800/50 hover:bg-slate-700/50 border border-slate-700/50 rounded-xl text-sm font-medium text-slate-300 transition-colors backdrop-blur-sm hover:border-slate-600 flex items-center gap-2"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-                  自定义列
-                </button>
+                自定义列
+            </button>
 
               {/* 自定义列设置弹窗 */}
               {showColumnSettings && (
@@ -554,10 +554,10 @@ export default function FacebookCampaignsPage() {
                       </button>
                     </div>
                   </div>
-                </div>
+          </div>
               )}
             </div> {/* This div closes the header items flex container */}
-          </header>
+        </header>
 
         {/* 消息提示 */}
         {message && (
@@ -567,13 +567,13 @@ export default function FacebookCampaignsPage() {
             <div className="flex items-start justify-between gap-4">
               <div className="flex-1">
                 <div className="flex items-center gap-3 mb-2">
-                  {message.type === 'success' ? (
+              {message.type === 'success' ? (
                     <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" /></svg>
-                  ) : (
+              ) : (
                     <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                  )}
-                  <span className="font-medium">{message.text}</span>
-                </div>
+              )}
+              <span className="font-medium">{message.text}</span>
+            </div>
                 {message.errors && message.errors.length > 0 && (
                   <div className="mt-3 pl-8 space-y-2">
                     <div className="text-sm opacity-90">
@@ -607,8 +607,8 @@ export default function FacebookCampaignsPage() {
                 )}
               </div>
               <button onClick={() => setMessage(null)} className="opacity-60 hover:opacity-100 p-1 hover:bg-white/5 rounded-lg transition-all flex-shrink-0">
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
-              </button>
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
+            </button>
             </div>
           </div>
         )}
@@ -621,12 +621,12 @@ export default function FacebookCampaignsPage() {
                筛选条件
              </h2>
              {(filters.name || filters.accountId || filters.status || filters.objective || filters.startDate || filters.endDate) && (
-                <button 
+                 <button 
                    onClick={() => setFilters({ name: '', accountId: '', status: '', objective: '', startDate: '', endDate: '' })} 
-                   className="text-xs text-indigo-400 hover:text-indigo-300 hover:underline transition-colors"
-                >
+                    className="text-xs text-indigo-400 hover:text-indigo-300 hover:underline transition-colors"
+                 >
                     重置筛选
-                </button>
+                 </button>
              )}
           </div>
           
@@ -723,8 +723,8 @@ export default function FacebookCampaignsPage() {
                         const direction = sortConfig?.key === col.key && sortConfig.direction === 'asc' ? 'desc' : 'asc'
                         setSortConfig({ key: col.key, direction })
                       }}
-                    >
-                      <div className="flex items-center gap-2">
+                      >
+                        <div className="flex items-center gap-2">
                         <span>{col.label}</span>
                         {sortConfig?.key === col.key && (
                           <svg className={`w-4 h-4 ${sortConfig.direction === 'asc' ? '' : 'rotate-180'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -735,9 +735,9 @@ export default function FacebookCampaignsPage() {
                           <svg className="w-4 h-4 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
                           </svg>
-                        )}
-                      </div>
-                    </th>
+                          )}
+                        </div>
+                      </th>
                   ))}
                   <th className="px-6 py-5 font-semibold text-slate-300 text-right">操作</th>
                 </tr>
@@ -777,18 +777,18 @@ export default function FacebookCampaignsPage() {
                             <div>
                               <div className="font-medium text-slate-200 group-hover:text-indigo-300 transition-colors">{(col.format as (v: string) => string)(campaign.name || (campaign as any).name)}</div>
                               <div className="text-xs text-slate-500 font-mono mt-1 opacity-70">ID: {(col.format as (v: string) => string)(campaign.campaignId || (campaign as any).id)}</div>
-                            </div>
+                                </div>
                           ) : col.key === 'status' ? (
                             <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium border ${getStatusColor(campaign.status || (campaign as any).status)}`}>
-                              <span className={`w-1.5 h-1.5 rounded-full mr-1.5 bg-current opacity-70`}></span>
+                                  <span className={`w-1.5 h-1.5 rounded-full mr-1.5 bg-current opacity-70`}></span>
                               {(col.format as (v: string) => string)(campaign.status || (campaign as any).status)}
-                            </span>
+                                </span>
                           ) : col.key === 'account_id' || col.key === 'accountId' ? (
                             <div className="text-xs text-slate-400 font-mono">{(campaign as any)[col.key] || campaign.accountId || '-'}</div>
                           ) : (
                             <span className="text-slate-300">{(campaign as any)[col.key] !== undefined && (campaign as any)[col.key] !== null ? col.format((campaign as any)[col.key]) : '-'}</span>
                           )}
-                        </td>
+                          </td>
                       ))}
                       <td className="px-6 py-4 text-right">
                         <button className="text-slate-400 hover:text-indigo-400 transition-colors opacity-60 group-hover:opacity-100">
@@ -797,11 +797,12 @@ export default function FacebookCampaignsPage() {
                       </td>
                     </tr>
                   ))
+                  })()
                 )}
               </tbody>
             </table>
           </div>
-
+          
           {/* 分页 */}
           {pagination.pages > 1 && (
             <div className="px-6 py-4 border-t border-white/5 flex items-center justify-between">
