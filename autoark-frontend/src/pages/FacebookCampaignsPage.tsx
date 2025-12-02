@@ -186,6 +186,7 @@ export default function FacebookCampaignsPage() {
   const [columnOrder, setColumnOrder] = useState<string[]>([]) // 列的顺序（包括所有列）
   const [showColumnSettings, setShowColumnSettings] = useState(false)
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null)
+  const [columnSearchQuery, setColumnSearchQuery] = useState<string>('') // 搜索关键词
 
   // 字段名映射（兼容旧数据）
   const fieldNameMapping: Record<string, string> = {
@@ -417,27 +418,78 @@ export default function FacebookCampaignsPage() {
                         </div>
                         自定义列
                     </h2>
+                    
+                    {/* 搜索框 */}
+                    <div className="mb-4">
+                        <div className="relative">
+                            <input
+                                type="text"
+                                value={columnSearchQuery}
+                                onChange={(e) => setColumnSearchQuery(e.target.value)}
+                                placeholder="搜索字段名..."
+                                className="w-full px-4 py-2.5 pl-10 bg-slate-800/50 border border-slate-700 rounded-xl text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500/50 transition-all"
+                            />
+                            <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                            </svg>
+                            {columnSearchQuery && (
+                                <button
+                                    onClick={() => setColumnSearchQuery('')}
+                                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition-colors"
+                                >
+                                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                                    </svg>
+                                </button>
+                            )}
+                        </div>
+                    </div>
+                    
+                    <div className="flex items-center gap-2 mb-4 text-sm text-slate-400">
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
+                        <span>💡 拖拽列标题可以调整顺序</span>
+                    </div>
+                    
                     <div className="space-y-2 max-h-96 overflow-y-auto pr-2">
-                      <p className="text-xs text-slate-400 mb-3">💡 拖拽列标题可以调整顺序</p>
-                      {(columnOrder.length > 0 ? columnOrder : ALL_CAMPAIGN_COLUMNS.map(col => col.key)).map((colKey) => {
-                        const col = ALL_CAMPAIGN_COLUMNS.find(c => c.key === colKey)
-                        if (!col) return null
-                        // 使用当前 columnOrder 或默认顺序
-                        const currentOrder = columnOrder.length > 0 ? columnOrder : ALL_CAMPAIGN_COLUMNS.map(c => c.key)
-                        const actualIndex = currentOrder.indexOf(colKey)
-                        return (
-                          <div
-                            key={col.key}
-                            draggable
-                            onDragStart={() => handleDragStart(actualIndex)}
-                            onDragOver={(e) => handleDragOver(e, actualIndex)}
-                            onDragEnd={handleDragEnd}
-                            className={`flex items-center space-x-3 p-3 rounded-lg border transition-all cursor-move ${
-                              draggedIndex === actualIndex
-                                ? 'bg-indigo-500/20 border-indigo-500/50 shadow-lg'
-                                : 'bg-slate-800/50 border-slate-700/50 hover:bg-slate-700/50'
-                            }`}
-                          >
+                      {/* 过滤列列表 */}
+                      {(() => {
+                        const allColumns = columnOrder.length > 0 ? columnOrder : ALL_CAMPAIGN_COLUMNS.map(col => col.key)
+                        const filteredColumns = columnSearchQuery
+                          ? allColumns.filter(colKey => {
+                              const col = ALL_CAMPAIGN_COLUMNS.find(c => c.key === colKey)
+                              if (!col) return false
+                              const searchLower = columnSearchQuery.toLowerCase()
+                              return col.key.toLowerCase().includes(searchLower) || col.label.toLowerCase().includes(searchLower)
+                            })
+                          : allColumns
+                        
+                        return filteredColumns.length === 0 ? (
+                          <div className="text-center py-8 text-slate-500 text-sm">
+                            未找到匹配的字段
+                          </div>
+                        ) : (
+                          filteredColumns.map((colKey) => {
+                            const col = ALL_CAMPAIGN_COLUMNS.find(c => c.key === colKey)
+                            if (!col) return null
+                            // 使用当前 columnOrder 或默认顺序
+                            const currentOrder = columnOrder.length > 0 ? columnOrder : ALL_CAMPAIGN_COLUMNS.map(c => c.key)
+                            const actualIndex = currentOrder.indexOf(colKey)
+                            
+                            return (
+                              <div
+                                key={col.key}
+                                draggable={!columnSearchQuery} // 搜索时禁用拖拽
+                                onDragStart={() => handleDragStart(actualIndex)}
+                                onDragOver={(e) => handleDragOver(e, actualIndex)}
+                                onDragEnd={handleDragEnd}
+                                className={`flex items-center space-x-3 p-3 rounded-lg border transition-all ${
+                                  columnSearchQuery ? 'cursor-default' : 'cursor-move'
+                                } ${
+                                  draggedIndex === actualIndex
+                                    ? 'bg-indigo-500/20 border-indigo-500/50 shadow-lg'
+                                    : 'bg-slate-800/50 border-slate-700/50 hover:bg-slate-700/50'
+                                }`}
+                              >
                             {/* 拖拽手柄 */}
                             <div className="flex items-center text-slate-400 hover:text-slate-300">
                               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -463,14 +515,22 @@ export default function FacebookCampaignsPage() {
                               {col.label}
                             </label>
                           </div>
+                            )
+                          })
                         )
-                      })}
+                      })()}
                     </div>
                     <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-slate-800/50">
-                      <button onClick={() => setShowColumnSettings(false)} className="px-5 py-2.5 bg-slate-800 hover:bg-slate-700 rounded-xl text-slate-300 font-medium">
+                      <button onClick={() => {
+                        setShowColumnSettings(false)
+                        setColumnSearchQuery('') // 关闭时清空搜索
+                      }} className="px-5 py-2.5 bg-slate-800 hover:bg-slate-700 rounded-xl text-slate-300 font-medium">
                         取消
                       </button>
-                      <button onClick={() => saveColumnSettings(visibleColumns, columnOrder)} className="px-6 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 rounded-xl text-white font-medium">
+                      <button onClick={() => {
+                        saveColumnSettings(visibleColumns, columnOrder)
+                        setColumnSearchQuery('') // 保存时清空搜索
+                      }} className="px-6 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 rounded-xl text-white font-medium">
                         保存设置
                       </button>
                     </div>
