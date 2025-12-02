@@ -146,3 +146,80 @@ export async function deleteToken(id: string): Promise<void> {
   }
 }
 
+// === 账户管理 ===
+
+export interface FbAccount {
+  id: string
+  accountId: string
+  name: string
+  status: string
+  accountStatus: number
+  currency: string
+  balance: number
+  spendCap?: string
+  amountSpent?: string
+  operator?: string
+  token?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface AccountListResponse {
+  success: boolean
+  data: FbAccount[]
+  pagination: {
+    total: number
+    page: number
+    limit: number
+    pages: number
+  }
+}
+
+// 获取账户列表
+export async function getAccounts(params?: {
+  page?: number
+  limit?: number
+  optimizer?: string
+  status?: string
+  accountId?: string
+  name?: string
+}): Promise<AccountListResponse> {
+  const queryParams = new URLSearchParams()
+  if (params?.page) queryParams.append('page', params.page.toString())
+  if (params?.limit) queryParams.append('limit', params.limit.toString())
+  if (params?.optimizer) queryParams.append('optimizer', params.optimizer)
+  if (params?.status) queryParams.append('status', params.status)
+  if (params?.accountId) queryParams.append('accountId', params.accountId)
+  if (params?.name) queryParams.append('name', params.name)
+
+  const url = `${API_BASE_URL}/api/facebook/accounts-list${
+    queryParams.toString() ? `?${queryParams.toString()}` : ''
+  }`
+
+  const response = await fetch(url)
+
+  if (!response.ok) {
+    throw new Error('Failed to fetch accounts')
+  }
+
+  return response.json()
+}
+
+// 同步账户
+export async function syncAccounts(): Promise<{
+  success: boolean
+  message: string
+  data: { syncedCount: number; errorCount: number }
+}> {
+  const response = await fetch(`${API_BASE_URL}/api/facebook/accounts/sync`, {
+    method: 'POST',
+  })
+
+  if (!response.ok) {
+    const error = await response.json()
+    throw new Error(error.message || 'Failed to sync accounts')
+  }
+
+  return response.json()
+}
+

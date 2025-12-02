@@ -116,7 +116,7 @@ if (frontendDistPath) {
   
   app.get('/', (req: Request, res: Response) => {
     res.send('AutoArk Backend API is running. Frontend not built yet. Please build: cd autoark-frontend && npm run build')
-  })
+})
 }
 
 // 404 Handler (must be after all routes, before errorHandler)

@@ -20,7 +20,7 @@ export const fbClient = {
     const url = `${FB_BASE_URL}/${FB_API_VERSION}${endpoint}`
 
     try {
-      const token = await getFacebookAccessToken()
+      const token = params.access_token || (await getFacebookAccessToken())
       const res = await axios.get(url, {
         params: {
           access_token: token,
@@ -35,11 +35,16 @@ export const fbClient = {
   },
 }
 
-export const fetchUserAdAccounts = async () => {
-  const res = await fbClient.get('/me/adaccounts', {
-    fields: 'id,account_status,name',
+export const fetchUserAdAccounts = async (token?: string) => {
+  const params: any = {
+    fields:
+      'id,account_status,name,currency,balance,spend_cap,amount_spent,disable_reason',
     limit: 500,
-  })
+  }
+  if (token) {
+    params.access_token = token
+  }
+  const res = await fbClient.get('/me/adaccounts', params)
   return res.data || []
 }
 

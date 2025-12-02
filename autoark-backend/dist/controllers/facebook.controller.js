@@ -33,9 +33,45 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getAccounts = exports.getInsightsDaily = exports.getAds = exports.getAdSets = exports.getCampaigns = void 0;
+exports.getAccounts = exports.getInsightsDaily = exports.getAds = exports.getAdSets = exports.getCampaigns = exports.getAccountsList = exports.syncAccounts = void 0;
 const facebookService = __importStar(require("../services/facebook.service"));
+const facebookAccountsService = __importStar(require("../services/facebook.accounts.service"));
 const facebook_sync_service_1 = require("../services/facebook.sync.service");
+const syncAccounts = async (req, res, next) => {
+    try {
+        const result = await facebookAccountsService.syncAccountsFromTokens();
+        res.json({
+            success: true,
+            message: 'Accounts sync completed',
+            data: result,
+        });
+    }
+    catch (error) {
+        next(error);
+    }
+};
+exports.syncAccounts = syncAccounts;
+const getAccountsList = async (req, res, next) => {
+    try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 20;
+        const filters = {
+            optimizer: req.query.optimizer,
+            status: req.query.status,
+            accountId: req.query.accountId,
+            name: req.query.name
+        };
+        const result = await facebookAccountsService.getAccounts(filters, { page, limit });
+        res.json({
+            success: true,
+            ...result
+        });
+    }
+    catch (error) {
+        next(error);
+    }
+};
+exports.getAccountsList = getAccountsList;
 const getCampaigns = async (req, res, next) => {
     try {
         const { id } = req.params;

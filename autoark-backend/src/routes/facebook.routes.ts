@@ -6,6 +6,8 @@ const router = Router()
 
 router.post('/save-token', saveFacebookToken) // New token saving route
 router.get('/accounts', facebookController.getAccounts)
+router.get('/accounts-list', facebookController.getAccountsList) // New: Account management list
+router.post('/accounts/sync', facebookController.syncAccounts) // New: Trigger sync
 router.get('/accounts/:id/campaigns', facebookController.getCampaigns)
 router.get('/accounts/:id/adsets', facebookController.getAdSets)
 router.get('/accounts/:id/ads', facebookController.getAds)

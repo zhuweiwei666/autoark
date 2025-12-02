@@ -58,9 +58,19 @@ router.get('/', (_req, res) => {
           class="w-full px-4 py-3 rounded-lg text-sm font-medium transition-colors text-slate-200 hover:text-slate-100 hover:bg-slate-800/50 flex items-center gap-3"
         >
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path>
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"></path>
           </svg>
           <span>Token 管理</span>
+        </button>
+        <button 
+          onclick="switchView('accounts')" 
+          id="menu-accounts"
+          class="w-full px-4 py-3 rounded-lg text-sm font-medium transition-colors text-slate-200 hover:text-slate-100 hover:bg-slate-800/50 flex items-center gap-3"
+        >
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"></path>
+          </svg>
+          <span>账户管理</span>
         </button>
       </nav>
       
@@ -155,6 +165,15 @@ router.get('/', (_req, res) => {
           src="/fb-token" 
           class="w-full h-full border-0"
           title="Token Management"
+        ></iframe>
+      </div>
+
+      <!-- Accounts Management View -->
+      <div id="view-accounts" class="h-full hidden">
+        <iframe 
+          src="/fb-accounts" 
+          class="w-full h-full border-0"
+          title="Accounts Management"
         ></iframe>
       </div>
     </main>

@@ -1,52 +1,112 @@
-import axios from 'axios'
+import Account from '../models/Account'
+import FbToken from '../models/FbToken'
+import { fetchUserAdAccounts } from './facebook.api'
 import logger from '../utils/logger'
-import { getFacebookAccessToken } from '../utils/fbToken'
 
-const FB_API_VERSION = 'v19.0'
-const FB_BASE_URL = 'https://graph.facebook.com'
-
-/**
- * Fetch all ad accounts associated with the current user token.
- * Automatically filters for active accounts (account_status = 1).
- * Returns an array of account IDs (e.g., ["act_123", "act_456"]).
- */
-export async function fetchUserAdAccounts(): Promise<string[]> {
+export const syncAccountsFromTokens = async () => {
   const startTime = Date.now()
-  logger.info('[Facebook API] fetchUserAdAccounts started')
+  let syncedCount = 0
+  let errorCount = 0
 
   try {
-    const token = await getFacebookAccessToken()
-    const url = `${FB_BASE_URL}/${FB_API_VERSION}/me/adaccounts`
+    // 1. 获取所有有效的 Token
+    const tokens = await FbToken.find({ status: 'active' })
+    logger.info(`Starting account sync for ${tokens.length} tokens`)
 
-    // account_status: 1 = Active, 2 = Disabled, 3 = Unsettled, 7 = Pending_risk_review, 8 = Pending_settlement, 9 = In_grace_period, 100 = Pending_closure, 101 = Closed, 201 = Any_active, 202 = Any_closed
-    const response = await axios.get(url, {
-      params: {
-        access_token: token,
-        fields: 'id,account_status,name',
-        limit: 500,
-      },
-    })
+    for (const tokenDoc of tokens) {
+      try {
+        // 2. 拉取该 Token 下的广告账户
+        const accounts = await fetchUserAdAccounts(tokenDoc.token)
+        
+        // 3. 更新数据库
+        for (const acc of accounts) {
+          const accountData = {
+            channel: 'facebook',
+            accountId: acc.id.replace('act_', ''), // 统一格式，去掉前缀
+            name: acc.name,
+            currency: acc.currency,
+            status: mapAccountStatus(acc.account_status),
+            accountStatus: acc.account_status,
+            disableReason: acc.disable_reason,
+            balance: acc.balance, // 注意：FB 返回的 balance 通常是分，需要确认单位
+            spendCap: acc.spend_cap,
+            amountSpent: acc.amount_spent,
+            token: tokenDoc.token, // 关联的 Token
+            operator: tokenDoc.optimizer, // 关联的优化师
+          }
 
-    const accounts = response.data.data || []
+          await Account.findOneAndUpdate(
+            { accountId: accountData.accountId },
+            accountData,
+            { upsert: true, new: true }
+          )
+          syncedCount++
+        }
+        
+        // 更新 Token 的最后检查时间
+        await FbToken.findByIdAndUpdate(tokenDoc._id, { lastCheckedAt: new Date() })
 
-    // Filter for active accounts (status 1)
-    // Note: Adjust logic if you want to include other statuses like 'In grace period' etc.
-    const activeAccounts = accounts
-      .filter((acc: any) => acc.account_status === 1)
-      .map((acc: any) => acc.id)
+      } catch (error: any) {
+        errorCount++
+        logger.error(`Failed to sync accounts for token ${tokenDoc._id}: ${error.message}`)
+        // 如果是 Token 失效，更新 Token 状态
+        if (error.message?.includes('Session has expired') || error.response?.data?.error?.code === 190) {
+            await FbToken.findByIdAndUpdate(tokenDoc._id, { status: 'expired' })
+        }
+      }
+    }
 
-    logger.timerLog('[Facebook API] fetchUserAdAccounts', startTime)
-    logger.info(
-      `Found ${activeAccounts.length} active ad accounts out of ${accounts.length} total.`,
-    )
+    logger.info(`Account sync completed. Synced: ${syncedCount}, Errors: ${errorCount}, Duration: ${Date.now() - startTime}ms`)
+    return { syncedCount, errorCount }
 
-    return activeAccounts
   } catch (error: any) {
-    const errMsg = error.response?.data?.error?.message || error.message
-    logger.error(
-      `[Facebook API] fetchUserAdAccounts failed: ${errMsg}`,
-      error.response?.data,
-    )
-    throw new Error(`Failed to fetch user ad accounts: ${errMsg}`)
+    logger.error('Account sync failed:', error)
+    throw error
+  }
+}
+
+// Facebook 账户状态映射
+// 1 = ACTIVE, 2 = DISABLED, 3 = UNSETTLED, 7 = PENDING_RISK_REVIEW, 8 = IN_GRACE_PERIOD, 9 = PENDING_CLOSURE, 100 = CLOSED, 101 = PENDING_CLOSURE, 201 = ANY_ACTIVE, 202 = ANY_CLOSED
+const mapAccountStatus = (status: number): string => {
+  switch (status) {
+    case 1: return 'active'
+    case 2: return 'disabled'
+    case 3: return 'unsettled'
+    case 7: return 'review'
+    case 100: return 'closed'
+    default: return `status_${status}`
+  }
+}
+
+export const getAccounts = async (filters: any = {}, pagination: { page: number, limit: number }) => {
+    const query: any = {}
+    
+    if (filters.optimizer) {
+        query.operator = { $regex: filters.optimizer, $options: 'i' }
+    }
+    if (filters.status) {
+        query.status = filters.status
+    }
+    if (filters.accountId) {
+        query.accountId = { $regex: filters.accountId, $options: 'i' }
+    }
+    if (filters.name) {
+        query.name = { $regex: filters.name, $options: 'i' }
+    }
+
+    const total = await Account.countDocuments(query)
+    const accounts = await Account.find(query)
+        .sort({ createdAt: -1 })
+        .skip((pagination.page - 1) * pagination.limit)
+        .limit(pagination.limit)
+
+    return {
+        data: accounts,
+        pagination: {
+            total,
+            page: pagination.page,
+            limit: pagination.limit,
+            pages: Math.ceil(total / pagination.limit)
+        }
   }
 }

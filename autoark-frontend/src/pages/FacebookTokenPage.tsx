@@ -177,12 +177,12 @@ export default function FacebookTokenPage() {
               </svg>
               添加 Token
             </button>
-            <button
-              onClick={loadTokens}
+          <button
+            onClick={loadTokens}
               className="px-5 py-2.5 bg-slate-800/50 hover:bg-slate-700/50 border border-slate-700/50 rounded-xl text-sm font-medium text-slate-300 transition-colors backdrop-blur-sm hover:border-slate-600"
-            >
-              刷新列表
-            </button>
+          >
+            刷新列表
+          </button>
           </div>
         </header>
 
@@ -220,12 +220,12 @@ export default function FacebookTokenPage() {
                筛选条件
              </h2>
              {(filterOptimizer || filterStatus || filterStartDate || filterEndDate) && (
-                 <button 
+            <button
                     onClick={handleClearFilter}
                     className="text-xs text-indigo-400 hover:text-indigo-300 hover:underline transition-colors"
-                 >
+            >
                     重置筛选
-                 </button>
+            </button>
              )}
           </div>
           
@@ -243,16 +243,16 @@ export default function FacebookTokenPage() {
             <div className="group">
               <label className="block text-xs font-medium text-slate-400 mb-2 group-focus-within:text-indigo-400 transition-colors">状态</label>
               <div className="relative">
-                <select
-                  value={filterStatus}
-                  onChange={(e) => setFilterStatus(e.target.value)}
+              <select
+                value={filterStatus}
+                onChange={(e) => setFilterStatus(e.target.value)}
                   className="w-full px-4 py-2.5 bg-slate-800/50 border border-slate-700 rounded-xl text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500/50 transition-all appearance-none cursor-pointer"
-                >
+              >
                   <option value="">全部状态</option>
-                  <option value="active">有效</option>
-                  <option value="expired">已过期</option>
-                  <option value="invalid">无效</option>
-                </select>
+                <option value="active">有效</option>
+                <option value="expired">已过期</option>
+                <option value="invalid">无效</option>
+              </select>
                 <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-500">
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" /></svg>
                 </div>
@@ -277,19 +277,19 @@ export default function FacebookTokenPage() {
               />
             </div>
             <div>
-               <button
-                 onClick={handleApplyFilter}
+            <button
+              onClick={handleApplyFilter}
                  className="w-full px-4 py-2.5 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-xl text-sm font-medium transition-all hover:shadow-lg border border-transparent hover:border-slate-500"
-               >
+            >
                  执行筛选
-               </button>
+            </button>
             </div>
           </div>
         </section>
 
         {/* Token 列表 */}
         <section className="bg-slate-900/40 backdrop-blur-xl border border-white/5 rounded-2xl overflow-hidden shadow-xl">
-          <div className="overflow-x-auto">
+            <div className="overflow-x-auto">
             <table className="w-full text-sm text-left">
               <thead>
                 <tr className="border-b border-white/5 bg-white/5">
@@ -300,8 +300,8 @@ export default function FacebookTokenPage() {
                   <th className="px-6 py-5 font-semibold text-slate-300">最后检查</th>
                   <th className="px-6 py-5 font-semibold text-slate-300">创建时间</th>
                   <th className="px-6 py-5 font-semibold text-slate-300 text-right">操作</th>
-                </tr>
-              </thead>
+                  </tr>
+                </thead>
               <tbody className="divide-y divide-white/5">
                 {loadingList ? (
                     <tr><td colSpan={7} className="px-6 py-12 text-center text-slate-500 animate-pulse">加载数据中...</td></tr>
@@ -311,39 +311,39 @@ export default function FacebookTokenPage() {
                     tokens.map((item) => (
                   <tr key={item.id} className="group hover:bg-white/[0.02] transition-colors">
                     <td className="px-6 py-4">
-                      <div>
+                        <div>
                         <div className="font-medium text-slate-200 group-hover:text-indigo-300 transition-colors">{item.fbUserName || '-'}</div>
                         <div className="text-xs text-slate-500 font-mono mt-1 opacity-70">
-                          {item.fbUserId || '-'}
+                            {item.fbUserId || '-'}
+                          </div>
                         </div>
-                      </div>
-                    </td>
+                      </td>
                     <td className="px-6 py-4">
-                      {editingToken?.id === item.id ? (
+                        {editingToken?.id === item.id ? (
                         <div className="flex items-center gap-2">
-                             <input
-                                type="text"
-                                value={editOptimizer}
-                                onChange={(e) => setEditOptimizer(e.target.value)}
+                          <input
+                            type="text"
+                            value={editOptimizer}
+                            onChange={(e) => setEditOptimizer(e.target.value)}
                                 className="px-3 py-1.5 bg-slate-950/50 border border-indigo-500/50 rounded-lg text-slate-200 text-xs w-32 focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
-                                onKeyDown={(e) => {
-                                    if (e.key === 'Enter') handleSaveEdit()
-                                    if (e.key === 'Escape') setEditingToken(null)
-                                }}
-                                autoFocus
-                             />
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') handleSaveEdit()
+                              if (e.key === 'Escape') setEditingToken(null)
+                            }}
+                            autoFocus
+                          />
                         </div>
-                      ) : (
+                        ) : (
                         <div className="flex items-center gap-2">
                             <div className="w-6 h-6 rounded-full bg-gradient-to-br from-slate-700 to-slate-800 flex items-center justify-center text-[10px] font-bold text-slate-400 border border-white/5">
                                 {(item.optimizer || '?').charAt(0).toUpperCase()}
                             </div>
                             <span className="text-slate-300">{item.optimizer || '-'}</span>
                         </div>
-                      )}
-                    </td>
+                        )}
+                      </td>
                     <td className="px-6 py-4">
-                      <span
+                        <span
                         className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium border ${
                           item.status === 'active'
                             ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20 shadow-[0_0_10px_rgba(16,185,129,0.1)]'
@@ -351,78 +351,78 @@ export default function FacebookTokenPage() {
                               ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
                               : 'bg-red-500/10 text-red-400 border-red-500/20'
                         }`}
-                      >
+                        >
                         <span className={`w-1.5 h-1.5 rounded-full mr-1.5 ${
                             item.status === 'active' ? 'bg-emerald-400' : 
                             item.status === 'expired' ? 'bg-amber-400' : 'bg-red-400'
                         }`}></span>
-                        {item.status === 'active'
-                          ? '有效'
-                          : item.status === 'expired'
-                            ? '已过期'
-                            : '无效'}
-                      </span>
-                    </td>
+                          {item.status === 'active'
+                            ? '有效'
+                            : item.status === 'expired'
+                              ? '已过期'
+                              : '无效'}
+                        </span>
+                      </td>
                     <td className="px-6 py-4 text-slate-400 whitespace-nowrap text-xs">
-                      {formatDate(item.expiresAt)}
-                    </td>
+                        {formatDate(item.expiresAt)}
+                      </td>
                     <td className="px-6 py-4 text-slate-400 whitespace-nowrap text-xs">
-                      {formatDate(item.lastCheckedAt)}
-                    </td>
+                        {formatDate(item.lastCheckedAt)}
+                      </td>
                     <td className="px-6 py-4 text-slate-500 whitespace-nowrap text-xs font-mono">
-                      {formatDate(item.createdAt)}
-                    </td>
+                        {formatDate(item.createdAt)}
+                      </td>
                     <td className="px-6 py-4 text-right">
                       <div className="flex items-center justify-end gap-2 opacity-60 group-hover:opacity-100 transition-opacity">
-                        {editingToken?.id === item.id ? (
-                          <>
-                            <button
-                              onClick={handleSaveEdit}
+                          {editingToken?.id === item.id ? (
+                            <>
+                              <button
+                                onClick={handleSaveEdit}
                               className="p-1.5 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 rounded-lg transition-colors"
                               title="保存"
-                            >
+                              >
                               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" /></svg>
-                            </button>
-                            <button
-                              onClick={() => setEditingToken(null)}
+                              </button>
+                              <button
+                                onClick={() => setEditingToken(null)}
                               className="p-1.5 bg-slate-700/50 text-slate-400 hover:bg-slate-700 rounded-lg transition-colors"
                               title="取消"
-                            >
+                              >
                               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
-                            </button>
-                          </>
-                        ) : (
-                          <>
-                            <button
-                              onClick={() => handleCheckStatus(item.id)}
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <button
+                                onClick={() => handleCheckStatus(item.id)}
                               className="p-2 text-slate-400 hover:text-blue-400 hover:bg-blue-500/10 rounded-lg transition-all"
-                              title="检查状态"
-                            >
+                                title="检查状态"
+                              >
                               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
-                            </button>
-                            <button
-                              onClick={() => handleStartEdit(item)}
+                              </button>
+                              <button
+                                onClick={() => handleStartEdit(item)}
                               className="p-2 text-slate-400 hover:text-indigo-400 hover:bg-indigo-500/10 rounded-lg transition-all"
-                              title="编辑优化师"
-                            >
+                                title="编辑优化师"
+                              >
                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
-                            </button>
-                            <button
-                              onClick={() => handleDelete(item.id)}
+                              </button>
+                              <button
+                                onClick={() => handleDelete(item.id)}
                               className="p-2 text-slate-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-all"
-                              title="删除"
-                            >
+                                title="删除"
+                              >
                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                            </button>
-                          </>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
                 )))}
-              </tbody>
-            </table>
-          </div>
+                </tbody>
+              </table>
+            </div>
         </section>
       </div>
 
