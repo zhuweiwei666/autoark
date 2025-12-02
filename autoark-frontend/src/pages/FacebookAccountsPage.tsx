@@ -272,10 +272,90 @@ export default function FacebookAccountsPage() {
             <table className="w-full text-sm text-left">
               <thead>
                 <tr className="border-b border-white/5 bg-white/5">
-                  <th className="px-6 py-5 font-semibold text-slate-300">账户信息</th>
-                  <th className="px-6 py-5 font-semibold text-slate-300">状态</th>
-                  <th className="px-6 py-5 font-semibold text-slate-300">余额 / 花费</th>
-                  <th className="px-6 py-5 font-semibold text-slate-300">优化师</th>
+                  <th 
+                    className="px-6 py-5 font-semibold text-slate-300 cursor-pointer hover:bg-white/10 transition-colors select-none"
+                    onClick={() => {
+                      const direction = sortConfig?.key === 'name' && sortConfig.direction === 'asc' ? 'desc' : 'asc'
+                      setSortConfig({ key: 'name', direction })
+                    }}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span>账户信息</span>
+                      {sortConfig?.key === 'name' && (
+                        <svg className={`w-4 h-4 ${sortConfig.direction === 'asc' ? '' : 'rotate-180'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 15l7-7 7 7" />
+                        </svg>
+                      )}
+                      {sortConfig?.key !== 'name' && (
+                        <svg className="w-4 h-4 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
+                        </svg>
+                      )}
+                    </div>
+                  </th>
+                  <th 
+                    className="px-6 py-5 font-semibold text-slate-300 cursor-pointer hover:bg-white/10 transition-colors select-none"
+                    onClick={() => {
+                      const direction = sortConfig?.key === 'status' && sortConfig.direction === 'asc' ? 'desc' : 'asc'
+                      setSortConfig({ key: 'status', direction })
+                    }}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span>状态</span>
+                      {sortConfig?.key === 'status' && (
+                        <svg className={`w-4 h-4 ${sortConfig.direction === 'asc' ? '' : 'rotate-180'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 15l7-7 7 7" />
+                        </svg>
+                      )}
+                      {sortConfig?.key !== 'status' && (
+                        <svg className="w-4 h-4 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
+                        </svg>
+                      )}
+                    </div>
+                  </th>
+                  <th 
+                    className="px-6 py-5 font-semibold text-slate-300 cursor-pointer hover:bg-white/10 transition-colors select-none"
+                    onClick={() => {
+                      const direction = sortConfig?.key === 'balance' && sortConfig.direction === 'asc' ? 'desc' : 'asc'
+                      setSortConfig({ key: 'balance', direction })
+                    }}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span>余额 / 花费</span>
+                      {sortConfig?.key === 'balance' && (
+                        <svg className={`w-4 h-4 ${sortConfig.direction === 'asc' ? '' : 'rotate-180'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 15l7-7 7 7" />
+                        </svg>
+                      )}
+                      {sortConfig?.key !== 'balance' && (
+                        <svg className="w-4 h-4 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
+                        </svg>
+                      )}
+                    </div>
+                  </th>
+                  <th 
+                    className="px-6 py-5 font-semibold text-slate-300 cursor-pointer hover:bg-white/10 transition-colors select-none"
+                    onClick={() => {
+                      const direction = sortConfig?.key === 'operator' && sortConfig.direction === 'asc' ? 'desc' : 'asc'
+                      setSortConfig({ key: 'operator', direction })
+                    }}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span>优化师</span>
+                      {sortConfig?.key === 'operator' && (
+                        <svg className={`w-4 h-4 ${sortConfig.direction === 'asc' ? '' : 'rotate-180'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 15l7-7 7 7" />
+                        </svg>
+                      )}
+                      {sortConfig?.key !== 'operator' && (
+                        <svg className="w-4 h-4 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
+                        </svg>
+                      )}
+                    </div>
+                  </th>
                   <th className="px-6 py-5 font-semibold text-slate-300 text-right">操作</th>
                 </tr>
               </thead>
