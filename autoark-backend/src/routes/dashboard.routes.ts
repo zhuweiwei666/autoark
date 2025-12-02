@@ -294,14 +294,14 @@ router.get('/', (_req, res) => {
       
       // Update menu active state
       document.querySelectorAll('[id^="menu-"]').forEach(btn => {
-        btn.classList.remove('bg-slate-200', 'border', 'border-slate-300')
-        btn.classList.add('bg-transparent')
+        btn.classList.remove('bg-slate-200', 'border', 'border-slate-300', 'text-slate-900')
+        btn.classList.add('text-slate-700')
       })
       
       const activeBtn = document.getElementById('menu-' + viewName)
       if (activeBtn) {
-        activeBtn.classList.add('bg-slate-200', 'border', 'border-slate-300')
-        activeBtn.classList.remove('bg-transparent')
+        activeBtn.classList.add('bg-slate-200', 'border', 'border-slate-300', 'text-slate-900')
+        activeBtn.classList.remove('text-slate-700')
       }
     }
     
@@ -350,11 +350,11 @@ router.get('/', (_req, res) => {
         const badge = document.getElementById('health-badge')
         if (data.mongoConnected) {
           badge.textContent = 'Healthy'
-          badge.classList.remove('bg-red-100', 'text-red-700')
+          badge.classList.remove('bg-red-100', 'text-red-700', 'bg-slate-100', 'text-slate-700')
           badge.classList.add('bg-emerald-100', 'text-emerald-700')
         } else {
           badge.textContent = 'Degraded'
-          badge.classList.remove('bg-emerald-100', 'text-emerald-700')
+          badge.classList.remove('bg-emerald-100', 'text-emerald-700', 'bg-slate-100', 'text-slate-700')
           badge.classList.add('bg-red-100', 'text-red-700')
         }
       } catch (e) {
