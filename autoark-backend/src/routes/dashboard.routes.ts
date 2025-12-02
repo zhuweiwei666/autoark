@@ -609,7 +609,10 @@ router.get('/', (_req, res) => {
         
         // 优化：如果图表已存在，只更新数据，不重建
         if (campaignRankingChart) {
-          campaignRankingChart.data.labels = sortedData.map(d => (d.campaignName || d.campaignId || 'Unknown').substring(0, 20))
+          campaignRankingChart.data.labels = sortedData.map(d => {
+            const name = d.campaignName || d.campaignId || 'Unknown'
+            return name.length > 25 ? name.substring(0, 25) + '...' : name
+          })
           campaignRankingChart.data.datasets[0].data = sortedData.map(d => d.spend || 0)
           campaignRankingChart.update('none') // 'none' 模式，无动画，更快
           return
@@ -618,7 +621,10 @@ router.get('/', (_req, res) => {
         campaignRankingChart = new Chart(ctx, {
           type: 'bar',
           data: {
-            labels: sortedData.map(d => (d.campaignName || d.campaignId || 'Unknown').substring(0, 20)),
+            labels: sortedData.map(d => {
+              const name = d.campaignName || d.campaignId || 'Unknown'
+              return name.length > 25 ? name.substring(0, 25) + '...' : name
+            }),
             datasets: [{
               label: '消耗 ($)',
               data: sortedData.map(d => d.spend || 0),
@@ -668,7 +674,10 @@ router.get('/', (_req, res) => {
         
         // 优化：如果图表已存在，只更新数据，不重建
         if (countryRankingChart) {
-          countryRankingChart.data.labels = data.map(d => (d.accountName || d.accountId || 'Unknown').substring(0, 20))
+          countryRankingChart.data.labels = data.map(d => {
+            const name = d.accountName || d.accountId || 'Unknown'
+            return name.length > 25 ? name.substring(0, 25) + '...' : name
+          })
           countryRankingChart.data.datasets[0].data = data.map(d => d.spend || 0)
           countryRankingChart.update('none') // 'none' 模式，无动画，更快
           return

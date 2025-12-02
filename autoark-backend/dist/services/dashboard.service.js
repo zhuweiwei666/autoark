@@ -339,6 +339,7 @@ async function getCampaignSpendRanking(limit = 10, startDate, endDate) {
             $project: {
                 _id: 0,
                 campaignId: '$_id',
+                campaignName: { $arrayElemAt: ['$campaign.name', 0] },
                 spend: 1,
                 impressions: 1,
                 clicks: 1,
@@ -411,6 +412,7 @@ async function getCountrySpendRanking(limit = 10, startDate, endDate) {
             $project: {
                 _id: 0,
                 accountId: '$_id',
+                accountName: { $arrayElemAt: ['$account.name', 0] },
                 spend: 1,
                 impressions: 1,
                 clicks: 1,
