@@ -31,43 +31,52 @@ router.get('/', (_req, res) => {
   <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-slate-950 text-slate-100">
-  <!-- Navigation Menu Bar -->
-  <nav class="border-b border-slate-800 bg-slate-900/50 sticky top-0 z-50 backdrop-blur-sm">
-    <div class="max-w-7xl mx-auto px-4 py-3">
-      <div class="flex items-center justify-between">
-        <div class="flex items-center gap-1">
-          <h1 class="text-xl font-bold text-slate-100">AutoArk</h1>
-          <span class="text-xs text-slate-400">V0.1</span>
-        </div>
-        <div class="flex items-center gap-1">
-          <a href="/dashboard" class="px-4 py-2 rounded-lg text-sm font-medium transition-colors text-slate-200 hover:text-slate-100 hover:bg-slate-800/50 bg-slate-800/30 border border-slate-700/50">
-            <span class="flex items-center gap-2">
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
-              </svg>
-              仪表盘
-            </span>
-          </a>
-          <a href="/fb-token" class="px-4 py-2 rounded-lg text-sm font-medium transition-colors text-slate-200 hover:text-slate-100 hover:bg-slate-800/50">
-            <span class="flex items-center gap-2">
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path>
-              </svg>
-              Token 管理
-            </span>
-          </a>
-        </div>
-        <div class="flex items-center gap-3">
-          <span id="health-badge" class="text-xs px-3 py-1 rounded-full bg-slate-800 text-slate-300">Loading...</span>
-        </div>
+  <div class="flex h-screen overflow-hidden">
+    <!-- Left Sidebar Menu -->
+    <aside class="w-64 bg-slate-900/80 border-r border-slate-800 flex flex-col">
+      <!-- Logo -->
+      <div class="p-4 border-b border-slate-800">
+        <h1 class="text-xl font-bold text-slate-100">AutoArk</h1>
+        <span class="text-xs text-slate-400">V0.1</span>
       </div>
-    </div>
-  </nav>
+      
+      <!-- Menu Items -->
+      <nav class="flex-1 p-4 space-y-2">
+        <button 
+          onclick="switchView('dashboard')" 
+          id="menu-dashboard"
+          class="w-full px-4 py-3 rounded-lg text-sm font-medium transition-colors text-slate-200 hover:text-slate-100 hover:bg-slate-800/50 bg-slate-800/30 border border-slate-700/50 flex items-center gap-3"
+        >
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
+          </svg>
+          <span>仪表盘</span>
+        </button>
+        <button 
+          onclick="switchView('token')" 
+          id="menu-token"
+          class="w-full px-4 py-3 rounded-lg text-sm font-medium transition-colors text-slate-200 hover:text-slate-100 hover:bg-slate-800/50 flex items-center gap-3"
+        >
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path>
+          </svg>
+          <span>Token 管理</span>
+        </button>
+      </nav>
+      
+      <!-- Health Badge -->
+      <div class="p-4 border-t border-slate-800">
+        <span id="health-badge" class="text-xs px-3 py-1 rounded-full bg-slate-800 text-slate-300 block text-center">Loading...</span>
+      </div>
+    </aside>
 
-  <div class="min-h-screen max-w-6xl mx-auto px-4 py-6 space-y-6">
-    <header class="flex items-center justify-between">
-      <h2 class="text-2xl font-bold text-slate-100">Dashboard</h2>
-    </header>
+    <!-- Main Content Area -->
+    <main class="flex-1 overflow-y-auto">
+      <!-- Dashboard View -->
+      <div id="view-dashboard" class="h-full p-6 space-y-6">
+        <header class="flex items-center justify-between">
+          <h2 class="text-2xl font-bold text-slate-100">Dashboard</h2>
+        </header>
 
     <section class="grid grid-cols-1 md:grid-cols-2 gap-4">
       <!-- System Health -->
@@ -138,9 +147,50 @@ router.get('/', (_req, res) => {
         </table>
       </div>
     </section>
+      </div>
+
+      <!-- Token Management View -->
+      <div id="view-token" class="h-full hidden">
+        <iframe 
+          src="/fb-token" 
+          class="w-full h-full border-0"
+          title="Token Management"
+        ></iframe>
+      </div>
+    </main>
   </div>
 
   <script>
+    // View switching function
+    function switchView(viewName) {
+      // Hide all views
+      document.querySelectorAll('[id^="view-"]').forEach(view => {
+        view.classList.add('hidden')
+      })
+      
+      // Show selected view
+      const selectedView = document.getElementById(\`view-\${viewName}\`)
+      if (selectedView) {
+        selectedView.classList.remove('hidden')
+      }
+      
+      // Update menu active state
+      document.querySelectorAll('[id^="menu-"]').forEach(btn => {
+        btn.classList.remove('bg-slate-800/30', 'border', 'border-slate-700/50')
+        btn.classList.add('bg-transparent')
+      })
+      
+      const activeBtn = document.getElementById(\`menu-\${viewName}\`)
+      if (activeBtn) {
+        activeBtn.classList.add('bg-slate-800/30', 'border', 'border-slate-700/50')
+        activeBtn.classList.remove('bg-transparent')
+      }
+    }
+    
+    // Initialize: show dashboard by default
+    switchView('dashboard')
+
+    // Format functions
     function formatTime(value) {
       if (!value) return '-'
       try {
