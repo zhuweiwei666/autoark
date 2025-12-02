@@ -125,7 +125,7 @@ router.get('/', (_req, res) => {
     </aside>
 
     <!-- Main Content Area -->
-    <main class="flex-1 overflow-y-auto">
+    <main class="flex-1 overflow-hidden">
       <!-- Dashboard View -->
       <div id="view-dashboard" class="h-full p-6 space-y-6 overflow-y-auto">
         <header class="flex items-center justify-between">
@@ -227,11 +227,11 @@ router.get('/', (_req, res) => {
     <section class="bg-slate-900/70 rounded-xl border border-slate-800 p-4">
       <div class="flex items-center justify-between mb-2">
         <h2 class="font-semibold text-sm text-slate-200">Cron / Sync Logs</h2>
-        <span class="text-[10px] text-slate-500">latest 50</span>
+        <span class="text-[10px] text-slate-500">latest 20</span>
       </div>
-      <div class="overflow-x-auto">
+      <div class="overflow-x-auto max-h-64 overflow-y-auto">
         <table class="w-full text-xs text-left border-collapse" id="cron-table">
-          <thead class="bg-slate-900/90 text-slate-400">
+          <thead class="bg-slate-900/90 text-slate-400 sticky top-0">
             <tr>
               <th class="px-2 py-1 border-b border-slate-800">Time</th>
               <th class="px-2 py-1 border-b border-slate-800">Job</th>
@@ -250,11 +250,11 @@ router.get('/', (_req, res) => {
     <section class="bg-slate-900/70 rounded-xl border border-slate-800 p-4">
       <div class="flex items-center justify-between mb-2">
         <h2 class="font-semibold text-sm text-slate-200">Rules / Ops Logs</h2>
-        <span class="text-[10px] text-slate-500">latest 50</span>
+        <span class="text-[10px] text-slate-500">latest 20</span>
       </div>
-      <div class="overflow-x-auto">
+      <div class="overflow-x-auto max-h-64 overflow-y-auto">
         <table class="w-full text-xs text-left border-collapse" id="ops-table">
-          <thead class="bg-slate-900/90 text-slate-400">
+          <thead class="bg-slate-900/90 text-slate-400 sticky top-0">
             <tr>
               <th class="px-2 py-1 border-b border-slate-800">Time</th>
               <th class="px-2 py-1 border-b border-slate-800">Action</th>
@@ -418,7 +418,7 @@ router.get('/', (_req, res) => {
 
     async function loadCronLogs() {
       try {
-        const { data } = await fetchJSON(API_BASE + '/api/cron-logs?limit=50')
+        const { data } = await fetchJSON(API_BASE + '/api/cron-logs?limit=20')
         renderCronLogs(data || [])
       } catch (e) {
         console.error(e)
@@ -444,7 +444,7 @@ router.get('/', (_req, res) => {
 
     async function loadOpsLogs() {
       try {
-        const { data } = await fetchJSON(API_BASE + '/api/ops-logs?limit=50')
+        const { data } = await fetchJSON(API_BASE + '/api/ops-logs?limit=20')
         renderOpsLogs(data || [])
       } catch (e) {
         console.error(e)
