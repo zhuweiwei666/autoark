@@ -35,5 +35,9 @@ const metricsDailySchema = new mongoose.Schema(
 metricsDailySchema.index({ adId: 1, date: 1 }, { unique: true })
 // New compound unique index for campaign level insights
 metricsDailySchema.index({ campaignId: 1, date: 1 }, { unique: true })
+// 性能优化：为日期范围查询添加索引
+metricsDailySchema.index({ date: 1 })
+metricsDailySchema.index({ date: 1, campaignId: 1 })
+metricsDailySchema.index({ date: 1, accountId: 1 })
 
 export default mongoose.model('MetricsDaily', metricsDailySchema)

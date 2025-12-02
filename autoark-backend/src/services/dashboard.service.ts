@@ -332,8 +332,14 @@ export async function getCampaignSpendRanking(limit = 10, startDate?: string, en
   const today = endDate || new Date().toISOString().split('T')[0]
   const sevenDaysAgo = startDate || new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
 
+  // 优化：先聚合和排序，再 lookup，减少 lookup 的数据量
   const data = await MetricsDaily.aggregate([
-    { $match: { date: { $gte: sevenDaysAgo, $lte: today }, campaignId: { $exists: true, $ne: null } } },
+    { 
+      $match: { 
+        date: { $gte: sevenDaysAgo, $lte: today }, 
+        campaignId: { $exists: true, $ne: null } 
+      } 
+    },
     {
       $group: {
         _id: '$campaignId',
@@ -358,7 +364,6 @@ export async function getCampaignSpendRanking(limit = 10, startDate?: string, en
       $project: {
         _id: 0,
         campaignId: '$_id',
-        campaignName: { $arrayElemAt: ['$campaign.name', 0] },
         spend: 1,
         impressions: 1,
         clicks: 1,
@@ -407,6 +412,7 @@ export async function getCountrySpendRanking(limit = 10, startDate?: string, end
 
   // 注意：MetricsDaily 中没有 country 字段，需要从 Campaign 或其他地方获取
   // 这里先返回按 accountId 分组的数据，后续可以扩展
+  // 优化：先聚合和排序，再 lookup，减少 lookup 的数据量
   const data = await MetricsDaily.aggregate([
     { $match: { date: { $gte: sevenDaysAgo, $lte: today } } },
     {
@@ -433,7 +439,6 @@ export async function getCountrySpendRanking(limit = 10, startDate?: string, end
       $project: {
         _id: 0,
         accountId: '$_id',
-        accountName: { $arrayElemAt: ['$account.name', 0] },
         spend: 1,
         impressions: 1,
         clicks: 1,

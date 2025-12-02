@@ -362,7 +362,7 @@ export default function FacebookCampaignsPage() {
     }
   }
 
-  // 根据可见列和顺序过滤
+  // 根据可见列和顺序过滤 - 使用 useMemo 缓存，避免频繁重新计算
   const columnsToRender = useMemo(() => {
     // 如果 columnOrder 为空，使用默认顺序
     const order = columnOrder.length > 0 ? columnOrder : ALL_CAMPAIGN_COLUMNS.map(col => col.key)
@@ -377,10 +377,12 @@ export default function FacebookCampaignsPage() {
       .filter((col): col is typeof ALL_CAMPAIGN_COLUMNS[0] => col !== undefined)
   }, [visibleColumns, columnOrder])
 
-  // 错误处理：如果 columnsToRender 为空，使用默认列
-  const safeColumnsToRender = columnsToRender.length > 0 
-    ? columnsToRender 
-    : ALL_CAMPAIGN_COLUMNS.filter(col => col.defaultVisible)
+  // 错误处理：如果 columnsToRender 为空，使用默认列 - 也使用 useMemo
+  const safeColumnsToRender = useMemo(() => {
+    return columnsToRender.length > 0 
+      ? columnsToRender 
+      : ALL_CAMPAIGN_COLUMNS.filter(col => col.defaultVisible)
+  }, [columnsToRender])
 
   return (
     <div className="min-h-screen bg-[#0B1120] text-slate-200 p-6 relative overflow-hidden">
@@ -718,7 +720,8 @@ export default function FacebookCampaignsPage() {
                         </button>
                       </td>
                     </tr>
-                  ))
+                    )
+                  })
                 )}
               </tbody>
             </table>

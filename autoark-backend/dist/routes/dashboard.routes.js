@@ -683,13 +683,31 @@ router.get('/', (_req, res) => {
       }
     }
 
+    let isLoadingDashboardData = false
+    let lastLoadTime = 0
+    const MIN_LOAD_INTERVAL = 2000 // 最小加载间隔 2 秒
+    
     async function loadDashboardData() {
-      await Promise.all([
-        loadCoreMetrics(),
-        loadSpendTrend(),
-        loadCampaignRanking(),
-        loadCountryRanking(),
-      ])
+      // 优化：防止并发请求和频繁请求
+      const now = Date.now()
+      if (isLoadingDashboardData || (now - lastLoadTime < MIN_LOAD_INTERVAL)) {
+        return
+      }
+      isLoadingDashboardData = true
+      lastLoadTime = now
+      try {
+        // 优化：串行加载，避免同时发起太多请求
+        await loadCoreMetrics()
+        await Promise.all([
+          loadSpendTrend(),
+          loadCampaignRanking(),
+          loadCountryRanking(),
+        ])
+      } catch (e) {
+        console.error('Failed to load dashboard data', e)
+      } finally {
+        isLoadingDashboardData = false
+      }
     }
 
     async function init() {
