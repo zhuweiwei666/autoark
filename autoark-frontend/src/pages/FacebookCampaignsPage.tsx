@@ -607,10 +607,10 @@ export default function FacebookCampaignsPage() {
         )}
 
         {/* 筛选区域 */}
-        <section className="bg-slate-900/40 backdrop-blur-xl border border-white/5 rounded-2xl p-6 shadow-xl">
+        <section className="bg-white rounded-3xl p-6 shadow-lg shadow-black/5 border border-slate-200">
           <div className="flex items-center justify-between mb-6">
-             <h2 className="text-lg font-semibold text-slate-200 flex items-center gap-2">
-               <svg className="w-5 h-5 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" /></svg>
+             <h2 className="text-lg font-semibold text-slate-900 flex items-center gap-2">
+               <svg className="w-5 h-5 text-slate-700" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" /></svg>
                筛选条件
              </h2>
              {(filters.name || filters.accountId || filters.status || filters.objective || filters.startDate !== today || filters.endDate !== today) && (
@@ -702,16 +702,16 @@ export default function FacebookCampaignsPage() {
           </div>
         </section>
 
-        {/* 广告系列列表 */}
-        <section className="bg-slate-900/40 backdrop-blur-xl border border-white/5 rounded-2xl overflow-hidden shadow-xl">
+        {/* 纯白底广告系列列表 */}
+        <section className="bg-white rounded-3xl overflow-hidden shadow-lg shadow-black/5 border border-slate-200">
           <div className="overflow-x-auto">
             <table className="w-full text-sm text-left">
               <thead>
-                <tr className="border-b border-white/5 bg-white/5">
+                <tr className="border-b border-slate-200 bg-slate-50">
                   {safeColumnsToRender.map(col => (
                     <th 
                       key={col.key} 
-                      className="px-6 py-5 font-semibold text-slate-300 cursor-pointer hover:bg-white/10 transition-colors select-none"
+                      className="px-6 py-5 font-semibold text-slate-900 cursor-pointer hover:bg-slate-100 transition-colors select-none"
                       onClick={() => {
                         const direction = sortConfig?.key === col.key && sortConfig.direction === 'asc' ? 'desc' : 'asc'
                         setSortConfig({ key: col.key, direction })
@@ -735,7 +735,7 @@ export default function FacebookCampaignsPage() {
                   <th className="px-6 py-5 font-semibold text-slate-900 text-right">操作</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-white/5">
+              <tbody>
                 {loading ? (
                   <tr><td colSpan={safeColumnsToRender.length + 1} className="px-6 py-12 text-center text-slate-500 animate-pulse">加载中...</td></tr>
                 ) : campaigns.length === 0 ? (

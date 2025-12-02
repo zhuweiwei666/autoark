@@ -274,7 +274,7 @@ export default function FacebookAccountsPage() {
         </section>
 
         {/* 列表区域 */}
-        <section className="bg-slate-900/40 backdrop-blur-xl border border-white/5 rounded-2xl overflow-hidden shadow-xl">
+        <section className="bg-white rounded-3xl overflow-hidden shadow-lg shadow-black/5 border border-slate-200">
           <div className="overflow-x-auto">
             <table className="w-full text-sm text-left">
               <thead>
