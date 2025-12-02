@@ -12,26 +12,106 @@ import {
 // Removed: import { Select } from '../components/ui/select'
 // Removed: import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '../components/ui/dialog'
 
-// 默认列定义
+// 格式化函数
+const formatCurrency = (v: number) => v ? `$${(v || 0).toFixed(2)}` : '-'
+const formatPercent = (v: number) => v ? `${(v * 100).toFixed(2)}%` : '-'
+const formatNumber = (v: number) => v !== undefined && v !== null ? v.toLocaleString() : '-'
+const formatDate = (v: string) => v ? new Date(v).toLocaleString() : '-'
+const formatBudget = (v: string | number) => {
+  const num = typeof v === 'string' ? parseFloat(v) : v
+  return num ? `$${(num / 100).toFixed(2)}` : '-'
+}
+
+// 默认列定义 - 使用 Facebook API 原始字段名
 const ALL_CAMPAIGN_COLUMNS = [
-  { key: 'name', label: '广告系列名称', defaultVisible: true, format: (v: string) => v || '-' },
-  { key: 'accountId', label: '账户ID', defaultVisible: true, format: (v: string) => v || '-' },
-  { key: 'status', label: '状态', defaultVisible: true, format: (v: string) => v.toUpperCase() },
-  { key: 'spend', label: '消耗', defaultVisible: true, format: (v: number) => `$${(v || 0).toFixed(2)}` },
-  { key: 'cpm', label: 'CPM', defaultVisible: true, format: (v: number) => (v ? v.toFixed(2) : '-') },
-  { key: 'ctr', label: 'CTR', defaultVisible: true, format: (v: number) => (v ? `${(v * 100).toFixed(2)}%` : '-') },
-  { key: 'cpc', label: 'CPC', defaultVisible: true, format: (v: number) => (v ? `$${v.toFixed(2)}` : '-') },
-  { key: 'cpi', label: 'CPI', defaultVisible: false, format: (v: number) => (v ? `$${v.toFixed(2)}` : '-') },
-  { key: 'purchase_value', label: '购物转化价值', defaultVisible: false, format: (v: number) => (v ? `$${v.toFixed(2)}` : '-') },
-  { key: 'roas', label: 'ROAS', defaultVisible: false, format: (v: number) => (v ? `${(v * 100).toFixed(2)}%` : '-') },
-  { key: 'event_conversions', label: '事件转化次数', defaultVisible: false, format: (v: number) => v || '-' },
-  { key: 'installs', label: '安装量', defaultVisible: true, format: (v: number) => v || 0 },
-  { key: 'objective', label: '目标', defaultVisible: false, format: (v: string) => v || '-' },
-  { key: 'buying_type', label: '购买类型', defaultVisible: false, format: (v: string) => v || '-' },
-  { key: 'daily_budget', label: '日预算', defaultVisible: false, format: (v: string) => v ? `$${(parseFloat(v) / 100).toFixed(2)}` : '-' },
-  { key: 'budget_remaining', label: '剩余预算', defaultVisible: false, format: (v: string) => v ? `$${(parseFloat(v) / 100).toFixed(2)}` : '-' },
-  { key: 'created_time', label: '创建时间', defaultVisible: false, format: (v: string) => v ? new Date(v).toLocaleString() : '-' },
-  { key: 'updated_time', label: '更新时间', defaultVisible: false, format: (v: string) => v ? new Date(v).toLocaleString() : '-' },
+  // Campaign 基础字段
+  { key: 'id', label: 'id', defaultVisible: false, format: (v: any) => v || '-' },
+  { key: 'name', label: 'name', defaultVisible: true, format: (v: string) => v || '-' },
+  { key: 'account_id', label: 'account_id', defaultVisible: true, format: (v: string) => v || '-' },
+  { key: 'status', label: 'status', defaultVisible: true, format: (v: string) => v ? v.toUpperCase() : '-' },
+  { key: 'objective', label: 'objective', defaultVisible: false, format: (v: string) => v || '-' },
+  { key: 'buying_type', label: 'buying_type', defaultVisible: false, format: (v: string) => v || '-' },
+  { key: 'daily_budget', label: 'daily_budget', defaultVisible: false, format: formatBudget },
+  { key: 'budget_remaining', label: 'budget_remaining', defaultVisible: false, format: formatBudget },
+  { key: 'lifetime_budget', label: 'lifetime_budget', defaultVisible: false, format: formatBudget },
+  { key: 'start_time', label: 'start_time', defaultVisible: false, format: formatDate },
+  { key: 'stop_time', label: 'stop_time', defaultVisible: false, format: formatDate },
+  { key: 'created_time', label: 'created_time', defaultVisible: false, format: formatDate },
+  { key: 'updated_time', label: 'updated_time', defaultVisible: false, format: formatDate },
+  { key: 'bid_strategy', label: 'bid_strategy', defaultVisible: false, format: (v: string) => v || '-' },
+  { key: 'bid_amount', label: 'bid_amount', defaultVisible: false, format: formatCurrency },
+  { key: 'source_campaign_id', label: 'source_campaign_id', defaultVisible: false, format: (v: string) => v || '-' },
+  
+  // Insights 基础指标
+  { key: 'impressions', label: 'impressions', defaultVisible: true, format: formatNumber },
+  { key: 'clicks', label: 'clicks', defaultVisible: true, format: formatNumber },
+  { key: 'unique_clicks', label: 'unique_clicks', defaultVisible: false, format: formatNumber },
+  { key: 'spend', label: 'spend', defaultVisible: true, format: formatCurrency },
+  { key: 'reach', label: 'reach', defaultVisible: false, format: formatNumber },
+  { key: 'frequency', label: 'frequency', defaultVisible: false, format: (v: number) => v ? v.toFixed(2) : '-' },
+  
+  // Insights 成本指标
+  { key: 'cpc', label: 'cpc', defaultVisible: true, format: formatCurrency },
+  { key: 'cpm', label: 'cpm', defaultVisible: true, format: formatCurrency },
+  { key: 'cpp', label: 'cpp', defaultVisible: false, format: formatCurrency },
+  { key: 'cpa', label: 'cpa', defaultVisible: false, format: formatCurrency },
+  { key: 'ctr', label: 'ctr', defaultVisible: true, format: formatPercent },
+  { key: 'cost_per_conversion', label: 'cost_per_conversion', defaultVisible: false, format: formatCurrency },
+  { key: 'conversion_rate', label: 'conversion_rate', defaultVisible: false, format: formatPercent },
+  
+  // Insights 转化指标
+  { key: 'conversions', label: 'conversions', defaultVisible: false, format: formatNumber },
+  { key: 'value', label: 'value', defaultVisible: false, format: formatCurrency },
+  
+  // Insights 视频指标
+  { key: 'video_play_actions', label: 'video_play_actions', defaultVisible: false, format: formatNumber },
+  { key: 'video_30_sec_watched_actions', label: 'video_30_sec_watched_actions', defaultVisible: false, format: formatNumber },
+  { key: 'video_avg_time_watched_actions', label: 'video_avg_time_watched_actions', defaultVisible: false, format: (v: number) => v ? `${v.toFixed(2)}s` : '-' },
+  { key: 'video_p100_watched_actions', label: 'video_p100_watched_actions', defaultVisible: false, format: formatNumber },
+  { key: 'video_p25_watched_actions', label: 'video_p25_watched_actions', defaultVisible: false, format: formatNumber },
+  { key: 'video_p50_watched_actions', label: 'video_p50_watched_actions', defaultVisible: false, format: formatNumber },
+  { key: 'video_p75_watched_actions', label: 'video_p75_watched_actions', defaultVisible: false, format: formatNumber },
+  { key: 'video_p95_watched_actions', label: 'video_p95_watched_actions', defaultVisible: false, format: formatNumber },
+  { key: 'video_thruplay_watched_actions', label: 'video_thruplay_watched_actions', defaultVisible: false, format: formatNumber },
+  { key: 'video_time_watched_actions', label: 'video_time_watched_actions', defaultVisible: false, format: (v: number) => v ? `${v.toFixed(2)}s` : '-' },
+  
+  // Actions - 常见操作类型（动态字段，从 actions 数组中提取）
+  { key: 'mobile_app_install', label: 'mobile_app_install', defaultVisible: true, format: formatNumber },
+  { key: 'link_click', label: 'link_click', defaultVisible: false, format: formatNumber },
+  { key: 'page_engagement', label: 'page_engagement', defaultVisible: false, format: formatNumber },
+  { key: 'post_engagement', label: 'post_engagement', defaultVisible: false, format: formatNumber },
+  { key: 'post', label: 'post', defaultVisible: false, format: formatNumber },
+  { key: 'post_reaction', label: 'post_reaction', defaultVisible: false, format: formatNumber },
+  { key: 'comment', label: 'comment', defaultVisible: false, format: formatNumber },
+  { key: 'like', label: 'like', defaultVisible: false, format: formatNumber },
+  { key: 'share', label: 'share', defaultVisible: false, format: formatNumber },
+  { key: 'video_view', label: 'video_view', defaultVisible: false, format: formatNumber },
+  { key: 'lead', label: 'lead', defaultVisible: false, format: formatNumber },
+  { key: 'offsite_conversion.fb_pixel_purchase', label: 'offsite_conversion.fb_pixel_purchase', defaultVisible: false, format: formatNumber },
+  { key: 'offsite_conversion.fb_pixel_add_to_cart', label: 'offsite_conversion.fb_pixel_add_to_cart', defaultVisible: false, format: formatNumber },
+  { key: 'offsite_conversion.fb_pixel_initiate_checkout', label: 'offsite_conversion.fb_pixel_initiate_checkout', defaultVisible: false, format: formatNumber },
+  { key: 'offsite_conversion.fb_pixel_search', label: 'offsite_conversion.fb_pixel_search', defaultVisible: false, format: formatNumber },
+  { key: 'offsite_conversion.fb_pixel_view_content', label: 'offsite_conversion.fb_pixel_view_content', defaultVisible: false, format: formatNumber },
+  { key: 'offsite_conversion.fb_pixel_add_payment_info', label: 'offsite_conversion.fb_pixel_add_payment_info', defaultVisible: false, format: formatNumber },
+  { key: 'offsite_conversion.fb_pixel_complete_registration', label: 'offsite_conversion.fb_pixel_complete_registration', defaultVisible: false, format: formatNumber },
+  { key: 'offsite_conversion.fb_pixel_lead', label: 'offsite_conversion.fb_pixel_lead', defaultVisible: false, format: formatNumber },
+  
+  // Action Values - 常见操作价值（动态字段，从 action_values 数组中提取）
+  { key: 'purchase_value', label: 'purchase_value', defaultVisible: false, format: formatCurrency },
+  { key: 'mobile_app_purchase_value', label: 'mobile_app_purchase_value', defaultVisible: false, format: formatCurrency },
+  { key: 'offsite_conversion.fb_pixel_purchase_value', label: 'offsite_conversion.fb_pixel_purchase_value', defaultVisible: false, format: formatCurrency },
+  { key: 'offsite_conversion.fb_pixel_add_to_cart_value', label: 'offsite_conversion.fb_pixel_add_to_cart_value', defaultVisible: false, format: formatCurrency },
+  { key: 'offsite_conversion.fb_pixel_initiate_checkout_value', label: 'offsite_conversion.fb_pixel_initiate_checkout_value', defaultVisible: false, format: formatCurrency },
+  { key: 'offsite_conversion.fb_pixel_lead_value', label: 'offsite_conversion.fb_pixel_lead_value', defaultVisible: false, format: formatCurrency },
+  
+  // Purchase ROAS - 购买 ROAS（动态字段，从 purchase_roas 数组中提取）
+  { key: 'purchase_roas', label: 'purchase_roas', defaultVisible: false, format: (v: number) => v ? v.toFixed(2) : '-' },
+  { key: 'mobile_app_purchase_roas', label: 'mobile_app_purchase_roas', defaultVisible: false, format: (v: number) => v ? v.toFixed(2) : '-' },
+  { key: 'offsite_conversion.fb_pixel_purchase_roas', label: 'offsite_conversion.fb_pixel_purchase_roas', defaultVisible: false, format: (v: number) => v ? v.toFixed(2) : '-' },
+  
+  // 时间字段
+  { key: 'date_start', label: 'date_start', defaultVisible: false, format: (v: string) => v || '-' },
+  { key: 'date_stop', label: 'date_stop', defaultVisible: false, format: (v: string) => v || '-' },
 ]
 
 export default function FacebookCampaignsPage() {
@@ -71,14 +151,14 @@ export default function FacebookCampaignsPage() {
         const defaultVisibleKeys = ALL_CAMPAIGN_COLUMNS.filter(col => col.defaultVisible).map(col => col.key)
         const userColumns = [...response.data]
         
-        // 如果用户设置中没有安装量，但安装量是默认可见的，则添加它
-        if (!userColumns.includes('installs') && defaultVisibleKeys.includes('installs')) {
-          // 找到安装量应该插入的位置（在 cpc 之后）
+        // 如果用户设置中没有 mobile_app_install，但它是默认可见的，则添加它
+        if (!userColumns.includes('mobile_app_install') && defaultVisibleKeys.includes('mobile_app_install')) {
+          // 找到应该插入的位置（在 cpc 之后）
           const cpcIndex = userColumns.indexOf('cpc')
           if (cpcIndex >= 0) {
-            userColumns.splice(cpcIndex + 1, 0, 'installs')
+            userColumns.splice(cpcIndex + 1, 0, 'mobile_app_install')
           } else {
-            userColumns.push('installs')
+            userColumns.push('mobile_app_install')
           }
         }
         
@@ -454,20 +534,18 @@ export default function FacebookCampaignsPage() {
                         <td key={col.key} className="px-6 py-4">
                           {col.key === 'name' ? (
                             <div>
-                              <div className="font-medium text-slate-200 group-hover:text-indigo-300 transition-colors">{(col.format as (v: string) => string)(campaign.name)}</div>
-                              <div className="text-xs text-slate-500 font-mono mt-1 opacity-70">ID: {(col.format as (v: string) => string)(campaign.campaignId)}</div>
+                              <div className="font-medium text-slate-200 group-hover:text-indigo-300 transition-colors">{(col.format as (v: string) => string)(campaign.name || (campaign as any).name)}</div>
+                              <div className="text-xs text-slate-500 font-mono mt-1 opacity-70">ID: {(col.format as (v: string) => string)(campaign.campaignId || (campaign as any).id)}</div>
                             </div>
                           ) : col.key === 'status' ? (
-                            <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium border ${getStatusColor(campaign.status)}`}>
+                            <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium border ${getStatusColor(campaign.status || (campaign as any).status)}`}>
                               <span className={`w-1.5 h-1.5 rounded-full mr-1.5 bg-current opacity-70`}></span>
-                              {(col.format as (v: string) => string)(campaign.status)}
+                              {(col.format as (v: string) => string)(campaign.status || (campaign as any).status)}
                             </span>
-                          ) : col.key === 'accountId' ? (
-                            <div className="text-xs text-slate-400 font-mono">{(campaign as any)[col.key] || '-'}</div>
-                          ) : (col.key === 'spend' || col.key === 'cpm' || col.key === 'ctr' || col.key === 'cpc' || col.key === 'cpi' || col.key === 'purchase_value' || col.key === 'roas' || col.key === 'event_conversions' || col.key === 'installs') ? (
-                            <span className="font-mono text-slate-300">{(col.format as (v: number) => string)((campaign as any)[col.key] || 0)}</span>
+                          ) : col.key === 'account_id' || col.key === 'accountId' ? (
+                            <div className="text-xs text-slate-400 font-mono">{(campaign as any)[col.key] || campaign.accountId || '-'}</div>
                           ) : (
-                            <span className="text-slate-300">{(campaign as any)[col.key] ? (col.format as (v: any) => string)((campaign as any)[col.key]) : '-'}</span>
+                            <span className="text-slate-300">{(campaign as any)[col.key] !== undefined && (campaign as any)[col.key] !== null ? col.format((campaign as any)[col.key]) : '-'}</span>
                           )}
                         </td>
                       ))}

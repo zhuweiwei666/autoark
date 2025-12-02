@@ -48,7 +48,7 @@ const fetchUserAdAccounts = async (token) => {
 exports.fetchUserAdAccounts = fetchUserAdAccounts;
 const fetchCampaigns = async (accountId, token) => {
     const params = {
-        fields: 'id,name,objective,status,created_time,updated_time,buying_type,daily_budget,budget_remaining',
+        fields: 'id,name,objective,status,created_time,updated_time,buying_type,daily_budget,budget_remaining,lifetime_budget,start_time,stop_time,bid_strategy,bid_amount,account_id,special_ad_categories,source_campaign_id,promoted_object',
         limit: 1000,
     };
     if (token) {
@@ -90,15 +90,35 @@ level, datePreset = 'today', token) => {
         'ad_id',
         'impressions',
         'clicks',
+        'unique_clicks',
         'spend',
+        'reach',
+        'frequency',
         'cpc',
         'ctr',
         'cpm',
+        'cpp',
+        'cpa',
+        'cost_per_conversion',
+        'conversion_rate',
+        'conversions',
         'actions', // for conversions
         'action_values', // for conversion values
+        'unique_actions',
         'purchase_roas', // Return on Ad Spend
-        'conversions', // For generic conversions
-        'mobile_app_install', // For specific event count
+        'value',
+        'cost_per_action_type',
+        'mobile_app_install',
+        'video_play_actions',
+        'video_30_sec_watched_actions',
+        'video_avg_time_watched_actions',
+        'video_p100_watched_actions',
+        'video_p25_watched_actions',
+        'video_p50_watched_actions',
+        'video_p75_watched_actions',
+        'video_p95_watched_actions',
+        'video_thruplay_watched_actions',
+        'video_time_watched_actions',
         'date_start',
         'date_stop',
     ].join(',');

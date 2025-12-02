@@ -12,20 +12,18 @@ const getCampaignColumnSettings = async (userId) => {
         if (settings && settings.campaignColumns) {
             return settings.campaignColumns;
         }
-        // 返回默认列
+        // 返回默认列（使用 Facebook 原始字段名）
         return [
             'name',
-            'accountId',
+            'account_id',
             'status',
             'spend',
             'cpm',
             'ctr',
             'cpc',
-            'installs',
-            'cpi',
-            'purchase_value',
-            'roas',
-            'event_conversions',
+            'mobile_app_install',
+            'impressions',
+            'clicks',
         ];
     }
     catch (error) {

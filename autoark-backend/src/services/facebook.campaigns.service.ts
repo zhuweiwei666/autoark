@@ -155,22 +155,66 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
         date: today
     })
     
-    // 将指标合并到 Campaign 对象中
+    // 将指标合并到 Campaign 对象中，直接使用 Facebook 原始字段名
     const campaignsWithMetrics = campaigns.map(campaign => {
         const metrics = latestMetrics.find(m => m.campaignId === campaign.campaignId)
+        const campaignObj = campaign.toObject()
+        
+        // 合并所有 metrics 字段（使用 Facebook 原始字段名）
+        const metricsObj: any = metrics ? metrics.toObject() : {}
+        
+        // 从 actions 和 action_values 中提取具体字段
+        const actions = (metricsObj.actions || []) as any[]
+        const actionValues = (metricsObj.action_values || []) as any[]
+        const purchaseRoas = (metricsObj.purchase_roas || []) as any[]
+        
+        // 提取各种 action 类型
+        const extractedActions: any = {}
+        actions.forEach((action: any) => {
+            if (action.action_type && action.value !== undefined) {
+                extractedActions[action.action_type] = parseFloat(action.value) || 0
+            }
+        })
+        
+        // 提取各种 action_value 类型
+        const extractedActionValues: any = {}
+        actionValues.forEach((action: any) => {
+            if (action.action_type && action.value !== undefined) {
+                extractedActionValues[`${action.action_type}_value`] = parseFloat(action.value) || 0
+            }
+        })
+        
+        // 提取 purchase_roas
+        const extractedRoas: any = {}
+        purchaseRoas.forEach((roas: any) => {
+            if (roas.action_type && roas.value !== undefined) {
+                extractedRoas[`${roas.action_type}_roas`] = parseFloat(roas.value) || 0
+            }
+        })
+        
         return {
-            ...campaign.toObject(),
-            metrics: metrics ? metrics.toObject() : undefined,
-            // 计算额外指标
-            spend: metrics?.spendUsd || 0,
-            cpm: metrics?.cpm,
-            ctr: metrics?.ctr,
-            cpc: metrics?.cpc,
-            cpi: calculateCpi(metrics), // 需要实现 calculateCpi
-            purchase_value: metrics?.purchase_value,
-            roas: metrics?.purchase_roas,
-            event_conversions: metrics?.mobile_app_install_count, // 或者从 actions 中提取
-            installs: metrics?.mobile_app_install_count || 0, // 安装量
+            ...campaignObj,
+            // Campaign 基础字段（使用 Facebook 原始字段名）
+            id: campaignObj.campaignId,
+            account_id: campaignObj.accountId,
+            // Insights 基础字段
+            impressions: metricsObj.impressions || 0,
+            clicks: metricsObj.clicks || 0,
+            spend: metricsObj.spendUsd || 0,
+            cpc: metricsObj.cpc,
+            ctr: metricsObj.ctr,
+            cpm: metricsObj.cpm,
+            // 从 raw 中提取其他字段（如果存在）
+            ...(metricsObj.raw || {}),
+            // 提取的 actions
+            ...extractedActions,
+            // 提取的 action_values
+            ...extractedActionValues,
+            // 提取的 purchase_roas
+            ...extractedRoas,
+            // 保留原始数据
+            metrics: metricsObj,
+            raw_insights: metricsObj.raw,
         }
     })
 
