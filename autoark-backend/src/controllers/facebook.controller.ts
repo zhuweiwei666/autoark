@@ -1,7 +1,52 @@
 import { Request, Response, NextFunction } from 'express'
 import * as facebookService from '../services/facebook.service'
 import * as facebookAccountsService from '../services/facebook.accounts.service'
+import * as facebookCampaignsService from '../services/facebook.campaigns.service'
 import { getEffectiveAdAccounts } from '../services/facebook.sync.service'
+
+export const syncCampaigns = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
+  try {
+    const result = await facebookCampaignsService.syncCampaignsFromAdAccounts()
+    res.json({
+      success: true,
+      message: 'Campaigns sync completed',
+      data: result,
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
+export const getCampaignsList = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
+  try {
+    const page = parseInt(req.query.page as string) || 1
+    const limit = parseInt(req.query.limit as string) || 20
+    const sortBy = (req.query.sortBy as string) || 'createdAt'
+    const sortOrder = (req.query.sortOrder as 'asc' | 'desc') || 'desc'
+    const filters = {
+        name: req.query.name,
+        accountId: req.query.accountId,
+        status: req.query.status,
+        objective: req.query.objective
+    }
+
+    const result = await facebookCampaignsService.getCampaigns(filters, { page, limit, sortBy, sortOrder })
+    res.json({
+      success: true,
+      ...result
+    })
+  } catch (error) {
+    next(error)
+  }
+}
 
 export const syncAccounts = async (
   req: Request,

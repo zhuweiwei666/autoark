@@ -12,6 +12,7 @@ const facebook_routes_1 = __importDefault(require("./routes/facebook.routes"));
 const dashboard_routes_1 = __importDefault(require("./routes/dashboard.routes"));
 const facebook_sync_routes_1 = __importDefault(require("./routes/facebook.sync.routes"));
 const fbToken_routes_1 = __importDefault(require("./routes/fbToken.routes"));
+const user_settings_routes_1 = __importDefault(require("./routes/user.settings.routes")); // New: User settings routes
 const logger_1 = __importDefault(require("./utils/logger"));
 const sync_cron_1 = __importDefault(require("./cron/sync.cron"));
 const cron_1 = __importDefault(require("./cron"));
@@ -42,6 +43,7 @@ app.use('/api/facebook', facebook_routes_1.default);
 app.use('/api/facebook', facebook_sync_routes_1.default);
 app.use('/api/dashboard', dashboard_routes_1.default);
 app.use('/api/fb-token', fbToken_routes_1.default); // Facebook token management
+app.use('/api/user-settings', user_settings_routes_1.default); // New: User settings management
 // Dashboard UI (accessible at /dashboard)
 app.use('/dashboard', dashboard_routes_1.default);
 // Serve frontend static files (if dist directory exists)

@@ -223,3 +223,130 @@ export async function syncAccounts(): Promise<{
   return response.json()
 }
 
+// === 广告系列管理 ===
+
+export interface FbCampaignMetrics {
+  spend: number
+  cpm?: number
+  ctr?: number
+  cpc?: number
+  cpi?: number // Cost Per Install
+  purchase_value?: number // 购物转化价值
+  roas?: number // Return on Ad Spend
+  event_conversions?: number // 事件转化次数
+}
+
+export interface FbCampaign {
+  id: string
+  campaignId: string
+  accountId: string
+  name: string
+  status: string
+  objective?: string
+  buying_type?: string
+  daily_budget?: string
+  budget_remaining?: string
+  created_time?: string
+  updated_time?: string
+  metrics?: FbCampaignMetrics // 汇总指标
+  raw?: any
+}
+
+export interface CampaignListResponse {
+  success: boolean
+  data: FbCampaign[]
+  pagination: {
+    total: number
+    page: number
+    limit: number
+    pages: number
+  }
+}
+
+// 获取广告系列列表
+export async function getCampaigns(params?: {
+  page?: number
+  limit?: number
+  sortBy?: string
+  sortOrder?: 'asc' | 'desc'
+  name?: string
+  accountId?: string
+  status?: string
+  objective?: string
+}): Promise<CampaignListResponse> {
+  const queryParams = new URLSearchParams()
+  if (params?.page) queryParams.append('page', params.page.toString())
+  if (params?.limit) queryParams.append('limit', params.limit.toString())
+  if (params?.sortBy) queryParams.append('sortBy', params.sortBy)
+  if (params?.sortOrder) queryParams.append('sortOrder', params.sortOrder)
+  if (params?.name) queryParams.append('name', params.name)
+  if (params?.accountId) queryParams.append('accountId', params.accountId)
+  if (params?.status) queryParams.append('status', params.status)
+  if (params?.objective) queryParams.append('objective', params.objective)
+
+  const url = `${API_BASE_URL}/api/facebook/campaigns-list${
+    queryParams.toString() ? `?${queryParams.toString()}` : ''
+  }`
+
+  const response = await fetch(url)
+
+  if (!response.ok) {
+    throw new Error('Failed to fetch campaigns')
+  }
+
+  return response.json()
+}
+
+// 同步广告系列
+export async function syncCampaigns(): Promise<{
+  success: boolean
+  message: string
+  data: { syncedCampaigns: number; syncedMetrics: number; errorCount: number }
+}> {
+  const response = await fetch(`${API_BASE_URL}/api/facebook/campaigns/sync`, {
+    method: 'POST',
+  })
+
+  if (!response.ok) {
+    const error = await response.json()
+    throw new Error(error.message || 'Failed to sync campaigns')
+  }
+
+  return response.json()
+}
+
+// === 用户设置 (自定义列) ===
+
+export interface UserSettingsResponse {
+  success: boolean
+  data: string[]
+  message?: string
+}
+
+// 获取用户自定义列设置
+export async function getCampaignColumnSettings(): Promise<UserSettingsResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/user-settings/campaign-columns`)
+
+  if (!response.ok) {
+    throw new Error('Failed to fetch campaign column settings')
+  }
+
+  return response.json()
+}
+
+// 保存用户自定义列设置
+export async function saveCampaignColumnSettings(columns: string[]): Promise<UserSettingsResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/user-settings/campaign-columns`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ columns }),
+  })
+
+  if (!response.ok) {
+    const error = await response.json()
+    throw new Error(error.message || 'Failed to save campaign column settings')
+  }
+
+  return response.json()
+}
+

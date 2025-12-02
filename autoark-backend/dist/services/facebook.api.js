@@ -46,11 +46,15 @@ const fetchUserAdAccounts = async (token) => {
     return res.data || [];
 };
 exports.fetchUserAdAccounts = fetchUserAdAccounts;
-const fetchCampaigns = async (accountId) => {
-    const res = await exports.fbClient.get(`/${accountId}/campaigns`, {
-        fields: 'id,name,objective,status,created_time,updated_time',
+const fetchCampaigns = async (accountId, token) => {
+    const params = {
+        fields: 'id,name,objective,status,created_time,updated_time,buying_type,daily_budget,budget_remaining',
         limit: 1000,
-    });
+    };
+    if (token) {
+        params.access_token = token;
+    }
+    const res = await exports.fbClient.get(`/${accountId}/campaigns`, params);
     return res.data || [];
 };
 exports.fetchCampaigns = fetchCampaigns;
@@ -78,8 +82,8 @@ const fetchCreatives = async (accountId) => {
     return res.data || [];
 };
 exports.fetchCreatives = fetchCreatives;
-const fetchInsights = async (accountId, datePreset = 'today') => {
-    // Level = ad to get granular data
+const fetchInsights = async (entityId, // 可以是 accountId, campaignId, adsetId, adId
+level, datePreset = 'today', token) => {
     const fields = [
         'campaign_id',
         'adset_id',
@@ -91,16 +95,23 @@ const fetchInsights = async (accountId, datePreset = 'today') => {
         'ctr',
         'cpm',
         'actions', // for conversions
-        'action_values',
+        'action_values', // for conversion values
+        'purchase_roas', // Return on Ad Spend
+        'conversions', // For generic conversions
+        'mobile_app_install', // For specific event count
         'date_start',
         'date_stop',
     ].join(',');
-    const res = await exports.fbClient.get(`/${accountId}/insights`, {
-        level: 'ad',
+    const params = {
+        level: level,
         date_preset: datePreset,
         fields,
         limit: 1000,
-    });
+    };
+    if (token) {
+        params.access_token = token;
+    }
+    const res = await exports.fbClient.get(`/${entityId}/insights`, params);
     return res.data || [];
 };
 exports.fetchInsights = fetchInsights;

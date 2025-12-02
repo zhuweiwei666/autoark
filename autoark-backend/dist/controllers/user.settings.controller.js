@@ -33,19 +33,39 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-const express_1 = require("express");
-const facebookController = __importStar(require("../controllers/facebook.controller"));
-const facebookToken_controller_1 = require("../controllers/facebookToken.controller");
-const router = (0, express_1.Router)();
-router.post('/save-token', facebookToken_controller_1.saveFacebookToken); // New token saving route
-router.get('/accounts', facebookController.getAccounts);
-router.get('/accounts-list', facebookController.getAccountsList); // New: Account management list
-router.post('/accounts/sync', facebookController.syncAccounts); // New: Trigger sync
-// Campaign management
-router.get('/campaigns-list', facebookController.getCampaignsList); // New: Campaign management list
-router.post('/campaigns/sync', facebookController.syncCampaigns); // New: Trigger sync
-router.get('/accounts/:id/campaigns', facebookController.getCampaigns);
-router.get('/accounts/:id/adsets', facebookController.getAdSets);
-router.get('/accounts/:id/ads', facebookController.getAds);
-router.get('/accounts/:id/insights/daily', facebookController.getInsightsDaily);
-exports.default = router;
+exports.saveCampaignColumns = exports.getCampaignColumns = void 0;
+const userSettingsService = __importStar(require("../services/user.settings.service"));
+// 假设用户 ID 可以从请求中获取，例如通过认证中间件。
+// 这里我们暂时模拟一个 userId。
+const MOCK_USER_ID = 'user_autoark_test_id';
+const getCampaignColumns = async (req, res, next) => {
+    try {
+        const columns = await userSettingsService.getCampaignColumnSettings(MOCK_USER_ID);
+        res.json({
+            success: true,
+            data: columns,
+        });
+    }
+    catch (error) {
+        next(error);
+    }
+};
+exports.getCampaignColumns = getCampaignColumns;
+const saveCampaignColumns = async (req, res, next) => {
+    try {
+        const { columns } = req.body;
+        if (!Array.isArray(columns)) {
+            return res.status(400).json({ success: false, message: 'Columns must be an array.' });
+        }
+        const savedColumns = await userSettingsService.saveCampaignColumnSettings(MOCK_USER_ID, columns);
+        res.json({
+            success: true,
+            message: 'Campaign columns saved successfully.',
+            data: savedColumns,
+        });
+    }
+    catch (error) {
+        next(error);
+    }
+};
+exports.saveCampaignColumns = saveCampaignColumns;

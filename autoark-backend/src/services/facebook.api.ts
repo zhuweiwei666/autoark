@@ -48,11 +48,16 @@ export const fetchUserAdAccounts = async (token?: string) => {
   return res.data || []
 }
 
-export const fetchCampaigns = async (accountId: string) => {
-  const res = await fbClient.get(`/${accountId}/campaigns`, {
-    fields: 'id,name,objective,status,created_time,updated_time',
+export const fetchCampaigns = async (accountId: string, token?: string) => {
+  const params: any = {
+    fields:
+      'id,name,objective,status,created_time,updated_time,buying_type,daily_budget,budget_remaining',
     limit: 1000,
-  })
+  }
+  if (token) {
+    params.access_token = token
+  }
+  const res = await fbClient.get(`/${accountId}/campaigns`, params)
   return res.data || []
 }
 
@@ -83,10 +88,11 @@ export const fetchCreatives = async (accountId: string) => {
 }
 
 export const fetchInsights = async (
-  accountId: string,
+  entityId: string, // 可以是 accountId, campaignId, adsetId, adId
+  level: 'account' | 'campaign' | 'adset' | 'ad',
   datePreset = 'today',
+  token?: string,
 ) => {
-  // Level = ad to get granular data
   const fields = [
     'campaign_id',
     'adset_id',
@@ -98,16 +104,24 @@ export const fetchInsights = async (
     'ctr',
     'cpm',
     'actions', // for conversions
-    'action_values',
+    'action_values', // for conversion values
+    'purchase_roas', // Return on Ad Spend
+    'conversions', // For generic conversions
+    'mobile_app_install', // For specific event count
     'date_start',
     'date_stop',
   ].join(',')
 
-  const res = await fbClient.get(`/${accountId}/insights`, {
-    level: 'ad',
+  const params: any = {
+    level: level,
     date_preset: datePreset,
     fields,
     limit: 1000,
-  })
+  }
+  if (token) {
+    params.access_token = token
+  }
+
+  const res = await fbClient.get(`/${entityId}/insights`, params)
   return res.data || []
 }

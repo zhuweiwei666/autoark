@@ -7,6 +7,7 @@ import facebookRoutes from './routes/facebook.routes'
 import dashboardRoutes from './routes/dashboard.routes'
 import facebookSyncRoutes from './routes/facebook.sync.routes'
 import fbTokenRoutes from './routes/fbToken.routes'
+import userSettingsRoutes from './routes/user.settings.routes' // New: User settings routes
 import logger from './utils/logger'
 import initSyncCron from './cron/sync.cron'
 import initCronJobs from './cron'
@@ -45,6 +46,7 @@ app.use('/api/facebook', facebookRoutes)
 app.use('/api/facebook', facebookSyncRoutes)
 app.use('/api/dashboard', dashboardRoutes)
 app.use('/api/fb-token', fbTokenRoutes) // Facebook token management
+app.use('/api/user-settings', userSettingsRoutes) // New: User settings management
 
 // Dashboard UI (accessible at /dashboard)
 app.use('/dashboard', dashboardRoutes)

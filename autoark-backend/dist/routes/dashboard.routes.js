@@ -57,6 +57,13 @@ router.get('/', (_req, res) => {
   <meta charset="UTF-8" />
   <title>AutoArk Dashboard V0.1</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    /* Custom styles for active menu item */
+    .menu-active {
+      background-color: rgba(30, 41, 59, 0.5); /* slate-800/50 */
+      border-color: rgba(100, 116, 139, 0.5); /* slate-700/50 */
+    }
+  </style>
 </head>
 <body class="bg-slate-950 text-slate-100">
   <div class="flex h-screen overflow-hidden">
@@ -73,11 +80,9 @@ router.get('/', (_req, res) => {
         <button 
           onclick="switchView('dashboard')" 
           id="menu-dashboard"
-          class="w-full px-4 py-3 rounded-lg text-sm font-medium transition-colors text-slate-200 hover:text-slate-100 hover:bg-slate-800/50 bg-slate-800/30 border border-slate-700/50 flex items-center gap-3"
+          class="w-full px-4 py-3 rounded-lg text-sm font-medium transition-colors text-slate-200 hover:text-slate-100 hover:bg-slate-800/50 flex items-center gap-3"
         >
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
-          </svg>
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75h2.25A2.25 2.25 0 018.25 18v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V15.75zM13.5 6h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H13.5A2.25 2.25 0 0111.25 18V8.25a2.25 2.25 0 012.25-2.25z" /></svg>
           <span>仪表盘</span>
         </button>
         <button 
@@ -85,9 +90,7 @@ router.get('/', (_req, res) => {
           id="menu-token"
           class="w-full px-4 py-3 rounded-lg text-sm font-medium transition-colors text-slate-200 hover:text-slate-100 hover:bg-slate-800/50 flex items-center gap-3"
         >
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"></path>
-          </svg>
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 9z" /></svg>
           <span>Token 管理</span>
         </button>
         <button 
@@ -95,10 +98,17 @@ router.get('/', (_req, res) => {
           id="menu-accounts"
           class="w-full px-4 py-3 rounded-lg text-sm font-medium transition-colors text-slate-200 hover:text-slate-100 hover:bg-slate-800/50 flex items-center gap-3"
         >
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"></path>
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" d="M19 21v-2a4 4 0 00-4-4H9a4 4 0 00-4 4v2m16-11V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16M14 10h.01M17 10h.01M9 10h.01M12 10h.01m2 2h.01M17 14h.01M9 14h.01M12 14h.01m2 2h.01M17 18h.01M9 18h.01M12 18h.01m-2-12h.01M7 12h.01m-2-12h.01M17 12h.01M9 12h.01m4-4h.01M7 16h.01M14 16h.01M14 20h.01M7 20h.01M9 16h.01M14 20h.01M7 20h.01"></path>
           </svg>
           <span>账户管理</span>
+        </button>
+        <button 
+          onclick="switchView('campaigns')" 
+          id="menu-campaigns"
+          class="w-full px-4 py-3 rounded-lg text-sm font-medium transition-colors text-slate-200 hover:text-slate-100 hover:bg-slate-800/50 flex items-center gap-3"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 6.75V15m6-6v8.25m.503 3.497l4.875-2.437c.381-.194.62-.57.62-.981V9.75M8.25 19.5l-1.5-1.5m-3.75 3.75h15M11.25 4.5l-1.5-1.5M1.5 13.5l1.5-1.5m1.5 2.25l-1.5-1.5m-1.5 2.25l-1.5-1.5" /></svg>
+          <span>广告系列</span>
         </button>
       </nav>
       
@@ -204,6 +214,15 @@ router.get('/', (_req, res) => {
           title="Accounts Management"
         ></iframe>
       </div>
+
+      <!-- Campaigns Management View -->
+      <div id="view-campaigns" class="h-full hidden">
+        <iframe 
+          src="/fb-campaigns" 
+          class="w-full h-full border-0"
+          title="Campaigns Management"
+        ></iframe>
+      </div>
     </main>
   </div>
 
@@ -216,7 +235,7 @@ router.get('/', (_req, res) => {
       })
       
       // Show selected view
-      const selectedView = document.getElementById(\`view-\${viewName}\`)
+      const selectedView = document.getElementById(`, view - $, { viewName } `)
       if (selectedView) {
         selectedView.classList.remove('hidden')
       }
@@ -227,7 +246,7 @@ router.get('/', (_req, res) => {
         btn.classList.add('bg-transparent')
       })
       
-      const activeBtn = document.getElementById(\`menu-\${viewName}\`)
+      const activeBtn = document.getElementById(`, menu - $, { viewName } `)
       if (activeBtn) {
         activeBtn.classList.add('bg-slate-800/30', 'border', 'border-slate-700/50')
         activeBtn.classList.remove('bg-transparent')
@@ -254,12 +273,12 @@ router.get('/', (_req, res) => {
       const h = Math.floor(s / 3600)
       const m = Math.floor((s % 3600) / 60)
       const r = Math.floor(s % 60)
-      return \`\${h}h \${m}m \${r}s\`
+      return `, $, { h }, h, $, { m }, m, $, { r }, s `
     }
 
     async function fetchJSON(url) {
       const res = await fetch(url)
-      if (!res.ok) throw new Error(\`Request failed: \${res.status}\`)
+      if (!res.ok) throw new Error(`, Request, failed, $, { res, : .status } `)
       return res.json()
     }
 
@@ -268,7 +287,7 @@ router.get('/', (_req, res) => {
     
     async function loadSystemHealth() {
       try {
-        const { data } = await fetchJSON(\`\${API_BASE}/api/health\`) 
+        const { data } = await fetchJSON(`, $, { API_BASE } / api / health `) 
         
         const root = document.getElementById('system-health')
         root.querySelector('[data-field="serverTime"]').textContent = formatTime(data.serverTime)
@@ -296,7 +315,7 @@ router.get('/', (_req, res) => {
 
     async function loadFacebookOverview() {
       try {
-        const { data } = await fetchJSON(\`\${API_BASE}/api/facebook-overview\`)
+        const { data } = await fetchJSON(`, $, { API_BASE } / api / facebook - overview `)
         const root = document.getElementById('fb-overview')
         root.querySelector('[data-field="accounts"]').textContent = data.accounts
         root.querySelector('[data-field="campaigns"]').textContent = data.campaigns
@@ -316,19 +335,23 @@ router.get('/', (_req, res) => {
       }
       logs.forEach((log) => {
         const tr = document.createElement('tr')
-        tr.innerHTML = \`
-          <td class="px-2 py-1 text-slate-300">\${formatTime(log.createdAt || log.startedAt)}</td>
-          <td class="px-2 py-1 text-slate-300">\${log.jobName || log.job || 'Sync'}</td>
-          <td class="px-2 py-1">\${log.status || '-'}</td>
-          <td class="px-2 py-1 text-slate-400 max-w-xs truncate">\${log.message || log.error || JSON.stringify(log.details) || '-'}</td>
-        \`
+        tr.innerHTML = `
+        < td, class {
+    } = "px-2 py-1 text-slate-300" > $, { formatTime(log) { }, : .createdAt || log.startedAt });
+}, /td>
+    < td, class {
+} = "px-2 py-1 text-slate-300" > $, { log, : .jobName || log.job || 'Sync' } < /td>
+    < td, class {
+} = "px-2 py-1" > $, { log, : .status || '-' } < /td>
+    < td, class {
+} = "px-2 py-1 text-slate-400 max-w-xs truncate" > $, { log, : .message || log.error || JSON.stringify(log.details) || '-' } < /td> `
         tbody.appendChild(tr)
       })
     }
 
     async function loadCronLogs() {
       try {
-        const { data } = await fetchJSON(\`\${API_BASE}/api/cron-logs?limit=50\`)
+        const { data } = await fetchJSON(`, $, { API_BASE } / api / cron - logs ? limit = 50 `)
         renderCronLogs(data || [])
       } catch (e) {
         console.error(e)
@@ -344,19 +367,46 @@ router.get('/', (_req, res) => {
       }
       logs.forEach((log) => {
         const tr = document.createElement('tr')
-        tr.innerHTML = \`
-          <td class="px-2 py-1 text-slate-300">\${formatTime(log.createdAt)}</td>
-          <td class="px-2 py-1 text-slate-300">\${log.action || '-'}</td>
-          <td class="px-2 py-1 text-slate-300">\${log.related?.adId || '-'}</td>
-          <td class="px-2 py-1 text-slate-400 max-w-xs truncate">\${log.reason || '-'}</td>
-        \`
+        tr.innerHTML = `
+    < td : , class {
+} = "px-2 py-1 text-slate-300" > $, { formatTime(log) { }, : .createdAt });
+/td>
+    < td;
+class {
+}
+"px-2 py-1 text-slate-300" > $;
+{
+    log.action || '-';
+}
+/td>
+    < td;
+class {
+}
+"px-2 py-1 text-slate-300" > $;
+{
+    log.related?.adId || '-';
+}
+/td>
+    < td;
+class {
+}
+"px-2 py-1 text-slate-400 max-w-xs truncate" > $;
+{
+    log.reason || '-';
+}
+/td> `
         tbody.appendChild(tr)
       })
     }
 
     async function loadOpsLogs() {
       try {
-        const { data } = await fetchJSON(\`\${API_BASE}/api/ops-logs?limit=50\`)
+        const { data } = await fetchJSON(`;
+$;
+{
+    API_BASE;
+}
+/api/ops - logs ? limit = 50 `)
         renderOpsLogs(data || [])
       } catch (e) {
         console.error(e)
@@ -377,6 +427,5 @@ router.get('/', (_req, res) => {
   </script>
 </body>
 </html>
-  `);
-});
+  ` : ;
 exports.default = router;

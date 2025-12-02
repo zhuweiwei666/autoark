@@ -11,6 +11,9 @@ const campaignSchema = new mongoose_1.default.Schema({
     name: String,
     status: String,
     objective: String,
+    buying_type: String, // 购买类型，如 AUCTION
+    daily_budget: String, // 日预算
+    budget_remaining: String, // 剩余预算
     created_time: Date,
     updated_time: Date,
     raw: Object,

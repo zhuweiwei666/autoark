@@ -19,12 +19,21 @@ const metricsDailySchema = new mongoose.Schema(
     installs: { type: Number, default: 0 },
     conversions: { type: Number, default: 0 }, // Generic conversions if installs not specific
 
+    // New fields for detailed insights
+    actions: mongoose.Schema.Types.Mixed, // Array of {action_type, value}
+    action_values: mongoose.Schema.Types.Mixed, // Array of {action_type, value}
+    purchase_roas: Number,
+    purchase_value: Number,
+    mobile_app_install_count: Number, // Example for specific event count
+
     raw: Object,
   },
   { timestamps: true },
 )
 
-// Compound unique index for upsert
+// Compound unique index for upsert (ad level)
 metricsDailySchema.index({ adId: 1, date: 1 }, { unique: true })
+// New compound unique index for campaign level insights
+metricsDailySchema.index({ campaignId: 1, date: 1 }, { unique: true })
 
 export default mongoose.model('MetricsDaily', metricsDailySchema)

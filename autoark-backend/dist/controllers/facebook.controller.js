@@ -33,10 +33,48 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getAccounts = exports.getInsightsDaily = exports.getAds = exports.getAdSets = exports.getCampaigns = exports.getAccountsList = exports.syncAccounts = void 0;
+exports.getAccounts = exports.getInsightsDaily = exports.getAds = exports.getAdSets = exports.getCampaigns = exports.getAccountsList = exports.syncAccounts = exports.getCampaignsList = exports.syncCampaigns = void 0;
 const facebookService = __importStar(require("../services/facebook.service"));
 const facebookAccountsService = __importStar(require("../services/facebook.accounts.service"));
+const facebookCampaignsService = __importStar(require("../services/facebook.campaigns.service"));
 const facebook_sync_service_1 = require("../services/facebook.sync.service");
+const syncCampaigns = async (req, res, next) => {
+    try {
+        const result = await facebookCampaignsService.syncCampaignsFromAdAccounts();
+        res.json({
+            success: true,
+            message: 'Campaigns sync completed',
+            data: result,
+        });
+    }
+    catch (error) {
+        next(error);
+    }
+};
+exports.syncCampaigns = syncCampaigns;
+const getCampaignsList = async (req, res, next) => {
+    try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 20;
+        const sortBy = req.query.sortBy || 'createdAt';
+        const sortOrder = req.query.sortOrder || 'desc';
+        const filters = {
+            name: req.query.name,
+            accountId: req.query.accountId,
+            status: req.query.status,
+            objective: req.query.objective
+        };
+        const result = await facebookCampaignsService.getCampaigns(filters, { page, limit, sortBy, sortOrder });
+        res.json({
+            success: true,
+            ...result
+        });
+    }
+    catch (error) {
+        next(error);
+    }
+};
+exports.getCampaignsList = getCampaignsList;
 const syncAccounts = async (req, res, next) => {
     try {
         const result = await facebookAccountsService.syncAccountsFromTokens();
