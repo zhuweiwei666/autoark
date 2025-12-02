@@ -720,8 +720,7 @@ export default function FacebookCampaignsPage() {
                         </button>
                       </td>
                     </tr>
-                    )
-                  })
+                  ))
                 )}
               </tbody>
             </table>
