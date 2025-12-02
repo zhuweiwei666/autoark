@@ -142,14 +142,27 @@ export default function FacebookCampaignsPage() {
   const [showColumnSettings, setShowColumnSettings] = useState(false)
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null)
 
+  // 字段名映射（兼容旧数据）
+  const fieldNameMapping: Record<string, string> = {
+    'accountId': 'account_id',
+    'installs': 'mobile_app_install',
+    'event_conversions': 'conversions',
+    'purchase_value': 'purchase_value', // 保持不变，但需要从 action_values 中提取
+    'roas': 'purchase_roas', // 需要从 purchase_roas 中提取
+    'cpi': 'mobile_app_install', // CPI 需要计算，暂时用 mobile_app_install
+  }
+
   // 获取用户自定义列设置
   const loadColumnSettings = async () => {
     try {
       const response = await getCampaignColumnSettings()
       if (response.data && response.data.length > 0) {
-        // 确保安装量列在可见列中（如果是默认可见的）
+        // 映射旧字段名到新字段名
+        const mappedColumns = response.data.map((col: string) => fieldNameMapping[col] || col)
+        
+        // 确保默认可见列在可见列中
         const defaultVisibleKeys = ALL_CAMPAIGN_COLUMNS.filter(col => col.defaultVisible).map(col => col.key)
-        const userColumns = [...response.data]
+        const userColumns = [...mappedColumns]
         
         // 如果用户设置中没有 mobile_app_install，但它是默认可见的，则添加它
         if (!userColumns.includes('mobile_app_install') && defaultVisibleKeys.includes('mobile_app_install')) {
