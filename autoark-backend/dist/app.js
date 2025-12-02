@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
 const dotenv_1 = __importDefault(require("dotenv"));
+const path_1 = __importDefault(require("path"));
 const db_1 = __importDefault(require("./config/db"));
 const facebook_routes_1 = __importDefault(require("./routes/facebook.routes"));
 const dashboard_routes_1 = __importDefault(require("./routes/dashboard.routes"));
@@ -43,10 +44,43 @@ app.use('/api/dashboard', dashboard_routes_1.default);
 app.use('/api/fb-token', fbToken_routes_1.default); // Facebook token management
 // Dashboard UI (accessible at /dashboard)
 app.use('/dashboard', dashboard_routes_1.default);
-app.get('/', (req, res) => {
-    res.send('AutoArk Backend API is running');
-});
+// Serve frontend static files (if dist directory exists)
+const frontendDistPath = path_1.default.join(__dirname, '../../autoark-frontend/dist');
+try {
+    const fs = require('fs');
+    if (fs.existsSync(frontendDistPath)) {
+        app.use(express_1.default.static(frontendDistPath));
+        // Fallback to index.html for client-side routing (React Router)
+        // This must be before 404 handler but after all API routes
+        app.get('*', (req, res, next) => {
+            // Skip API routes and dashboard route - let them be handled by their routes or 404
+            if (req.path.startsWith('/api') || req.path.startsWith('/dashboard')) {
+                return next();
+            }
+            // For all other routes, serve the React app (for client-side routing)
+            res.sendFile(path_1.default.join(frontendDistPath, 'index.html'), (err) => {
+                if (err) {
+                    next(err);
+                }
+            });
+        });
+        logger_1.default.info(`Frontend static files served from: ${frontendDistPath}`);
+    }
+    else {
+        logger_1.default.warn(`Frontend dist directory not found at: ${frontendDistPath}`);
+        app.get('/', (req, res) => {
+            res.send('AutoArk Backend API is running. Frontend not built yet.');
+        });
+    }
+}
+catch (error) {
+    logger_1.default.error('Error setting up frontend static files:', error);
+    app.get('/', (req, res) => {
+        res.send('AutoArk Backend API is running');
+    });
+}
 // 404 Handler (must be after all routes, before errorHandler)
+// This will only catch requests that weren't handled by API routes, dashboard, or frontend
 app.use((req, res) => {
     res.status(404).json({
         success: false,

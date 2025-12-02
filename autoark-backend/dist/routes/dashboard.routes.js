@@ -62,7 +62,12 @@ router.get('/', (_req, res) => {
   <div class="min-h-screen max-w-6xl mx-auto px-4 py-6 space-y-6">
     <header class="flex items-center justify-between">
       <h1 class="text-2xl font-bold">AutoArk Dashboard <span class="text-xs text-slate-400">V0.1</span></h1>
-      <span id="health-badge" class="text-xs px-3 py-1 rounded-full bg-slate-800 text-slate-300">Loading...</span>
+      <div class="flex items-center gap-4">
+        <a href="/fb-token" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-sm font-medium transition-colors text-white">
+          Facebook Token 管理
+        </a>
+        <span id="health-badge" class="text-xs px-3 py-1 rounded-full bg-slate-800 text-slate-300">Loading...</span>
+      </div>
     </header>
 
     <section class="grid grid-cols-1 md:grid-cols-2 gap-4">
