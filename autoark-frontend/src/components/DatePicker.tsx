@@ -101,34 +101,34 @@ export default function DatePicker({ value, onChange, placeholder = '选择日�
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className="w-full px-4 py-2.5 bg-slate-800/50 border border-slate-700 rounded-xl text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500/50 transition-all text-left flex items-center justify-between"
+        className="w-full px-4 py-3 bg-white/80 backdrop-blur-sm border border-slate-200 rounded-2xl text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition-all text-left flex items-center justify-between shadow-sm"
       >
-        <span className={value ? '' : 'text-slate-500'}>{displayValue}</span>
-        <svg className="w-5 h-5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <span className={value ? 'font-medium' : 'text-slate-400'}>{displayValue}</span>
+        <svg className="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
         </svg>
       </button>
 
       {isOpen && (
-        <div className="absolute z-50 mt-2 bg-white rounded-lg shadow-xl border border-slate-200 p-4 w-80">
-          {/* 月份导航 */}
-          <div className="flex items-center justify-between mb-4">
+        <div className="absolute z-50 mt-2 bg-white/95 backdrop-blur-2xl rounded-3xl shadow-2xl border border-white/50 p-5 w-80">
+          {/* iOS 风格月份导航 */}
+          <div className="flex items-center justify-between mb-5">
             <button
               type="button"
               onClick={handlePrevMonth}
-              className="p-2 hover:bg-slate-100 rounded-lg transition-colors"
+              className="p-2.5 hover:bg-slate-100/80 rounded-2xl transition-colors active:scale-95"
             >
               <svg className="w-5 h-5 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7" />
               </svg>
             </button>
-            <div className="text-lg font-semibold text-slate-800">
+            <div className="text-lg font-bold text-slate-900">
               {monthNames[currentMonth.getMonth()]} {currentMonth.getFullYear()}
             </div>
             <button
               type="button"
               onClick={handleNextMonth}
-              className="p-2 hover:bg-slate-100 rounded-lg transition-colors"
+              className="p-2.5 hover:bg-slate-100/80 rounded-2xl transition-colors active:scale-95"
             >
               <svg className="w-5 h-5 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" />
@@ -136,28 +136,28 @@ export default function DatePicker({ value, onChange, placeholder = '选择日�
             </button>
           </div>
 
-          {/* 星期标题 */}
-          <div className="grid grid-cols-7 gap-1 mb-2">
+          {/* iOS 风格星期标题 */}
+          <div className="grid grid-cols-7 gap-1 mb-3">
             {weekDays.map((day) => (
-              <div key={day} className="text-center text-xs font-medium text-slate-500 py-2">
+              <div key={day} className="text-center text-xs font-semibold text-slate-500 py-2">
                 {day}
               </div>
             ))}
           </div>
 
-          {/* 日期网格 */}
-          <div className="grid grid-cols-7 gap-1">
+          {/* iOS 风格日期网格 */}
+          <div className="grid grid-cols-7 gap-1.5">
             {getCalendarDays().map((day, index) => (
               <button
                 key={index}
                 type="button"
                 onClick={() => handleDateSelect(day.date)}
                 className={`
-                  aspect-square flex items-center justify-center text-sm rounded-lg transition-colors
+                  aspect-square flex items-center justify-center text-sm rounded-xl transition-all font-medium
                   ${!day.isCurrentMonth ? 'text-slate-300' : 'text-slate-700'}
-                  ${day.isToday ? 'bg-blue-100 font-semibold' : ''}
-                  ${day.isSelected ? 'bg-blue-600 text-white font-semibold' : ''}
-                  ${!day.isSelected && day.isCurrentMonth && !day.isToday ? 'hover:bg-slate-100' : ''}
+                  ${day.isToday ? 'bg-blue-100/80 font-bold text-blue-700' : ''}
+                  ${day.isSelected ? 'bg-blue-600 text-white font-bold shadow-md shadow-blue-500/30' : ''}
+                  ${!day.isSelected && day.isCurrentMonth && !day.isToday ? 'hover:bg-slate-100/80 active:scale-95' : ''}
                 `}
               >
                 {day.date.getDate()}
@@ -165,11 +165,11 @@ export default function DatePicker({ value, onChange, placeholder = '选择日�
             ))}
           </div>
 
-          {/* 底部操作 */}
-          <div className="mt-4 flex items-center justify-between pt-4 border-t border-slate-200">
+          {/* iOS 风格底部操作 */}
+          <div className="mt-5 flex items-center justify-between pt-4 border-t border-slate-200/50">
             <button
               type="button"
-              className="flex items-center gap-2 text-sm text-slate-600 hover:text-slate-800 transition-colors"
+              className="flex items-center gap-2 text-sm text-slate-600 hover:text-slate-800 font-medium transition-colors px-3 py-2 rounded-xl hover:bg-slate-50/80 active:scale-95"
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -179,7 +179,7 @@ export default function DatePicker({ value, onChange, placeholder = '选择日�
             <button
               type="button"
               onClick={() => setIsOpen(false)}
-              className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors"
+              className="px-5 py-2.5 bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-600 hover:to-indigo-700 text-white text-sm font-semibold rounded-2xl transition-all shadow-lg shadow-blue-500/30 active:scale-95"
             >
               更新筛选器
             </button>
