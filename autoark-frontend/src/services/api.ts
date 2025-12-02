@@ -183,10 +183,14 @@ export async function getAccounts(params?: {
   status?: string
   accountId?: string
   name?: string
+  startDate?: string
+  endDate?: string
 }): Promise<AccountListResponse> {
   const queryParams = new URLSearchParams()
   if (params?.page) queryParams.append('page', params.page.toString())
   if (params?.limit) queryParams.append('limit', params.limit.toString())
+  if (params?.startDate) queryParams.append('startDate', params.startDate)
+  if (params?.endDate) queryParams.append('endDate', params.endDate)
   if (params?.optimizer) queryParams.append('optimizer', params.optimizer)
   if (params?.status) queryParams.append('status', params.status)
   if (params?.accountId) queryParams.append('accountId', params.accountId)
@@ -284,8 +288,12 @@ export async function getCampaigns(params?: {
   accountId?: string
   status?: string
   objective?: string
+  startDate?: string
+  endDate?: string
 }): Promise<CampaignListResponse> {
   const queryParams = new URLSearchParams()
+  if (params?.startDate) queryParams.append('startDate', params.startDate)
+  if (params?.endDate) queryParams.append('endDate', params.endDate)
   if (params?.page) queryParams.append('page', params.page.toString())
   if (params?.limit) queryParams.append('limit', params.limit.toString())
   if (params?.sortBy) queryParams.append('sortBy', params.sortBy)

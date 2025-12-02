@@ -179,6 +179,8 @@ export default function FacebookCampaignsPage() {
     accountId: '',
     status: '',
     objective: '',
+    startDate: '',
+    endDate: '',
   })
 
   // 自定义列相关

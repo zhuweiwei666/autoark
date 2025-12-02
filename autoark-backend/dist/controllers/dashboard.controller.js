@@ -131,7 +131,9 @@ async function getOpsLogsHandler(req, res, next) {
 // ========== 数据看板 V1 API Handlers ==========
 async function getCoreMetricsHandler(req, res, next) {
     try {
-        const data = await dashboardService.getCoreMetrics();
+        const startDate = req.query.startDate;
+        const endDate = req.query.endDate;
+        const data = await dashboardService.getCoreMetrics(startDate, endDate);
         res.json({ success: true, data });
     }
     catch (err) {
@@ -140,7 +142,9 @@ async function getCoreMetricsHandler(req, res, next) {
 }
 async function getTodaySpendTrendHandler(req, res, next) {
     try {
-        const data = await dashboardService.getTodaySpendTrend();
+        const startDate = req.query.startDate;
+        const endDate = req.query.endDate;
+        const data = await dashboardService.getTodaySpendTrend(startDate, endDate);
         res.json({ success: true, data });
     }
     catch (err) {
@@ -150,7 +154,9 @@ async function getTodaySpendTrendHandler(req, res, next) {
 async function getCampaignSpendRankingHandler(req, res, next) {
     try {
         const limit = Number(req.query.limit) || 10;
-        const data = await dashboardService.getCampaignSpendRanking(limit);
+        const startDate = req.query.startDate;
+        const endDate = req.query.endDate;
+        const data = await dashboardService.getCampaignSpendRanking(limit, startDate, endDate);
         res.json({ success: true, data });
     }
     catch (err) {
@@ -160,7 +166,9 @@ async function getCampaignSpendRankingHandler(req, res, next) {
 async function getCountrySpendRankingHandler(req, res, next) {
     try {
         const limit = Number(req.query.limit) || 10;
-        const data = await dashboardService.getCountrySpendRanking(limit);
+        const startDate = req.query.startDate;
+        const endDate = req.query.endDate;
+        const data = await dashboardService.getCountrySpendRanking(limit, startDate, endDate);
         res.json({ success: true, data });
     }
     catch (err) {

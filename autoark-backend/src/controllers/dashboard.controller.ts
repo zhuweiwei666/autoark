@@ -124,7 +124,9 @@ export async function getCoreMetricsHandler(
   next: NextFunction,
 ) {
   try {
-    const data = await dashboardService.getCoreMetrics()
+    const startDate = req.query.startDate as string | undefined
+    const endDate = req.query.endDate as string | undefined
+    const data = await dashboardService.getCoreMetrics(startDate, endDate)
     res.json({ success: true, data })
   } catch (err) {
     next(err)
@@ -137,7 +139,9 @@ export async function getTodaySpendTrendHandler(
   next: NextFunction,
 ) {
   try {
-    const data = await dashboardService.getTodaySpendTrend()
+    const startDate = req.query.startDate as string | undefined
+    const endDate = req.query.endDate as string | undefined
+    const data = await dashboardService.getTodaySpendTrend(startDate, endDate)
     res.json({ success: true, data })
   } catch (err) {
     next(err)
@@ -151,7 +155,9 @@ export async function getCampaignSpendRankingHandler(
 ) {
   try {
     const limit = Number(req.query.limit) || 10
-    const data = await dashboardService.getCampaignSpendRanking(limit)
+    const startDate = req.query.startDate as string | undefined
+    const endDate = req.query.endDate as string | undefined
+    const data = await dashboardService.getCampaignSpendRanking(limit, startDate, endDate)
     res.json({ success: true, data })
   } catch (err) {
     next(err)
@@ -165,7 +171,9 @@ export async function getCountrySpendRankingHandler(
 ) {
   try {
     const limit = Number(req.query.limit) || 10
-    const data = await dashboardService.getCountrySpendRanking(limit)
+    const startDate = req.query.startDate as string | undefined
+    const endDate = req.query.endDate as string | undefined
+    const data = await dashboardService.getCountrySpendRanking(limit, startDate, endDate)
     res.json({ success: true, data })
   } catch (err) {
     next(err)

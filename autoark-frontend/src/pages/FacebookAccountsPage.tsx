@@ -20,7 +20,9 @@ export default function FacebookAccountsPage() {
     optimizer: '',
     status: '',
     accountId: '',
-    name: ''
+    name: '',
+    startDate: '',
+    endDate: ''
   })
 
   // 加载列表
@@ -134,6 +136,24 @@ export default function FacebookAccountsPage() {
         {/* 筛选区域 */}
         <section className="bg-slate-900/40 backdrop-blur-xl border border-white/5 rounded-2xl p-6 shadow-xl">
           <div className="grid grid-cols-1 md:grid-cols-4 lg:grid-cols-5 gap-4 items-end">
+            <div className="group">
+              <label className="block text-xs font-medium text-slate-400 mb-2">开始日期</label>
+              <input
+                type="date"
+                value={filters.startDate}
+                onChange={e => setFilters({...filters, startDate: e.target.value})}
+                className="w-full px-4 py-2.5 bg-slate-800/50 border border-slate-700 rounded-xl text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
+              />
+            </div>
+            <div className="group">
+              <label className="block text-xs font-medium text-slate-400 mb-2">结束日期</label>
+              <input
+                type="date"
+                value={filters.endDate}
+                onChange={e => setFilters({...filters, endDate: e.target.value})}
+                className="w-full px-4 py-2.5 bg-slate-800/50 border border-slate-700 rounded-xl text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
+              />
+            </div>
             <div className="group">
               <label className="block text-xs font-medium text-slate-400 mb-2">优化师</label>
               <input

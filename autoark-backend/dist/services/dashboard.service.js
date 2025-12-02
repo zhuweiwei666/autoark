@@ -190,10 +190,10 @@ async function getOpsLogs(limit = 50) {
 /**
  * 获取核心指标概览（今日消耗、昨日消耗、7日趋势等）
  */
-async function getCoreMetrics() {
-    const today = new Date().toISOString().split('T')[0];
-    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+async function getCoreMetrics(startDate, endDate) {
+    const today = endDate || new Date().toISOString().split('T')[0];
+    const yesterday = startDate ? new Date(new Date(startDate).getTime() - 24 * 60 * 60 * 1000).toISOString().split('T')[0] : new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const sevenDaysAgo = startDate || new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
     // 今日数据
     const todayData = await models_1.MetricsDaily.aggregate([
         { $match: { date: today } },
@@ -275,9 +275,9 @@ async function getCoreMetrics() {
 /**
  * 获取今日消耗趋势（按小时）- 由于数据是按天存储的，这里返回最近7天的趋势
  */
-async function getTodaySpendTrend() {
-    const today = new Date().toISOString().split('T')[0];
-    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+async function getTodaySpendTrend(startDate, endDate) {
+    const today = endDate || new Date().toISOString().split('T')[0];
+    const sevenDaysAgo = startDate || new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
     const data = await models_1.MetricsDaily.aggregate([
         { $match: { date: { $gte: sevenDaysAgo, $lte: today } } },
         {
@@ -304,9 +304,9 @@ async function getTodaySpendTrend() {
 /**
  * 获取分 Campaign 消耗排行
  */
-async function getCampaignSpendRanking(limit = 10) {
-    const today = new Date().toISOString().split('T')[0];
-    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+async function getCampaignSpendRanking(limit = 10, startDate, endDate) {
+    const today = endDate || new Date().toISOString().split('T')[0];
+    const sevenDaysAgo = startDate || new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
     const data = await models_1.MetricsDaily.aggregate([
         { $match: { date: { $gte: sevenDaysAgo, $lte: today }, campaignId: { $exists: true, $ne: null } } },
         {
@@ -374,9 +374,9 @@ async function getCampaignSpendRanking(limit = 10) {
 /**
  * 获取分国家消耗排行
  */
-async function getCountrySpendRanking(limit = 10) {
-    const today = new Date().toISOString().split('T')[0];
-    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+async function getCountrySpendRanking(limit = 10, startDate, endDate) {
+    const today = endDate || new Date().toISOString().split('T')[0];
+    const sevenDaysAgo = startDate || new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
     // 注意：MetricsDaily 中没有 country 字段，需要从 Campaign 或其他地方获取
     // 这里先返回按 accountId 分组的数据，后续可以扩展
     const data = await models_1.MetricsDaily.aggregate([

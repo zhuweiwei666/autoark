@@ -107,7 +107,28 @@ router.get('/', (_req, res) => {
 
     <!-- 数据看板 V1 - 核心指标卡片 -->
     <section class="bg-slate-900/70 rounded-xl border border-slate-800 p-6">
-      <h2 class="text-xl font-bold text-slate-100 mb-4">📊 数据看板</h2>
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-xl font-bold text-slate-100">📊 数据看板</h2>
+        <div class="flex items-center gap-3">
+          <input
+            type="date"
+            id="dashboard-start-date"
+            class="px-3 py-2 bg-slate-800/50 border border-slate-700 rounded-lg text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500/50"
+          />
+          <span class="text-slate-400">至</span>
+          <input
+            type="date"
+            id="dashboard-end-date"
+            class="px-3 py-2 bg-slate-800/50 border border-slate-700 rounded-lg text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500/50"
+          />
+          <button
+            onclick="applyDashboardDateFilter()"
+            class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-sm font-medium text-white transition-colors"
+          >
+            应用
+          </button>
+        </div>
+      </div>
       <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6" id="core-metrics-cards">
         <div class="bg-slate-800/50 rounded-lg p-4 border border-slate-700/50">
           <div class="text-xs text-slate-400 mb-1">今日消耗</div>
@@ -407,10 +428,31 @@ router.get('/', (_req, res) => {
     let spendTrendChart = null
     let campaignRankingChart = null
     let countryRankingChart = null
+    let dashboardStartDate = ''
+    let dashboardEndDate = ''
+
+    // 初始化日期（默认最近7天）
+    function initDashboardDates() {
+      const end = new Date()
+      const start = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
+      dashboardEndDate = end.toISOString().split('T')[0]
+      dashboardStartDate = start.toISOString().split('T')[0]
+      document.getElementById('dashboard-start-date').value = dashboardStartDate
+      document.getElementById('dashboard-end-date').value = dashboardEndDate
+    }
+
+    function applyDashboardDateFilter() {
+      dashboardStartDate = document.getElementById('dashboard-start-date').value
+      dashboardEndDate = document.getElementById('dashboard-end-date').value
+      loadDashboardData()
+    }
 
     async function loadCoreMetrics() {
       try {
-        const { data } = await fetchJSON(API_BASE + '/api/core-metrics')
+        const url = API_BASE + '/api/core-metrics' + 
+          (dashboardStartDate ? '?startDate=' + dashboardStartDate : '') +
+          (dashboardEndDate ? (dashboardStartDate ? '&' : '?') + 'endDate=' + dashboardEndDate : '')
+        const { data } = await fetchJSON(url)
         
         // 更新核心指标卡片
         document.getElementById('today-spend').textContent = '$' + (data.today?.spend || 0).toFixed(2)
@@ -433,7 +475,10 @@ router.get('/', (_req, res) => {
 
     async function loadSpendTrend() {
       try {
-        const { data } = await fetchJSON(API_BASE + '/api/today-spend-trend')
+        const url = API_BASE + '/api/today-spend-trend' + 
+          (dashboardStartDate ? '?startDate=' + dashboardStartDate : '') +
+          (dashboardEndDate ? (dashboardStartDate ? '&' : '?') + 'endDate=' + dashboardEndDate : '')
+        const { data } = await fetchJSON(url)
         
         const ctx = document.getElementById('spend-trend-chart')
         if (spendTrendChart) {
@@ -480,21 +525,30 @@ router.get('/', (_req, res) => {
 
     async function loadCampaignRanking() {
       try {
-        const { data } = await fetchJSON(API_BASE + '/api/campaign-spend-ranking?limit=10')
+        const url = API_BASE + '/api/campaign-spend-ranking?limit=10' + 
+          (dashboardStartDate ? '&startDate=' + dashboardStartDate : '') +
+          (dashboardEndDate ? '&endDate=' + dashboardEndDate : '')
+        const { data } = await fetchJSON(url)
         
         const ctx = document.getElementById('campaign-ranking-chart')
         if (campaignRankingChart) {
           campaignRankingChart.destroy()
         }
         
+        // 如果只有一个campaign，确保它排在最上面（反转顺序）
+        const sortedData = data.length === 1 ? data : data.reverse()
+        
         campaignRankingChart = new Chart(ctx, {
           type: 'bar',
           data: {
-            labels: data.map(d => (d.campaignName || d.campaignId || 'Unknown').substring(0, 20)),
+            labels: sortedData.map(d => (d.campaignName || d.campaignId || 'Unknown').substring(0, 20)),
             datasets: [{
               label: '消耗 ($)',
-              data: data.map(d => d.spend || 0),
+              data: sortedData.map(d => d.spend || 0),
               backgroundColor: 'rgba(99, 102, 241, 0.8)',
+              maxBarThickness: 50, // 限制柱子最大宽度
+              categoryPercentage: 0.6, // 柱子占分类宽度的60%
+              barPercentage: 0.8, // 柱子占可用空间的80%
             }],
           },
           options: {
@@ -504,6 +558,7 @@ router.get('/', (_req, res) => {
             plugins: {
               legend: {
                 labels: { color: '#cbd5e1' },
+                display: false, // 隐藏图例
               },
             },
             scales: {
@@ -525,7 +580,10 @@ router.get('/', (_req, res) => {
 
     async function loadCountryRanking() {
       try {
-        const { data } = await fetchJSON(API_BASE + '/api/country-spend-ranking?limit=10')
+        const url = API_BASE + '/api/country-spend-ranking?limit=10' + 
+          (dashboardStartDate ? '&startDate=' + dashboardStartDate : '') +
+          (dashboardEndDate ? '&endDate=' + dashboardEndDate : '')
+        const { data } = await fetchJSON(url)
         
         const ctx = document.getElementById('country-ranking-chart')
         if (countryRankingChart) {
@@ -540,6 +598,9 @@ router.get('/', (_req, res) => {
               label: '消耗 ($)',
               data: data.map(d => d.spend || 0),
               backgroundColor: 'rgba(16, 185, 129, 0.8)',
+              maxBarThickness: 50, // 限制柱子最大宽度
+              categoryPercentage: 0.6, // 柱子占分类宽度的60%
+              barPercentage: 0.8, // 柱子占可用空间的80%
             }],
           },
           options: {
@@ -549,6 +610,7 @@ router.get('/', (_req, res) => {
             plugins: {
               legend: {
                 labels: { color: '#cbd5e1' },
+                display: false, // 隐藏图例
               },
             },
             scales: {
@@ -578,6 +640,7 @@ router.get('/', (_req, res) => {
     }
 
     async function init() {
+      initDashboardDates()
       await Promise.all([
         loadSystemHealth(),
         loadFacebookOverview(),
