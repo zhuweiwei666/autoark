@@ -119,19 +119,14 @@ export default function FacebookAccountsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/30 to-indigo-50/20 text-slate-900 p-6 relative overflow-hidden">
-      {/* iOS 风格背景 */}
-      <div className="absolute top-0 left-0 w-full h-full overflow-hidden z-0 pointer-events-none">
-        <div className="absolute top-0 right-0 w-[600px] h-[600px] bg-blue-200/20 rounded-full blur-[120px]" />
-        <div className="absolute bottom-0 left-0 w-[500px] h-[500px] bg-indigo-200/20 rounded-full blur-[100px]" />
-      </div>
+    <div className="min-h-screen bg-white text-slate-900 p-6 relative overflow-hidden">
 
       <div className="relative z-10 max-w-7xl mx-auto space-y-6">
-        {/* iOS 风格头部 */}
-        <header className="flex items-center justify-between backdrop-blur-xl bg-white/70 rounded-3xl p-6 shadow-lg shadow-black/5 border border-white/50">
+        {/* 纯白底头部 */}
+        <header className="flex items-center justify-between bg-white rounded-3xl p-6 shadow-lg shadow-black/5 border border-slate-200">
           <div className="flex items-center gap-4">
-            <h1 className="text-3xl font-bold bg-gradient-to-r from-slate-900 to-slate-700 bg-clip-text text-transparent tracking-tight">广告账户管理</h1>
-            <span className="bg-gradient-to-r from-blue-500/10 to-indigo-500/10 backdrop-blur-sm border border-blue-200/50 px-4 py-1.5 rounded-full text-xs font-semibold text-blue-700">
+            <h1 className="text-3xl font-bold text-slate-900 tracking-tight">广告账户管理</h1>
+            <span className="bg-slate-100 border border-slate-200 px-4 py-1.5 rounded-full text-xs font-semibold text-slate-700">
               Total: {pagination.total}
             </span>
           </div>
@@ -139,7 +134,7 @@ export default function FacebookAccountsPage() {
             <button
               onClick={handleSync}
               disabled={syncing}
-              className={`group px-6 py-3 bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-600 hover:to-indigo-700 rounded-2xl text-sm font-semibold text-white shadow-lg shadow-blue-500/30 hover:shadow-blue-500/40 transition-all duration-200 flex items-center gap-2 active:scale-95 ${syncing ? 'opacity-70 cursor-not-allowed' : ''}`}
+              className={`group px-6 py-3 bg-slate-900 hover:bg-slate-800 rounded-2xl text-sm font-semibold text-white shadow-md hover:shadow-lg transition-all duration-200 flex items-center gap-2 active:scale-95 ${syncing ? 'opacity-70 cursor-not-allowed' : ''}`}
             >
               <svg className={`w-5 h-5 ${syncing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -203,63 +198,63 @@ export default function FacebookAccountsPage() {
           </div>
         )}
 
-        {/* iOS 风格筛选区域 */}
-        <section className="backdrop-blur-2xl bg-white/70 rounded-3xl p-6 shadow-xl shadow-black/5 border border-white/50">
+        {/* 纯白底筛选区域 */}
+        <section className="bg-white rounded-3xl p-6 shadow-lg shadow-black/5 border border-slate-200">
           <div className="grid grid-cols-1 md:grid-cols-4 lg:grid-cols-5 gap-4 items-end">
             <div className="group">
-              <label className="block text-xs font-semibold text-slate-600 mb-2">开始日期</label>
+              <label className="block text-xs font-semibold text-slate-700 mb-2">开始日期</label>
               <input
                 type="date"
                 value={filters.startDate}
                 onChange={e => setFilters({...filters, startDate: e.target.value})}
-                className="w-full px-4 py-3 bg-white/80 backdrop-blur-sm border border-slate-200 rounded-2xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition-all shadow-sm"
+                className="w-full px-4 py-3 bg-white border border-slate-300 rounded-2xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-400 focus:border-slate-400 transition-all shadow-sm"
               />
             </div>
             <div className="group">
-              <label className="block text-xs font-semibold text-slate-600 mb-2">结束日期</label>
+              <label className="block text-xs font-semibold text-slate-700 mb-2">结束日期</label>
               <input
                 type="date"
                 value={filters.endDate}
                 onChange={e => setFilters({...filters, endDate: e.target.value})}
-                className="w-full px-4 py-3 bg-white/80 backdrop-blur-sm border border-slate-200 rounded-2xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition-all shadow-sm"
+                className="w-full px-4 py-3 bg-white border border-slate-300 rounded-2xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-400 focus:border-slate-400 transition-all shadow-sm"
               />
             </div>
             <div className="group">
-              <label className="block text-xs font-semibold text-slate-600 mb-2">优化师</label>
+              <label className="block text-xs font-semibold text-slate-700 mb-2">优化师</label>
               <input
                 type="text"
                 value={filters.optimizer}
                 onChange={e => setFilters({...filters, optimizer: e.target.value})}
-                className="w-full px-4 py-3 bg-white/80 backdrop-blur-sm border border-slate-200 rounded-2xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition-all shadow-sm placeholder:text-slate-400"
+                className="w-full px-4 py-3 bg-white border border-slate-300 rounded-2xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-400 focus:border-slate-400 transition-all shadow-sm placeholder:text-slate-400"
                 placeholder="输入名称"
               />
             </div>
             <div className="group">
-              <label className="block text-xs font-semibold text-slate-600 mb-2">账户名称</label>
+              <label className="block text-xs font-semibold text-slate-700 mb-2">账户名称</label>
               <input
                 type="text"
                 value={filters.name}
                 onChange={e => setFilters({...filters, name: e.target.value})}
-                className="w-full px-4 py-3 bg-white/80 backdrop-blur-sm border border-slate-200 rounded-2xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition-all shadow-sm placeholder:text-slate-400"
+                className="w-full px-4 py-3 bg-white border border-slate-300 rounded-2xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-400 focus:border-slate-400 transition-all shadow-sm placeholder:text-slate-400"
                 placeholder="输入账户名称"
               />
             </div>
             <div className="group">
-              <label className="block text-xs font-semibold text-slate-600 mb-2">账户 ID</label>
+              <label className="block text-xs font-semibold text-slate-700 mb-2">账户 ID</label>
               <input
                 type="text"
                 value={filters.accountId}
                 onChange={e => setFilters({...filters, accountId: e.target.value})}
-                className="w-full px-4 py-3 bg-white/80 backdrop-blur-sm border border-slate-200 rounded-2xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition-all shadow-sm placeholder:text-slate-400"
+                className="w-full px-4 py-3 bg-white border border-slate-300 rounded-2xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-400 focus:border-slate-400 transition-all shadow-sm placeholder:text-slate-400"
                 placeholder="输入账户ID"
               />
             </div>
             <div className="group">
-              <label className="block text-xs font-semibold text-slate-600 mb-2">状态</label>
+              <label className="block text-xs font-semibold text-slate-700 mb-2">状态</label>
               <select
                 value={filters.status}
                 onChange={e => setFilters({...filters, status: e.target.value})}
-                className="w-full px-4 py-3 bg-white/80 backdrop-blur-sm border border-slate-200 rounded-2xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition-all shadow-sm appearance-none cursor-pointer"
+                className="w-full px-4 py-3 bg-white border border-slate-300 rounded-2xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-400 focus:border-slate-400 transition-all shadow-sm appearance-none cursor-pointer"
               >
                 <option value="">全部</option>
                 <option value="active">Active</option>
@@ -269,7 +264,7 @@ export default function FacebookAccountsPage() {
             </div>
             <button
               onClick={() => loadAccounts(1)}
-              className="w-full px-4 py-3 bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-600 hover:to-indigo-700 text-white rounded-2xl text-sm font-semibold transition-all shadow-lg shadow-blue-500/30 active:scale-95"
+              className="w-full px-4 py-3 bg-slate-900 hover:bg-slate-800 rounded-2xl text-sm font-semibold text-white transition-all shadow-md hover:shadow-lg active:scale-95"
             >
               搜索
             </button>
@@ -283,7 +278,7 @@ export default function FacebookAccountsPage() {
               <thead>
                 <tr className="border-b border-white/5 bg-white/5">
                   <th 
-                    className="px-6 py-5 font-semibold text-slate-700 cursor-pointer hover:bg-slate-50/50 transition-colors select-none"
+                    className="px-6 py-5 font-semibold text-slate-900 cursor-pointer hover:bg-slate-100 transition-colors select-none"
                     onClick={() => {
                       const direction = sortConfig?.key === 'name' && sortConfig.direction === 'asc' ? 'desc' : 'asc'
                       setSortConfig({ key: 'name', direction })
@@ -304,7 +299,7 @@ export default function FacebookAccountsPage() {
                     </div>
                   </th>
                   <th 
-                    className="px-6 py-5 font-semibold text-slate-700 cursor-pointer hover:bg-slate-50/50 transition-colors select-none"
+                    className="px-6 py-5 font-semibold text-slate-900 cursor-pointer hover:bg-slate-100 transition-colors select-none"
                     onClick={() => {
                       const direction = sortConfig?.key === 'status' && sortConfig.direction === 'asc' ? 'desc' : 'asc'
                       setSortConfig({ key: 'status', direction })
@@ -325,7 +320,7 @@ export default function FacebookAccountsPage() {
                     </div>
                   </th>
                   <th 
-                    className="px-6 py-5 font-semibold text-slate-700 cursor-pointer hover:bg-slate-50/50 transition-colors select-none"
+                    className="px-6 py-5 font-semibold text-slate-900 cursor-pointer hover:bg-slate-100 transition-colors select-none"
                     onClick={() => {
                       const direction = sortConfig?.key === 'balance' && sortConfig.direction === 'asc' ? 'desc' : 'asc'
                       setSortConfig({ key: 'balance', direction })
@@ -346,7 +341,7 @@ export default function FacebookAccountsPage() {
                     </div>
                   </th>
                   <th 
-                    className="px-6 py-5 font-semibold text-slate-700 cursor-pointer hover:bg-slate-50/50 transition-colors select-none"
+                    className="px-6 py-5 font-semibold text-slate-900 cursor-pointer hover:bg-slate-100 transition-colors select-none"
                     onClick={() => {
                       const direction = sortConfig?.key === 'operator' && sortConfig.direction === 'asc' ? 'desc' : 'asc'
                       setSortConfig({ key: 'operator', direction })
@@ -366,7 +361,7 @@ export default function FacebookAccountsPage() {
                       )}
                     </div>
                   </th>
-                  <th className="px-6 py-5 font-semibold text-slate-700 text-right">操作</th>
+                  <th className="px-6 py-5 font-semibold text-slate-900 text-right">操作</th>
                 </tr>
               </thead>
               <tbody>
@@ -446,24 +441,24 @@ export default function FacebookAccountsPage() {
             </table>
           </div>
           
-          {/* iOS 风格分页 */}
+          {/* 纯白底分页 */}
           {pagination.pages > 1 && (
-            <div className="px-6 py-5 border-t border-slate-200/50 bg-white/30 backdrop-blur-sm flex items-center justify-between">
-              <span className="text-sm text-slate-600 font-medium">
+            <div className="px-6 py-5 border-t border-slate-200 bg-slate-50 flex items-center justify-between">
+              <span className="text-sm text-slate-700 font-medium">
                 显示 {(pagination.page - 1) * pagination.limit + 1} - {Math.min(pagination.page * pagination.limit, pagination.total)} 共 {pagination.total} 条
               </span>
               <div className="flex gap-3">
                 <button
                   onClick={() => loadAccounts(pagination.page - 1)}
                   disabled={pagination.page === 1}
-                  className="px-5 py-2.5 bg-white/80 backdrop-blur-sm hover:bg-white border border-slate-200 rounded-2xl text-sm font-semibold text-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-sm active:scale-95"
+                  className="px-5 py-2.5 bg-white hover:bg-slate-50 border border-slate-300 rounded-2xl text-sm font-semibold text-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-sm active:scale-95"
                 >
                   上一页
                 </button>
                 <button
                   onClick={() => loadAccounts(pagination.page + 1)}
                   disabled={pagination.page >= pagination.pages}
-                  className="px-5 py-2.5 bg-white/80 backdrop-blur-sm hover:bg-white border border-slate-200 rounded-2xl text-sm font-semibold text-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-sm active:scale-95"
+                  className="px-5 py-2.5 bg-white hover:bg-slate-50 border border-slate-300 rounded-2xl text-sm font-semibold text-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-sm active:scale-95"
                 >
                   下一页
                 </button>

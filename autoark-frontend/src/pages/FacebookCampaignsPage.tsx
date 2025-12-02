@@ -382,19 +382,14 @@ export default function FacebookCampaignsPage() {
   }, [columnsToRender])
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/30 to-indigo-50/20 text-slate-900 p-6 relative overflow-hidden">
-      {/* iOS 风格背景 */}
-      <div className="absolute top-0 left-0 w-full h-full overflow-hidden z-0 pointer-events-none">
-        <div className="absolute top-0 right-0 w-[600px] h-[600px] bg-blue-200/20 rounded-full blur-[120px]" />
-        <div className="absolute bottom-0 left-0 w-[500px] h-[500px] bg-indigo-200/20 rounded-full blur-[100px]" />
-      </div>
+    <div className="min-h-screen bg-white text-slate-900 p-6 relative overflow-hidden">
 
       <div className="relative z-10 max-w-7xl mx-auto space-y-6">
-        {/* iOS 风格头部 */}
-        <header className="flex items-center justify-between backdrop-blur-xl bg-white/70 rounded-3xl p-6 shadow-lg shadow-black/5 border border-white/50">
+        {/* 纯白底头部 */}
+        <header className="flex items-center justify-between bg-white rounded-3xl p-6 shadow-lg shadow-black/5 border border-slate-200">
           <div className="flex items-center gap-4">
-            <h1 className="text-3xl font-bold bg-gradient-to-r from-slate-900 to-slate-700 bg-clip-text text-transparent tracking-tight">广告系列管理</h1>
-            <span className="bg-gradient-to-r from-blue-500/10 to-indigo-500/10 backdrop-blur-sm border border-blue-200/50 px-4 py-1.5 rounded-full text-xs font-semibold text-blue-700">
+            <h1 className="text-3xl font-bold text-slate-900 tracking-tight">广告系列管理</h1>
+            <span className="bg-slate-100 border border-slate-200 px-4 py-1.5 rounded-full text-xs font-semibold text-slate-700">
               Total: {pagination.total}
             </span>
           </div>
@@ -402,7 +397,7 @@ export default function FacebookCampaignsPage() {
             <button
               onClick={handleSync}
               disabled={syncing}
-              className={`group px-6 py-3 bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-600 hover:to-indigo-700 rounded-2xl text-sm font-semibold text-white shadow-lg shadow-blue-500/30 hover:shadow-blue-500/40 transition-all duration-200 flex items-center gap-2 active:scale-95 ${syncing ? 'opacity-70 cursor-not-allowed' : ''}`}
+              className={`group px-6 py-3 bg-slate-900 hover:bg-slate-800 rounded-2xl text-sm font-semibold text-white shadow-md hover:shadow-lg transition-all duration-200 flex items-center gap-2 active:scale-95 ${syncing ? 'opacity-70 cursor-not-allowed' : ''}`}
             >
               <svg className={`w-5 h-5 ${syncing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -410,10 +405,10 @@ export default function FacebookCampaignsPage() {
               {syncing ? '同步中...' : '同步广告系列'}
             </button>
 
-            {/* iOS 风格自定义列设置按钮 */}
+            {/* 纯白底自定义列设置按钮 */}
             <button
               onClick={() => setShowColumnSettings(true)}
-              className="px-6 py-3 bg-white/80 backdrop-blur-sm hover:bg-white border border-slate-200 rounded-2xl text-sm font-semibold text-slate-700 transition-all shadow-sm active:scale-95 flex items-center gap-2"
+              className="px-6 py-3 bg-white hover:bg-slate-50 border border-slate-300 rounded-2xl text-sm font-semibold text-slate-700 transition-all shadow-sm active:scale-95 flex items-center gap-2"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
                 自定义列
@@ -434,7 +429,7 @@ export default function FacebookCampaignsPage() {
                         自定义列
                     </h2>
                     
-                    {/* iOS 风格搜索框 */}
+                    {/* 纯白底搜索框 */}
                     <div className="mb-4">
                         <div className="relative">
                             <input
@@ -442,15 +437,15 @@ export default function FacebookCampaignsPage() {
                                 value={columnSearchQuery}
                                 onChange={(e) => setColumnSearchQuery(e.target.value)}
                                 placeholder="搜索字段名..."
-                                className="w-full px-4 py-3 pl-10 bg-white/80 backdrop-blur-sm border border-slate-200 rounded-2xl text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition-all shadow-sm"
+                                className="w-full px-4 py-3 pl-10 bg-white border border-slate-300 rounded-2xl text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-400 focus:border-slate-400 transition-all shadow-sm"
                             />
-                            <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                             </svg>
                             {columnSearchQuery && (
                                 <button
                                     onClick={() => setColumnSearchQuery('')}
-                                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors p-1 hover:bg-slate-100/50 rounded-lg"
+                                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-700 transition-colors p-1 hover:bg-white/30 rounded-lg"
                                 >
                                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
@@ -460,7 +455,7 @@ export default function FacebookCampaignsPage() {
                         </div>
                     </div>
                     
-                    <div className="flex items-center gap-2 mb-4 text-sm text-slate-600">
+                    <div className="flex items-center gap-2 mb-4 text-sm text-slate-700">
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
                         <span>💡 拖拽列标题可以调整顺序</span>
                     </div>
@@ -501,12 +496,12 @@ export default function FacebookCampaignsPage() {
                                   columnSearchQuery ? 'cursor-default' : 'cursor-move'
                                 } ${
                                   draggedIndex === actualIndex
-                                    ? 'bg-blue-100/80 border-blue-300/50 shadow-md'
-                                    : 'bg-white/80 backdrop-blur-sm border-slate-200/50 hover:bg-slate-50/80'
+                                    ? 'bg-blue-50 border-blue-300 shadow-md'
+                                    : 'bg-white border-slate-200 hover:bg-slate-50'
                                 }`}
                               >
                             {/* 拖拽手柄 */}
-                            <div className="flex items-center text-slate-400 hover:text-slate-600">
+                            <div className="flex items-center text-slate-500 hover:text-slate-700">
                               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 8h16M4 16h16" />
                               </svg>
@@ -520,12 +515,12 @@ export default function FacebookCampaignsPage() {
                                   e.target.checked ? [...prev, col.key] : prev.filter(k => k !== col.key)
                                 )
                               }}
-                              className="form-checkbox h-4 w-4 text-blue-600 bg-white border-slate-300 rounded focus:ring-blue-500"
+                              className="form-checkbox h-4 w-4 text-slate-600 bg-white border-slate-300 rounded focus:ring-slate-400"
                               onClick={(e) => e.stopPropagation()}
                             />
                             <label
                               htmlFor={`col-${col.key}`}
-                              className="flex-1 text-sm font-medium leading-none text-slate-700 cursor-pointer"
+                              className="flex-1 text-sm font-medium leading-none text-slate-900 cursor-pointer"
                             >
                               {col.label}
                             </label>
@@ -535,17 +530,17 @@ export default function FacebookCampaignsPage() {
                         )
                       })()}
                     </div>
-                    <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-slate-200/50">
+                    <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-slate-200">
                       <button onClick={() => {
                         setShowColumnSettings(false)
                         setColumnSearchQuery('') // 关闭时清空搜索
-                      }} className="px-5 py-2.5 bg-white/80 backdrop-blur-sm hover:bg-white border border-slate-200 rounded-2xl text-slate-700 font-semibold transition-all shadow-sm active:scale-95">
+                      }} className="px-5 py-2.5 bg-white hover:bg-slate-50 border border-slate-300 rounded-2xl text-slate-700 font-semibold transition-all shadow-sm active:scale-95">
                         取消
                       </button>
                       <button onClick={() => {
                         saveColumnSettings(visibleColumns, columnOrder)
                         setColumnSearchQuery('') // 保存时清空搜索
-                      }} className="px-6 py-2.5 bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-600 hover:to-indigo-700 rounded-2xl text-white font-semibold transition-all shadow-lg shadow-blue-500/30 active:scale-95">
+                      }} className="px-6 py-2.5 bg-slate-900 hover:bg-slate-800 rounded-2xl text-white font-semibold transition-all shadow-md hover:shadow-lg active:scale-95">
                         保存设置
                       </button>
                     </div>
@@ -555,12 +550,12 @@ export default function FacebookCampaignsPage() {
             </div> {/* This div closes the header items flex container */}
         </header>
 
-        {/* iOS 风格消息提示 */}
+        {/* 纯白底消息提示 */}
         {message && (
-          <div className={`p-5 rounded-3xl border backdrop-blur-2xl shadow-xl animate-fade-in ${
+          <div className={`p-5 rounded-3xl border shadow-xl animate-fade-in ${
             message.type === 'success' 
-              ? 'bg-gradient-to-r from-emerald-50/90 to-green-50/90 border-emerald-200/50 text-emerald-800' 
-              : 'bg-gradient-to-r from-red-50/90 to-rose-50/90 border-red-200/50 text-red-800'
+              ? 'bg-emerald-50 border-emerald-200 text-emerald-800' 
+              : 'bg-red-50 border-red-200 text-red-800'
           }`}>
             <div className="flex items-start justify-between gap-4">
               <div className="flex-1">
@@ -737,7 +732,7 @@ export default function FacebookCampaignsPage() {
                         </div>
                       </th>
                   ))}
-                  <th className="px-6 py-5 font-semibold text-slate-700 text-right">操作</th>
+                  <th className="px-6 py-5 font-semibold text-slate-900 text-right">操作</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5">
@@ -768,38 +763,38 @@ export default function FacebookCampaignsPage() {
                       })
                     }
                     return sortedCampaigns.map((campaign) => (
-                    <tr key={campaign.id || (campaign as any).id} className="group hover:bg-slate-50/50 transition-colors border-b border-slate-100/50">
+                    <tr key={campaign.id || (campaign as any).id} className="group hover:bg-slate-50 transition-colors border-b border-slate-100">
                       {safeColumnsToRender.map(col => (
                         <td key={col.key} className="px-6 py-4">
                           {col.key === 'name' ? (
                             <div>
-                              <div className="font-semibold text-slate-900 group-hover:text-blue-600 transition-colors">{(col.format as (v: string) => string)(campaign.name || (campaign as any).name)}</div>
+                              <div className="font-semibold text-slate-900 group-hover:text-slate-950 transition-colors">{(col.format as (v: string) => string)(campaign.name || (campaign as any).name)}</div>
                               <div className="text-xs text-slate-500 font-mono mt-1">ID: {(col.format as (v: string) => string)(campaign.campaignId || (campaign as any).id)}</div>
-                                </div>
+                            </div>
                           ) : col.key === 'status' ? (
-                            <span className={`inline-flex items-center px-3 py-1.5 rounded-full text-xs font-semibold border backdrop-blur-sm ${
+                            <span className={`inline-flex items-center px-3 py-1.5 rounded-full text-xs font-semibold border ${
                               (campaign.status || (campaign as any).status) === 'ACTIVE'
-                                ? 'bg-emerald-50/80 border-emerald-200/50 text-emerald-700'
+                                ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
                                 : (campaign.status || (campaign as any).status) === 'PAUSED'
-                                ? 'bg-amber-50/80 border-amber-200/50 text-amber-700'
-                                : 'bg-slate-50/80 border-slate-200/50 text-slate-700'
+                                ? 'bg-amber-50 border-amber-200 text-amber-700'
+                                : 'bg-slate-50 border-slate-200 text-slate-700'
                             }`}>
                               <span className={`w-1.5 h-1.5 rounded-full mr-2 ${
                                 (campaign.status || (campaign as any).status) === 'ACTIVE' ? 'bg-emerald-500' : 
                                 (campaign.status || (campaign as any).status) === 'PAUSED' ? 'bg-amber-500' : 'bg-slate-400'
                               }`}></span>
                               {(col.format as (v: string) => string)(campaign.status || (campaign as any).status)}
-                                </span>
+                            </span>
                           ) : col.key === 'account_id' || col.key === 'accountId' ? (
-                            <div className="text-xs text-slate-600 font-mono">{(campaign as any)[col.key] || campaign.accountId || '-'}</div>
+                            <div className="text-xs text-slate-700 font-mono">{(campaign as any)[col.key] || campaign.accountId || '-'}</div>
                           ) : (
-                            <span className="text-slate-700">{(campaign as any)[col.key] !== undefined && (campaign as any)[col.key] !== null ? col.format((campaign as any)[col.key]) : '-'}</span>
+                            <span className="text-slate-900">{(campaign as any)[col.key] !== undefined && (campaign as any)[col.key] !== null ? col.format((campaign as any)[col.key]) : '-'}</span>
                           )}
-                          </td>
+                        </td>
                       ))}
                       <td className="px-6 py-4 text-right">
-                        <button className="opacity-60 hover:opacity-100 p-2 hover:bg-slate-100/50 rounded-xl transition-all active:scale-95">
-                          <svg className="w-5 h-5 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" /></svg>
+                        <button className="opacity-60 hover:opacity-100 p-2 hover:bg-slate-100 rounded-xl transition-all active:scale-95">
+                          <svg className="w-5 h-5 text-slate-700" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" /></svg>
                         </button>
                       </td>
                     </tr>
@@ -810,24 +805,24 @@ export default function FacebookCampaignsPage() {
             </table>
           </div>
           
-          {/* iOS 风格分页 */}
+          {/* 纯白底分页 */}
           {pagination.pages > 1 && (
-            <div className="px-6 py-5 border-t border-slate-200/50 bg-white/30 backdrop-blur-sm flex items-center justify-between">
-              <span className="text-sm text-slate-600 font-medium">
+            <div className="px-6 py-5 border-t border-slate-200 bg-slate-50 flex items-center justify-between">
+              <span className="text-sm text-slate-700 font-medium">
                 显示 {(pagination.page - 1) * pagination.limit + 1} - {Math.min(pagination.page * pagination.limit, pagination.total)} 共 {pagination.total} 条
               </span>
               <div className="flex gap-3">
                 <button
                   onClick={() => loadCampaigns(pagination.page - 1)}
                   disabled={pagination.page === 1}
-                  className="px-5 py-2.5 bg-white/80 backdrop-blur-sm hover:bg-white border border-slate-200 rounded-2xl text-sm font-semibold text-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-sm active:scale-95"
+                  className="px-5 py-2.5 bg-white hover:bg-slate-50 border border-slate-300 rounded-2xl text-sm font-semibold text-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-sm active:scale-95"
                 >
                   上一页
                 </button>
                 <button
                   onClick={() => loadCampaigns(pagination.page + 1)}
                   disabled={pagination.page >= pagination.pages}
-                  className="px-5 py-2.5 bg-white/80 backdrop-blur-sm hover:bg-white border border-slate-200 rounded-2xl text-sm font-semibold text-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-sm active:scale-95"
+                  className="px-5 py-2.5 bg-white hover:bg-slate-50 border border-slate-300 rounded-2xl text-sm font-semibold text-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-sm active:scale-95"
                 >
                   下一页
                 </button>
