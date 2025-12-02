@@ -526,8 +526,16 @@ router.get('/', (_req, res) => {
         
         // 优化：如果图表已存在，只更新数据，不重建
         if (spendTrendChart) {
-          spendTrendChart.data.labels = data.map(d => d.date)
+          const formattedLabels = data.map(d => {
+            const date = new Date(d.date + 'T00:00:00')
+            return (date.getMonth() + 1) + '/' + date.getDate()
+          })
+          spendTrendChart.data.labels = formattedLabels
           spendTrendChart.data.datasets[0].data = data.map(d => d.spend || 0)
+          // 更新原始日期数据用于 tooltip
+          if (spendTrendChart.data.rawDates) {
+            spendTrendChart.data.rawDates = data.map(d => d.date)
+          }
           spendTrendChart.update('none') // 'none' 模式，无动画，更快
           return
         }
