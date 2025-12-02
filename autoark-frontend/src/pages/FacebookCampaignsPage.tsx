@@ -1,4 +1,11 @@
 import { useState, useEffect, useMemo } from 'react'
+import DatePicker from '../components/DatePicker'
+
+// 获取今天的日期字符串 (YYYY-MM-DD)
+const getToday = () => {
+  const today = new Date()
+  return today.toISOString().split('T')[0]
+}
 import {
   getCampaigns,
   syncCampaigns,
@@ -173,17 +180,18 @@ export default function FacebookCampaignsPage() {
     pages: 1,
   })
   
-  // 排序状态
-  const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(null)
+  // 排序状态 - 默认按 spend 降序
+  const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' } | null>({ key: 'spend', direction: 'desc' })
 
-  // 筛选条件
+  // 筛选条件 - 默认显示今天的数据
+  const today = getToday()
   const [filters, setFilters] = useState({
     name: '',
     accountId: '',
     status: '',
     objective: '',
-    startDate: '',
-    endDate: '',
+    startDate: today,
+    endDate: today,
   })
 
   // 自定义列相关
@@ -636,20 +644,20 @@ export default function FacebookCampaignsPage() {
           <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-6 items-end">
             <div className="group">
               <label className="block text-xs font-medium text-slate-400 mb-2 group-focus-within:text-indigo-400 transition-colors">开始日期</label>
-              <input
-                type="date"
+              <DatePicker
                 value={filters.startDate}
-                onChange={e => setFilters({...filters, startDate: e.target.value})}
-                className="w-full px-4 py-2.5 bg-slate-800/50 border border-slate-700 rounded-xl text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500/50 transition-all"
+                onChange={(date) => setFilters({...filters, startDate: date})}
+                placeholder="选择开始日期"
+                className="w-full"
               />
             </div>
             <div className="group">
               <label className="block text-xs font-medium text-slate-400 mb-2 group-focus-within:text-indigo-400 transition-colors">结束日期</label>
-              <input
-                type="date"
+              <DatePicker
                 value={filters.endDate}
-                onChange={e => setFilters({...filters, endDate: e.target.value})}
-                className="w-full px-4 py-2.5 bg-slate-800/50 border border-slate-700 rounded-xl text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500/50 transition-all"
+                onChange={(date) => setFilters({...filters, endDate: date})}
+                placeholder="选择结束日期"
+                className="w-full"
               />
             </div>
             <div className="group">
