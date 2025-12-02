@@ -41,9 +41,12 @@ if [ -f "ecosystem.config.js" ]; then
   echo "使用 ecosystem.config.js 启动..."
   pm2 start ecosystem.config.js
 else
-  echo "直接启动..."
-  pm2 start dist/server.js --name autoark
+  echo "直接启动（使用当前目录的 .env）..."
+  pm2 start dist/server.js --name autoark --cwd $(pwd)
 fi
+
+# 确保 PM2 保存配置
+pm2 save
 
 echo -e "\n=== 7. 等待服务启动（5秒） ==="
 sleep 5
