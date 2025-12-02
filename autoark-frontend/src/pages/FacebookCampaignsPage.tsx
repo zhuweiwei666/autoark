@@ -172,6 +172,9 @@ export default function FacebookCampaignsPage() {
     total: 0,
     pages: 1,
   })
+  
+  // 排序状态
+  const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(null)
 
   // 筛选条件
   const [filters, setFilters] = useState({

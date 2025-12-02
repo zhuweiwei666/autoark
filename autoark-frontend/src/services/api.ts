@@ -213,7 +213,7 @@ export async function getAccounts(params?: {
 export async function syncAccounts(): Promise<{
   success: boolean
   message: string
-  data: { syncedCount: number; errorCount: number }
+  data: { syncedCount: number; errorCount: number; errors?: Array<{ accountId?: string; tokenId?: string; optimizer?: string; error: string }> }
 }> {
   const response = await fetch(`${API_BASE_URL}/api/facebook/accounts/sync`, {
     method: 'POST',
@@ -320,7 +320,7 @@ export async function getCampaigns(params?: {
 export async function syncCampaigns(): Promise<{
   success: boolean
   message: string
-  data: { syncedCampaigns: number; syncedMetrics: number; errorCount: number }
+  data: { syncedCampaigns: number; syncedMetrics: number; errorCount: number; errors?: Array<{ accountId?: string; tokenId?: string; optimizer?: string; error: string }> }
 }> {
   const response = await fetch(`${API_BASE_URL}/api/facebook/campaigns/sync`, {
     method: 'POST',
