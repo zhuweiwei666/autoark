@@ -10,9 +10,11 @@ const db_1 = __importDefault(require("./config/db"));
 const facebook_routes_1 = __importDefault(require("./routes/facebook.routes"));
 const dashboard_routes_1 = __importDefault(require("./routes/dashboard.routes"));
 const facebook_sync_routes_1 = __importDefault(require("./routes/facebook.sync.routes"));
+const fbToken_routes_1 = __importDefault(require("./routes/fbToken.routes"));
 const logger_1 = __importDefault(require("./utils/logger"));
 const sync_cron_1 = __importDefault(require("./cron/sync.cron"));
 const cron_1 = __importDefault(require("./cron"));
+const tokenValidation_cron_1 = __importDefault(require("./cron/tokenValidation.cron"));
 const errorHandler_1 = require("./middlewares/errorHandler");
 dotenv_1.default.config();
 // Connect to DB
@@ -20,6 +22,7 @@ dotenv_1.default.config();
 // Initialize Crons
 (0, cron_1.default)();
 (0, sync_cron_1.default)();
+(0, tokenValidation_cron_1.default)(); // Token validation cron (每小时检查一次)
 const app = (0, express_1.default)();
 app.use((0, cors_1.default)());
 app.use(express_1.default.json());
@@ -37,6 +40,7 @@ app.use((req, res, next) => {
 app.use('/api/facebook', facebook_routes_1.default);
 app.use('/api/facebook', facebook_sync_routes_1.default);
 app.use('/api/dashboard', dashboard_routes_1.default);
+app.use('/api/fb-token', fbToken_routes_1.default); // Facebook token management
 // Dashboard UI (accessible at /dashboard)
 app.use('/dashboard', dashboard_routes_1.default);
 app.get('/', (req, res) => {

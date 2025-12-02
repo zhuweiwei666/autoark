@@ -5,9 +5,11 @@ import connectDB from './config/db'
 import facebookRoutes from './routes/facebook.routes'
 import dashboardRoutes from './routes/dashboard.routes'
 import facebookSyncRoutes from './routes/facebook.sync.routes'
+import fbTokenRoutes from './routes/fbToken.routes'
 import logger from './utils/logger'
 import initSyncCron from './cron/sync.cron'
 import initCronJobs from './cron'
+import initTokenValidationCron from './cron/tokenValidation.cron'
 import { errorHandler } from './middlewares/errorHandler'
 
 dotenv.config()
@@ -18,6 +20,7 @@ connectDB()
 // Initialize Crons
 initCronJobs()
 initSyncCron()
+initTokenValidationCron() // Token validation cron (每小时检查一次)
 
 const app = express()
 app.use(cors())
@@ -40,6 +43,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 app.use('/api/facebook', facebookRoutes)
 app.use('/api/facebook', facebookSyncRoutes)
 app.use('/api/dashboard', dashboardRoutes)
+app.use('/api/fb-token', fbTokenRoutes) // Facebook token management
 
 // Dashboard UI (accessible at /dashboard)
 app.use('/dashboard', dashboardRoutes)
