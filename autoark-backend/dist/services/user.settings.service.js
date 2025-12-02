@@ -16,10 +16,12 @@ const getCampaignColumnSettings = async (userId) => {
         return [
             'name',
             'accountId',
+            'status',
             'spend',
             'cpm',
             'ctr',
             'cpc',
+            'installs',
             'cpi',
             'purchase_value',
             'roas',

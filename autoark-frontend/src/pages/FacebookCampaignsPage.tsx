@@ -94,6 +94,10 @@ export default function FacebookCampaignsPage() {
       } else {
         // 默认显示部分列
         const defaultVisible = ALL_CAMPAIGN_COLUMNS.filter(col => col.defaultVisible).map(col => col.key)
+        // 确保安装量在默认可见列中
+        if (!defaultVisible.includes('installs')) {
+          defaultVisible.push('installs')
+        }
         setVisibleColumns(defaultVisible)
         setColumnOrder(ALL_CAMPAIGN_COLUMNS.map(col => col.key))
       }

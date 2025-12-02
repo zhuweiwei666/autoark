@@ -235,7 +235,7 @@ router.get('/', (_req, res) => {
       })
       
       // Show selected view
-      const selectedView = document.getElementById(`, view - $, { viewName } `)
+      const selectedView = document.getElementById('view-' + viewName)
       if (selectedView) {
         selectedView.classList.remove('hidden')
       }
@@ -246,7 +246,7 @@ router.get('/', (_req, res) => {
         btn.classList.add('bg-transparent')
       })
       
-      const activeBtn = document.getElementById(`, menu - $, { viewName } `)
+      const activeBtn = document.getElementById('menu-' + viewName)
       if (activeBtn) {
         activeBtn.classList.add('bg-slate-800/30', 'border', 'border-slate-700/50')
         activeBtn.classList.remove('bg-transparent')
@@ -273,12 +273,12 @@ router.get('/', (_req, res) => {
       const h = Math.floor(s / 3600)
       const m = Math.floor((s % 3600) / 60)
       const r = Math.floor(s % 60)
-      return `, $, { h }, h, $, { m }, m, $, { r }, s `
+      return h + 'h ' + m + 'm ' + r + 's'
     }
 
     async function fetchJSON(url) {
       const res = await fetch(url)
-      if (!res.ok) throw new Error(`, Request, failed, $, { res, : .status } `)
+      if (!res.ok) throw new Error('Request failed: ' + res.status)
       return res.json()
     }
 
@@ -287,7 +287,7 @@ router.get('/', (_req, res) => {
     
     async function loadSystemHealth() {
       try {
-        const { data } = await fetchJSON(`, $, { API_BASE } / api / health `) 
+        const { data } = await fetchJSON(API_BASE + '/api/health') 
         
         const root = document.getElementById('system-health')
         root.querySelector('[data-field="serverTime"]').textContent = formatTime(data.serverTime)
@@ -315,7 +315,7 @@ router.get('/', (_req, res) => {
 
     async function loadFacebookOverview() {
       try {
-        const { data } = await fetchJSON(`, $, { API_BASE } / api / facebook - overview `)
+        const { data } = await fetchJSON(API_BASE + '/api/facebook-overview')
         const root = document.getElementById('fb-overview')
         root.querySelector('[data-field="accounts"]').textContent = data.accounts
         root.querySelector('[data-field="campaigns"]').textContent = data.campaigns
@@ -335,23 +335,17 @@ router.get('/', (_req, res) => {
       }
       logs.forEach((log) => {
         const tr = document.createElement('tr')
-        tr.innerHTML = `
-        < td, class {
-    } = "px-2 py-1 text-slate-300" > $, { formatTime(log) { }, : .createdAt || log.startedAt });
-}, /td>
-    < td, class {
-} = "px-2 py-1 text-slate-300" > $, { log, : .jobName || log.job || 'Sync' } < /td>
-    < td, class {
-} = "px-2 py-1" > $, { log, : .status || '-' } < /td>
-    < td, class {
-} = "px-2 py-1 text-slate-400 max-w-xs truncate" > $, { log, : .message || log.error || JSON.stringify(log.details) || '-' } < /td> `
+        tr.innerHTML = '<td class="px-2 py-1 text-slate-300">' + formatTime(log.createdAt || log.startedAt) + '</td>' +
+          '<td class="px-2 py-1 text-slate-300">' + (log.jobName || log.job || 'Sync') + '</td>' +
+          '<td class="px-2 py-1">' + (log.status || '-') + '</td>' +
+          '<td class="px-2 py-1 text-slate-400 max-w-xs truncate">' + (log.message || log.error || JSON.stringify(log.details) || '-') + '</td>'
         tbody.appendChild(tr)
       })
     }
 
     async function loadCronLogs() {
       try {
-        const { data } = await fetchJSON(`, $, { API_BASE } / api / cron - logs ? limit = 50 `)
+        const { data } = await fetchJSON(API_BASE + '/api/cron-logs?limit=50')
         renderCronLogs(data || [])
       } catch (e) {
         console.error(e)
@@ -367,46 +361,17 @@ router.get('/', (_req, res) => {
       }
       logs.forEach((log) => {
         const tr = document.createElement('tr')
-        tr.innerHTML = `
-    < td : , class {
-} = "px-2 py-1 text-slate-300" > $, { formatTime(log) { }, : .createdAt });
-/td>
-    < td;
-class {
-}
-"px-2 py-1 text-slate-300" > $;
-{
-    log.action || '-';
-}
-/td>
-    < td;
-class {
-}
-"px-2 py-1 text-slate-300" > $;
-{
-    log.related?.adId || '-';
-}
-/td>
-    < td;
-class {
-}
-"px-2 py-1 text-slate-400 max-w-xs truncate" > $;
-{
-    log.reason || '-';
-}
-/td> `
+        tr.innerHTML = '<td class="px-2 py-1 text-slate-300">' + formatTime(log.createdAt) + '</td>' +
+          '<td class="px-2 py-1 text-slate-300">' + (log.action || '-') + '</td>' +
+          '<td class="px-2 py-1 text-slate-300">' + (log.related && log.related.adId ? log.related.adId : '-') + '</td>' +
+          '<td class="px-2 py-1 text-slate-400 max-w-xs truncate">' + (log.reason || '-') + '</td>'
         tbody.appendChild(tr)
       })
     }
 
     async function loadOpsLogs() {
       try {
-        const { data } = await fetchJSON(`;
-$;
-{
-    API_BASE;
-}
-/api/ops - logs ? limit = 50 `)
+        const { data } = await fetchJSON(API_BASE + '/api/ops-logs?limit=50')
         renderOpsLogs(data || [])
       } catch (e) {
         console.error(e)
@@ -427,5 +392,6 @@ $;
   </script>
 </body>
 </html>
-  ` : ;
+  `);
+});
 exports.default = router;

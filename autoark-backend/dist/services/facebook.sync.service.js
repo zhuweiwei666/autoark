@@ -160,7 +160,7 @@ const syncAccount = async (accountId) => {
     }
     // 5. Insights (Daily)
     try {
-        const insights = await fbApi.fetchInsights(accountId, 'today'); // or 'yesterday'
+        const insights = await fbApi.fetchInsights(accountId, 'account', 'today'); // or 'yesterday'
         logger_1.default.info(`Syncing ${insights.length} insight records for ${accountId}`);
         for (const i of insights) {
             const spendUsd = parseFloat(i.spend || '0');

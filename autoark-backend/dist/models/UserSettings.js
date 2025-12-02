@@ -11,10 +11,12 @@ const userSettingsSchema = new mongoose_1.default.Schema({
         default: [
             'name',
             'accountId',
+            'status',
             'spend',
             'cpm',
             'ctr',
             'cpc',
+            'installs',
             'cpi',
             'purchase_value',
             'roas',

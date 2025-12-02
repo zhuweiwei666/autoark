@@ -151,6 +151,7 @@ const getCampaigns = async (filters = {}, pagination) => {
             purchase_value: metrics?.purchase_value,
             roas: metrics?.purchase_roas,
             event_conversions: metrics?.mobile_app_install_count, // 或者从 actions 中提取
+            installs: metrics?.mobile_app_install_count || 0, // 安装量
         };
     });
     return {
