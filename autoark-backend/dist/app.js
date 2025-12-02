@@ -42,5 +42,12 @@ app.use('/dashboard', dashboard_routes_1.default);
 app.get('/', (req, res) => {
     res.send('AutoArk Backend API is running');
 });
+// 404 Handler (must be after all routes)
+app.use((req, res, next) => {
+    res.status(404).json({
+        success: false,
+        message: `Route ${req.method} ${req.path} not found`,
+    });
+});
 app.use(errorHandler_1.errorHandler);
 exports.default = app;

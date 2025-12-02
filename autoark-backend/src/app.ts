@@ -48,6 +48,14 @@ app.get('/', (req, res) => {
   res.send('AutoArk Backend API is running')
 })
 
+// 404 Handler (must be after all routes)
+app.use((req: Request, res: Response, next: NextFunction) => {
+  res.status(404).json({
+    success: false,
+    message: `Route ${req.method} ${req.path} not found`,
+  })
+})
+
 app.use(errorHandler)
 
 export default app
