@@ -36,17 +36,18 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const dashboardController = __importStar(require("../controllers/dashboard.controller"));
 const router = (0, express_1.Router)();
-// Existing Analytics Routes
+// Analytics
 router.get('/daily', dashboardController.getDaily);
 router.get('/by-country', dashboardController.getByCountry);
 router.get('/by-adset', dashboardController.getByAdSet);
-// New Dashboard API Routes
-router.get('/api/dashboard/health', dashboardController.getSystemHealthHandler);
-router.get('/api/dashboard/facebook-overview', dashboardController.getFacebookOverviewHandler);
-router.get('/api/dashboard/cron-logs', dashboardController.getCronLogsHandler);
-router.get('/api/dashboard/ops-logs', dashboardController.getOpsLogsHandler);
-// Dashboard HTML Page
-router.get('/dashboard', (_req, res) => {
+// API: /dashboard/api/xxx (mounted at /dashboard in app.ts, so /api/health becomes /dashboard/api/health)
+router.get('/api/health', dashboardController.getSystemHealthHandler);
+router.get('/api/facebook-overview', dashboardController.getFacebookOverviewHandler);
+router.get('/api/cron-logs', dashboardController.getCronLogsHandler);
+router.get('/api/ops-logs', dashboardController.getOpsLogsHandler);
+// Dashboard UI (GET /dashboard)
+// Mounted at /dashboard in app.ts, so '/' becomes '/dashboard'
+router.get('/', (_req, res) => {
     res.send(`
 <!DOCTYPE html>
 <html lang="en">
@@ -159,13 +160,12 @@ router.get('/dashboard', (_req, res) => {
       return res.json()
     }
 
+    // API endpoints are mounted at /api/dashboard, so use absolute paths
+    const API_BASE = '/api/dashboard'
+    
     async function loadSystemHealth() {
       try {
-        const { data } = await fetchJSON('/dashboard/api/dashboard/health') // Note: Adjust if router prefix is different
-        // Based on routes file, it is mounted at /dashboard, so paths are /dashboard/api/dashboard/health
-        // Wait, app.ts mounts dashboardRoutes at /dashboard.
-        // So routes defined as /api/dashboard/health become /dashboard/api/dashboard/health
-        // Let's adjust fetch calls to match the mount point.
+        const { data } = await fetchJSON(\`\${API_BASE}/api/health\`) 
         
         const root = document.getElementById('system-health')
         root.querySelector('[data-field="serverTime"]').textContent = formatTime(data.serverTime)
@@ -185,23 +185,6 @@ router.get('/dashboard', (_req, res) => {
         }
       } catch (e) {
         console.error('Health check failed', e)
-        // Try fallback path in case I misunderstood the mounting
-        // If mounted at /dashboard, then /dashboard/dashboard is unlikely.
-        // Let's assume the user accesses /dashboard/dashboard to get the HTML?
-        // No, router.get('/dashboard') inside dashboard.routes.ts mounted at /dashboard in app.ts 
-        // means the URL is /dashboard/dashboard. 
-        // The user instruction said: "浏览器访问 GET /dashboard 返回一个简单 HTML 页面"
-        // But app.ts says: app.use('/dashboard', dashboardRoutes)
-        // And dashboardRoutes says: router.get('/dashboard', ...)
-        // This results in /dashboard/dashboard.
-        // To make it /dashboard, we should change the route in dashboard.routes.ts to '/' 
-        // OR change app.ts mount.
-        // I will stick to the current structure but fix the fetch URLs in the script.
-        
-        // Actually, let's fix the route path to be cleaner.
-        // In dashboard.routes.ts: router.get('/', ...) would make it /dashboard/
-        // I will proceed with what I wrote but be mindful of the URL.
-        
         const badge = document.getElementById('health-badge')
         badge.textContent = 'Error'
         badge.classList.add('bg-red-900/60', 'text-red-300')
@@ -210,7 +193,7 @@ router.get('/dashboard', (_req, res) => {
 
     async function loadFacebookOverview() {
       try {
-        const { data } = await fetchJSON('/dashboard/api/dashboard/facebook-overview')
+        const { data } = await fetchJSON(\`\${API_BASE}/api/facebook-overview\`)
         const root = document.getElementById('fb-overview')
         root.querySelector('[data-field="accounts"]').textContent = data.accounts
         root.querySelector('[data-field="campaigns"]').textContent = data.campaigns
@@ -242,7 +225,7 @@ router.get('/dashboard', (_req, res) => {
 
     async function loadCronLogs() {
       try {
-        const { data } = await fetchJSON('/dashboard/api/dashboard/cron-logs?limit=50')
+        const { data } = await fetchJSON(\`\${API_BASE}/api/cron-logs?limit=50\`)
         renderCronLogs(data || [])
       } catch (e) {
         console.error(e)
@@ -270,7 +253,7 @@ router.get('/dashboard', (_req, res) => {
 
     async function loadOpsLogs() {
       try {
-        const { data } = await fetchJSON('/dashboard/api/dashboard/ops-logs?limit=50')
+        const { data } = await fetchJSON(\`\${API_BASE}/api/ops-logs?limit=50\`)
         renderOpsLogs(data || [])
       } catch (e) {
         console.error(e)

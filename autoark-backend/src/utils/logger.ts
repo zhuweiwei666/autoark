@@ -25,19 +25,37 @@ const transports: winston.transport[] = [
 ]
 
 // 2. Daily rotating production logs (if available) or regular file transport
-if (hasDailyRotateFile && (winston.transports as any).DailyRotateFile) {
-  const DailyRotateFile = (winston.transports as any).DailyRotateFile
-  transports.push(
-    new DailyRotateFile({
-      dirname: 'logs',
-      filename: 'app-%DATE%.log',
-      datePattern: 'YYYY-MM-DD',
-      zippedArchive: true,
-      maxSize: '20m',
-      maxFiles: '14d',
-      format: combine(timestamp(), json()),
-    }),
-  )
+if (hasDailyRotateFile) {
+  try {
+    // Try to use DailyRotateFile if it was successfully loaded
+    // Use dynamic access to avoid TypeScript errors
+    const transportsAny = winston.transports as any
+    if (transportsAny && transportsAny.DailyRotateFile) {
+      const DailyRotateFile = transportsAny.DailyRotateFile
+      transports.push(
+        new DailyRotateFile({
+          dirname: 'logs',
+          filename: 'app-%DATE%.log',
+          datePattern: 'YYYY-MM-DD',
+          zippedArchive: true,
+          maxSize: '20m',
+          maxFiles: '14d',
+          format: combine(timestamp(), json()),
+        }),
+      )
+    } else {
+      throw new Error('DailyRotateFile not available')
+    }
+  } catch (e) {
+    // Fallback to regular file transport if DailyRotateFile fails
+    console.warn('Failed to initialize DailyRotateFile, using File transport:', e)
+    transports.push(
+      new winston.transports.File({
+        filename: 'logs/app.log',
+        format: combine(timestamp(), json()),
+      }),
+    )
+  }
 } else {
   // Fallback to regular file transport
   transports.push(

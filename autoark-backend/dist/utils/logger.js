@@ -4,31 +4,70 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 const winston_1 = __importDefault(require("winston"));
-require("winston-daily-rotate-file");
+// Import winston-daily-rotate-file as a side-effect to extend winston.transports
+// Use require() to ensure it works in all environments
+let hasDailyRotateFile = false;
+try {
+    require('winston-daily-rotate-file');
+    hasDailyRotateFile = true;
+}
+catch (e) {
+    console.warn('winston-daily-rotate-file not found, using File transport instead');
+}
 const { combine, timestamp, printf, json, colorize } = winston_1.default.format;
 // Human-readable console format
 const consoleFormat = printf(({ timestamp, level, message }) => {
     return `${timestamp} [${level.toUpperCase()}]: ${message}`;
 });
+// Build transports array
+const transports = [
+    // 1. Pretty logs on console (for development)
+    new winston_1.default.transports.Console({
+        format: combine(colorize(), timestamp(), consoleFormat),
+    }),
+];
+// 2. Daily rotating production logs (if available) or regular file transport
+if (hasDailyRotateFile) {
+    try {
+        // Try to use DailyRotateFile if it was successfully loaded
+        // Use dynamic access to avoid TypeScript errors
+        const transportsAny = winston_1.default.transports;
+        if (transportsAny && transportsAny.DailyRotateFile) {
+            const DailyRotateFile = transportsAny.DailyRotateFile;
+            transports.push(new DailyRotateFile({
+                dirname: 'logs',
+                filename: 'app-%DATE%.log',
+                datePattern: 'YYYY-MM-DD',
+                zippedArchive: true,
+                maxSize: '20m',
+                maxFiles: '14d',
+                format: combine(timestamp(), json()),
+            }));
+        }
+        else {
+            throw new Error('DailyRotateFile not available');
+        }
+    }
+    catch (e) {
+        // Fallback to regular file transport if DailyRotateFile fails
+        console.warn('Failed to initialize DailyRotateFile, using File transport:', e);
+        transports.push(new winston_1.default.transports.File({
+            filename: 'logs/app.log',
+            format: combine(timestamp(), json()),
+        }));
+    }
+}
+else {
+    // Fallback to regular file transport
+    transports.push(new winston_1.default.transports.File({
+        filename: 'logs/app.log',
+        format: combine(timestamp(), json()),
+    }));
+}
 const winstonLogger = winston_1.default.createLogger({
     level: process.env.LOG_LEVEL || 'info',
     format: combine(timestamp(), json()),
-    transports: [
-        // 1. Pretty logs on console (for development)
-        new winston_1.default.transports.Console({
-            format: combine(colorize(), timestamp(), consoleFormat),
-        }),
-        // 2. Daily rotating production logs
-        new winston_1.default.transports.DailyRotateFile({
-            dirname: 'logs',
-            filename: 'app-%DATE%.log',
-            datePattern: 'YYYY-MM-DD',
-            zippedArchive: true,
-            maxSize: '20m',
-            maxFiles: '14d',
-            format: combine(timestamp(), json()),
-        }),
-    ],
+    transports,
 });
 // Extend the logger to support custom methods used in the codebase
 const logger = {
