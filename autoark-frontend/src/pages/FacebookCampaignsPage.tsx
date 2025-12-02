@@ -25,6 +25,7 @@ const ALL_CAMPAIGN_COLUMNS = [
   { key: 'purchase_value', label: '购物转化价值', defaultVisible: false, format: (v: number) => (v ? `$${v.toFixed(2)}` : '-') },
   { key: 'roas', label: 'ROAS', defaultVisible: false, format: (v: number) => (v ? `${(v * 100).toFixed(2)}%` : '-') },
   { key: 'event_conversions', label: '事件转化次数', defaultVisible: false, format: (v: number) => v || '-' },
+  { key: 'installs', label: '安装量', defaultVisible: true, format: (v: number) => v || 0 },
   { key: 'objective', label: '目标', defaultVisible: false, format: (v: string) => v || '-' },
   { key: 'buying_type', label: '购买类型', defaultVisible: false, format: (v: string) => v || '-' },
   { key: 'daily_budget', label: '日预算', defaultVisible: false, format: (v: string) => v ? `$${(parseFloat(v) / 100).toFixed(2)}` : '-' },
@@ -56,36 +57,90 @@ export default function FacebookCampaignsPage() {
   })
 
   // 自定义列相关
-  const [visibleColumns, setVisibleColumns] = useState<string[]>([]
-  )
+  const [visibleColumns, setVisibleColumns] = useState<string[]>([])
+  const [columnOrder, setColumnOrder] = useState<string[]>([]) // 列的顺序（包括所有列）
   const [showColumnSettings, setShowColumnSettings] = useState(false)
+  const [draggedIndex, setDraggedIndex] = useState<number | null>(null)
 
   // 获取用户自定义列设置
   const loadColumnSettings = async () => {
     try {
       const response = await getCampaignColumnSettings()
       if (response.data && response.data.length > 0) {
-        setVisibleColumns(response.data)
+        // 确保安装量列在可见列中（如果是默认可见的）
+        const defaultVisibleKeys = ALL_CAMPAIGN_COLUMNS.filter(col => col.defaultVisible).map(col => col.key)
+        const userColumns = [...response.data]
+        
+        // 如果用户设置中没有安装量，但安装量是默认可见的，则添加它
+        if (!userColumns.includes('installs') && defaultVisibleKeys.includes('installs')) {
+          // 找到安装量应该插入的位置（在 cpc 之后）
+          const cpcIndex = userColumns.indexOf('cpc')
+          if (cpcIndex >= 0) {
+            userColumns.splice(cpcIndex + 1, 0, 'installs')
+          } else {
+            userColumns.push('installs')
+          }
+        }
+        
+        setVisibleColumns(userColumns)
+        // 如果返回的数据包含顺序信息，使用它；否则使用默认顺序
+        const allColumnKeys = ALL_CAMPAIGN_COLUMNS.map(col => col.key)
+        // 保持可见列的顺序，并将不可见列追加到后面
+        const orderedColumns = [
+          ...userColumns,
+          ...allColumnKeys.filter(key => !userColumns.includes(key))
+        ]
+        setColumnOrder(orderedColumns)
       } else {
         // 默认显示部分列
-        setVisibleColumns(ALL_CAMPAIGN_COLUMNS.filter(col => col.defaultVisible).map(col => col.key))
+        const defaultVisible = ALL_CAMPAIGN_COLUMNS.filter(col => col.defaultVisible).map(col => col.key)
+        setVisibleColumns(defaultVisible)
+        setColumnOrder(ALL_CAMPAIGN_COLUMNS.map(col => col.key))
       }
     } catch (error: any) {
       setMessage({ type: 'error', text: error.message || '加载列设置失败' })
-      setVisibleColumns(ALL_CAMPAIGN_COLUMNS.filter(col => col.defaultVisible).map(col => col.key))
+      const defaultVisible = ALL_CAMPAIGN_COLUMNS.filter(col => col.defaultVisible).map(col => col.key)
+      setVisibleColumns(defaultVisible)
+      setColumnOrder(ALL_CAMPAIGN_COLUMNS.map(col => col.key))
     }
   }
 
   // 保存用户自定义列设置
-  const saveColumnSettings = async (columns: string[]) => {
+  const saveColumnSettings = async (columns: string[], order?: string[]) => {
     try {
-      await saveCampaignColumnSettings(columns)
+      // 保存可见列和顺序
+      const columnsToSave = order || columnOrder.filter(key => columns.includes(key))
+      await saveCampaignColumnSettings(columnsToSave)
       setMessage({ type: 'success', text: '列设置已保存！' })
       setVisibleColumns(columns)
+      if (order) {
+        setColumnOrder(order)
+      }
       setShowColumnSettings(false)
     } catch (error: any) {
       setMessage({ type: 'error', text: error.message || '保存列设置失败' })
     }
+  }
+
+  // 拖拽处理函数
+  const handleDragStart = (index: number) => {
+    setDraggedIndex(index)
+  }
+
+  const handleDragOver = (e: React.DragEvent, index: number) => {
+    e.preventDefault()
+    if (draggedIndex === null) return
+    
+    const newOrder = [...columnOrder]
+    const draggedItem = newOrder[draggedIndex]
+    newOrder.splice(draggedIndex, 1)
+    newOrder.splice(index, 0, draggedItem)
+    setColumnOrder(newOrder)
+    setDraggedIndex(index)
+  }
+
+  const handleDragEnd = () => {
+    setDraggedIndex(null)
   }
 
   // 加载广告系列列表
@@ -148,10 +203,14 @@ export default function FacebookCampaignsPage() {
     }
   }
 
-  // 根据可见列过滤和排序
+  // 根据可见列和顺序过滤
   const columnsToRender = useMemo(() => {
-    return ALL_CAMPAIGN_COLUMNS.filter(col => visibleColumns.includes(col.key))
-  }, [visibleColumns])
+    // 按照 columnOrder 的顺序，只包含可见的列
+    return columnOrder
+      .filter(key => visibleColumns.includes(key))
+      .map(key => ALL_CAMPAIGN_COLUMNS.find(col => col.key === key))
+      .filter((col): col is typeof ALL_CAMPAIGN_COLUMNS[0] => col !== undefined)
+  }, [visibleColumns, columnOrder])
 
   return (
     <div className="min-h-screen bg-[#0B1120] text-slate-200 p-6 relative overflow-hidden">
@@ -205,34 +264,60 @@ export default function FacebookCampaignsPage() {
                         </div>
                         自定义列
                     </h2>
-                    <div className="grid grid-cols-2 gap-4 max-h-96 overflow-y-auto pr-2">
-                      {ALL_CAMPAIGN_COLUMNS.map(col => (
-                        <div key={col.key} className="flex items-center space-x-2">
-                          <input
-                            type="checkbox"
-                            id={`col-${col.key}`}
-                            checked={visibleColumns.includes(col.key)}
-                            onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
-                              setVisibleColumns(prev =>
-                                e.target.checked ? [...prev, col.key] : prev.filter(k => k !== col.key)
-                              )
-                            }}
-                            className="form-checkbox h-4 w-4 text-indigo-600 bg-slate-800 border-slate-600 rounded focus:ring-indigo-500"
-                          />
-                          <label
-                            htmlFor={`col-${col.key}`}
-                            className="text-sm font-medium leading-none text-slate-300 cursor-pointer"
+                    <div className="space-y-2 max-h-96 overflow-y-auto pr-2">
+                      <p className="text-xs text-slate-400 mb-3">💡 拖拽列标题可以调整顺序</p>
+                      {(columnOrder.length > 0 ? columnOrder : ALL_CAMPAIGN_COLUMNS.map(col => col.key)).map((colKey) => {
+                        const col = ALL_CAMPAIGN_COLUMNS.find(c => c.key === colKey)
+                        if (!col) return null
+                        // 使用当前 columnOrder 或默认顺序
+                        const currentOrder = columnOrder.length > 0 ? columnOrder : ALL_CAMPAIGN_COLUMNS.map(c => c.key)
+                        const actualIndex = currentOrder.indexOf(colKey)
+                        return (
+                          <div
+                            key={col.key}
+                            draggable
+                            onDragStart={() => handleDragStart(actualIndex)}
+                            onDragOver={(e) => handleDragOver(e, actualIndex)}
+                            onDragEnd={handleDragEnd}
+                            className={`flex items-center space-x-3 p-3 rounded-lg border transition-all cursor-move ${
+                              draggedIndex === actualIndex
+                                ? 'bg-indigo-500/20 border-indigo-500/50 shadow-lg'
+                                : 'bg-slate-800/50 border-slate-700/50 hover:bg-slate-700/50'
+                            }`}
                           >
-                            {col.label}
-                          </label>
-                        </div>
-                      ))}
+                            {/* 拖拽手柄 */}
+                            <div className="flex items-center text-slate-400 hover:text-slate-300">
+                              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 8h16M4 16h16" />
+                              </svg>
+                            </div>
+                            <input
+                              type="checkbox"
+                              id={`col-${col.key}`}
+                              checked={visibleColumns.includes(col.key)}
+                              onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                                setVisibleColumns(prev =>
+                                  e.target.checked ? [...prev, col.key] : prev.filter(k => k !== col.key)
+                                )
+                              }}
+                              className="form-checkbox h-4 w-4 text-indigo-600 bg-slate-800 border-slate-600 rounded focus:ring-indigo-500"
+                              onClick={(e) => e.stopPropagation()}
+                            />
+                            <label
+                              htmlFor={`col-${col.key}`}
+                              className="flex-1 text-sm font-medium leading-none text-slate-300 cursor-pointer"
+                            >
+                              {col.label}
+                            </label>
+                          </div>
+                        )
+                      })}
                     </div>
                     <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-slate-800/50">
                       <button onClick={() => setShowColumnSettings(false)} className="px-5 py-2.5 bg-slate-800 hover:bg-slate-700 rounded-xl text-slate-300 font-medium">
                         取消
                       </button>
-                      <button onClick={() => saveColumnSettings(visibleColumns)} className="px-6 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 rounded-xl text-white font-medium">
+                      <button onClick={() => saveColumnSettings(visibleColumns, columnOrder)} className="px-6 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 rounded-xl text-white font-medium">
                         保存设置
                       </button>
                     </div>
@@ -375,7 +460,7 @@ export default function FacebookCampaignsPage() {
                             </span>
                           ) : col.key === 'accountId' ? (
                             <div className="text-xs text-slate-400 font-mono">{(campaign as any)[col.key] || '-'}</div>
-                          ) : (col.key === 'spend' || col.key === 'cpm' || col.key === 'ctr' || col.key === 'cpc' || col.key === 'cpi' || col.key === 'purchase_value' || col.key === 'roas' || col.key === 'event_conversions') ? (
+                          ) : (col.key === 'spend' || col.key === 'cpm' || col.key === 'ctr' || col.key === 'cpc' || col.key === 'cpi' || col.key === 'purchase_value' || col.key === 'roas' || col.key === 'event_conversions' || col.key === 'installs') ? (
                             <span className="font-mono text-slate-300">{(col.format as (v: number) => string)((campaign as any)[col.key] || 0)}</span>
                           ) : (
                             <span className="text-slate-300">{(campaign as any)[col.key] ? (col.format as (v: any) => string)((campaign as any)[col.key]) : '-'}</span>

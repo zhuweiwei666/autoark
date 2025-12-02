@@ -234,6 +234,7 @@ export interface FbCampaignMetrics {
   purchase_value?: number // 购物转化价值
   roas?: number // Return on Ad Spend
   event_conversions?: number // 事件转化次数
+  installs?: number // 安装量
 }
 
 export interface FbCampaign {
@@ -249,6 +250,16 @@ export interface FbCampaign {
   created_time?: string
   updated_time?: string
   metrics?: FbCampaignMetrics // 汇总指标
+  // 直接从后端返回的指标字段（已合并到 campaign 对象中）
+  spend?: number
+  cpm?: number
+  ctr?: number
+  cpc?: number
+  cpi?: number
+  purchase_value?: number
+  roas?: number
+  event_conversions?: number
+  installs?: number // 安装量
   raw?: any
 }
 
