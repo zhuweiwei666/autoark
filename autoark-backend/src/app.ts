@@ -50,36 +50,59 @@ app.use('/api/fb-token', fbTokenRoutes) // Facebook token management
 app.use('/dashboard', dashboardRoutes)
 
 // Serve frontend static files (if dist directory exists)
-const frontendDistPath = path.join(__dirname, '../../autoark-frontend/dist')
-try {
-  const fs = require('fs')
-  if (fs.existsSync(frontendDistPath)) {
-    app.use(express.static(frontendDistPath))
-    // Fallback to index.html for client-side routing (React Router)
-    // This must be before 404 handler but after all API routes
-    app.get('*', (req: Request, res: Response, next: NextFunction) => {
-      // Skip API routes and dashboard route - let them be handled by their routes or 404
-      if (req.path.startsWith('/api') || req.path.startsWith('/dashboard')) {
-        return next()
-      }
-      // For all other routes, serve the React app (for client-side routing)
-      res.sendFile(path.join(frontendDistPath, 'index.html'), (err) => {
-        if (err) {
-          next(err)
-        }
-      })
-    })
-    logger.info(`Frontend static files served from: ${frontendDistPath}`)
-  } else {
-    logger.warn(`Frontend dist directory not found at: ${frontendDistPath}`)
-    app.get('/', (req, res) => {
-      res.send('AutoArk Backend API is running. Frontend not built yet.')
-    })
+// Try multiple possible paths for frontend dist
+const fs = require('fs')
+const possiblePaths = [
+  path.join(__dirname, '../../autoark-frontend/dist'), // Relative from dist/
+  path.join(process.cwd(), 'autoark-frontend/dist'), // From project root
+  path.join(process.cwd(), '../autoark-frontend/dist'), // From backend dir
+  '/root/autoark/autoark-frontend/dist', // Absolute path on server
+]
+
+let frontendDistPath: string | null = null
+for (const possiblePath of possiblePaths) {
+  if (fs.existsSync(possiblePath)) {
+    frontendDistPath = possiblePath
+    break
   }
-} catch (error) {
-  logger.error('Error setting up frontend static files:', error)
-  app.get('/', (req, res) => {
-    res.send('AutoArk Backend API is running')
+}
+
+if (frontendDistPath) {
+  logger.info(`Frontend static files served from: ${frontendDistPath}`)
+  app.use(express.static(frontendDistPath))
+  
+  // Fallback to index.html for client-side routing (React Router)
+  // This must be before 404 handler but after all API routes
+  app.get('*', (req: Request, res: Response, next: NextFunction) => {
+    // Skip API routes and dashboard route - let them be handled by their routes or 404
+    if (req.path.startsWith('/api') || req.path.startsWith('/dashboard')) {
+      return next()
+    }
+    // For all other routes, serve the React app (for client-side routing)
+    const indexPath = path.join(frontendDistPath!, 'index.html')
+    res.sendFile(indexPath, (err) => {
+      if (err) {
+        logger.error(`Error serving frontend index.html: ${err.message}`)
+        next(err)
+      }
+    })
+  })
+} else {
+  logger.warn('Frontend dist directory not found. Tried paths:')
+  possiblePaths.forEach(p => logger.warn(`  - ${p}`))
+  logger.warn('Please build the frontend: cd autoark-frontend && npm run build')
+  
+  // Still provide a route for /fb-token to show helpful message
+  app.get('/fb-token', (req: Request, res: Response) => {
+    res.status(503).json({
+      success: false,
+      message: 'Frontend not built. Please build the frontend first: cd autoark-frontend && npm run build',
+      pathsTried: possiblePaths,
+    })
+  })
+  
+  app.get('/', (req: Request, res: Response) => {
+    res.send('AutoArk Backend API is running. Frontend not built yet. Please build: cd autoark-frontend && npm run build')
   })
 }
 
