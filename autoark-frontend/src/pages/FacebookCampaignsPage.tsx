@@ -187,9 +187,9 @@ export default function FacebookCampaignsPage() {
       } else {
         // 默认显示部分列
         const defaultVisible = ALL_CAMPAIGN_COLUMNS.filter(col => col.defaultVisible).map(col => col.key)
-        // 确保安装量在默认可见列中
-        if (!defaultVisible.includes('installs')) {
-          defaultVisible.push('installs')
+        // 确保 mobile_app_install 在默认可见列中
+        if (!defaultVisible.includes('mobile_app_install')) {
+          defaultVisible.push('mobile_app_install')
         }
         setVisibleColumns(defaultVisible)
         setColumnOrder(ALL_CAMPAIGN_COLUMNS.map(col => col.key))
@@ -302,12 +302,23 @@ export default function FacebookCampaignsPage() {
 
   // 根据可见列和顺序过滤
   const columnsToRender = useMemo(() => {
+    // 如果 columnOrder 为空，使用默认顺序
+    const order = columnOrder.length > 0 ? columnOrder : ALL_CAMPAIGN_COLUMNS.map(col => col.key)
+    
+    // 如果 visibleColumns 为空，使用默认可见列
+    const visible = visibleColumns.length > 0 ? visibleColumns : ALL_CAMPAIGN_COLUMNS.filter(col => col.defaultVisible).map(col => col.key)
+    
     // 按照 columnOrder 的顺序，只包含可见的列
-    return columnOrder
-      .filter(key => visibleColumns.includes(key))
+    return order
+      .filter(key => visible.includes(key))
       .map(key => ALL_CAMPAIGN_COLUMNS.find(col => col.key === key))
       .filter((col): col is typeof ALL_CAMPAIGN_COLUMNS[0] => col !== undefined)
   }, [visibleColumns, columnOrder])
+
+  // 错误处理：如果 columnsToRender 为空，使用默认列
+  const safeColumnsToRender = columnsToRender.length > 0 
+    ? columnsToRender 
+    : ALL_CAMPAIGN_COLUMNS.filter(col => col.defaultVisible)
 
   return (
     <div className="min-h-screen bg-[#0B1120] text-slate-200 p-6 relative overflow-hidden">
@@ -527,7 +538,7 @@ export default function FacebookCampaignsPage() {
             <table className="w-full text-sm text-left">
               <thead>
                 <tr className="border-b border-white/5 bg-white/5">
-                  {columnsToRender.map(col => (
+                  {safeColumnsToRender.map(col => (
                     <th key={col.key} className="px-6 py-5 font-semibold text-slate-300">
                       {col.label}
                     </th>
@@ -537,13 +548,13 @@ export default function FacebookCampaignsPage() {
               </thead>
               <tbody className="divide-y divide-white/5">
                 {loading ? (
-                  <tr><td colSpan={columnsToRender.length + 1} className="px-6 py-12 text-center text-slate-500 animate-pulse">加载中...</td></tr>
+                  <tr><td colSpan={safeColumnsToRender.length + 1} className="px-6 py-12 text-center text-slate-500 animate-pulse">加载中...</td></tr>
                 ) : campaigns.length === 0 ? (
-                  <tr><td colSpan={columnsToRender.length + 1} className="px-6 py-12 text-center text-slate-500">暂无数据</td></tr>
+                  <tr><td colSpan={safeColumnsToRender.length + 1} className="px-6 py-12 text-center text-slate-500">暂无数据</td></tr>
                 ) : (
                   campaigns.map((campaign) => (
-                    <tr key={campaign.id} className="group hover:bg-white/[0.02] transition-colors">
-                      {columnsToRender.map(col => (
+                    <tr key={campaign.id || (campaign as any).id} className="group hover:bg-white/[0.02] transition-colors">
+                      {safeColumnsToRender.map(col => (
                         <td key={col.key} className="px-6 py-4">
                           {col.key === 'name' ? (
                             <div>
