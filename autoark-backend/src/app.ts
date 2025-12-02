@@ -73,9 +73,14 @@ if (frontendDistPath) {
   
   // Fallback to index.html for client-side routing (React Router)
   // This must be before 404 handler but after all API routes
-  app.get('*', (req: Request, res: Response, next: NextFunction) => {
+  // Use app.use instead of app.get('*') for Express 5.x compatibility
+  app.use((req: Request, res: Response, next: NextFunction) => {
     // Skip API routes and dashboard route - let them be handled by their routes or 404
     if (req.path.startsWith('/api') || req.path.startsWith('/dashboard')) {
+      return next()
+    }
+    // Skip if it's a static file request (already handled by express.static)
+    if (req.path.includes('.')) {
       return next()
     }
     // For all other routes, serve the React app (for client-side routing)
