@@ -139,7 +139,7 @@ export const syncAccount = async (accountId: string) => {
 
   // 5. Insights (Daily)
   try {
-    const insights = await fbApi.fetchInsights(accountId, 'today') // or 'yesterday'
+    const insights = await fbApi.fetchInsights(accountId, 'account', 'today') // or 'yesterday'
     logger.info(`Syncing ${insights.length} insight records for ${accountId}`)
 
     for (const i of insights) {

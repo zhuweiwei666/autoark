@@ -5,7 +5,6 @@ import {
   getCampaignColumnSettings,
   saveCampaignColumnSettings,
   type FbCampaign,
-  type FbCampaignMetrics,
 } from '../services/api'
 // Removed: import { Checkbox } from '../components/ui/checkbox'
 // Removed: import { Button } from '../components/ui/button'
@@ -203,6 +202,7 @@ export default function FacebookCampaignsPage() {
                     <h2 className="text-2xl font-bold text-white mb-6 flex items-center gap-3">
                         <div className="bg-gradient-to-br from-blue-600 to-indigo-600 p-2.5 rounded-xl text-white shadow-lg shadow-blue-500/20">
                             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                        </div>
                         自定义列
                     </h2>
                     <div className="grid grid-cols-2 gap-4 max-h-96 overflow-y-auto pr-2">
@@ -365,20 +365,20 @@ export default function FacebookCampaignsPage() {
                         <td key={col.key} className="px-6 py-4">
                           {col.key === 'name' ? (
                             <div>
-                              <div className="font-medium text-slate-200 group-hover:text-indigo-300 transition-colors">{col.format(campaign.name)}</div>
-                              <div className="text-xs text-slate-500 font-mono mt-1 opacity-70">ID: {col.format(campaign.campaignId)}</div>
+                              <div className="font-medium text-slate-200 group-hover:text-indigo-300 transition-colors">{(col.format as (v: string) => string)(campaign.name)}</div>
+                              <div className="text-xs text-slate-500 font-mono mt-1 opacity-70">ID: {(col.format as (v: string) => string)(campaign.campaignId)}</div>
                             </div>
                           ) : col.key === 'status' ? (
                             <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium border ${getStatusColor(campaign.status)}`}>
                               <span className={`w-1.5 h-1.5 rounded-full mr-1.5 bg-current opacity-70`}></span>
-                              {col.format(campaign.status)}
+                              {(col.format as (v: string) => string)(campaign.status)}
                             </span>
                           ) : col.key === 'accountId' ? (
                             <div className="text-xs text-slate-400 font-mono">{(campaign as any)[col.key] || '-'}</div>
                           ) : (col.key === 'spend' || col.key === 'cpm' || col.key === 'ctr' || col.key === 'cpc' || col.key === 'cpi' || col.key === 'purchase_value' || col.key === 'roas' || col.key === 'event_conversions') ? (
-                            <span className="font-mono text-slate-300">{col.format((campaign as any)[col.key])}</span>
+                            <span className="font-mono text-slate-300">{(col.format as (v: number) => string)((campaign as any)[col.key] || 0)}</span>
                           ) : (
-                            <span className="text-slate-300">{(campaign as any)[col.key] ? col.format((campaign as any)[col.key]) : '-'}</span>
+                            <span className="text-slate-300">{(campaign as any)[col.key] ? (col.format as (v: any) => string)((campaign as any)[col.key]) : '-'}</span>
                           )}
                         </td>
                       ))}
