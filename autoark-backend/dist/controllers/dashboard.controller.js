@@ -38,6 +38,10 @@ exports.getSystemHealthHandler = getSystemHealthHandler;
 exports.getFacebookOverviewHandler = getFacebookOverviewHandler;
 exports.getCronLogsHandler = getCronLogsHandler;
 exports.getOpsLogsHandler = getOpsLogsHandler;
+exports.getCoreMetricsHandler = getCoreMetricsHandler;
+exports.getTodaySpendTrendHandler = getTodaySpendTrendHandler;
+exports.getCampaignSpendRankingHandler = getCampaignSpendRankingHandler;
+exports.getCountrySpendRankingHandler = getCountrySpendRankingHandler;
 const dashboardService = __importStar(require("../services/dashboard.service"));
 const getFilters = (req) => {
     const { startDate, endDate, channel, country } = req.query;
@@ -118,6 +122,45 @@ async function getOpsLogsHandler(req, res, next) {
     try {
         const limit = Number(req.query.limit) || 50;
         const data = await dashboardService.getOpsLogs(limit);
+        res.json({ success: true, data });
+    }
+    catch (err) {
+        next(err);
+    }
+}
+// ========== 数据看板 V1 API Handlers ==========
+async function getCoreMetricsHandler(req, res, next) {
+    try {
+        const data = await dashboardService.getCoreMetrics();
+        res.json({ success: true, data });
+    }
+    catch (err) {
+        next(err);
+    }
+}
+async function getTodaySpendTrendHandler(req, res, next) {
+    try {
+        const data = await dashboardService.getTodaySpendTrend();
+        res.json({ success: true, data });
+    }
+    catch (err) {
+        next(err);
+    }
+}
+async function getCampaignSpendRankingHandler(req, res, next) {
+    try {
+        const limit = Number(req.query.limit) || 10;
+        const data = await dashboardService.getCampaignSpendRanking(limit);
+        res.json({ success: true, data });
+    }
+    catch (err) {
+        next(err);
+    }
+}
+async function getCountrySpendRankingHandler(req, res, next) {
+    try {
+        const limit = Number(req.query.limit) || 10;
+        const data = await dashboardService.getCountrySpendRanking(limit);
         res.json({ success: true, data });
     }
     catch (err) {

@@ -45,6 +45,11 @@ router.get('/api/health', dashboardController.getSystemHealthHandler);
 router.get('/api/facebook-overview', dashboardController.getFacebookOverviewHandler);
 router.get('/api/cron-logs', dashboardController.getCronLogsHandler);
 router.get('/api/ops-logs', dashboardController.getOpsLogsHandler);
+// 数据看板 V1 API
+router.get('/api/core-metrics', dashboardController.getCoreMetricsHandler);
+router.get('/api/today-spend-trend', dashboardController.getTodaySpendTrendHandler);
+router.get('/api/campaign-spend-ranking', dashboardController.getCampaignSpendRankingHandler);
+router.get('/api/country-spend-ranking', dashboardController.getCountrySpendRankingHandler);
 // Dashboard UI (GET /dashboard)
 // Mounted at /dashboard in app.ts, so '/' becomes '/dashboard'
 router.get('/', (_req, res) => {
@@ -57,6 +62,7 @@ router.get('/', (_req, res) => {
   <meta charset="UTF-8" />
   <title>AutoArk Dashboard V0.1</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <style>
     /* Custom styles for active menu item */
     .menu-active {
@@ -121,10 +127,56 @@ router.get('/', (_req, res) => {
     <!-- Main Content Area -->
     <main class="flex-1 overflow-y-auto">
       <!-- Dashboard View -->
-      <div id="view-dashboard" class="h-full p-6 space-y-6">
+      <div id="view-dashboard" class="h-full p-6 space-y-6 overflow-y-auto">
         <header class="flex items-center justify-between">
           <h2 class="text-2xl font-bold text-slate-100">Dashboard</h2>
         </header>
+
+    <!-- 数据看板 V1 - 核心指标卡片 -->
+    <section class="bg-slate-900/70 rounded-xl border border-slate-800 p-6">
+      <h2 class="text-xl font-bold text-slate-100 mb-4">📊 数据看板</h2>
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6" id="core-metrics-cards">
+        <div class="bg-slate-800/50 rounded-lg p-4 border border-slate-700/50">
+          <div class="text-xs text-slate-400 mb-1">今日消耗</div>
+          <div class="text-2xl font-bold text-slate-100" id="today-spend">$0.00</div>
+          <div class="text-xs text-slate-500 mt-1" id="today-spend-change">-</div>
+        </div>
+        <div class="bg-slate-800/50 rounded-lg p-4 border border-slate-700/50">
+          <div class="text-xs text-slate-400 mb-1">昨日消耗</div>
+          <div class="text-2xl font-bold text-slate-100" id="yesterday-spend">$0.00</div>
+        </div>
+        <div class="bg-slate-800/50 rounded-lg p-4 border border-slate-700/50">
+          <div class="text-xs text-slate-400 mb-1">7日总消耗</div>
+          <div class="text-2xl font-bold text-slate-100" id="seven-days-spend">$0.00</div>
+          <div class="text-xs text-slate-500 mt-1" id="seven-days-avg">日均: $0.00</div>
+        </div>
+        <div class="bg-slate-800/50 rounded-lg p-4 border border-slate-700/50">
+          <div class="text-xs text-slate-400 mb-1">今日 ROAS</div>
+          <div class="text-2xl font-bold text-slate-100" id="today-roas">0.00</div>
+        </div>
+      </div>
+
+      <!-- 图表区域 -->
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <!-- 今日消耗趋势图 -->
+        <div class="bg-slate-800/30 rounded-lg p-4 border border-slate-700/50">
+          <h3 class="text-sm font-semibold text-slate-200 mb-4">今日消耗趋势（近7天）</h3>
+          <canvas id="spend-trend-chart" height="200"></canvas>
+        </div>
+
+        <!-- 分 Campaign 消耗排行 -->
+        <div class="bg-slate-800/30 rounded-lg p-4 border border-slate-700/50">
+          <h3 class="text-sm font-semibold text-slate-200 mb-4">Campaign 消耗排行（Top 10）</h3>
+          <canvas id="campaign-ranking-chart" height="200"></canvas>
+        </div>
+      </div>
+
+      <!-- 分国家消耗排行 -->
+      <div class="mt-6 bg-slate-800/30 rounded-lg p-4 border border-slate-700/50">
+        <h3 class="text-sm font-semibold text-slate-200 mb-4">账户消耗排行（Top 10）</h3>
+        <canvas id="country-ranking-chart" height="150"></canvas>
+      </div>
+    </section>
 
     <section class="grid grid-cols-1 md:grid-cols-2 gap-4">
       <!-- System Health -->
@@ -378,12 +430,187 @@ router.get('/', (_req, res) => {
       }
     }
 
+    // ========== 数据看板 V1 ==========
+    let spendTrendChart = null
+    let campaignRankingChart = null
+    let countryRankingChart = null
+
+    async function loadCoreMetrics() {
+      try {
+        const { data } = await fetchJSON(API_BASE + '/api/core-metrics')
+        
+        // 更新核心指标卡片
+        document.getElementById('today-spend').textContent = '$' + (data.today?.spend || 0).toFixed(2)
+        document.getElementById('yesterday-spend').textContent = '$' + (data.yesterday?.spend || 0).toFixed(2)
+        document.getElementById('seven-days-spend').textContent = '$' + (data.sevenDays?.spend || 0).toFixed(2)
+        document.getElementById('seven-days-avg').textContent = '日均: $' + (data.sevenDays?.avgDailySpend || 0).toFixed(2)
+        document.getElementById('today-roas').textContent = (data.today?.roas || 0).toFixed(2)
+        
+        // 计算今日 vs 昨日变化
+        const change = data.yesterday?.spend > 0 
+          ? ((data.today?.spend - data.yesterday?.spend) / data.yesterday?.spend * 100).toFixed(1)
+          : '0.0'
+        const changeEl = document.getElementById('today-spend-change')
+        changeEl.textContent = change + '% vs 昨日'
+        changeEl.className = 'text-xs mt-1 ' + (parseFloat(change) >= 0 ? 'text-emerald-400' : 'text-red-400')
+      } catch (e) {
+        console.error('Failed to load core metrics', e)
+      }
+    }
+
+    async function loadSpendTrend() {
+      try {
+        const { data } = await fetchJSON(API_BASE + '/api/today-spend-trend')
+        
+        const ctx = document.getElementById('spend-trend-chart')
+        if (spendTrendChart) {
+          spendTrendChart.destroy()
+        }
+        
+        spendTrendChart = new Chart(ctx, {
+          type: 'line',
+          data: {
+            labels: data.map(d => d.date),
+            datasets: [{
+              label: '消耗 ($)',
+              data: data.map(d => d.spend || 0),
+              borderColor: 'rgb(99, 102, 241)',
+              backgroundColor: 'rgba(99, 102, 241, 0.1)',
+              tension: 0.4,
+              fill: true,
+            }],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: {
+                labels: { color: '#cbd5e1' },
+              },
+            },
+            scales: {
+              x: {
+                ticks: { color: '#94a3b8' },
+                grid: { color: 'rgba(148, 163, 184, 0.1)' },
+              },
+              y: {
+                ticks: { color: '#94a3b8' },
+                grid: { color: 'rgba(148, 163, 184, 0.1)' },
+              },
+            },
+          },
+        })
+      } catch (e) {
+        console.error('Failed to load spend trend', e)
+      }
+    }
+
+    async function loadCampaignRanking() {
+      try {
+        const { data } = await fetchJSON(API_BASE + '/api/campaign-spend-ranking?limit=10')
+        
+        const ctx = document.getElementById('campaign-ranking-chart')
+        if (campaignRankingChart) {
+          campaignRankingChart.destroy()
+        }
+        
+        campaignRankingChart = new Chart(ctx, {
+          type: 'bar',
+          data: {
+            labels: data.map(d => (d.campaignName || d.campaignId || 'Unknown').substring(0, 20)),
+            datasets: [{
+              label: '消耗 ($)',
+              data: data.map(d => d.spend || 0),
+              backgroundColor: 'rgba(99, 102, 241, 0.8)',
+            }],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            indexAxis: 'y',
+            plugins: {
+              legend: {
+                labels: { color: '#cbd5e1' },
+              },
+            },
+            scales: {
+              x: {
+                ticks: { color: '#94a3b8' },
+                grid: { color: 'rgba(148, 163, 184, 0.1)' },
+              },
+              y: {
+                ticks: { color: '#94a3b8' },
+                grid: { color: 'rgba(148, 163, 184, 0.1)' },
+              },
+            },
+          },
+        })
+      } catch (e) {
+        console.error('Failed to load campaign ranking', e)
+      }
+    }
+
+    async function loadCountryRanking() {
+      try {
+        const { data } = await fetchJSON(API_BASE + '/api/country-spend-ranking?limit=10')
+        
+        const ctx = document.getElementById('country-ranking-chart')
+        if (countryRankingChart) {
+          countryRankingChart.destroy()
+        }
+        
+        countryRankingChart = new Chart(ctx, {
+          type: 'bar',
+          data: {
+            labels: data.map(d => (d.accountName || d.accountId || 'Unknown').substring(0, 20)),
+            datasets: [{
+              label: '消耗 ($)',
+              data: data.map(d => d.spend || 0),
+              backgroundColor: 'rgba(16, 185, 129, 0.8)',
+            }],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            indexAxis: 'y',
+            plugins: {
+              legend: {
+                labels: { color: '#cbd5e1' },
+              },
+            },
+            scales: {
+              x: {
+                ticks: { color: '#94a3b8' },
+                grid: { color: 'rgba(148, 163, 184, 0.1)' },
+              },
+              y: {
+                ticks: { color: '#94a3b8' },
+                grid: { color: 'rgba(148, 163, 184, 0.1)' },
+              },
+            },
+          },
+        })
+      } catch (e) {
+        console.error('Failed to load country ranking', e)
+      }
+    }
+
+    async function loadDashboardData() {
+      await Promise.all([
+        loadCoreMetrics(),
+        loadSpendTrend(),
+        loadCampaignRanking(),
+        loadCountryRanking(),
+      ])
+    }
+
     async function init() {
       await Promise.all([
         loadSystemHealth(),
         loadFacebookOverview(),
         loadCronLogs(),
         loadOpsLogs(),
+        loadDashboardData(),
       ])
     }
 

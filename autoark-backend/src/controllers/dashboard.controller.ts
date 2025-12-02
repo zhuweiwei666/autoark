@@ -115,3 +115,59 @@ export async function getOpsLogsHandler(
     next(err)
   }
 }
+
+// ========== 数据看板 V1 API Handlers ==========
+
+export async function getCoreMetricsHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  try {
+    const data = await dashboardService.getCoreMetrics()
+    res.json({ success: true, data })
+  } catch (err) {
+    next(err)
+  }
+}
+
+export async function getTodaySpendTrendHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  try {
+    const data = await dashboardService.getTodaySpendTrend()
+    res.json({ success: true, data })
+  } catch (err) {
+    next(err)
+  }
+}
+
+export async function getCampaignSpendRankingHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  try {
+    const limit = Number(req.query.limit) || 10
+    const data = await dashboardService.getCampaignSpendRanking(limit)
+    res.json({ success: true, data })
+  } catch (err) {
+    next(err)
+  }
+}
+
+export async function getCountrySpendRankingHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  try {
+    const limit = Number(req.query.limit) || 10
+    const data = await dashboardService.getCountrySpendRanking(limit)
+    res.json({ success: true, data })
+  } catch (err) {
+    next(err)
+  }
+}
