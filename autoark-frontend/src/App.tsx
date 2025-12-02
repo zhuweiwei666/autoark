@@ -6,7 +6,7 @@ import FacebookCampaignsPage from './pages/FacebookCampaignsPage' // New: Campai
 function App() {
   return (
     <Router>
-      <div className="min-h-screen bg-slate-950">
+      <div className="min-h-screen bg-white">
         <Routes>
           <Route path="/fb-token" element={<FacebookTokenPage />} />
           <Route path="/fb-accounts" element={<FacebookAccountsPage />} />

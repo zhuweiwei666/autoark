@@ -71,14 +71,14 @@ router.get('/', (_req, res) => {
     }
   </style>
 </head>
-<body class="bg-slate-950 text-slate-100">
+<body class="bg-white text-slate-900">
   <div class="flex h-screen overflow-hidden">
     <!-- Left Sidebar Menu -->
-    <aside class="w-64 bg-slate-900/80 border-r border-slate-800 flex flex-col">
+    <aside class="w-64 bg-white border-r border-slate-200 flex flex-col shadow-sm">
       <!-- Logo -->
-      <div class="p-4 border-b border-slate-800">
-        <h1 class="text-xl font-bold text-slate-100">AutoArk</h1>
-        <span class="text-xs text-slate-400">V0.1</span>
+      <div class="p-4 border-b border-slate-200">
+        <h1 class="text-xl font-bold text-slate-900">AutoArk</h1>
+        <span class="text-xs text-slate-600">V0.1</span>
       </div>
       
       <!-- Menu Items -->
@@ -86,7 +86,7 @@ router.get('/', (_req, res) => {
         <button 
           onclick="switchView('dashboard')" 
           id="menu-dashboard"
-          class="w-full px-4 py-3 rounded-lg text-sm font-medium transition-colors text-slate-200 hover:text-slate-100 hover:bg-slate-800/50 flex items-center gap-3"
+          class="w-full px-4 py-3 rounded-lg text-sm font-medium transition-colors text-slate-700 hover:text-slate-900 hover:bg-slate-100 flex items-center gap-3"
         >
           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75h2.25A2.25 2.25 0 018.25 18v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V15.75zM13.5 6h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H13.5A2.25 2.25 0 0111.25 18V8.25a2.25 2.25 0 012.25-2.25z" /></svg>
           <span>仪表盘</span>
@@ -94,7 +94,7 @@ router.get('/', (_req, res) => {
         <button 
           onclick="switchView('token')" 
           id="menu-token"
-          class="w-full px-4 py-3 rounded-lg text-sm font-medium transition-colors text-slate-200 hover:text-slate-100 hover:bg-slate-800/50 flex items-center gap-3"
+          class="w-full px-4 py-3 rounded-lg text-sm font-medium transition-colors text-slate-700 hover:text-slate-900 hover:bg-slate-100 flex items-center gap-3"
         >
           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 9z" /></svg>
           <span>Token 管理</span>
@@ -102,7 +102,7 @@ router.get('/', (_req, res) => {
         <button 
           onclick="switchView('accounts')" 
           id="menu-accounts"
-          class="w-full px-4 py-3 rounded-lg text-sm font-medium transition-colors text-slate-200 hover:text-slate-100 hover:bg-slate-800/50 flex items-center gap-3"
+          class="w-full px-4 py-3 rounded-lg text-sm font-medium transition-colors text-slate-700 hover:text-slate-900 hover:bg-slate-100 flex items-center gap-3"
         >
           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" d="M19 21v-2a4 4 0 00-4-4H9a4 4 0 00-4 4v2m16-11V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16M14 10h.01M17 10h.01M9 10h.01M12 10h.01m2 2h.01M17 14h.01M9 14h.01M12 14h.01m2 2h.01M17 18h.01M9 18h.01M12 18h.01m-2-12h.01M7 12h.01m-2-12h.01M17 12h.01M9 12h.01m4-4h.01M7 16h.01M14 16h.01M14 20h.01M7 20h.01M9 16h.01M14 20h.01M7 20h.01"></path>
           </svg>
@@ -111,7 +111,7 @@ router.get('/', (_req, res) => {
         <button 
           onclick="switchView('campaigns')" 
           id="menu-campaigns"
-          class="w-full px-4 py-3 rounded-lg text-sm font-medium transition-colors text-slate-200 hover:text-slate-100 hover:bg-slate-800/50 flex items-center gap-3"
+          class="w-full px-4 py-3 rounded-lg text-sm font-medium transition-colors text-slate-700 hover:text-slate-900 hover:bg-slate-100 flex items-center gap-3"
         >
           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 6.75V15m6-6v8.25m.503 3.497l4.875-2.437c.381-.194.62-.57.62-.981V9.75M8.25 19.5l-1.5-1.5m-3.75 3.75h15M11.25 4.5l-1.5-1.5M1.5 13.5l1.5-1.5m1.5 2.25l-1.5-1.5m-1.5 2.25l-1.5-1.5" /></svg>
           <span>广告系列</span>
@@ -119,77 +119,77 @@ router.get('/', (_req, res) => {
       </nav>
       
       <!-- Health Badge -->
-      <div class="p-4 border-t border-slate-800">
-        <span id="health-badge" class="text-xs px-3 py-1 rounded-full bg-slate-800 text-slate-300 block text-center">Loading...</span>
+      <div class="p-4 border-t border-slate-200">
+        <span id="health-badge" class="text-xs px-3 py-1 rounded-full bg-slate-100 text-slate-700 block text-center">Loading...</span>
       </div>
     </aside>
 
     <!-- Main Content Area -->
     <main class="flex-1 overflow-hidden">
       <!-- Dashboard View -->
-      <div id="view-dashboard" class="h-full p-6 space-y-6 overflow-y-auto">
+      <div id="view-dashboard" class="h-full p-6 space-y-6 overflow-y-auto bg-white">
         <header class="flex items-center justify-between">
-          <h2 class="text-2xl font-bold text-slate-100">Dashboard</h2>
+          <h2 class="text-2xl font-bold text-slate-900">Dashboard</h2>
         </header>
 
     <!-- 数据看板 V1 - 核心指标卡片 -->
-    <section class="bg-slate-900/70 rounded-xl border border-slate-800 p-6">
+    <section class="bg-white rounded-3xl border border-slate-200 p-6 shadow-lg shadow-black/5">
       <div class="flex items-center justify-between mb-4">
-        <h2 class="text-xl font-bold text-slate-100">📊 数据看板</h2>
+        <h2 class="text-xl font-bold text-slate-900">📊 数据看板</h2>
         <div class="flex items-center gap-3">
           <input
             type="date"
             id="dashboard-start-date"
-            class="px-3 py-2 bg-slate-800/50 border border-slate-700 rounded-lg text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500/50"
+            class="px-3 py-2 bg-white border border-slate-300 rounded-2xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-400 focus:border-slate-400 shadow-sm"
           />
-          <span class="text-slate-400">至</span>
+          <span class="text-slate-600">至</span>
           <input
             type="date"
             id="dashboard-end-date"
-            class="px-3 py-2 bg-slate-800/50 border border-slate-700 rounded-lg text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500/50"
+            class="px-3 py-2 bg-white border border-slate-300 rounded-2xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-400 focus:border-slate-400 shadow-sm"
           />
           <button
             onclick="applyDashboardDateFilter()"
-            class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-sm font-medium text-white transition-colors"
+            class="px-4 py-2 bg-slate-900 hover:bg-slate-800 rounded-2xl text-sm font-semibold text-white transition-colors shadow-md hover:shadow-lg"
           >
             应用
           </button>
         </div>
       </div>
       <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6" id="core-metrics-cards">
-        <div class="bg-slate-800/50 rounded-lg p-4 border border-slate-700/50">
-          <div class="text-xs text-slate-400 mb-1">今日消耗</div>
-          <div class="text-2xl font-bold text-slate-100" id="today-spend">$0.00</div>
+        <div class="bg-slate-50 rounded-2xl p-4 border border-slate-200">
+          <div class="text-xs text-slate-600 mb-1">今日消耗</div>
+          <div class="text-2xl font-bold text-slate-900" id="today-spend">$0.00</div>
           <div class="text-xs text-slate-500 mt-1" id="today-spend-change">-</div>
         </div>
-        <div class="bg-slate-800/50 rounded-lg p-4 border border-slate-700/50">
-          <div class="text-xs text-slate-400 mb-1">昨日消耗</div>
-          <div class="text-2xl font-bold text-slate-100" id="yesterday-spend">$0.00</div>
+        <div class="bg-slate-50 rounded-2xl p-4 border border-slate-200">
+          <div class="text-xs text-slate-600 mb-1">昨日消耗</div>
+          <div class="text-2xl font-bold text-slate-900" id="yesterday-spend">$0.00</div>
         </div>
-        <div class="bg-slate-800/50 rounded-lg p-4 border border-slate-700/50">
-          <div class="text-xs text-slate-400 mb-1">7日总消耗</div>
-          <div class="text-2xl font-bold text-slate-100" id="seven-days-spend">$0.00</div>
+        <div class="bg-slate-50 rounded-2xl p-4 border border-slate-200">
+          <div class="text-xs text-slate-600 mb-1">7日总消耗</div>
+          <div class="text-2xl font-bold text-slate-900" id="seven-days-spend">$0.00</div>
           <div class="text-xs text-slate-500 mt-1" id="seven-days-avg">日均: $0.00</div>
         </div>
-        <div class="bg-slate-800/50 rounded-lg p-4 border border-slate-700/50">
-          <div class="text-xs text-slate-400 mb-1">今日 ROAS</div>
-          <div class="text-2xl font-bold text-slate-100" id="today-roas">0.00</div>
+        <div class="bg-slate-50 rounded-2xl p-4 border border-slate-200">
+          <div class="text-xs text-slate-600 mb-1">今日 ROAS</div>
+          <div class="text-2xl font-bold text-slate-900" id="today-roas">0.00</div>
         </div>
       </div>
 
       <!-- 图表区域 -->
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <!-- 消耗趋势图（按天维度） -->
-        <div class="bg-slate-800/30 rounded-lg p-4 border border-slate-700/50">
-          <h3 class="text-sm font-semibold text-slate-200 mb-4">消耗趋势（按天）</h3>
+        <div class="bg-white rounded-2xl p-4 border border-slate-200 shadow-sm">
+          <h3 class="text-sm font-semibold text-slate-900 mb-4">消耗趋势（按天）</h3>
           <div class="h-64 overflow-hidden">
             <canvas id="spend-trend-chart"></canvas>
           </div>
         </div>
 
         <!-- 分 Campaign 消耗排行 -->
-        <div class="bg-slate-800/30 rounded-lg p-4 border border-slate-700/50">
-          <h3 class="text-sm font-semibold text-slate-200 mb-4">Campaign 消耗排行（Top 10）</h3>
+        <div class="bg-white rounded-2xl p-4 border border-slate-200 shadow-sm">
+          <h3 class="text-sm font-semibold text-slate-900 mb-4">Campaign 消耗排行（Top 10）</h3>
           <div class="h-64 overflow-hidden">
             <canvas id="campaign-ranking-chart"></canvas>
           </div>
@@ -197,8 +197,8 @@ router.get('/', (_req, res) => {
       </div>
 
       <!-- 分国家消耗排行 -->
-      <div class="mt-6 bg-slate-800/30 rounded-lg p-4 border border-slate-700/50">
-        <h3 class="text-sm font-semibold text-slate-200 mb-4">账户消耗排行（Top 10）</h3>
+      <div class="mt-6 bg-white rounded-2xl p-4 border border-slate-200 shadow-sm">
+        <h3 class="text-sm font-semibold text-slate-900 mb-4">账户消耗排行（Top 10）</h3>
         <div class="h-48 overflow-hidden">
           <canvas id="country-ranking-chart"></canvas>
         </div>
@@ -207,45 +207,45 @@ router.get('/', (_req, res) => {
 
     <section class="grid grid-cols-1 md:grid-cols-2 gap-4">
       <!-- System Health -->
-      <div class="bg-slate-900/70 rounded-xl border border-slate-800 p-4 space-y-2">
-        <h2 class="font-semibold text-sm text-slate-200">System Health</h2>
+      <div class="bg-white rounded-3xl border border-slate-200 p-4 space-y-2 shadow-lg shadow-black/5">
+        <h2 class="font-semibold text-sm text-slate-900">System Health</h2>
         <dl class="text-xs space-y-1" id="system-health">
-          <div><dt class="inline text-slate-400">Server Time:</dt> <dd class="inline" data-field="serverTime">-</dd></div>
-          <div><dt class="inline text-slate-400">Uptime:</dt> <dd class="inline" data-field="uptime">-</dd></div>
-          <div><dt class="inline text-slate-400">Mongo:</dt> <dd class="inline" data-field="mongoConnected">-</dd></div>
-          <div><dt class="inline text-slate-400">Last Sync:</dt> <dd class="inline" data-field="lastSyncAt">-</dd></div>
+          <div><dt class="inline text-slate-600">Server Time:</dt> <dd class="inline text-slate-900" data-field="serverTime">-</dd></div>
+          <div><dt class="inline text-slate-600">Uptime:</dt> <dd class="inline text-slate-900" data-field="uptime">-</dd></div>
+          <div><dt class="inline text-slate-600">Mongo:</dt> <dd class="inline text-slate-900" data-field="mongoConnected">-</dd></div>
+          <div><dt class="inline text-slate-600">Last Sync:</dt> <dd class="inline text-slate-900" data-field="lastSyncAt">-</dd></div>
         </dl>
       </div>
 
       <!-- Facebook Overview -->
-      <div class="bg-slate-900/70 rounded-xl border border-slate-800 p-4 space-y-2">
-        <h2 class="font-semibold text-sm text-slate-200">Facebook Overview</h2>
+      <div class="bg-white rounded-3xl border border-slate-200 p-4 space-y-2 shadow-lg shadow-black/5">
+        <h2 class="font-semibold text-sm text-slate-900">Facebook Overview</h2>
         <dl class="text-xs space-y-1" id="fb-overview">
-          <div><dt class="inline text-slate-400">Accounts:</dt> <dd class="inline" data-field="accounts">-</dd></div>
-          <div><dt class="inline text-slate-400">Campaigns:</dt> <dd class="inline" data-field="campaigns">-</dd></div>
-          <div><dt class="inline text-slate-400">Ads:</dt> <dd class="inline" data-field="ads">-</dd></div>
-          <div><dt class="inline text-slate-400">Last Sync:</dt> <dd class="inline" data-field="lastSyncAt">-</dd></div>
+          <div><dt class="inline text-slate-600">Accounts:</dt> <dd class="inline text-slate-900" data-field="accounts">-</dd></div>
+          <div><dt class="inline text-slate-600">Campaigns:</dt> <dd class="inline text-slate-900" data-field="campaigns">-</dd></div>
+          <div><dt class="inline text-slate-600">Ads:</dt> <dd class="inline text-slate-900" data-field="ads">-</dd></div>
+          <div><dt class="inline text-slate-600">Last Sync:</dt> <dd class="inline text-slate-900" data-field="lastSyncAt">-</dd></div>
         </dl>
       </div>
     </section>
 
     <!-- Cron Logs -->
-    <section class="bg-slate-900/70 rounded-xl border border-slate-800 p-4">
+    <section class="bg-white rounded-3xl border border-slate-200 p-4 shadow-lg shadow-black/5">
       <div class="flex items-center justify-between mb-2">
-        <h2 class="font-semibold text-sm text-slate-200">Cron / Sync Logs</h2>
+        <h2 class="font-semibold text-sm text-slate-900">Cron / Sync Logs</h2>
         <span class="text-[10px] text-slate-500">latest 20</span>
       </div>
       <div class="overflow-x-auto max-h-64 overflow-y-auto">
         <table class="w-full text-xs text-left border-collapse" id="cron-table">
-          <thead class="bg-slate-900/90 text-slate-400 sticky top-0">
+          <thead class="bg-slate-50 text-slate-700 sticky top-0">
             <tr>
-              <th class="px-2 py-1 border-b border-slate-800">Time</th>
-              <th class="px-2 py-1 border-b border-slate-800">Job</th>
-              <th class="px-2 py-1 border-b border-slate-800">Status</th>
-              <th class="px-2 py-1 border-b border-slate-800">Message</th>
+              <th class="px-2 py-1 border-b border-slate-200">Time</th>
+              <th class="px-2 py-1 border-b border-slate-200">Job</th>
+              <th class="px-2 py-1 border-b border-slate-200">Status</th>
+              <th class="px-2 py-1 border-b border-slate-200">Message</th>
             </tr>
           </thead>
-          <tbody class="divide-y divide-slate-800" id="cron-body">
+          <tbody class="divide-y divide-slate-100" id="cron-body">
             <tr><td class="px-2 py-2 text-slate-500" colspan="4">Loading...</td></tr>
           </tbody>
         </table>
@@ -253,22 +253,22 @@ router.get('/', (_req, res) => {
     </section>
 
     <!-- Ops Logs -->
-    <section class="bg-slate-900/70 rounded-xl border border-slate-800 p-4">
+    <section class="bg-white rounded-3xl border border-slate-200 p-4 shadow-lg shadow-black/5">
       <div class="flex items-center justify-between mb-2">
-        <h2 class="font-semibold text-sm text-slate-200">Rules / Ops Logs</h2>
+        <h2 class="font-semibold text-sm text-slate-900">Rules / Ops Logs</h2>
         <span class="text-[10px] text-slate-500">latest 20</span>
       </div>
       <div class="overflow-x-auto max-h-64 overflow-y-auto">
         <table class="w-full text-xs text-left border-collapse" id="ops-table">
-          <thead class="bg-slate-900/90 text-slate-400 sticky top-0">
+          <thead class="bg-slate-50 text-slate-700 sticky top-0">
             <tr>
-              <th class="px-2 py-1 border-b border-slate-800">Time</th>
-              <th class="px-2 py-1 border-b border-slate-800">Action</th>
-              <th class="px-2 py-1 border-b border-slate-800">Target</th>
-              <th class="px-2 py-1 border-b border-slate-800">Detail</th>
+              <th class="px-2 py-1 border-b border-slate-200">Time</th>
+              <th class="px-2 py-1 border-b border-slate-200">Action</th>
+              <th class="px-2 py-1 border-b border-slate-200">Target</th>
+              <th class="px-2 py-1 border-b border-slate-200">Detail</th>
             </tr>
           </thead>
-          <tbody class="divide-y divide-slate-800" id="ops-body">
+          <tbody class="divide-y divide-slate-100" id="ops-body">
             <tr><td class="px-2 py-2 text-slate-500" colspan="4">Loading...</td></tr>
           </tbody>
         </table>
@@ -321,13 +321,13 @@ router.get('/', (_req, res) => {
       
       // Update menu active state
       document.querySelectorAll('[id^="menu-"]').forEach(btn => {
-        btn.classList.remove('bg-slate-800/30', 'border', 'border-slate-700/50')
+        btn.classList.remove('bg-slate-200', 'border', 'border-slate-300')
         btn.classList.add('bg-transparent')
       })
       
       const activeBtn = document.getElementById('menu-' + viewName)
       if (activeBtn) {
-        activeBtn.classList.add('bg-slate-800/30', 'border', 'border-slate-700/50')
+        activeBtn.classList.add('bg-slate-200', 'border', 'border-slate-300')
         activeBtn.classList.remove('bg-transparent')
       }
     }
@@ -377,18 +377,18 @@ router.get('/', (_req, res) => {
         const badge = document.getElementById('health-badge')
         if (data.mongoConnected) {
           badge.textContent = 'Healthy'
-          badge.classList.remove('bg-red-900/60', 'text-red-300')
-          badge.classList.add('bg-emerald-900/60', 'text-emerald-300')
+          badge.classList.remove('bg-red-100', 'text-red-700')
+          badge.classList.add('bg-emerald-100', 'text-emerald-700')
         } else {
           badge.textContent = 'Degraded'
-          badge.classList.remove('bg-emerald-900/60', 'text-emerald-300')
-          badge.classList.add('bg-red-900/60', 'text-red-300')
+          badge.classList.remove('bg-emerald-100', 'text-emerald-700')
+          badge.classList.add('bg-red-100', 'text-red-700')
         }
       } catch (e) {
         console.error('Health check failed', e)
         const badge = document.getElementById('health-badge')
         badge.textContent = 'Error'
-        badge.classList.add('bg-red-900/60', 'text-red-300')
+        badge.classList.add('bg-red-100', 'text-red-700')
       }
     }
 
@@ -414,10 +414,10 @@ router.get('/', (_req, res) => {
       }
       logs.forEach((log) => {
         const tr = document.createElement('tr')
-        tr.innerHTML = '<td class="px-2 py-1 text-slate-300">' + formatTime(log.createdAt || log.startedAt) + '</td>' +
-          '<td class="px-2 py-1 text-slate-300">' + (log.jobName || log.job || 'Sync') + '</td>' +
-          '<td class="px-2 py-1">' + (log.status || '-') + '</td>' +
-          '<td class="px-2 py-1 text-slate-400 max-w-xs truncate">' + (log.message || log.error || JSON.stringify(log.details) || '-') + '</td>'
+        tr.innerHTML = '<td class="px-2 py-1 text-slate-700">' + formatTime(log.createdAt || log.startedAt) + '</td>' +
+          '<td class="px-2 py-1 text-slate-700">' + (log.jobName || log.job || 'Sync') + '</td>' +
+          '<td class="px-2 py-1 text-slate-900">' + (log.status || '-') + '</td>' +
+          '<td class="px-2 py-1 text-slate-600 max-w-xs truncate">' + (log.message || log.error || JSON.stringify(log.details) || '-') + '</td>'
         tbody.appendChild(tr)
       })
     }
@@ -440,10 +440,10 @@ router.get('/', (_req, res) => {
       }
       logs.forEach((log) => {
         const tr = document.createElement('tr')
-        tr.innerHTML = '<td class="px-2 py-1 text-slate-300">' + formatTime(log.createdAt) + '</td>' +
-          '<td class="px-2 py-1 text-slate-300">' + (log.action || '-') + '</td>' +
-          '<td class="px-2 py-1 text-slate-300">' + (log.related && log.related.adId ? log.related.adId : '-') + '</td>' +
-          '<td class="px-2 py-1 text-slate-400 max-w-xs truncate">' + (log.reason || '-') + '</td>'
+        tr.innerHTML = '<td class="px-2 py-1 text-slate-700">' + formatTime(log.createdAt) + '</td>' +
+          '<td class="px-2 py-1 text-slate-700">' + (log.action || '-') + '</td>' +
+          '<td class="px-2 py-1 text-slate-700">' + (log.related && log.related.adId ? log.related.adId : '-') + '</td>' +
+          '<td class="px-2 py-1 text-slate-600 max-w-xs truncate">' + (log.reason || '-') + '</td>'
         tbody.appendChild(tr)
       })
     }
@@ -509,7 +509,7 @@ router.get('/', (_req, res) => {
           : '0.0'
         const changeEl = document.getElementById('today-spend-change')
         changeEl.textContent = change + '% vs 昨日'
-        changeEl.className = 'text-xs mt-1 ' + (parseFloat(change) >= 0 ? 'text-emerald-400' : 'text-red-400')
+        changeEl.className = 'text-xs mt-1 ' + (parseFloat(change) >= 0 ? 'text-emerald-700' : 'text-red-700')
       } catch (e) {
         console.error('Failed to load core metrics', e)
       }
