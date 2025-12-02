@@ -12,25 +12,46 @@ import {
 // Removed: import { Select } from '../components/ui/select'
 // Removed: import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '../components/ui/dialog'
 
-// 格式化函数
-const formatCurrency = (v: number) => v ? `$${(v || 0).toFixed(2)}` : '-'
-const formatPercent = (v: number) => v ? `${(v * 100).toFixed(2)}%` : '-'
-const formatNumber = (v: number) => v !== undefined && v !== null ? v.toLocaleString() : '-'
-const formatDate = (v: string) => v ? new Date(v).toLocaleString() : '-'
-const formatBudget = (v: string | number) => {
-  const num = typeof v === 'string' ? parseFloat(v) : v
-  return num ? `$${(num / 100).toFixed(2)}` : '-'
+// 格式化函数 - 确保类型安全
+const formatCurrency = (v: any) => {
+  if (v === null || v === undefined || v === '') return '-'
+  const num = typeof v === 'number' ? v : parseFloat(v)
+  return !isNaN(num) ? `$${num.toFixed(2)}` : '-'
+}
+const formatPercent = (v: any) => {
+  if (v === null || v === undefined || v === '') return '-'
+  const num = typeof v === 'number' ? v : parseFloat(v)
+  return !isNaN(num) ? `${(num * 100).toFixed(2)}%` : '-'
+}
+const formatNumber = (v: any) => {
+  if (v === null || v === undefined || v === '') return '-'
+  const num = typeof v === 'number' ? v : parseFloat(v)
+  return !isNaN(num) ? num.toLocaleString() : '-'
+}
+const formatDate = (v: any) => {
+  if (!v) return '-'
+  try {
+    const date = new Date(v)
+    return isNaN(date.getTime()) ? v : date.toLocaleString()
+  } catch {
+    return v
+  }
+}
+const formatBudget = (v: any) => {
+  if (v === null || v === undefined || v === '') return '-'
+  const num = typeof v === 'string' ? parseFloat(v) : (typeof v === 'number' ? v : parseFloat(v))
+  return !isNaN(num) && num > 0 ? `$${(num / 100).toFixed(2)}` : '-'
 }
 
 // 默认列定义 - 使用 Facebook API 原始字段名
 const ALL_CAMPAIGN_COLUMNS = [
   // Campaign 基础字段
   { key: 'id', label: 'id', defaultVisible: false, format: (v: any) => v || '-' },
-  { key: 'name', label: 'name', defaultVisible: true, format: (v: string) => v || '-' },
-  { key: 'account_id', label: 'account_id', defaultVisible: true, format: (v: string) => v || '-' },
-  { key: 'status', label: 'status', defaultVisible: true, format: (v: string) => v ? v.toUpperCase() : '-' },
-  { key: 'objective', label: 'objective', defaultVisible: false, format: (v: string) => v || '-' },
-  { key: 'buying_type', label: 'buying_type', defaultVisible: false, format: (v: string) => v || '-' },
+  { key: 'name', label: 'name', defaultVisible: true, format: (v: any) => v || '-' },
+  { key: 'account_id', label: 'account_id', defaultVisible: true, format: (v: any) => v || '-' },
+  { key: 'status', label: 'status', defaultVisible: true, format: (v: any) => v ? String(v).toUpperCase() : '-' },
+  { key: 'objective', label: 'objective', defaultVisible: false, format: (v: any) => v || '-' },
+  { key: 'buying_type', label: 'buying_type', defaultVisible: false, format: (v: any) => v || '-' },
   { key: 'daily_budget', label: 'daily_budget', defaultVisible: false, format: formatBudget },
   { key: 'budget_remaining', label: 'budget_remaining', defaultVisible: false, format: formatBudget },
   { key: 'lifetime_budget', label: 'lifetime_budget', defaultVisible: false, format: formatBudget },
@@ -38,9 +59,9 @@ const ALL_CAMPAIGN_COLUMNS = [
   { key: 'stop_time', label: 'stop_time', defaultVisible: false, format: formatDate },
   { key: 'created_time', label: 'created_time', defaultVisible: false, format: formatDate },
   { key: 'updated_time', label: 'updated_time', defaultVisible: false, format: formatDate },
-  { key: 'bid_strategy', label: 'bid_strategy', defaultVisible: false, format: (v: string) => v || '-' },
+  { key: 'bid_strategy', label: 'bid_strategy', defaultVisible: false, format: (v: any) => v || '-' },
   { key: 'bid_amount', label: 'bid_amount', defaultVisible: false, format: formatCurrency },
-  { key: 'source_campaign_id', label: 'source_campaign_id', defaultVisible: false, format: (v: string) => v || '-' },
+  { key: 'source_campaign_id', label: 'source_campaign_id', defaultVisible: false, format: (v: any) => v || '-' },
   
   // Insights 基础指标
   { key: 'impressions', label: 'impressions', defaultVisible: true, format: formatNumber },
@@ -48,7 +69,11 @@ const ALL_CAMPAIGN_COLUMNS = [
   { key: 'unique_clicks', label: 'unique_clicks', defaultVisible: false, format: formatNumber },
   { key: 'spend', label: 'spend', defaultVisible: true, format: formatCurrency },
   { key: 'reach', label: 'reach', defaultVisible: false, format: formatNumber },
-  { key: 'frequency', label: 'frequency', defaultVisible: false, format: (v: number) => v ? v.toFixed(2) : '-' },
+  { key: 'frequency', label: 'frequency', defaultVisible: false, format: (v: any) => {
+    if (v === null || v === undefined || v === '') return '-'
+    const num = typeof v === 'number' ? v : parseFloat(v)
+    return !isNaN(num) ? num.toFixed(2) : '-'
+  }},
   
   // Insights 成本指标
   { key: 'cpc', label: 'cpc', defaultVisible: true, format: formatCurrency },
@@ -66,14 +91,22 @@ const ALL_CAMPAIGN_COLUMNS = [
   // Insights 视频指标
   { key: 'video_play_actions', label: 'video_play_actions', defaultVisible: false, format: formatNumber },
   { key: 'video_30_sec_watched_actions', label: 'video_30_sec_watched_actions', defaultVisible: false, format: formatNumber },
-  { key: 'video_avg_time_watched_actions', label: 'video_avg_time_watched_actions', defaultVisible: false, format: (v: number) => v ? `${v.toFixed(2)}s` : '-' },
+  { key: 'video_avg_time_watched_actions', label: 'video_avg_time_watched_actions', defaultVisible: false, format: (v: any) => {
+    if (v === null || v === undefined || v === '') return '-'
+    const num = typeof v === 'number' ? v : parseFloat(v)
+    return !isNaN(num) ? `${num.toFixed(2)}s` : '-'
+  }},
   { key: 'video_p100_watched_actions', label: 'video_p100_watched_actions', defaultVisible: false, format: formatNumber },
   { key: 'video_p25_watched_actions', label: 'video_p25_watched_actions', defaultVisible: false, format: formatNumber },
   { key: 'video_p50_watched_actions', label: 'video_p50_watched_actions', defaultVisible: false, format: formatNumber },
   { key: 'video_p75_watched_actions', label: 'video_p75_watched_actions', defaultVisible: false, format: formatNumber },
   { key: 'video_p95_watched_actions', label: 'video_p95_watched_actions', defaultVisible: false, format: formatNumber },
   { key: 'video_thruplay_watched_actions', label: 'video_thruplay_watched_actions', defaultVisible: false, format: formatNumber },
-  { key: 'video_time_watched_actions', label: 'video_time_watched_actions', defaultVisible: false, format: (v: number) => v ? `${v.toFixed(2)}s` : '-' },
+  { key: 'video_time_watched_actions', label: 'video_time_watched_actions', defaultVisible: false, format: (v: any) => {
+    if (v === null || v === undefined || v === '') return '-'
+    const num = typeof v === 'number' ? v : parseFloat(v)
+    return !isNaN(num) ? `${num.toFixed(2)}s` : '-'
+  }},
   
   // Actions - 常见操作类型（动态字段，从 actions 数组中提取）
   { key: 'mobile_app_install', label: 'mobile_app_install', defaultVisible: true, format: formatNumber },
@@ -105,9 +138,21 @@ const ALL_CAMPAIGN_COLUMNS = [
   { key: 'offsite_conversion.fb_pixel_lead_value', label: 'offsite_conversion.fb_pixel_lead_value', defaultVisible: false, format: formatCurrency },
   
   // Purchase ROAS - 购买 ROAS（动态字段，从 purchase_roas 数组中提取）
-  { key: 'purchase_roas', label: 'purchase_roas', defaultVisible: false, format: (v: number) => v ? v.toFixed(2) : '-' },
-  { key: 'mobile_app_purchase_roas', label: 'mobile_app_purchase_roas', defaultVisible: false, format: (v: number) => v ? v.toFixed(2) : '-' },
-  { key: 'offsite_conversion.fb_pixel_purchase_roas', label: 'offsite_conversion.fb_pixel_purchase_roas', defaultVisible: false, format: (v: number) => v ? v.toFixed(2) : '-' },
+  { key: 'purchase_roas', label: 'purchase_roas', defaultVisible: false, format: (v: any) => {
+    if (v === null || v === undefined || v === '') return '-'
+    const num = typeof v === 'number' ? v : parseFloat(v)
+    return !isNaN(num) ? num.toFixed(2) : '-'
+  }},
+  { key: 'mobile_app_purchase_roas', label: 'mobile_app_purchase_roas', defaultVisible: false, format: (v: any) => {
+    if (v === null || v === undefined || v === '') return '-'
+    const num = typeof v === 'number' ? v : parseFloat(v)
+    return !isNaN(num) ? num.toFixed(2) : '-'
+  }},
+  { key: 'offsite_conversion.fb_pixel_purchase_roas', label: 'offsite_conversion.fb_pixel_purchase_roas', defaultVisible: false, format: (v: any) => {
+    if (v === null || v === undefined || v === '') return '-'
+    const num = typeof v === 'number' ? v : parseFloat(v)
+    return !isNaN(num) ? num.toFixed(2) : '-'
+  }},
   
   // 时间字段
   { key: 'date_start', label: 'date_start', defaultVisible: false, format: (v: string) => v || '-' },
