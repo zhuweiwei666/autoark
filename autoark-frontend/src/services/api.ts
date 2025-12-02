@@ -1,4 +1,18 @@
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001'
+// 在生产环境中，如果前端和后端在同一域名下，使用相对路径
+// 在开发环境中，使用环境变量或默认的 localhost
+const getApiBaseUrl = () => {
+  if (import.meta.env.VITE_API_BASE_URL) {
+    return import.meta.env.VITE_API_BASE_URL
+  }
+  // 如果是生产环境且没有配置，尝试使用当前域名
+  if (import.meta.env.PROD) {
+    return window.location.origin
+  }
+  // 开发环境默认
+  return 'http://localhost:3001'
+}
+
+const API_BASE_URL = getApiBaseUrl()
 
 export interface FbToken {
   id: string
