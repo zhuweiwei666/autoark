@@ -574,11 +574,11 @@ export default function FacebookCampaignsPage() {
                     </div>
                     <div className="space-y-1 max-h-32 overflow-y-auto">
                       {message.errors.slice(0, 5).map((err, idx) => (
-                        <div key={idx} className="text-xs opacity-80 pl-2 border-l-2 border-amber-500/30">
-                          {err.accountId && <span className="font-mono">账户: {err.accountId}</span>}
-                          {err.tokenId && <span className="font-mono">Token: {err.tokenId.substring(0, 8)}...</span>}
-                          {err.optimizer && <span className="ml-2">优化师: {err.optimizer}</span>}
-                          <div className="mt-1 text-amber-300/80">{err.error}</div>
+                        <div key={idx} className="text-xs pl-3 border-l-2 border-amber-400 bg-amber-50 rounded-r-lg py-1.5">
+                          {err.accountId && <span className="font-mono text-amber-900">账户: {err.accountId}</span>}
+                          {err.tokenId && <span className="font-mono text-amber-900">Token: {err.tokenId.substring(0, 8)}...</span>}
+                          {err.optimizer && <span className="ml-2 text-amber-900">优化师: {err.optimizer}</span>}
+                          <div className="mt-1 text-amber-800">{err.error}</div>
                         </div>
                       ))}
                       {message.errors.length > 5 && (
@@ -589,7 +589,7 @@ export default function FacebookCampaignsPage() {
                     </div>
                     <a
                       href="/dashboard"
-                      className="inline-flex items-center gap-2 mt-3 px-4 py-2 bg-blue-50/80 hover:bg-blue-100/80 rounded-2xl text-sm font-semibold text-blue-700 transition-all active:scale-95 shadow-sm"
+                      className="inline-flex items-center gap-2 mt-3 px-4 py-2 bg-blue-50 hover:bg-blue-100 rounded-2xl text-sm font-semibold text-blue-700 transition-all active:scale-95 shadow-sm"
                     >
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
@@ -770,7 +770,7 @@ export default function FacebookCampaignsPage() {
                             <div>
                               <div className="font-semibold text-slate-900 group-hover:text-slate-950 transition-colors">{(col.format as (v: string) => string)(campaign.name || (campaign as any).name)}</div>
                               <div className="text-xs text-slate-500 font-mono mt-1">ID: {(col.format as (v: string) => string)(campaign.campaignId || (campaign as any).id)}</div>
-                            </div>
+                                </div>
                           ) : col.key === 'status' ? (
                             <span className={`inline-flex items-center px-3 py-1.5 rounded-full text-xs font-semibold border ${
                               (campaign.status || (campaign as any).status) === 'ACTIVE'
@@ -784,13 +784,13 @@ export default function FacebookCampaignsPage() {
                                 (campaign.status || (campaign as any).status) === 'PAUSED' ? 'bg-amber-500' : 'bg-slate-400'
                               }`}></span>
                               {(col.format as (v: string) => string)(campaign.status || (campaign as any).status)}
-                            </span>
+                                </span>
                           ) : col.key === 'account_id' || col.key === 'accountId' ? (
                             <div className="text-xs text-slate-700 font-mono">{(campaign as any)[col.key] || campaign.accountId || '-'}</div>
                           ) : (
                             <span className="text-slate-900">{(campaign as any)[col.key] !== undefined && (campaign as any)[col.key] !== null ? col.format((campaign as any)[col.key]) : '-'}</span>
                           )}
-                        </td>
+                          </td>
                       ))}
                       <td className="px-6 py-4 text-right">
                         <button className="opacity-60 hover:opacity-100 p-2 hover:bg-slate-100 rounded-xl transition-all active:scale-95">
