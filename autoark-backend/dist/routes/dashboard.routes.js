@@ -48,6 +48,8 @@ router.get('/api/ops-logs', dashboardController.getOpsLogsHandler);
 // Dashboard UI (GET /dashboard)
 // Mounted at /dashboard in app.ts, so '/' becomes '/dashboard'
 router.get('/', (_req, res) => {
+    // 确保设置正确的 Content-Type
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.send(`
 <!DOCTYPE html>
 <html lang="en">
