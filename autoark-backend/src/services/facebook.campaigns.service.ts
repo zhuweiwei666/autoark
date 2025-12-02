@@ -10,6 +10,7 @@ export const syncCampaignsFromAdAccounts = async () => {
   let syncedCampaigns = 0
   let syncedMetrics = 0
   let errorCount = 0
+  const errors: Array<{ accountId: string; error: string }> = []
 
   try {
     // 1. 获取所有有效的广告账户
@@ -91,12 +92,14 @@ export const syncCampaignsFromAdAccounts = async () => {
         }
       } catch (error: any) {
         errorCount++
-        logger.error(`Failed to sync campaigns/insights for account ${account.accountId}: ${error.message}`)
+        const errorMsg = error.message || String(error)
+        errors.push({ accountId: account.accountId, error: errorMsg })
+        logger.error(`Failed to sync campaigns/insights for account ${account.accountId}: ${errorMsg}`)
       }
     }
 
     logger.info(`Campaign sync completed. Synced Campaigns: ${syncedCampaigns}, Synced Metrics: ${syncedMetrics}, Errors: ${errorCount}, Duration: ${Date.now() - startTime}ms`)
-    return { syncedCampaigns, syncedMetrics, errorCount }
+    return { syncedCampaigns, syncedMetrics, errorCount, errors }
 
   } catch (error: any) {
     logger.error('Campaign sync failed:', error)

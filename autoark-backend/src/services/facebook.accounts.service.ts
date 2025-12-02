@@ -7,6 +7,7 @@ export const syncAccountsFromTokens = async () => {
   const startTime = Date.now()
   let syncedCount = 0
   let errorCount = 0
+  const errors: Array<{ tokenId: string; optimizer?: string; error: string }> = []
 
   try {
     // 1. 获取所有有效的 Token
@@ -48,7 +49,13 @@ export const syncAccountsFromTokens = async () => {
 
       } catch (error: any) {
         errorCount++
-        logger.error(`Failed to sync accounts for token ${tokenDoc._id}: ${error.message}`)
+        const errorMsg = error.message || String(error)
+        errors.push({ 
+          tokenId: String(tokenDoc._id), 
+          optimizer: tokenDoc.optimizer,
+          error: errorMsg 
+        })
+        logger.error(`Failed to sync accounts for token ${tokenDoc._id}: ${errorMsg}`)
         // 如果是 Token 失效，更新 Token 状态
         if (error.message?.includes('Session has expired') || error.response?.data?.error?.code === 190) {
             await FbToken.findByIdAndUpdate(tokenDoc._id, { status: 'expired' })
@@ -57,7 +64,7 @@ export const syncAccountsFromTokens = async () => {
     }
 
     logger.info(`Account sync completed. Synced: ${syncedCount}, Errors: ${errorCount}, Duration: ${Date.now() - startTime}ms`)
-    return { syncedCount, errorCount }
+    return { syncedCount, errorCount, errors }
 
   } catch (error: any) {
     logger.error('Account sync failed:', error)

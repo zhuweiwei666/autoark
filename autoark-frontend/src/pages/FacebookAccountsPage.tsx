@@ -4,7 +4,7 @@ import { getAccounts, syncAccounts, type FbAccount } from '../services/api'
 export default function FacebookAccountsPage() {
   const [loading, setLoading] = useState(false)
   const [syncing, setSyncing] = useState(false)
-  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string; errors?: Array<{ accountId?: string; tokenId?: string; optimizer?: string; error: string }> } | null>(null)
 
   // 列表数据
   const [accounts, setAccounts] = useState<FbAccount[]>([])
@@ -14,6 +14,9 @@ export default function FacebookAccountsPage() {
     total: 0,
     pages: 1
   })
+  
+  // 排序状态
+  const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(null)
 
   // 筛选条件
   const [filters, setFilters] = useState({
@@ -70,7 +73,8 @@ export default function FacebookAccountsPage() {
       const result = await syncAccounts()
       setMessage({ 
         type: 'success', 
-        text: `同步完成！成功: ${result.data.syncedCount}, 失败: ${result.data.errorCount}` 
+        text: `同步完成！成功: ${result.data.syncedCount}, 失败: ${result.data.errorCount}`,
+        errors: result.data.errors || []
       })
       loadAccounts(1) // 刷新列表
     } catch (error: any) {
@@ -137,13 +141,55 @@ export default function FacebookAccountsPage() {
 
         {/* 消息提示 */}
         {message && (
-          <div className={`p-4 rounded-xl border backdrop-blur-md flex items-center justify-between shadow-lg animate-fade-in ${
+          <div className={`p-4 rounded-xl border backdrop-blur-md shadow-lg animate-fade-in ${
             message.type === 'success' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-red-500/10 border-red-500/20 text-red-400'
           }`}>
-            <span>{message.text}</span>
-            <button onClick={() => setMessage(null)} className="opacity-60 hover:opacity-100 p-1">
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
-            </button>
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex-1">
+                <div className="flex items-center gap-3 mb-2">
+                  {message.type === 'success' ? (
+                    <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" /></svg>
+                  ) : (
+                    <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                  )}
+                  <span className="font-medium">{message.text}</span>
+                </div>
+                {message.errors && message.errors.length > 0 && (
+                  <div className="mt-3 pl-8 space-y-2">
+                    <div className="text-sm opacity-90">
+                      <strong>失败详情：</strong>
+                    </div>
+                    <div className="space-y-1 max-h-32 overflow-y-auto">
+                      {message.errors.slice(0, 5).map((err, idx) => (
+                        <div key={idx} className="text-xs opacity-80 pl-2 border-l-2 border-amber-500/30">
+                          {err.accountId && <span className="font-mono">账户: {err.accountId}</span>}
+                          {err.tokenId && <span className="font-mono">Token: {err.tokenId.substring(0, 8)}...</span>}
+                          {err.optimizer && <span className="ml-2">优化师: {err.optimizer}</span>}
+                          <div className="mt-1 text-amber-300/80">{err.error}</div>
+                        </div>
+                      ))}
+                      {message.errors.length > 5 && (
+                        <div className="text-xs opacity-70 italic pl-2">
+                          还有 {message.errors.length - 5} 个错误...
+                        </div>
+                      )}
+                    </div>
+                    <a
+                      href="/dashboard"
+                      className="inline-flex items-center gap-2 mt-2 text-sm text-blue-400 hover:text-blue-300 underline transition-colors"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                      </svg>
+                      前往日志中心查看完整日志
+                    </a>
+                  </div>
+                )}
+              </div>
+              <button onClick={() => setMessage(null)} className="opacity-60 hover:opacity-100 p-1 hover:bg-white/5 rounded-lg transition-all flex-shrink-0">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
+              </button>
+            </div>
           </div>
         )}
 
@@ -239,7 +285,37 @@ export default function FacebookAccountsPage() {
                 ) : accounts.length === 0 ? (
                   <tr><td colSpan={5} className="px-6 py-12 text-center text-slate-500">暂无数据</td></tr>
                 ) : (
-                  accounts.map((account) => (
+                  (() => {
+                    // 排序逻辑
+                    const sortedAccounts = [...accounts]
+                    if (sortConfig) {
+                      sortedAccounts.sort((a, b) => {
+                        let aVal: any, bVal: any
+                        if (sortConfig.key === 'balance') {
+                          aVal = a.balance ? Number(a.balance) : 0
+                          bVal = b.balance ? Number(b.balance) : 0
+                        } else if (sortConfig.key === 'name') {
+                          aVal = a.name || ''
+                          bVal = b.name || ''
+                        } else {
+                          aVal = (a as any)[sortConfig.key]
+                          bVal = (b as any)[sortConfig.key]
+                        }
+                        if (aVal === null || aVal === undefined) return 1
+                        if (bVal === null || bVal === undefined) return -1
+                        if (typeof aVal === 'number' && typeof bVal === 'number') {
+                          return sortConfig.direction === 'asc' ? aVal - bVal : bVal - aVal
+                        }
+                        const aStr = String(aVal).toLowerCase()
+                        const bStr = String(bVal).toLowerCase()
+                        if (sortConfig.direction === 'asc') {
+                          return aStr.localeCompare(bStr)
+                        } else {
+                          return bStr.localeCompare(aStr)
+                        }
+                      })
+                    }
+                    return sortedAccounts.map((account) => (
                     <tr key={account.id} className="group hover:bg-white/[0.02] transition-colors">
                       <td className="px-6 py-4">
                         <div>
