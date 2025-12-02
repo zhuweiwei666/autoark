@@ -152,23 +152,29 @@ router.get('/', (_req, res) => {
 
       <!-- 图表区域 -->
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <!-- 今日消耗趋势图 -->
+        <!-- 消耗趋势图（按天维度） -->
         <div class="bg-slate-800/30 rounded-lg p-4 border border-slate-700/50">
-          <h3 class="text-sm font-semibold text-slate-200 mb-4">今日消耗趋势（近7天）</h3>
-          <canvas id="spend-trend-chart" height="200"></canvas>
+          <h3 class="text-sm font-semibold text-slate-200 mb-4">消耗趋势（按天）</h3>
+          <div class="h-64 overflow-hidden">
+            <canvas id="spend-trend-chart"></canvas>
+          </div>
         </div>
 
         <!-- 分 Campaign 消耗排行 -->
         <div class="bg-slate-800/30 rounded-lg p-4 border border-slate-700/50">
           <h3 class="text-sm font-semibold text-slate-200 mb-4">Campaign 消耗排行（Top 10）</h3>
-          <canvas id="campaign-ranking-chart" height="200"></canvas>
+          <div class="h-64 overflow-hidden">
+            <canvas id="campaign-ranking-chart"></canvas>
+          </div>
         </div>
       </div>
 
       <!-- 分国家消耗排行 -->
       <div class="mt-6 bg-slate-800/30 rounded-lg p-4 border border-slate-700/50">
         <h3 class="text-sm font-semibold text-slate-200 mb-4">账户消耗排行（Top 10）</h3>
-        <canvas id="country-ranking-chart" height="150"></canvas>
+        <div class="h-48 overflow-hidden">
+          <canvas id="country-ranking-chart"></canvas>
+        </div>
       </div>
     </section>
 
@@ -499,35 +505,79 @@ router.get('/', (_req, res) => {
           return
         }
         
+        // 格式化日期标签（只显示月-日）
+        const formattedLabels = data.map(d => {
+          const date = new Date(d.date + 'T00:00:00')
+          return (date.getMonth() + 1) + '/' + date.getDate()
+        })
+        
+        // 保存原始数据到图表对象，用于 tooltip
+        const chartData = {
+          labels: formattedLabels,
+          datasets: [{
+            label: '消耗 ($)',
+            data: data.map(d => d.spend || 0),
+            borderColor: 'rgb(99, 102, 241)',
+            backgroundColor: 'rgba(99, 102, 241, 0.1)',
+            tension: 0.4,
+            fill: true,
+            pointRadius: 3,
+            pointHoverRadius: 5,
+            pointBackgroundColor: 'rgb(99, 102, 241)',
+            pointBorderColor: '#fff',
+            pointBorderWidth: 2,
+          }],
+          rawDates: data.map(d => d.date) // 保存原始日期用于 tooltip
+        }
+        
         spendTrendChart = new Chart(ctx, {
           type: 'line',
-          data: {
-            labels: data.map(d => d.date),
-            datasets: [{
-              label: '消耗 ($)',
-              data: data.map(d => d.spend || 0),
-              borderColor: 'rgb(99, 102, 241)',
-              backgroundColor: 'rgba(99, 102, 241, 0.1)',
-              tension: 0.4,
-              fill: true,
-            }],
-          },
+          data: chartData,
           options: {
             responsive: true,
-            maintainAspectRatio: false,
+            maintainAspectRatio: true,
+            aspectRatio: 2,
+            animation: false,
             plugins: {
               legend: {
-                labels: { color: '#cbd5e1' },
+                display: false,
+              },
+              tooltip: {
+                enabled: true,
+                callbacks: {
+                  title: function(context) {
+                    const index = context[0].dataIndex
+                    return chartData.rawDates[index] || ''
+                  },
+                  label: function(context) {
+                    return '消耗: $' + context.parsed.y.toFixed(2)
+                  }
+                }
               },
             },
             scales: {
               x: {
-                ticks: { color: '#94a3b8' },
-                grid: { color: 'rgba(148, 163, 184, 0.1)' },
+                ticks: { 
+                  color: '#94a3b8',
+                  maxTicksLimit: 10,
+                },
+                grid: { 
+                  color: 'rgba(148, 163, 184, 0.1)',
+                  display: false,
+                },
               },
               y: {
-                ticks: { color: '#94a3b8' },
-                grid: { color: 'rgba(148, 163, 184, 0.1)' },
+                ticks: { 
+                  color: '#94a3b8',
+                  maxTicksLimit: 6,
+                  callback: function(value) {
+                    return '$' + value.toFixed(0)
+                  }
+                },
+                grid: { 
+                  color: 'rgba(148, 163, 184, 0.1)',
+                },
+                beginAtZero: true,
               },
             },
           },
@@ -572,7 +622,8 @@ router.get('/', (_req, res) => {
           },
           options: {
             responsive: true,
-            maintainAspectRatio: false,
+            maintainAspectRatio: true,
+            aspectRatio: 1.5,
             indexAxis: 'y',
             animation: false, // 优化：禁用动画，提升性能
             plugins: {
@@ -583,12 +634,12 @@ router.get('/', (_req, res) => {
             },
             scales: {
               x: {
-                ticks: { color: '#94a3b8' },
+                ticks: { color: '#94a3b8', maxTicksLimit: 8 },
                 grid: { color: 'rgba(148, 163, 184, 0.1)' },
               },
               y: {
                 ticks: { color: '#94a3b8' },
-                grid: { color: 'rgba(148, 163, 184, 0.1)' },
+                grid: { color: 'rgba(148, 163, 184, 0.1)', display: false },
               },
             },
           },
