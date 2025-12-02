@@ -179,7 +179,7 @@ export default function FacebookCampaignsPage() {
     total: 0,
     pages: 1,
   })
-  
+
   // 排序状态 - 默认按 spend 降序
   const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' } | null>({ key: 'spend', direction: 'desc' })
 
@@ -358,21 +358,6 @@ export default function FacebookCampaignsPage() {
     }
   }
 
-  // iOS 风格状态颜色映射（已直接在 JSX 中使用，此函数保留用于兼容）
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'ACTIVE':
-        return 'bg-emerald-50/80 border-emerald-200/50 text-emerald-700'
-      case 'PAUSED':
-        return 'bg-amber-50/80 border-amber-200/50 text-amber-700'
-      case 'ARCHIVED':
-        return 'bg-slate-50/80 border-slate-200/50 text-slate-700'
-      case 'DELETED':
-        return 'bg-red-50/80 border-red-200/50 text-red-700'
-      default:
-        return 'bg-slate-50/80 border-slate-200/50 text-slate-700'
-    }
-  }
 
   // 根据可见列和顺序过滤 - 使用 useMemo 缓存，避免频繁重新计算
   const columnsToRender = useMemo(() => {
@@ -431,7 +416,7 @@ export default function FacebookCampaignsPage() {
               className="px-6 py-3 bg-white/80 backdrop-blur-sm hover:bg-white border border-slate-200 rounded-2xl text-sm font-semibold text-slate-700 transition-all shadow-sm active:scale-95 flex items-center gap-2"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-              自定义列
+                自定义列
             </button>
 
               {/* iOS 风格自定义列设置弹窗 */}
@@ -620,8 +605,8 @@ export default function FacebookCampaignsPage() {
                 )}
               </div>
               <button onClick={() => setMessage(null)} className="opacity-60 hover:opacity-100 p-2 hover:bg-white/50 rounded-xl transition-all flex-shrink-0 active:scale-95">
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
-              </button>
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
+            </button>
             </div>
           </div>
         )}
@@ -790,7 +775,7 @@ export default function FacebookCampaignsPage() {
                             <div>
                               <div className="font-semibold text-slate-900 group-hover:text-blue-600 transition-colors">{(col.format as (v: string) => string)(campaign.name || (campaign as any).name)}</div>
                               <div className="text-xs text-slate-500 font-mono mt-1">ID: {(col.format as (v: string) => string)(campaign.campaignId || (campaign as any).id)}</div>
-                            </div>
+                                </div>
                           ) : col.key === 'status' ? (
                             <span className={`inline-flex items-center px-3 py-1.5 rounded-full text-xs font-semibold border backdrop-blur-sm ${
                               (campaign.status || (campaign as any).status) === 'ACTIVE'
@@ -804,13 +789,13 @@ export default function FacebookCampaignsPage() {
                                 (campaign.status || (campaign as any).status) === 'PAUSED' ? 'bg-amber-500' : 'bg-slate-400'
                               }`}></span>
                               {(col.format as (v: string) => string)(campaign.status || (campaign as any).status)}
-                            </span>
+                                </span>
                           ) : col.key === 'account_id' || col.key === 'accountId' ? (
                             <div className="text-xs text-slate-600 font-mono">{(campaign as any)[col.key] || campaign.accountId || '-'}</div>
                           ) : (
                             <span className="text-slate-700">{(campaign as any)[col.key] !== undefined && (campaign as any)[col.key] !== null ? col.format((campaign as any)[col.key]) : '-'}</span>
                           )}
-                        </td>
+                          </td>
                       ))}
                       <td className="px-6 py-4 text-right">
                         <button className="opacity-60 hover:opacity-100 p-2 hover:bg-slate-100/50 rounded-xl transition-all active:scale-95">
