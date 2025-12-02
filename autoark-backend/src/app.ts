@@ -69,6 +69,11 @@ for (const possiblePath of possiblePaths) {
 
 if (frontendDistPath) {
   logger.info(`Frontend static files served from: ${frontendDistPath}`)
+  
+  // Explicitly serve assets directory to ensure CSS/JS loading
+  app.use('/assets', express.static(path.join(frontendDistPath, 'assets')))
+  
+  // Serve root static files (favicon, etc.)
   app.use(express.static(frontendDistPath))
   
   // Fallback to index.html for client-side routing (React Router)
@@ -79,10 +84,13 @@ if (frontendDistPath) {
     if (req.path.startsWith('/api') || req.path.startsWith('/dashboard')) {
       return next()
     }
-    // Skip if it's a static file request (already handled by express.static)
-    if (req.path.includes('.')) {
+    
+    // Skip if it's a static file request (likely 404 if we reached here)
+    // But we want to be careful not to block valid routes
+    if (req.path.includes('.') && !req.path.endsWith('.html')) {
       return next()
     }
+    
     // For all other routes, serve the React app (for client-side routing)
     const indexPath = path.join(frontendDistPath!, 'index.html')
     res.sendFile(indexPath, (err) => {
