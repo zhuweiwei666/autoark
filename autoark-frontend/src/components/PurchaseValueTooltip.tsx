@@ -12,7 +12,6 @@ export default function PurchaseValueTooltip({
   campaignId,
   date,
   country,
-  value,
   children,
 }: PurchaseValueTooltipProps) {
   const [showTooltip, setShowTooltip] = useState(false)
