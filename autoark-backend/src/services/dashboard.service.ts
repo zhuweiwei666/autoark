@@ -429,9 +429,21 @@ export async function getCountrySpendRanking(limit = 10, startDate?: string, end
     { $sort: { spend: -1 } },
     { $limit: limit },
     {
+      $addFields: {
+        // 统一处理 accountId：去掉 act_ 前缀以便匹配 Account 表
+        normalizedAccountId: {
+          $cond: {
+            if: { $eq: [{ $substr: ['$_id', 0, 4] }, 'act_'] },
+            then: { $substr: ['$_id', 4, -1] },
+            else: '$_id',
+          },
+        },
+      },
+    },
+    {
       $lookup: {
         from: 'accounts',
-        localField: '_id',
+        localField: 'normalizedAccountId',
         foreignField: 'accountId',
         as: 'account',
       },

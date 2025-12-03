@@ -1,6 +1,7 @@
 import * as fbApi from './facebook.api'
 import { Campaign, AdSet, Ad, MetricsDaily, SyncLog, Creative } from '../models'
 import logger from '../utils/logger'
+import { normalizeForApi, normalizeForStorage } from '../utils/accountId'
 
 // 1. Get Effective Accounts
 export const getEffectiveAdAccounts = async (): Promise<string[]> => {
@@ -39,10 +40,14 @@ const writeToMongo = async (model: any, filter: any, data: any) => {
 // 7. Sync Single Account
 export const syncAccount = async (accountId: string) => {
   logger.info(`Syncing Account: ${accountId}`)
+  
+  // 统一格式：API 调用需要带 act_ 前缀
+  const accountIdForApi = normalizeForApi(accountId)
+  const accountIdForStorage = normalizeForStorage(accountId)
 
   // 1. Campaigns
   try {
-    const campaigns = await fbApi.fetchCampaigns(accountId)
+    const campaigns = await fbApi.fetchCampaigns(accountIdForApi)
     logger.info(`Syncing ${campaigns.length} campaigns for ${accountId}`)
     for (const c of campaigns) {
       await writeToMongo(
@@ -50,7 +55,7 @@ export const syncAccount = async (accountId: string) => {
         { campaignId: c.id },
         {
           campaignId: c.id,
-          accountId,
+          accountId: accountIdForStorage, // 统一格式：数据库存储时去掉前缀
           name: c.name,
           status: c.status,
           objective: c.objective,
@@ -66,7 +71,7 @@ export const syncAccount = async (accountId: string) => {
 
   // 2. AdSets
   try {
-    const adsets = await fbApi.fetchAdSets(accountId)
+    const adsets = await fbApi.fetchAdSets(accountIdForApi)
     logger.info(`Syncing ${adsets.length} adsets for ${accountId}`)
     for (const a of adsets) {
       await writeToMongo(
@@ -74,7 +79,7 @@ export const syncAccount = async (accountId: string) => {
         { adsetId: a.id },
         {
           adsetId: a.id,
-          accountId,
+          accountId: accountIdForStorage, // 统一格式：数据库存储时去掉前缀
           campaignId: a.campaign_id,
           name: a.name,
           status: a.status,
@@ -92,7 +97,7 @@ export const syncAccount = async (accountId: string) => {
 
   // 3. Ads
   try {
-    const ads = await fbApi.fetchAds(accountId)
+    const ads = await fbApi.fetchAds(accountIdForApi)
     logger.info(`Syncing ${ads.length} ads for ${accountId}`)
     for (const a of ads) {
       await writeToMongo(
@@ -100,7 +105,7 @@ export const syncAccount = async (accountId: string) => {
         { adId: a.id },
         {
           adId: a.id,
-          accountId,
+          accountId: accountIdForStorage, // 统一格式：数据库存储时去掉前缀
           adsetId: a.adset_id,
           campaignId: a.campaign_id,
           name: a.name,
@@ -118,7 +123,7 @@ export const syncAccount = async (accountId: string) => {
 
   // 4. Creatives (Optional but good to have)
   try {
-    const creatives = await fbApi.fetchCreatives(accountId)
+    const creatives = await fbApi.fetchCreatives(accountIdForApi)
     logger.info(`Syncing ${creatives.length} creatives for ${accountId}`)
     for (const c of creatives) {
       await writeToMongo(
@@ -139,7 +144,7 @@ export const syncAccount = async (accountId: string) => {
 
   // 5. Insights (Daily)
   try {
-    const insights = await fbApi.fetchInsights(accountId, 'account', 'today') // or 'yesterday'
+    const insights = await fbApi.fetchInsights(accountIdForApi, 'account', 'today') // or 'yesterday'
     logger.info(`Syncing ${insights.length} insight records for ${accountId}`)
 
     for (const i of insights) {
@@ -160,7 +165,7 @@ export const syncAccount = async (accountId: string) => {
         {
           date: i.date_start,
           channel: 'facebook',
-          accountId,
+          accountId: accountIdForStorage, // 统一格式：数据库存储时去掉前缀
           campaignId: i.campaign_id,
           adsetId: i.adset_id,
           adId: i.ad_id,

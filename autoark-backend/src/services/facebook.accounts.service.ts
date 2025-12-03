@@ -3,6 +3,7 @@ import FbToken from '../models/FbToken'
 import MetricsDaily from '../models/MetricsDaily'
 import { fetchUserAdAccounts } from './facebook.api'
 import logger from '../utils/logger'
+import { normalizeForStorage, getAccountIdsForQuery, normalizeFromQuery } from '../utils/accountId'
 
 export const syncAccountsFromTokens = async () => {
   const startTime = Date.now()
@@ -24,7 +25,7 @@ export const syncAccountsFromTokens = async () => {
         for (const acc of accounts) {
           const accountData = {
             channel: 'facebook',
-            accountId: acc.id.replace('act_', ''), // 统一格式，去掉前缀
+            accountId: normalizeForStorage(acc.id), // 统一格式：数据库存储时去掉前缀
             name: acc.name,
             currency: acc.currency,
             status: mapAccountStatus(acc.account_status),
@@ -109,11 +110,9 @@ export const getAccounts = async (filters: any = {}, pagination: { page: number,
         .limit(pagination.limit)
 
     // 获取所有账户ID，用于批量查询消耗数据
-    // 注意：Account 表中的 accountId 已经去掉了 "act_" 前缀
-    // 但 MetricsDaily 中可能存储的是带 "act_" 前缀的，需要同时查询两种格式
+    // 使用统一工具函数处理格式，兼容历史数据可能存在的格式不一致
     const accountIds = accounts.map(acc => acc.accountId)
-    const accountIdsWithPrefix = accountIds.map(id => `act_${id}`)
-    const allAccountIds = [...new Set([...accountIds, ...accountIdsWithPrefix])] // 合并去重
+    const allAccountIds = getAccountIdsForQuery(accountIds)
     
     // 计算日期范围内的消耗（如果提供了日期范围）
     let periodSpendMap: Record<string, number> = {}
@@ -140,8 +139,8 @@ export const getAccounts = async (filters: any = {}, pagination: { page: number,
         ])
         
         periodSpendData.forEach((item: any) => {
-            // 统一处理 accountId，去掉 "act_" 前缀以便匹配
-            const normalizedId = item._id?.replace(/^act_/, '') || item._id
+            // 统一处理 accountId，转换为数据库存储格式以便匹配
+            const normalizedId = normalizeFromQuery(item._id)
             periodSpendMap[normalizedId] = (periodSpendMap[normalizedId] || 0) + (item.spend || 0)
         })
     }
@@ -160,8 +159,8 @@ export const getAccounts = async (filters: any = {}, pagination: { page: number,
         ])
         
         totalSpendData.forEach((item: any) => {
-            // 统一处理 accountId，去掉 "act_" 前缀以便匹配
-            const normalizedId = item._id?.replace(/^act_/, '') || item._id
+            // 统一处理 accountId，转换为数据库存储格式以便匹配
+            const normalizedId = normalizeFromQuery(item._id)
             totalSpendMap[normalizedId] = (totalSpendMap[normalizedId] || 0) + (item.totalSpend || 0)
         })
     }

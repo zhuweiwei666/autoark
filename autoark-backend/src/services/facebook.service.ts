@@ -108,10 +108,14 @@ export const getInsightsDaily = async (
   dateRange?: { since: string; until: string },
 ) => {
   const startTime = Date.now()
+  // 统一格式：API 调用需要带 act_ 前缀
+  const { normalizeForApi, normalizeForStorage } = await import('../utils/accountId')
+  const accountIdForApi = normalizeForApi(accountId)
+  const accountIdForStorage = normalizeForStorage(accountId)
   logger.info(`[Facebook API] getInsightsDaily started for ${accountId}`)
   try {
     const token = await getFacebookAccessToken()
-    const url = `${FB_BASE_URL}/${FB_API_VERSION}/${accountId}/insights`
+    const url = `${FB_BASE_URL}/${FB_API_VERSION}/${accountIdForApi}/insights`
 
     // Requested fields
     const fields = [
@@ -191,7 +195,7 @@ export const getInsightsDaily = async (
       const record = {
         date: item.date_start, // YYYY-MM-DD
         channel: 'facebook',
-        accountId: accountId,
+        accountId: accountIdForStorage, // 统一格式：数据库存储时去掉前缀
         campaignId: item.campaign_id,
         adsetId: item.adset_id,
         adId: item.ad_id,

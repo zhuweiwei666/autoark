@@ -4,6 +4,7 @@ import MetricsDaily from '../models/MetricsDaily'
 import { fetchCampaigns, fetchInsights } from './facebook.api'
 import logger from '../utils/logger'
 import dayjs from 'dayjs'
+import { normalizeForApi, normalizeForStorage } from '../utils/accountId'
 
 export const syncCampaignsFromAdAccounts = async () => {
   const startTime = Date.now()
@@ -25,15 +26,15 @@ export const syncCampaignsFromAdAccounts = async () => {
 
       try {
         // 2. 拉取该账户下的所有广告系列
-        // Facebook API 要求 accountId 必须有 "act_" 前缀
-        const accountIdForApi = account.accountId.startsWith('act_') ? account.accountId : `act_${account.accountId}`
+        // 使用统一工具函数：Facebook API 调用需要带 act_ 前缀
+        const accountIdForApi = normalizeForApi(account.accountId)
         const campaigns = await fetchCampaigns(accountIdForApi, account.token)
         logger.info(`Found ${campaigns.length} campaigns for account ${account.accountId}`)
 
         for (const camp of campaigns) {
           const campaignData = {
             campaignId: camp.id,
-            accountId: account.accountId,
+            accountId: normalizeForStorage(account.accountId), // 统一格式：数据库存储时去掉前缀
             channel: 'facebook',
             name: camp.name,
             status: camp.status,
@@ -67,7 +68,7 @@ export const syncCampaignsFromAdAccounts = async () => {
               const metricsData = {
                 date: today,
                 channel: 'facebook',
-                accountId: account.accountId,
+                accountId: normalizeForStorage(account.accountId), // 统一格式：数据库存储时去掉前缀
                 campaignId: camp.id,
                 impressions: insight.impressions || 0,
                 clicks: insight.clicks || 0,
