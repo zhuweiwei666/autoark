@@ -1,5 +1,5 @@
-import { metricsService } from '../../analytics/metrics.service'
-import { executionService } from '../execution.service'
+import { metricsService } from '../analytics/metrics.service'
+import { executionService } from './execution.service'
 import { OptimizationPolicy, OptimizationContext } from './policies/basePolicy'
 import OptimizationState from '../../models/OptimizationState'
 import logger from '../../utils/logger'
