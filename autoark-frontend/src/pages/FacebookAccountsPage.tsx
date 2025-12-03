@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { getAccounts, syncAccounts, type FbAccount } from '../services/api'
+import DatePicker from '../components/DatePicker'
 
 export default function FacebookAccountsPage() {
   const [loading, setLoading] = useState(false)
@@ -205,21 +206,21 @@ export default function FacebookAccountsPage() {
         <section className="bg-white rounded-3xl p-6 shadow-lg shadow-black/5 border border-slate-200">
           <div className="grid grid-cols-1 md:grid-cols-4 lg:grid-cols-5 gap-4 items-end">
             <div className="group">
-              <label className="block text-xs font-semibold text-slate-700 mb-2">开始日期</label>
-              <input
-                type="date"
+              <label className="block text-xs font-medium text-slate-400 mb-2 group-focus-within:text-indigo-400 transition-colors">开始日期</label>
+              <DatePicker
                 value={filters.startDate}
-                onChange={e => setFilters({...filters, startDate: e.target.value})}
-                className="w-full px-4 py-3 bg-white border border-slate-300 rounded-2xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-400 focus:border-slate-400 transition-all shadow-sm"
+                onChange={(date) => setFilters({...filters, startDate: date})}
+                placeholder="选择开始日期"
+                className="w-full"
               />
             </div>
             <div className="group">
-              <label className="block text-xs font-semibold text-slate-700 mb-2">结束日期</label>
-              <input
-                type="date"
+              <label className="block text-xs font-medium text-slate-400 mb-2 group-focus-within:text-indigo-400 transition-colors">结束日期</label>
+              <DatePicker
                 value={filters.endDate}
-                onChange={e => setFilters({...filters, endDate: e.target.value})}
-                className="w-full px-4 py-3 bg-white border border-slate-300 rounded-2xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-400 focus:border-slate-400 transition-all shadow-sm"
+                onChange={(date) => setFilters({...filters, endDate: date})}
+                placeholder="选择结束日期"
+                className="w-full"
               />
             </div>
             <div className="group">
