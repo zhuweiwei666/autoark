@@ -33,27 +33,122 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getAccounts = exports.getInsightsDaily = exports.getAds = exports.getAdSets = exports.getCampaigns = exports.getAccountsList = exports.syncAccounts = exports.getCampaignsList = exports.syncCampaigns = void 0;
+exports.getAccounts = exports.getInsightsDaily = exports.getAds = exports.getAdSets = exports.getCampaigns = exports.getCountriesList = exports.getAccountsList = exports.syncAccounts = exports.getCampaignsList = exports.getPurchaseValueInfo = exports.getTokenPoolStatus = exports.diagnoseTokens = exports.getQueueStatus = exports.syncCampaigns = void 0;
 const facebookService = __importStar(require("../services/facebook.service"));
 const facebookAccountsService = __importStar(require("../services/facebook.accounts.service"));
 const facebookCampaignsService = __importStar(require("../services/facebook.campaigns.service"));
+const facebookCampaignsV2Service = __importStar(require("../services/facebook.campaigns.v2.service"));
+const facebookPermissionsService = __importStar(require("../services/facebook.permissions.service"));
+const facebookPurchaseCorrectionService = __importStar(require("../services/facebook.purchase.correction"));
+const facebook_token_pool_1 = require("../services/facebook.token.pool");
+const facebookCountriesService = __importStar(require("../services/facebook.countries.service"));
 const facebook_sync_service_1 = require("../services/facebook.sync.service");
 const syncCampaigns = async (req, res, next) => {
     try {
-        const result = await facebookCampaignsService.syncCampaignsFromAdAccounts();
-        res.json({
-            success: true,
-            message: 'Campaigns sync completed',
-            data: result,
-        });
+        // 使用新的队列系统（V2）
+        const useV2 = req.query.v2 === 'true' || process.env.USE_QUEUE_SYNC === 'true';
+        if (useV2) {
+            const result = await facebookCampaignsV2Service.syncCampaignsFromAdAccountsV2();
+            res.json({
+                success: true,
+                message: 'Campaigns sync queued (using BullMQ)',
+                data: result,
+            });
+        }
+        else {
+            // 旧版本（同步执行）
+            const result = await facebookCampaignsService.syncCampaignsFromAdAccounts();
+            res.json({
+                success: true,
+                message: 'Campaigns sync completed',
+                data: result,
+            });
+        }
     }
     catch (error) {
         next(error);
     }
 };
 exports.syncCampaigns = syncCampaigns;
+// 获取队列状态
+const getQueueStatus = async (req, res, next) => {
+    try {
+        const status = await facebookCampaignsV2Service.getQueueStatus();
+        res.json({
+            success: true,
+            data: status,
+        });
+    }
+    catch (error) {
+        next(error);
+    }
+};
+exports.getQueueStatus = getQueueStatus;
+// 诊断 Token 权限
+const diagnoseTokens = async (req, res, next) => {
+    try {
+        const { tokenId } = req.query;
+        if (tokenId) {
+            // 诊断单个 token
+            const result = await facebookPermissionsService.diagnoseToken(tokenId);
+            res.json({
+                success: true,
+                data: result,
+            });
+        }
+        else {
+            // 诊断所有 token
+            const results = await facebookPermissionsService.diagnoseAllTokens();
+            res.json({
+                success: true,
+                data: results,
+            });
+        }
+    }
+    catch (error) {
+        next(error);
+    }
+};
+exports.diagnoseTokens = diagnoseTokens;
+// 获取 Token Pool 状态
+const getTokenPoolStatus = async (req, res, next) => {
+    try {
+        const status = facebook_token_pool_1.tokenPool.getTokenStatus();
+        res.json({
+            success: true,
+            data: status,
+        });
+    }
+    catch (error) {
+        next(error);
+    }
+};
+exports.getTokenPoolStatus = getTokenPoolStatus;
+// 获取 Purchase 值信息（用于前端 Tooltip）
+const getPurchaseValueInfo = async (req, res, next) => {
+    try {
+        const { campaignId, date, country } = req.query;
+        if (!campaignId || !date) {
+            return res.status(400).json({
+                success: false,
+                message: 'campaignId and date are required',
+            });
+        }
+        const info = await facebookPurchaseCorrectionService.getPurchaseValueInfo(campaignId, date, country);
+        res.json({
+            success: true,
+            data: info,
+        });
+    }
+    catch (error) {
+        next(error);
+    }
+};
+exports.getPurchaseValueInfo = getPurchaseValueInfo;
 const getCampaignsList = async (req, res, next) => {
     try {
+        // 确保设置正确的 Content-Type
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 20;
         const sortBy = req.query.sortBy || 'createdAt';
@@ -95,6 +190,8 @@ const getAccountsList = async (req, res, next) => {
     try {
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 20;
+        const sortBy = req.query.sortBy || 'periodSpend';
+        const sortOrder = req.query.sortOrder || 'desc';
         const filters = {
             optimizer: req.query.optimizer,
             status: req.query.status,
@@ -103,7 +200,7 @@ const getAccountsList = async (req, res, next) => {
             startDate: req.query.startDate,
             endDate: req.query.endDate,
         };
-        const result = await facebookAccountsService.getAccounts(filters, { page, limit });
+        const result = await facebookAccountsService.getAccounts(filters, { page, limit, sortBy, sortOrder });
         res.json({
             success: true,
             ...result
@@ -114,6 +211,33 @@ const getAccountsList = async (req, res, next) => {
     }
 };
 exports.getAccountsList = getAccountsList;
+const getCountriesList = async (req, res, next) => {
+    try {
+        // 确保设置正确的 Content-Type
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 20;
+        const sortBy = req.query.sortBy || 'spend';
+        const sortOrder = req.query.sortOrder || 'desc';
+        const filters = {
+            name: req.query.name,
+            accountId: req.query.accountId,
+            status: req.query.status,
+            objective: req.query.objective,
+            startDate: req.query.startDate,
+            endDate: req.query.endDate,
+        };
+        const result = await facebookCountriesService.getCountries(filters, { page, limit, sortBy, sortOrder });
+        res.json({
+            success: true,
+            ...result
+        });
+    }
+    catch (error) {
+        next(error);
+    }
+};
+exports.getCountriesList = getCountriesList;
 const getCampaigns = async (req, res, next) => {
     try {
         const { id } = req.params;

@@ -44,6 +44,25 @@ router.post('/accounts/sync', facebookController.syncAccounts); // New: Trigger 
 // Campaign management
 router.get('/campaigns-list', facebookController.getCampaignsList); // New: Campaign management list
 router.post('/campaigns/sync', facebookController.syncCampaigns); // New: Trigger sync
+router.get('/queue/status', facebookController.getQueueStatus); // New: Get queue status
+router.get('/diagnose', facebookController.diagnoseTokens); // New: Diagnose token permissions
+router.get('/token-pool/status', facebookController.getTokenPoolStatus); // New: Get token pool status
+router.get('/purchase-value-info', facebookController.getPurchaseValueInfo); // New: Get purchase value info for tooltip
+// Pixel routes
+const pixelsController = __importStar(require("../controllers/facebook.pixels.controller"));
+router.get('/pixels', pixelsController.getPixels); // Get all pixels
+router.get('/pixels/:id', pixelsController.getPixelDetails); // Get pixel details
+router.get('/pixels/:id/events', pixelsController.getPixelEvents); // Get pixel events
+// OAuth routes
+const oauthController = __importStar(require("../controllers/facebook.oauth.controller"));
+router.get('/oauth/login-url', oauthController.getLoginUrl); // Get Facebook login URL
+router.get('/oauth/callback', oauthController.handleCallback); // OAuth callback handler
+router.get('/oauth/config', oauthController.getOAuthConfig); // Get OAuth config status
+// AI routes
+const aiController = __importStar(require("../controllers/ai.controller"));
+router.post('/campaigns/:campaignId/ai-suggestion', aiController.generateAiSuggestion); // Generate suggestion
+router.get('/ai-suggestions', aiController.getAiSuggestions); // Get history
+router.post('/ai-suggestions/:id/apply', aiController.applyAiSuggestion); // Apply suggestion
 router.get('/accounts/:id/campaigns', facebookController.getCampaigns);
 router.get('/accounts/:id/adsets', facebookController.getAdSets);
 router.get('/accounts/:id/ads', facebookController.getAds);

@@ -32,12 +32,20 @@ const bindToken = async (req, res, next) => {
             });
         }
         // 保存或更新 token
+        // 使用 fbUserId 作为唯一标识，因为每个 Facebook 用户应该只有一个 token
+        const fbUserId = validation.fbUser?.id;
+        if (!fbUserId) {
+            return res.status(400).json({
+                success: false,
+                message: 'Failed to get Facebook user ID from token',
+            });
+        }
         const tokenData = {
             userId,
             token,
             status: 'active',
             lastCheckedAt: new Date(),
-            fbUserId: validation.fbUser?.id,
+            fbUserId: fbUserId,
             fbUserName: validation.fbUser?.name,
         };
         if (optimizer) {
@@ -46,7 +54,9 @@ const bindToken = async (req, res, next) => {
         if (validation.expiresAt) {
             tokenData.expiresAt = validation.expiresAt;
         }
-        const savedToken = await FbToken_1.default.findOneAndUpdate({ userId }, tokenData, { new: true, upsert: true });
+        // 使用 fbUserId 作为唯一标识，而不是 userId
+        // 这样同一个 Facebook 用户只能有一个 token，但不同的 Facebook 用户可以有多个 token
+        const savedToken = await FbToken_1.default.findOneAndUpdate({ fbUserId: fbUserId }, tokenData, { new: true, upsert: true });
         logger_1.default.info(`[Token Bind] Token saved successfully for user: ${userId}`);
         return res.json({
             success: true,

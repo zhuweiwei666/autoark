@@ -195,9 +195,16 @@ async function getCoreMetrics(startDate, endDate) {
     const yesterday = startDate ? new Date(new Date(startDate).getTime() - 24 * 60 * 60 * 1000).toISOString().split('T')[0] : new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().split('T')[0];
     const sevenDaysAgo = startDate || new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
     // 优化：合并查询，一次性获取所有需要的数据
+    // 重要：只统计 campaign 级别的数据（campaignId 存在），确保与广告系列页面数据一致
+    // 这样可以避免重复计算 ad 级别和 adset 级别的数据
     const [todayData, yesterdayData, sevenDaysData] = await Promise.all([
         models_1.MetricsDaily.aggregate([
-            { $match: { date: today } },
+            {
+                $match: {
+                    date: today,
+                    campaignId: { $exists: true, $ne: null } // 只统计 campaign 级别的数据
+                }
+            },
             {
                 $group: {
                     _id: null,
@@ -210,7 +217,12 @@ async function getCoreMetrics(startDate, endDate) {
             },
         ]),
         models_1.MetricsDaily.aggregate([
-            { $match: { date: yesterday } },
+            {
+                $match: {
+                    date: yesterday,
+                    campaignId: { $exists: true, $ne: null } // 只统计 campaign 级别的数据
+                }
+            },
             {
                 $group: {
                     _id: null,
@@ -223,7 +235,12 @@ async function getCoreMetrics(startDate, endDate) {
             },
         ]),
         models_1.MetricsDaily.aggregate([
-            { $match: { date: { $gte: sevenDaysAgo, $lte: today } } },
+            {
+                $match: {
+                    date: { $gte: sevenDaysAgo, $lte: today },
+                    campaignId: { $exists: true, $ne: null } // 只统计 campaign 级别的数据
+                }
+            },
             {
                 $group: {
                     _id: null,
@@ -278,8 +295,14 @@ async function getCoreMetrics(startDate, endDate) {
 async function getTodaySpendTrend(startDate, endDate) {
     const today = endDate || new Date().toISOString().split('T')[0];
     const sevenDaysAgo = startDate || new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    // 只统计 campaign 级别的数据，确保与广告系列页面数据一致
     const data = await models_1.MetricsDaily.aggregate([
-        { $match: { date: { $gte: sevenDaysAgo, $lte: today } } },
+        {
+            $match: {
+                date: { $gte: sevenDaysAgo, $lte: today },
+                campaignId: { $exists: true, $ne: null } // 只统计 campaign 级别的数据
+            }
+        },
         {
             $group: {
                 _id: '$date',
@@ -386,8 +409,14 @@ async function getCountrySpendRanking(limit = 10, startDate, endDate) {
     // 注意：MetricsDaily 中没有 country 字段，需要从 Campaign 或其他地方获取
     // 这里先返回按 accountId 分组的数据，后续可以扩展
     // 优化：先聚合和排序，再 lookup，减少 lookup 的数据量
+    // 重要：只统计 campaign 级别的数据，确保与广告系列页面数据一致
     const data = await models_1.MetricsDaily.aggregate([
-        { $match: { date: { $gte: sevenDaysAgo, $lte: today } } },
+        {
+            $match: {
+                date: { $gte: sevenDaysAgo, $lte: today },
+                campaignId: { $exists: true, $ne: null } // 只统计 campaign 级别的数据
+            }
+        },
         {
             $group: {
                 _id: '$accountId',
@@ -401,9 +430,21 @@ async function getCountrySpendRanking(limit = 10, startDate, endDate) {
         { $sort: { spend: -1 } },
         { $limit: limit },
         {
+            $addFields: {
+                // 统一处理 accountId：去掉 act_ 前缀以便匹配 Account 表
+                normalizedAccountId: {
+                    $cond: {
+                        if: { $eq: [{ $substr: ['$_id', 0, 4] }, 'act_'] },
+                        then: { $substr: ['$_id', 4, -1] },
+                        else: '$_id',
+                    },
+                },
+            },
+        },
+        {
             $lookup: {
                 from: 'accounts',
-                localField: '_id',
+                localField: 'normalizedAccountId',
                 foreignField: 'accountId',
                 as: 'account',
             },

@@ -21,9 +21,26 @@ const errorHandler_1 = require("./middlewares/errorHandler");
 dotenv_1.default.config();
 // Connect to DB
 (0, db_1.default)();
+// Initialize Redis
+const redis_1 = require("./config/redis");
+(0, redis_1.initRedis)();
+// Initialize Token Pool
+const facebook_token_pool_1 = require("./services/facebook.token.pool");
+facebook_token_pool_1.tokenPool.initialize().catch((error) => {
+    logger_1.default.error('[App] Failed to initialize token pool:', error);
+});
+// Initialize Queues and Workers
+const facebook_queue_1 = require("./queue/facebook.queue");
+const facebook_worker_1 = require("./queue/facebook.worker");
+(0, facebook_queue_1.initQueues)();
+(0, facebook_worker_1.initWorkers)();
 // Initialize Crons
+const preaggregation_cron_1 = __importDefault(require("./cron/preaggregation.cron"));
+const aggregation_cron_1 = __importDefault(require("./cron/aggregation.cron"));
 (0, cron_1.default)();
 (0, sync_cron_1.default)();
+(0, preaggregation_cron_1.default)();
+(0, aggregation_cron_1.default)(); // 数据聚合定时任务
 (0, tokenValidation_cron_1.default)(); // Token validation cron (每小时检查一次)
 const app = (0, express_1.default)();
 app.use((0, cors_1.default)());
@@ -44,8 +61,8 @@ app.use('/api/facebook', facebook_sync_routes_1.default);
 app.use('/api/dashboard', dashboard_routes_1.default);
 app.use('/api/fb-token', fbToken_routes_1.default); // Facebook token management
 app.use('/api/user-settings', user_settings_routes_1.default); // New: User settings management
-// Dashboard UI (accessible at /dashboard)
-app.use('/dashboard', dashboard_routes_1.default);
+// Dashboard UI 已迁移到 React 前端，不再需要后端路由
+// app.use('/dashboard', dashboardRoutes) // 已禁用，让前端 React Router 处理
 // Serve frontend static files (if dist directory exists)
 // Try multiple possible paths for frontend dist
 const fs = require('fs');
@@ -65,15 +82,34 @@ for (const possiblePath of possiblePaths) {
 if (frontendDistPath) {
     logger_1.default.info(`Frontend static files served from: ${frontendDistPath}`);
     // Explicitly serve assets directory to ensure CSS/JS loading
-    app.use('/assets', express_1.default.static(path_1.default.join(frontendDistPath, 'assets')));
-    // Serve root static files (favicon, etc.)
-    app.use(express_1.default.static(frontendDistPath));
+    // Serve static assets with no-cache headers to prevent browser caching issues
+    app.use('/assets', express_1.default.static(path_1.default.join(frontendDistPath, 'assets'), {
+        setHeaders: (res, path) => {
+            // For JS and CSS files, set no-cache to ensure fresh content
+            if (path.endsWith('.js') || path.endsWith('.css')) {
+                res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+                res.setHeader('Pragma', 'no-cache');
+                res.setHeader('Expires', '0');
+            }
+        }
+    }));
+    // Serve root static files (favicon, etc.) with no-cache for HTML
+    app.use(express_1.default.static(frontendDistPath, {
+        setHeaders: (res, path) => {
+            // For HTML files, set no-cache to ensure fresh content
+            if (path.endsWith('.html')) {
+                res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+                res.setHeader('Pragma', 'no-cache');
+                res.setHeader('Expires', '0');
+            }
+        }
+    }));
     // Fallback to index.html for client-side routing (React Router)
     // This must be before 404 handler but after all API routes
     // Use app.use instead of app.get('*') for Express 5.x compatibility
     app.use((req, res, next) => {
-        // Skip API routes and dashboard route - let them be handled by their routes or 404
-        if (req.path.startsWith('/api') || req.path.startsWith('/dashboard')) {
+        // Skip API routes only - let frontend handle all other routes including /dashboard
+        if (req.path.startsWith('/api')) {
             return next();
         }
         // Skip if it's a static file request (likely 404 if we reached here)
@@ -81,7 +117,7 @@ if (frontendDistPath) {
         if (req.path.includes('.') && !req.path.endsWith('.html')) {
             return next();
         }
-        // For all other routes, serve the React app (for client-side routing)
+        // For all other routes (including /dashboard), serve the React app (for client-side routing)
         const indexPath = path_1.default.join(frontendDistPath, 'index.html');
         res.sendFile(indexPath, (err) => {
             if (err) {

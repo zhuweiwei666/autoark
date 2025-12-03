@@ -1,10 +1,9 @@
-import OpenAI from 'openai'
+import { GoogleGenerativeAI, GenerativeModel } from '@google/generative-ai'
 import logger from '../../utils/logger'
 import { EntitySummaryDTO } from '../analytics/metrics.service'
 
 const LLM_API_KEY = process.env.LLM_API_KEY
-const LLM_BASE_URL = process.env.LLM_BASE_URL || 'https://api.openai.com/v1' // 可配置为 DeepSeek 等
-const LLM_MODEL = process.env.LLM_MODEL || 'gpt-3.5-turbo'
+const LLM_MODEL = process.env.LLM_MODEL || 'gemini-pro'
 
 export interface AiSuggestion {
   analysis: string // 简短分析
@@ -15,14 +14,12 @@ export interface AiSuggestion {
 }
 
 class AiService {
-  private client: OpenAI | null = null
+  private model: GenerativeModel | null = null
 
   constructor() {
     if (LLM_API_KEY) {
-      this.client = new OpenAI({
-        apiKey: LLM_API_KEY,
-        baseURL: LLM_BASE_URL,
-      })
+      const genAI = new GoogleGenerativeAI(LLM_API_KEY)
+      this.model = genAI.getGenerativeModel({ model: LLM_MODEL })
     } else {
       logger.warn('[AiService] LLM_API_KEY not found, AI features will be disabled/mocked.')
     }
@@ -36,7 +33,7 @@ class AiService {
     currentBudget: number,
     targetRoas: number
   ): Promise<AiSuggestion> {
-    if (!this.client) {
+    if (!this.model) {
       // Mock response if no API key
       return this.mockAnalysis(summary)
     }
@@ -44,16 +41,9 @@ class AiService {
     try {
       const prompt = this.buildPrompt(summary, currentBudget, targetRoas)
       
-      const completion = await this.client.chat.completions.create({
-        model: LLM_MODEL,
-        messages: [
-          { role: 'system', content: '你是一个专业的 Facebook 广告投放专家。请根据提供的数据进行分析并给出优化建议。请只返回 JSON 格式结果。' },
-          { role: 'user', content: prompt }
-        ],
-        temperature: 0.7,
-      })
-
-      const content = completion.choices[0]?.message?.content
+      const result = await this.model.generateContent(prompt)
+      const response = await result.response
+      const content = response.text()
       if (!content) throw new Error('No content from LLM')
 
       // 简单的 JSON 解析 (实际生产中可能需要更强的容错)

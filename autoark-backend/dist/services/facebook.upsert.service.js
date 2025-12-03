@@ -1,0 +1,142 @@
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.upsertService = void 0;
+const MetricsDaily_1 = __importDefault(require("../models/MetricsDaily"));
+const RawInsights_1 = __importDefault(require("../models/RawInsights"));
+const OptimizationState_1 = __importDefault(require("../models/OptimizationState"));
+const logger_1 = __importDefault(require("../utils/logger"));
+class UpsertService {
+    /**
+     * 幂等更新 MetricsDaily
+     */
+    async upsertMetricsDaily(doc) {
+        try {
+            // 构建查询条件 (Unique Key)
+            const filter = {
+                date: doc.date,
+                entityId: doc.entityId, // 统一使用 entityId 字段查询 (需要在 Schema 中支持或映射)
+                level: doc.level
+            };
+            // 如果有 breakdown (如 country)，也要加入 key
+            if (doc.country) {
+                filter.country = doc.country;
+            }
+            else {
+                filter.country = null;
+            }
+            // 构建更新内容
+            const update = {
+                $set: {
+                    channel: doc.channel || 'facebook',
+                    accountId: doc.accountId,
+                    campaignId: doc.campaignId,
+                    adsetId: doc.adsetId,
+                    adId: doc.adId,
+                    spendUsd: doc.spend, // 注意字段名映射 spend -> spendUsd
+                    impressions: doc.impressions,
+                    clicks: doc.clicks,
+                    purchase_value: doc.purchase_value,
+                    purchase_roas: doc.roas,
+                    cpc: doc.cpc,
+                    ctr: doc.ctr,
+                    cpm: doc.cpm,
+                    installs: doc.installs,
+                    conversions: doc.conversions,
+                    actions: doc.actions,
+                    action_values: doc.action_values,
+                    mobile_app_install_count: doc.mobile_app_install_count,
+                    raw: doc.raw,
+                    updatedAt: new Date(),
+                },
+                $setOnInsert: {
+                    createdAt: new Date(),
+                }
+            };
+            // 如果有修正数据，加入 $set
+            if (doc.purchase_value_corrected !== undefined) {
+                update.$set.purchase_value_corrected = doc.purchase_value_corrected;
+                update.$set.purchase_value_last7d = doc.purchase_value_last7d;
+                update.$set.purchase_correction_applied = doc.purchase_correction_applied;
+                update.$set.purchase_correction_date = doc.purchase_correction_date;
+            }
+            await MetricsDaily_1.default.updateOne(filter, update, { upsert: true });
+        }
+        catch (error) {
+            logger_1.default.error(`[UpsertService] Failed to upsert metrics for ${doc.entityId}:`, error);
+            throw error;
+        }
+    }
+    /**
+     * 幂等更新 RawInsights
+     */
+    async upsertRawInsights(doc) {
+        try {
+            const filter = {
+                adId: doc.adId,
+                date: doc.date,
+                datePreset: doc.datePreset,
+                country: doc.country || null
+            };
+            const update = {
+                $set: {
+                    raw: doc.raw,
+                    accountId: doc.accountId,
+                    campaignId: doc.campaignId,
+                    adsetId: doc.adsetId,
+                    spend: doc.spend,
+                    impressions: doc.impressions,
+                    clicks: doc.clicks,
+                    purchase_value: doc.purchase_value,
+                    syncedAt: doc.syncedAt || new Date(),
+                    tokenId: doc.tokenId,
+                    updatedAt: new Date()
+                },
+                $setOnInsert: {
+                    channel: 'facebook',
+                    createdAt: new Date()
+                }
+            };
+            await RawInsights_1.default.updateOne(filter, update, { upsert: true });
+        }
+        catch (error) {
+            logger_1.default.error(`[UpsertService] Failed to upsert raw insights for ${doc.adId}:`, error);
+            throw error;
+        }
+    }
+    /**
+     * 幂等更新 OptimizationState
+     */
+    async upsertOptimizationState(doc) {
+        try {
+            const filter = {
+                entityType: doc.entityType,
+                entityId: doc.entityId
+            };
+            const update = {
+                $set: {
+                    accountId: doc.accountId,
+                    currentBudget: doc.currentBudget,
+                    targetRoas: doc.targetRoas,
+                    status: doc.status,
+                    bidAmount: doc.bidAmount,
+                    lastAction: doc.lastAction,
+                    lastActionTime: doc.lastActionTime,
+                    lastCheckTime: doc.lastCheckTime || new Date(),
+                    updatedAt: new Date()
+                },
+                $setOnInsert: {
+                    createdAt: new Date()
+                }
+            };
+            await OptimizationState_1.default.updateOne(filter, update, { upsert: true });
+        }
+        catch (error) {
+            logger_1.default.error(`[UpsertService] Failed to upsert optimization state for ${doc.entityId}:`, error);
+            throw error;
+        }
+    }
+}
+exports.upsertService = new UpsertService();

@@ -1,4 +1,37 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -108,10 +141,14 @@ exports.getAds = getAds;
  */
 const getInsightsDaily = async (accountId, dateRange) => {
     const startTime = Date.now();
+    // 统一格式：API 调用需要带 act_ 前缀
+    const { normalizeForApi, normalizeForStorage } = await Promise.resolve().then(() => __importStar(require('../utils/accountId')));
+    const accountIdForApi = normalizeForApi(accountId);
+    const accountIdForStorage = normalizeForStorage(accountId);
     logger_1.default.info(`[Facebook API] getInsightsDaily started for ${accountId}`);
     try {
         const token = await (0, fbToken_1.getFacebookAccessToken)();
-        const url = `${FB_BASE_URL}/${FB_API_VERSION}/${accountId}/insights`;
+        const url = `${FB_BASE_URL}/${FB_API_VERSION}/${accountIdForApi}/insights`;
         // Requested fields
         const fields = [
             'campaign_id',
@@ -170,7 +207,7 @@ const getInsightsDaily = async (accountId, dateRange) => {
             const record = {
                 date: item.date_start, // YYYY-MM-DD
                 channel: 'facebook',
-                accountId: accountId,
+                accountId: accountIdForStorage, // 统一格式：数据库存储时去掉前缀
                 campaignId: item.campaign_id,
                 adsetId: item.adset_id,
                 adId: item.ad_id,

@@ -16,6 +16,7 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@google/generative-ai": "^0.24.1",
     "@types/node-cron": "^3.0.11",
     "axios": "^1.13.2",
     "bullmq": "^5.30.0",
@@ -26,7 +27,6 @@
     "ioredis": "^5.8.2",
     "mongoose": "^9.0.0",
     "node-cron": "^4.2.1",
-    "openai": "^6.9.1",
     "winston": "^3.15.0",
     "winston-daily-rotate-file": "^5.0.0"
   },

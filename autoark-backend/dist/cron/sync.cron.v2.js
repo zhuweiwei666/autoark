@@ -32,25 +32,33 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
-const express_1 = require("express");
-const dashboardController = __importStar(require("../controllers/dashboard.controller"));
-const router = (0, express_1.Router)();
-// Analytics
-router.get('/daily', dashboardController.getDaily);
-router.get('/by-country', dashboardController.getByCountry);
-router.get('/by-adset', dashboardController.getByAdSet);
-// API: /dashboard/api/xxx (mounted at /dashboard in app.ts, so /api/health becomes /dashboard/api/health)
-router.get('/api/health', dashboardController.getSystemHealthHandler);
-router.get('/api/facebook-overview', dashboardController.getFacebookOverviewHandler);
-router.get('/api/cron-logs', dashboardController.getCronLogsHandler);
-router.get('/api/ops-logs', dashboardController.getOpsLogsHandler);
-// 数据看板 V1 API
-router.get('/api/core-metrics', dashboardController.getCoreMetricsHandler);
-router.get('/api/today-spend-trend', dashboardController.getTodaySpendTrendHandler);
-router.get('/api/campaign-spend-ranking', dashboardController.getCampaignSpendRankingHandler);
-router.get('/api/country-spend-ranking', dashboardController.getCountrySpendRankingHandler);
-// Dashboard UI 已迁移到 React 前端，不再需要后端返回 HTML
-// 所有 /dashboard 路由现在由前端 React Router 处理
-// 只保留 API 路由，UI 路由已删除
-exports.default = router;
+const node_cron_1 = __importDefault(require("node-cron"));
+const facebookCampaignsV2Service = __importStar(require("../services/facebook.campaigns.v2.service"));
+const logger_1 = __importDefault(require("../utils/logger"));
+/**
+ * 新版本的同步 Cron
+ * 使用 BullMQ 队列 + 并发 Worker
+ */
+const initSyncCronV2 = () => {
+    const interval = process.env.CRON_SYNC_INTERVAL || '10'; // Default 10 mins
+    const schedule = `*/${interval} * * * *`;
+    logger_1.default.info(`[Sync Cron V2] Initializing with schedule: ${schedule}`);
+    node_cron_1.default.schedule(schedule, async () => {
+        const startTime = Date.now();
+        logger_1.default.cron(`[Sync Cron V2] Triggering Facebook Sync via Queue`);
+        try {
+            const result = await facebookCampaignsV2Service.syncCampaignsFromAdAccountsV2();
+            const duration = Date.now() - startTime;
+            logger_1.default.cron(`[Sync Cron V2] Queued ${result.jobsQueued} jobs - ${duration}ms`);
+        }
+        catch (error) {
+            const duration = Date.now() - startTime;
+            logger_1.default.cronError(`[Sync Cron V2] Failed - ${duration}ms`, error);
+        }
+    });
+};
+exports.default = initSyncCronV2;

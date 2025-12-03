@@ -1,11 +1,9 @@
+import { GoogleGenerativeAI, GenerativeModel } from '@google/generative-ai'
 import { EntitySummaryDTO } from '../../analytics/metrics.service'
-import OpenAI from 'openai'
 import logger from '../../../utils/logger'
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-  baseURL: process.env.OPENAI_BASE_URL // 支持自定义 endpoint
-})
+const LLM_API_KEY = process.env.LLM_API_KEY
+const LLM_MODEL = process.env.LLM_MODEL || 'gemini-pro'
 
 export interface AiSuggestion {
   campaignId: string
@@ -24,6 +22,16 @@ export interface AiSuggestion {
  * 负责分析数据并给出策略参数建议，不直接操作广告
  */
 class LlmPolicyAdvisor {
+  private model: GenerativeModel | null = null
+
+  constructor() {
+    if (LLM_API_KEY) {
+      const genAI = new GoogleGenerativeAI(LLM_API_KEY)
+      this.model = genAI.getGenerativeModel({ model: LLM_MODEL })
+    } else {
+      logger.warn('[AI Advisor] LLM_API_KEY not configured, AI suggestions will be mocked.')
+    }
+  }
   
   /**
    * 获取 Campaign 优化建议
@@ -32,47 +40,35 @@ class LlmPolicyAdvisor {
     summary: EntitySummaryDTO,
     currentConfig: { targetRoas: number; currentBudget: number }
   ): Promise<AiSuggestion> {
-    try {
-      if (!process.env.OPENAI_API_KEY) {
-        throw new Error('OPENAI_API_KEY not configured')
-      }
+    if (!this.model) {
+      return this.fallbackSuggestion(summary, 'LLM disabled')
+    }
 
+    try {
       // 构建 Prompt
       const prompt = this.buildPrompt(summary, currentConfig)
 
-      // 调用 LLM
-      const completion = await openai.chat.completions.create({
-        model: 'gpt-4-turbo-preview', // 或 gpt-3.5-turbo
-        messages: [
-          { role: 'system', content: this.getSystemPrompt() },
-          { role: 'user', content: prompt }
-        ],
-        response_format: { type: 'json_object' },
-        temperature: 0.3, // 低温度，保证输出稳定
-      })
-
-      const content = completion.choices[0].message.content
+      const result = await this.model.generateContent(prompt)
+      const response = await result.response
+      const content = response.text()
       if (!content) throw new Error('LLM returned empty response')
 
-      const result = JSON.parse(content)
+      const jsonMatch = content.match(/\{[\s\S]*\}/)
+      if (!jsonMatch) throw new Error('Failed to parse JSON from LLM response')
+
+      const parsed = JSON.parse(jsonMatch[0])
       
       return {
         campaignId: summary.entityId,
-        analysis: result.analysis,
-        strategy: result.strategy,
-        parameterUpdates: result.parameterUpdates,
-        reasoning: result.reasoning
+        analysis: parsed.analysis,
+        strategy: parsed.strategy,
+        parameterUpdates: parsed.parameterUpdates,
+        reasoning: parsed.reasoning
       }
 
     } catch (error: any) {
       logger.error(`[AI Advisor] Failed to get advice for ${summary.entityId}:`, error)
-      // 降级返回
-      return {
-        campaignId: summary.entityId,
-        analysis: 'AI分析暂时不可用',
-        strategy: 'OBSERVE',
-        reasoning: `Error: ${error.message}`
-      }
+      return this.fallbackSuggestion(summary, error.message)
     }
   }
 
@@ -95,7 +91,8 @@ class LlmPolicyAdvisor {
   }
 
   private buildPrompt(summary: EntitySummaryDTO, config: { targetRoas: number; currentBudget: number }) {
-    return `
+    return `${this.getSystemPrompt()}
+
 分析对象: Campaign ${summary.entityId}
 当前配置:
 - 预算: $${config.currentBudget}
@@ -114,8 +111,16 @@ ${summary.last7DaysData.map(d =>
   `- ${d.date}: Spend $${d.spendUsd}, ROAS ${d.purchase_roas || 0}`
 ).join('\n')}
 
-请根据以上数据给出优化建议。
-`
+请严格输出 JSON，字段结构参考说明。`
+  }
+
+  private fallbackSuggestion(summary: EntitySummaryDTO, reason: string): AiSuggestion {
+    return {
+      campaignId: summary.entityId,
+      analysis: 'AI分析暂时不可用',
+      strategy: 'OBSERVE',
+      reasoning: `Fallback triggered: ${reason}`
+    }
   }
 }
 

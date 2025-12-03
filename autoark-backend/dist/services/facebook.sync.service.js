@@ -40,6 +40,7 @@ exports.runFullSync = exports.syncAccount = exports.getEffectiveAdAccounts = voi
 const fbApi = __importStar(require("./facebook.api"));
 const models_1 = require("../models");
 const logger_1 = __importDefault(require("../utils/logger"));
+const accountId_1 = require("../utils/accountId");
 // 1. Get Effective Accounts
 const getEffectiveAdAccounts = async () => {
     // Priority: Env Array > Env Single > Auto-discover
@@ -77,14 +78,17 @@ const writeToMongo = async (model, filter, data) => {
 // 7. Sync Single Account
 const syncAccount = async (accountId) => {
     logger_1.default.info(`Syncing Account: ${accountId}`);
+    // 统一格式：API 调用需要带 act_ 前缀
+    const accountIdForApi = (0, accountId_1.normalizeForApi)(accountId);
+    const accountIdForStorage = (0, accountId_1.normalizeForStorage)(accountId);
     // 1. Campaigns
     try {
-        const campaigns = await fbApi.fetchCampaigns(accountId);
+        const campaigns = await fbApi.fetchCampaigns(accountIdForApi);
         logger_1.default.info(`Syncing ${campaigns.length} campaigns for ${accountId}`);
         for (const c of campaigns) {
             await writeToMongo(models_1.Campaign, { campaignId: c.id }, {
                 campaignId: c.id,
-                accountId,
+                accountId: accountIdForStorage, // 统一格式：数据库存储时去掉前缀
                 name: c.name,
                 status: c.status,
                 objective: c.objective,
@@ -99,12 +103,12 @@ const syncAccount = async (accountId) => {
     }
     // 2. AdSets
     try {
-        const adsets = await fbApi.fetchAdSets(accountId);
+        const adsets = await fbApi.fetchAdSets(accountIdForApi);
         logger_1.default.info(`Syncing ${adsets.length} adsets for ${accountId}`);
         for (const a of adsets) {
             await writeToMongo(models_1.AdSet, { adsetId: a.id }, {
                 adsetId: a.id,
-                accountId,
+                accountId: accountIdForStorage, // 统一格式：数据库存储时去掉前缀
                 campaignId: a.campaign_id,
                 name: a.name,
                 status: a.status,
@@ -121,12 +125,12 @@ const syncAccount = async (accountId) => {
     }
     // 3. Ads
     try {
-        const ads = await fbApi.fetchAds(accountId);
+        const ads = await fbApi.fetchAds(accountIdForApi);
         logger_1.default.info(`Syncing ${ads.length} ads for ${accountId}`);
         for (const a of ads) {
             await writeToMongo(models_1.Ad, { adId: a.id }, {
                 adId: a.id,
-                accountId,
+                accountId: accountIdForStorage, // 统一格式：数据库存储时去掉前缀
                 adsetId: a.adset_id,
                 campaignId: a.campaign_id,
                 name: a.name,
@@ -143,7 +147,7 @@ const syncAccount = async (accountId) => {
     }
     // 4. Creatives (Optional but good to have)
     try {
-        const creatives = await fbApi.fetchCreatives(accountId);
+        const creatives = await fbApi.fetchCreatives(accountIdForApi);
         logger_1.default.info(`Syncing ${creatives.length} creatives for ${accountId}`);
         for (const c of creatives) {
             await writeToMongo(models_1.Creative, { creativeId: c.id }, {
@@ -160,7 +164,7 @@ const syncAccount = async (accountId) => {
     }
     // 5. Insights (Daily)
     try {
-        const insights = await fbApi.fetchInsights(accountId, 'account', 'today'); // or 'yesterday'
+        const insights = await fbApi.fetchInsights(accountIdForApi, 'account', 'today'); // or 'yesterday'
         logger_1.default.info(`Syncing ${insights.length} insight records for ${accountId}`);
         for (const i of insights) {
             const spendUsd = parseFloat(i.spend || '0');
@@ -173,7 +177,7 @@ const syncAccount = async (accountId) => {
             await writeToMongo(models_1.MetricsDaily, { adId: i.ad_id, date: i.date_start }, {
                 date: i.date_start,
                 channel: 'facebook',
-                accountId,
+                accountId: accountIdForStorage, // 统一格式：数据库存储时去掉前缀
                 campaignId: i.campaign_id,
                 adsetId: i.adset_id,
                 adId: i.ad_id,
