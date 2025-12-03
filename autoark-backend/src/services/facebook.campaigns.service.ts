@@ -243,52 +243,52 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
             }
             
             if (filters.startDate || filters.endDate) {
-            // 有日期范围：使用优化的聚合查询
-            const dateQuery: any = {
-                campaignId: { $in: campaignIds }
-            }
-            if (filters.startDate) {
-                dateQuery.date = { $gte: filters.startDate }
-            }
-            if (filters.endDate) {
-                if (dateQuery.date) {
-                    dateQuery.date.$lte = filters.endDate
-                } else {
-                    dateQuery.date = { $lte: filters.endDate }
+                // 有日期范围：使用优化的聚合查询
+                const dateQuery: any = {
+                    campaignId: { $in: campaignIds }
                 }
-            }
-            
+                if (filters.startDate) {
+                    dateQuery.date = { $gte: filters.startDate }
+                }
+                if (filters.endDate) {
+                    if (dateQuery.date) {
+                        dateQuery.date.$lte = filters.endDate
+                    } else {
+                        dateQuery.date = { $lte: filters.endDate }
+                    }
+                }
+                
                 // 优化：直接按 campaignId 聚合，不需要先按日期分组
                 // 因为每个 campaignId + date 组合在 MetricsDaily 中已经是唯一的（有唯一索引）
                 metricsData = await MetricsDailyRead.aggregate([
-                { 
-                    $match: dateQuery,
-                    // 使用索引提示：优先使用 { campaignId: 1, date: 1 } 复合索引
-                },
-                {
-                    $sort: { date: -1 } // 按日期降序排序，确保 $last 获取最新的数据
-                },
-                {
-                    $group: {
-                        _id: '$campaignId',
-                        spendUsd: { $sum: '$spendUsd' },
-                        impressions: { $sum: '$impressions' },
-                        clicks: { $sum: '$clicks' },
-                        // 对于平均值，需要加权平均或简单平均（根据业务需求）
-                        cpc: { $avg: '$cpc' },
-                        ctr: { $avg: '$ctr' },
-                        cpm: { $avg: '$cpm' },
-                        // 取最新的 actions 和 action_values（按日期排序后）
-                        actions: { $first: '$actions' }, // 因为已经按日期降序排序，$first 就是最新的
-                        action_values: { $first: '$action_values' },
-                        purchase_roas: { $first: '$purchase_roas' },
-                        raw: { $first: '$raw' }
+                    { 
+                        $match: dateQuery,
+                        // 使用索引提示：优先使用 { campaignId: 1, date: 1 } 复合索引
+                    },
+                    {
+                        $sort: { date: -1 } // 按日期降序排序，确保 $last 获取最新的数据
+                    },
+                    {
+                        $group: {
+                            _id: '$campaignId',
+                            spendUsd: { $sum: '$spendUsd' },
+                            impressions: { $sum: '$impressions' },
+                            clicks: { $sum: '$clicks' },
+                            // 对于平均值，需要加权平均或简单平均（根据业务需求）
+                            cpc: { $avg: '$cpc' },
+                            ctr: { $avg: '$ctr' },
+                            cpm: { $avg: '$cpm' },
+                            // 取最新的 actions 和 action_values（按日期排序后）
+                            actions: { $first: '$actions' }, // 因为已经按日期降序排序，$first 就是最新的
+                            action_values: { $first: '$action_values' },
+                            purchase_roas: { $first: '$purchase_roas' },
+                            raw: { $first: '$raw' }
+                        }
                     }
-                }
-            ])
-            .hint({ campaignId: 1, date: 1 }) // 强制使用复合索引
-            .allowDiskUse(true)
-        } else {
+                ])
+                .hint({ campaignId: 1, date: 1 }) // 强制使用复合索引
+                .allowDiskUse(true)
+            } else {
             // 没有日期范围（使用今天）：直接查询，不需要聚合
             // 因为每个 campaignId + date 组合是唯一的，可以直接 find
             const today = dayjs().format('YYYY-MM-DD')
