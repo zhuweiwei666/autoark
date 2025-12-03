@@ -790,8 +790,7 @@ export default function FacebookCampaignsPage() {
                             // Purchase Value 带 Tooltip
                             <PurchaseValueTooltip
                               campaignId={campaign.campaignId || (campaign as any).id}
-                              date={filters.startDate || filters.endDate || getToday()}
-                              value={(campaign as any)[col.key] || 0}
+                              date={filters.endDate || filters.startDate || today}
                             >
                               <span className="text-slate-900 cursor-help underline decoration-dotted">
                                 {(campaign as any)[col.key] !== undefined && (campaign as any)[col.key] !== null ? col.format((campaign as any)[col.key]) : '-'}

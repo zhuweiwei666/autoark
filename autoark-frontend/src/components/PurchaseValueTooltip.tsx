@@ -1,11 +1,11 @@
 import { useState, useEffect } from 'react'
-import { getPurchaseValueInfo, type PurchaseValueInfo } from '../services/api'
+import { getPurchaseValueInfo, PurchaseValueInfo } from '../services/api'
 
 interface PurchaseValueTooltipProps {
   campaignId: string
   date: string
   country?: string
-  value: number
+  value?: number
   children: React.ReactNode
 }
 
@@ -24,10 +24,10 @@ export default function PurchaseValueTooltip({
     if (showTooltip && !info && !loading) {
       setLoading(true)
       getPurchaseValueInfo({ campaignId, date, country })
-        .then((response) => {
+        .then((response: { success: boolean; data: PurchaseValueInfo }) => {
           setInfo(response.data)
         })
-        .catch((error) => {
+        .catch((error: any) => {
           console.error('Failed to fetch purchase value info:', error)
         })
         .finally(() => {
