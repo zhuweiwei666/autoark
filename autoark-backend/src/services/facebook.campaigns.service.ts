@@ -230,12 +230,47 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
                         spendUsd: { $sum: '$spendUsd' },
                         impressions: { $sum: '$impressions' },
                         clicks: { $sum: '$clicks' },
-                        cpc: { $avg: '$cpc' },
-                        ctr: { $avg: '$ctr' },
-                        cpm: { $avg: '$cpm' },
-                        purchase_roas: { $first: '$purchase_roas' },
                         purchase_value: { $sum: { $ifNull: ['$purchase_value', 0] } },
                         mobile_app_install: { $sum: { $ifNull: ['$mobile_app_install_count', 0] } },
+                        // 计算加权平均值
+                        totalCpc: { $sum: { $multiply: [{ $ifNull: ['$cpc', 0] }, { $ifNull: ['$clicks', 0] }] } },
+                        totalCpm: { $sum: { $multiply: [{ $ifNull: ['$cpm', 0] }, { $ifNull: ['$impressions', 0] }] } },
+                        purchase_roas: { $first: '$purchase_roas' },
+                    }
+                },
+                {
+                    $project: {
+                        _id: 1,
+                        spendUsd: 1,
+                        impressions: 1,
+                        clicks: 1,
+                        purchase_value: 1,
+                        mobile_app_install: 1,
+                        purchase_roas: 1,
+                        // 计算正确的 CTR（clicks / impressions）
+                        ctr: {
+                            $cond: [
+                                { $gt: ['$impressions', 0] },
+                                { $divide: ['$clicks', '$impressions'] },
+                                0
+                            ]
+                        },
+                        // 计算加权平均 CPC
+                        cpc: {
+                            $cond: [
+                                { $gt: ['$clicks', 0] },
+                                { $divide: ['$totalCpc', '$clicks'] },
+                                0
+                            ]
+                        },
+                        // 计算加权平均 CPM
+                        cpm: {
+                            $cond: [
+                                { $gt: ['$impressions', 0] },
+                                { $divide: ['$totalCpm', '$impressions'] },
+                                0
+                            ]
+                        }
                     }
                 }
             ]).allowDiskUse(true)
@@ -244,18 +279,25 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
                 .hint({ campaignId: 1, date: 1 })
                 .lean()
             
-            allMetricsData = todayMetrics.map((metric: any) => ({
-                _id: metric.campaignId,
-                spendUsd: metric.spendUsd || 0,
-                impressions: metric.impressions || 0,
-                clicks: metric.clicks || 0,
-                cpc: metric.cpc,
-                ctr: metric.ctr,
-                cpm: metric.cpm,
-                purchase_roas: metric.purchase_roas,
-                purchase_value: metric.purchase_value || 0,
-                mobile_app_install: metric.mobile_app_install_count || 0,
-            }))
+            allMetricsData = todayMetrics.map((metric: any) => {
+                // 计算正确的 CTR（clicks / impressions），而不是直接使用存储的 CTR
+                const impressions = metric.impressions || 0
+                const clicks = metric.clicks || 0
+                const ctr = impressions > 0 ? clicks / impressions : 0
+                
+                return {
+                    _id: metric.campaignId,
+                    spendUsd: metric.spendUsd || 0,
+                    impressions: impressions,
+                    clicks: clicks,
+                    cpc: metric.cpc,
+                    ctr: ctr, // 使用计算出的 CTR
+                    cpm: metric.cpm,
+                    purchase_roas: metric.purchase_roas,
+                    purchase_value: metric.purchase_value || 0,
+                    mobile_app_install: metric.mobile_app_install_count || 0,
+                }
+            })
         }
         
         // 创建 metrics Map
@@ -267,13 +309,18 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
         // 合并 campaigns 和 metrics，然后排序
         const campaignsWithMetrics = allCampaigns.map(campaign => {
             const metrics = metricsMap.get(campaign.campaignId) || {}
+            const impressions = metrics.impressions || 0
+            const clicks = metrics.clicks || 0
+            // 计算正确的 CTR（clicks / impressions）
+            const calculatedCtr = impressions > 0 ? clicks / impressions : 0
+            
             return {
                 ...campaign,
                 spend: metrics.spendUsd || 0,
-                impressions: metrics.impressions || 0,
-                clicks: metrics.clicks || 0,
+                impressions: impressions,
+                clicks: clicks,
                 cpc: metrics.cpc || 0,
-                ctr: metrics.ctr || 0,
+                ctr: calculatedCtr, // 使用计算出的 CTR
                 cpm: metrics.cpm || 0,
                 purchase_roas: metrics.purchase_roas || 0,
                 purchase_value: metrics.purchase_value || 0,
@@ -513,15 +560,54 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
                             spendUsd: { $sum: '$spendUsd' },
                             impressions: { $sum: '$impressions' },
                             clicks: { $sum: '$clicks' },
-                            // 对于平均值，需要加权平均或简单平均（根据业务需求）
-                            cpc: { $avg: '$cpc' },
-                            ctr: { $avg: '$ctr' },
-                            cpm: { $avg: '$cpm' },
+                            purchase_value: { $sum: { $ifNull: ['$purchase_value', 0] } },
+                            mobile_app_install: { $sum: { $ifNull: ['$mobile_app_install_count', 0] } },
+                            // 计算加权平均值
+                            totalCpc: { $sum: { $multiply: [{ $ifNull: ['$cpc', 0] }, { $ifNull: ['$clicks', 0] }] } },
+                            totalCpm: { $sum: { $multiply: [{ $ifNull: ['$cpm', 0] }, { $ifNull: ['$impressions', 0] }] } },
                             // 取最新的 actions 和 action_values（按日期排序后）
                             actions: { $first: '$actions' }, // 因为已经按日期降序排序，$first 就是最新的
                             action_values: { $first: '$action_values' },
                             purchase_roas: { $first: '$purchase_roas' },
                             raw: { $first: '$raw' }
+                        }
+                    },
+                    {
+                        $project: {
+                            _id: 1,
+                            spendUsd: 1,
+                            impressions: 1,
+                            clicks: 1,
+                            purchase_value: 1,
+                            mobile_app_install: 1,
+                            actions: 1,
+                            action_values: 1,
+                            purchase_roas: 1,
+                            raw: 1,
+                            // 计算正确的 CTR（clicks / impressions）
+                            ctr: {
+                                $cond: [
+                                    { $gt: ['$impressions', 0] },
+                                    { $divide: ['$clicks', '$impressions'] },
+                                    0
+                                ]
+                            },
+                            // 计算加权平均 CPC
+                            cpc: {
+                                $cond: [
+                                    { $gt: ['$clicks', 0] },
+                                    { $divide: ['$totalCpc', '$clicks'] },
+                                    0
+                                ]
+                            },
+                            // 计算加权平均 CPM
+                            cpm: {
+                                $cond: [
+                                    { $gt: ['$impressions', 0] },
+                                    { $divide: ['$totalCpm', '$impressions'] },
+                                    0
+                                ]
+                            }
                         }
                     }
                 ])
@@ -552,19 +638,38 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
                     )
                     
                     const todayMetrics = batchResults.flat()
-                    metricsData = todayMetrics.map((metric: any) => ({
-                        _id: metric.campaignId,
-                        spendUsd: metric.spendUsd || 0,
-                        impressions: metric.impressions || 0,
-                        clicks: metric.clicks || 0,
-                        cpc: metric.cpc,
-                        ctr: metric.ctr,
-                        cpm: metric.cpm,
-                        actions: metric.actions,
-                        action_values: metric.action_values,
-                        purchase_roas: metric.purchase_roas,
-                        raw: metric.raw
-                    }))
+                    metricsData = todayMetrics.map((metric: any) => {
+                        // 计算正确的 CTR（clicks / impressions），而不是直接使用存储的 CTR
+                        const impressions = metric.impressions || 0
+                        const clicks = metric.clicks || 0
+                        const ctr = impressions > 0 ? clicks / impressions : 0
+                        
+                        // 从 action_values 中提取 purchase_value（如果数据库中没有存储）
+                        let purchase_value = metric.purchase_value
+                        if (!purchase_value && metric.action_values && Array.isArray(metric.action_values)) {
+                            const purchaseAction = metric.action_values.find((a: any) => 
+                                a.action_type === 'purchase' || a.action_type === 'mobile_app_purchase'
+                            )
+                            if (purchaseAction) {
+                                purchase_value = parseFloat(purchaseAction.value) || 0
+                            }
+                        }
+                        
+                        return {
+                            _id: metric.campaignId,
+                            spendUsd: metric.spendUsd || 0,
+                            impressions: impressions,
+                            clicks: clicks,
+                            cpc: metric.cpc,
+                            ctr: ctr, // 使用计算出的 CTR
+                            cpm: metric.cpm,
+                            actions: metric.actions,
+                            action_values: metric.action_values,
+                            purchase_roas: metric.purchase_roas,
+                            purchase_value: purchase_value || 0,
+                            raw: metric.raw
+                        }
+                    })
                 } else {
                     const todayMetrics = await MetricsDailyRead.find({
         campaignId: { $in: campaignIds },
@@ -574,19 +679,38 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
                     .lean() // 使用 lean() 提高性能
                     
                     // 转换为聚合结果的格式
-                    metricsData = todayMetrics.map((metric: any) => ({
-                        _id: metric.campaignId,
-                        spendUsd: metric.spendUsd || 0,
-                        impressions: metric.impressions || 0,
-                        clicks: metric.clicks || 0,
-                        cpc: metric.cpc,
-                        ctr: metric.ctr,
-                        cpm: metric.cpm,
-                        actions: metric.actions,
-                        action_values: metric.action_values,
-                        purchase_roas: metric.purchase_roas,
-                        raw: metric.raw
-                    }))
+                    metricsData = todayMetrics.map((metric: any) => {
+                        // 计算正确的 CTR（clicks / impressions），而不是直接使用存储的 CTR
+                        const impressions = metric.impressions || 0
+                        const clicks = metric.clicks || 0
+                        const ctr = impressions > 0 ? clicks / impressions : 0
+                        
+                        // 从 action_values 中提取 purchase_value（如果数据库中没有存储）
+                        let purchase_value = metric.purchase_value
+                        if (!purchase_value && metric.action_values && Array.isArray(metric.action_values)) {
+                            const purchaseAction = metric.action_values.find((a: any) => 
+                                a.action_type === 'purchase' || a.action_type === 'mobile_app_purchase'
+                            )
+                            if (purchaseAction) {
+                                purchase_value = parseFloat(purchaseAction.value) || 0
+                            }
+                        }
+                        
+                        return {
+                            _id: metric.campaignId,
+                            spendUsd: metric.spendUsd || 0,
+                            impressions: impressions,
+                            clicks: clicks,
+                            cpc: metric.cpc,
+                            ctr: ctr, // 使用计算出的 CTR
+                            cpm: metric.cpm,
+                            actions: metric.actions,
+                            action_values: metric.action_values,
+                            purchase_roas: metric.purchase_roas,
+                            purchase_value: purchase_value || 0,
+                            raw: metric.raw
+                        }
+                    })
                 }
             }
             
