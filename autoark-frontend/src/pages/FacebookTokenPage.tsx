@@ -60,9 +60,13 @@ export default function FacebookTokenPage() {
       try {
         const response = await getOAuthConfig()
         setOauthConfigured(response.data.configured)
+        if (!response.data.configured && response.data.missing.length > 0) {
+          console.warn('OAuth 未配置，缺少:', response.data.missing.join(', '))
+        }
       } catch (error) {
         // OAuth 配置检查失败不影响页面使用
         console.error('Failed to check OAuth config:', error)
+        setOauthConfigured(false)
       }
     }
     checkOAuthConfig()
@@ -223,18 +227,17 @@ export default function FacebookTokenPage() {
             </span>
           </div>
           <div className="flex gap-3">
-            {oauthConfigured && (
-              <button
-                onClick={handleFacebookLogin}
-                disabled={oauthLoading}
-                className="group px-6 py-3 bg-blue-600 hover:bg-blue-700 rounded-2xl text-sm font-semibold text-white shadow-md hover:shadow-lg transition-all duration-200 flex items-center gap-2 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
-                </svg>
-                {oauthLoading ? '连接中...' : '连接 Facebook'}
-              </button>
-            )}
+            <button
+              onClick={handleFacebookLogin}
+              disabled={oauthLoading || !oauthConfigured}
+              className="group px-6 py-3 bg-blue-600 hover:bg-blue-700 rounded-2xl text-sm font-semibold text-white shadow-md hover:shadow-lg transition-all duration-200 flex items-center gap-2 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+              title={!oauthConfigured ? 'OAuth 未配置，请联系管理员' : ''}
+            >
+              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
+              </svg>
+              {oauthLoading ? '连接中...' : '连接 Facebook'}
+            </button>
             <button
               onClick={() => setShowAddModal(true)}
               className="group px-6 py-3 bg-slate-900 hover:bg-slate-800 rounded-2xl text-sm font-semibold text-white shadow-md hover:shadow-lg transition-all duration-200 flex items-center gap-2 active:scale-95"
