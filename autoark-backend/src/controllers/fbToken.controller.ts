@@ -39,12 +39,21 @@ export const bindToken = async (
     }
 
     // 保存或更新 token
+    // 使用 fbUserId 作为唯一标识，因为每个 Facebook 用户应该只有一个 token
+    const fbUserId = validation.fbUser?.id
+    if (!fbUserId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Failed to get Facebook user ID from token',
+      })
+    }
+
     const tokenData: any = {
       userId,
       token,
       status: 'active',
       lastCheckedAt: new Date(),
-      fbUserId: validation.fbUser?.id,
+      fbUserId: fbUserId,
       fbUserName: validation.fbUser?.name,
     }
 
@@ -56,8 +65,10 @@ export const bindToken = async (
       tokenData.expiresAt = validation.expiresAt
     }
 
+    // 使用 fbUserId 作为唯一标识，而不是 userId
+    // 这样同一个 Facebook 用户只能有一个 token，但不同的 Facebook 用户可以有多个 token
     const savedToken = await FbToken.findOneAndUpdate(
-      { userId },
+      { fbUserId: fbUserId },
       tokenData,
       { new: true, upsert: true },
     )

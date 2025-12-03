@@ -32,10 +32,10 @@ const metricsDailySchema = new mongoose.Schema(
   { timestamps: true },
 )
 
-// Compound unique index for upsert (ad level)
+// Compound unique index for upsert (ad level with country)
 // 使用部分索引：只在 adId 存在时才应用唯一约束，避免 campaign 级别指标冲突
 metricsDailySchema.index(
-  { adId: 1, date: 1 }, 
+  { adId: 1, date: 1, country: 1 }, 
   { 
     unique: true,
     partialFilterExpression: { adId: { $exists: true } } // 只在 adId 存在时唯一

@@ -49,5 +49,14 @@ export const getRedisClient = (): Redis | null => {
   return redisClient
 }
 
+// BullMQ 需要的连接函数
+export const getRedisConnection = (): Redis => {
+  const client = getRedisClient()
+  if (!client) {
+    throw new Error('Redis connection not available. Please configure REDIS_URL environment variable.')
+  }
+  return client
+}
+
 export default getRedisClient
 

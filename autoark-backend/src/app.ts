@@ -23,11 +23,19 @@ connectDB()
 import { initRedis } from './config/redis'
 initRedis()
 
+// Initialize Queues and Workers
+import { initQueues } from './queue/facebook.queue'
+import { initWorkers } from './queue/facebook.worker'
+initQueues()
+initWorkers()
+
 // Initialize Crons
 import initPreaggregationCron from './cron/preaggregation.cron'
+import initAggregationCron from './cron/aggregation.cron'
 initCronJobs()
 initSyncCron()
 initPreaggregationCron()
+initAggregationCron() // 数据聚合定时任务
 initTokenValidationCron() // Token validation cron (每小时检查一次)
 
 const app = express()

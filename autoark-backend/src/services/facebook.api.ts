@@ -70,12 +70,16 @@ export const fetchAdSets = async (accountId: string) => {
   return res.data || []
 }
 
-export const fetchAds = async (accountId: string) => {
-  const res = await fbClient.get(`/${accountId}/ads`, {
+export const fetchAds = async (accountId: string, token?: string) => {
+  const params: any = {
     fields:
       'id,name,status,adset_id,campaign_id,creative{id},created_time,updated_time',
     limit: 1000,
-  })
+  }
+  if (token) {
+    params.access_token = token
+  }
+  const res = await fbClient.get(`/${accountId}/ads`, params)
   return res.data || []
 }
 

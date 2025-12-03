@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express'
 import * as facebookService from '../services/facebook.service'
 import * as facebookAccountsService from '../services/facebook.accounts.service'
 import * as facebookCampaignsService from '../services/facebook.campaigns.service'
+import * as facebookCampaignsV2Service from '../services/facebook.campaigns.v2.service'
 import * as facebookCountriesService from '../services/facebook.countries.service'
 import { getEffectiveAdAccounts } from '../services/facebook.sync.service'
 
@@ -11,11 +12,41 @@ export const syncCampaigns = async (
   next: NextFunction,
 ) => {
   try {
-    const result = await facebookCampaignsService.syncCampaignsFromAdAccounts()
+    // 使用新的队列系统（V2）
+    const useV2 = req.query.v2 === 'true' || process.env.USE_QUEUE_SYNC === 'true'
+    
+    if (useV2) {
+      const result = await facebookCampaignsV2Service.syncCampaignsFromAdAccountsV2()
+      res.json({
+        success: true,
+        message: 'Campaigns sync queued (using BullMQ)',
+        data: result,
+      })
+    } else {
+      // 旧版本（同步执行）
+      const result = await facebookCampaignsService.syncCampaignsFromAdAccounts()
+      res.json({
+        success: true,
+        message: 'Campaigns sync completed',
+        data: result,
+      })
+    }
+  } catch (error) {
+    next(error)
+  }
+}
+
+// 获取队列状态
+export const getQueueStatus = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
+  try {
+    const status = await facebookCampaignsV2Service.getQueueStatus()
     res.json({
       success: true,
-      message: 'Campaigns sync completed',
-      data: result,
+      data: status,
     })
   } catch (error) {
     next(error)
