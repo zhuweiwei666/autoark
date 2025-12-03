@@ -797,7 +797,6 @@ export default function FacebookCampaignsPage() {
                       </td>
                     </tr>
                   ))
-                  })()
                 )}
               </tbody>
             </table>
