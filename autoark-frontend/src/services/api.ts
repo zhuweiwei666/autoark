@@ -337,6 +337,132 @@ export async function syncCampaigns(): Promise<{
   return response.json()
 }
 
+// === 仪表盘 API ===
+
+export interface CoreMetrics {
+  today: {
+    spend: number
+    impressions: number
+    clicks: number
+    installs: number
+    ctr: number
+    cpm: number
+    cpc: number
+    cpi: number
+    roas: number
+  }
+  yesterday: {
+    spend: number
+    impressions: number
+    clicks: number
+    installs: number
+  }
+  sevenDays: {
+    spend: number
+    impressions: number
+    clicks: number
+    installs: number
+    avgDailySpend: number
+  }
+}
+
+export interface SpendTrendData {
+  date: string
+  spend: number
+  impressions: number
+  clicks: number
+}
+
+export interface CampaignRankingData {
+  campaignId: string
+  campaignName?: string
+  spend: number
+  impressions: number
+  clicks: number
+  installs: number
+  purchase_value: number
+}
+
+export interface AccountRankingData {
+  accountId: string
+  accountName?: string
+  spend: number
+  impressions: number
+  clicks: number
+  installs: number
+  purchase_value: number
+}
+
+// 获取核心指标
+export async function getCoreMetrics(startDate?: string, endDate?: string): Promise<{ success: boolean; data: CoreMetrics }> {
+  const queryParams = new URLSearchParams()
+  if (startDate) queryParams.append('startDate', startDate)
+  if (endDate) queryParams.append('endDate', endDate)
+
+  const url = `${API_BASE_URL}/api/dashboard/api/core-metrics${
+    queryParams.toString() ? `?${queryParams.toString()}` : ''
+  }`
+
+  const response = await fetch(url)
+  if (!response.ok) {
+    throw new Error('Failed to fetch core metrics')
+  }
+
+  return response.json()
+}
+
+// 获取消耗趋势
+export async function getSpendTrend(startDate?: string, endDate?: string): Promise<{ success: boolean; data: SpendTrendData[] }> {
+  const queryParams = new URLSearchParams()
+  if (startDate) queryParams.append('startDate', startDate)
+  if (endDate) queryParams.append('endDate', endDate)
+
+  const url = `${API_BASE_URL}/api/dashboard/api/today-spend-trend${
+    queryParams.toString() ? `?${queryParams.toString()}` : ''
+  }`
+
+  const response = await fetch(url)
+  if (!response.ok) {
+    throw new Error('Failed to fetch spend trend')
+  }
+
+  return response.json()
+}
+
+// 获取 Campaign 消耗排行
+export async function getCampaignRanking(limit = 10, startDate?: string, endDate?: string): Promise<{ success: boolean; data: CampaignRankingData[] }> {
+  const queryParams = new URLSearchParams()
+  queryParams.append('limit', limit.toString())
+  if (startDate) queryParams.append('startDate', startDate)
+  if (endDate) queryParams.append('endDate', endDate)
+
+  const url = `${API_BASE_URL}/api/dashboard/api/campaign-spend-ranking?${queryParams.toString()}`
+
+  const response = await fetch(url)
+  if (!response.ok) {
+    throw new Error('Failed to fetch campaign ranking')
+  }
+
+  return response.json()
+}
+
+// 获取账户消耗排行
+export async function getAccountRanking(limit = 10, startDate?: string, endDate?: string): Promise<{ success: boolean; data: AccountRankingData[] }> {
+  const queryParams = new URLSearchParams()
+  queryParams.append('limit', limit.toString())
+  if (startDate) queryParams.append('startDate', startDate)
+  if (endDate) queryParams.append('endDate', endDate)
+
+  const url = `${API_BASE_URL}/api/dashboard/api/country-spend-ranking?${queryParams.toString()}`
+
+  const response = await fetch(url)
+  if (!response.ok) {
+    throw new Error('Failed to fetch account ranking')
+  }
+
+  return response.json()
+}
+
 // === 用户设置 (自定义列) ===
 
 export interface UserSettingsResponse {
