@@ -369,6 +369,63 @@ export async function getCampaigns(params?: {
   return response.json()
 }
 
+// 获取国家列表
+export async function getCountries(params?: {
+  page?: number
+  limit?: number
+  sortBy?: string
+  sortOrder?: 'asc' | 'desc'
+  name?: string
+  accountId?: string
+  status?: string
+  objective?: string
+  startDate?: string
+  endDate?: string
+}): Promise<CountryListResponse> {
+  const queryParams = new URLSearchParams()
+  if (params?.startDate) queryParams.append('startDate', params.startDate)
+  if (params?.endDate) queryParams.append('endDate', params.endDate)
+  if (params?.page) queryParams.append('page', params.page.toString())
+  if (params?.limit) queryParams.append('limit', params.limit.toString())
+  if (params?.sortBy) queryParams.append('sortBy', params.sortBy)
+  if (params?.sortOrder) queryParams.append('sortOrder', params.sortOrder)
+  if (params?.name) queryParams.append('name', params.name)
+  if (params?.accountId) queryParams.append('accountId', params.accountId)
+  if (params?.status) queryParams.append('status', params.status)
+  if (params?.objective) queryParams.append('objective', params.objective)
+
+  const url = `${API_BASE_URL}/api/facebook/countries-list${
+    queryParams.toString() ? `?${queryParams.toString()}` : ''
+  }`
+
+  const response = await fetch(url)
+
+  if (!response.ok) {
+    const errorText = await response.text()
+    let errorMessage = 'Failed to fetch countries'
+    try {
+      const errorJson = JSON.parse(errorText)
+      errorMessage = errorJson.message || errorMessage
+    } catch {
+      if (errorText.includes('<!DOCTYPE')) {
+        errorMessage = `服务器返回了 HTML 响应，请检查 API 路由配置。状态码: ${response.status}`
+      } else {
+        errorMessage = errorText || errorMessage
+      }
+    }
+    throw new Error(errorMessage)
+  }
+
+  // 检查 Content-Type 确保是 JSON
+  const contentType = response.headers.get('content-type')
+  if (!contentType || !contentType.includes('application/json')) {
+    const text = await response.text()
+    throw new Error(`服务器返回了非 JSON 响应: ${contentType}. 响应内容: ${text.substring(0, 100)}`)
+  }
+
+  return response.json()
+}
+
 // 同步广告系列
 export async function syncCampaigns(): Promise<{
   success: boolean
