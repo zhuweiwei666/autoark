@@ -53,13 +53,20 @@ export const handleCallback = async (req: Request, res: Response, next: NextFunc
     // 处理 OAuth 回调
     const result = await oauthService.handleOAuthCallback(code as string)
 
-    // 重定向到 Token 管理页面，显示成功消息
+    // 重定向到 Token 管理页面，显示成功消息和用户信息
     const params = new URLSearchParams({
       oauth_success: 'true',
       token_id: result.tokenId,
       fb_user_id: result.fbUserId,
-      fb_user_name: result.fbUserName,
+      fb_user_name: encodeURIComponent(result.fbUserName || ''),
     })
+
+    // 如果有用户详细信息，也传递过去
+    if (result.userDetails) {
+      if (result.userDetails.email) {
+        params.append('fb_user_email', result.userDetails.email)
+      }
+    }
 
     res.redirect(`/fb-token?${params.toString()}`)
   } catch (error: any) {

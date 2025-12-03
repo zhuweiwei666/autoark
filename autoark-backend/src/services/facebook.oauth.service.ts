@@ -185,7 +185,29 @@ export const handleOAuthCallback = async (code: string): Promise<{
     // 5. 重新初始化 Token Pool（包含新 token）
     await tokenPool.initialize()
 
-    // 6. 检查权限
+    // 6. 获取用户详细信息（包括邮箱等）
+    let userDetails: any = {
+      id: userInfo.id,
+      name: userInfo.name,
+      email: userInfo.email,
+    }
+
+    try {
+      // 尝试获取更多用户信息
+      const userData = await fbClient.get('/me', {
+        access_token: longLivedToken,
+        fields: 'id,name,email,picture',
+      })
+      userDetails = {
+        ...userDetails,
+        ...userData,
+      }
+    } catch (error: any) {
+      logger.warn(`[OAuth] Failed to get additional user info:`, error)
+      // 获取额外信息失败不影响主要流程
+    }
+
+    // 7. 检查权限（可选，不阻塞）
     let permissions = null
     try {
       const diagnosis = await facebookPermissionsService.diagnoseToken(tokenDoc._id.toString())
@@ -199,6 +221,7 @@ export const handleOAuthCallback = async (code: string): Promise<{
       tokenId: tokenDoc._id.toString(),
       fbUserId: userInfo.id,
       fbUserName: userInfo.name,
+      userDetails,
       permissions,
     }
   } catch (error: any) {

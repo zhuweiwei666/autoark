@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import {
   bindToken,
@@ -90,11 +90,17 @@ export default function FacebookTokenPage() {
     const tokenId = searchParams.get('token_id')
     const fbUserId = searchParams.get('fb_user_id')
     const fbUserName = searchParams.get('fb_user_name')
+    const fbUserEmail = searchParams.get('fb_user_email')
 
     if (oauthSuccess === 'true' && tokenId) {
+      const userInfo = []
+      if (fbUserName) userInfo.push(`姓名: ${fbUserName}`)
+      if (fbUserEmail) userInfo.push(`邮箱: ${fbUserEmail}`)
+      if (fbUserId) userInfo.push(`ID: ${fbUserId}`)
+
       setMessage({
         type: 'success',
-        text: `Facebook 登录成功！用户: ${fbUserName || fbUserId || 'Unknown'}`,
+        text: `✅ Facebook 登录成功！\n\n${userInfo.join('\n')}\n\nToken 已自动保存到 Token Pool。`,
       })
       // 清除 URL 参数
       setSearchParams({})
@@ -103,12 +109,12 @@ export default function FacebookTokenPage() {
     } else if (oauthError) {
       setMessage({
         type: 'error',
-        text: `Facebook 登录失败: ${decodeURIComponent(oauthError)}`,
+        text: `❌ Facebook 登录失败: ${decodeURIComponent(oauthError)}`,
       })
       // 清除 URL 参数
       setSearchParams({})
     }
-  }, [searchParams, setSearchParams])
+  }, [searchParams, setSearchParams, loadTokens])
 
   // 初始加载
   useEffect(() => {
@@ -204,41 +210,26 @@ export default function FacebookTokenPage() {
 
   // Facebook OAuth 登录
   const handleFacebookLogin = async () => {
-    // 如果未配置，先检查一次配置状态
-    if (!oauthConfigured) {
-      try {
-        const configResponse = await getOAuthConfig()
-        if (!configResponse.data.configured) {
-          const missing = configResponse.data.missing || []
-          setMessage({
-            type: 'error',
-            text: `OAuth 未配置！\n\n缺少环境变量：${missing.join(', ')}\n\n请在服务器上配置以下环境变量：\n- FACEBOOK_APP_ID\n- FACEBOOK_APP_SECRET\n- FACEBOOK_REDIRECT_URI\n\n配置完成后刷新页面即可使用自动登录功能。\n\n或者使用"手动添加 Token"功能。`,
-          })
-          return
-        } else {
-          // 配置已更新，重新设置状态
-          setOauthConfigured(true)
-        }
-      } catch (error: any) {
-        setMessage({
-          type: 'error',
-          text: `无法检查 OAuth 配置：${error.message || '未知错误'}\n\n请使用"手动添加 Token"功能。`,
-        })
-        return
-      }
-    }
-
     setOauthLoading(true)
     try {
+      // 直接获取登录 URL，如果未配置会返回错误
       const response = await getFacebookLoginUrl()
       // 跳转到 Facebook 登录页面
       window.location.href = response.data.loginUrl
     } catch (error: any) {
+      // 如果 OAuth 未配置，显示配置说明
       const errorMsg = error.message || '获取登录链接失败'
-      setMessage({
-        type: 'error',
-        text: `${errorMsg}\n\n请检查 OAuth 配置是否正确，或使用"手动添加 Token"功能。`,
-      })
+      if (errorMsg.includes('配置不完整') || errorMsg.includes('missing')) {
+        setMessage({
+          type: 'error',
+          text: `Facebook 登录功能需要配置 OAuth。\n\n请联系管理员配置以下环境变量：\n- FACEBOOK_APP_ID\n- FACEBOOK_APP_SECRET\n- FACEBOOK_REDIRECT_URI\n\n或使用"手动添加 Token"功能。`,
+        })
+      } else {
+        setMessage({
+          type: 'error',
+          text: `登录失败：${errorMsg}\n\n请使用"手动添加 Token"功能。`,
+        })
+      }
       setOauthLoading(false)
     }
   }
@@ -269,17 +260,12 @@ export default function FacebookTokenPage() {
             <button
               onClick={handleFacebookLogin}
               disabled={oauthLoading}
-              className={`group px-6 py-3 rounded-2xl text-sm font-semibold text-white shadow-md hover:shadow-lg transition-all duration-200 flex items-center gap-2 active:scale-95 ${
-                oauthConfigured
-                  ? 'bg-blue-600 hover:bg-blue-700'
-                  : 'bg-gray-500 hover:bg-gray-600'
-              } ${oauthLoading ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
-              title={!oauthConfigured ? 'OAuth 未配置，点击查看配置说明' : '点击连接 Facebook 账号'}
+              className="group px-8 py-4 bg-blue-600 hover:bg-blue-700 rounded-2xl text-base font-semibold text-white shadow-lg hover:shadow-xl transition-all duration-200 flex items-center gap-3 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+              <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
                 <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
               </svg>
-              {oauthLoading ? '连接中...' : '连接 Facebook'}
+              {oauthLoading ? '正在跳转...' : 'Facebook 登录'}
             </button>
             <button
               onClick={() => setShowAddModal(true)}
