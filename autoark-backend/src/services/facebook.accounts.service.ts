@@ -109,12 +109,16 @@ export const getAccounts = async (filters: any = {}, pagination: { page: number,
         .limit(pagination.limit)
 
     // 获取所有账户ID，用于批量查询消耗数据
+    // 注意：Account 表中的 accountId 已经去掉了 "act_" 前缀
+    // 但 MetricsDaily 中可能存储的是带 "act_" 前缀的，需要同时查询两种格式
     const accountIds = accounts.map(acc => acc.accountId)
+    const accountIdsWithPrefix = accountIds.map(id => `act_${id}`)
+    const allAccountIds = [...new Set([...accountIds, ...accountIdsWithPrefix])] // 合并去重
     
     // 计算日期范围内的消耗（如果提供了日期范围）
     let periodSpendMap: Record<string, number> = {}
     if (accountIds.length > 0 && (filters.startDate || filters.endDate)) {
-        const dateQuery: any = { accountId: { $in: accountIds } }
+        const dateQuery: any = { accountId: { $in: allAccountIds } }
         if (filters.startDate || filters.endDate) {
             dateQuery.date = {}
             if (filters.startDate) {
@@ -136,7 +140,9 @@ export const getAccounts = async (filters: any = {}, pagination: { page: number,
         ])
         
         periodSpendData.forEach((item: any) => {
-            periodSpendMap[item._id] = item.spend || 0
+            // 统一处理 accountId，去掉 "act_" 前缀以便匹配
+            const normalizedId = item._id?.replace(/^act_/, '') || item._id
+            periodSpendMap[normalizedId] = (periodSpendMap[normalizedId] || 0) + (item.spend || 0)
         })
     }
     
@@ -144,7 +150,7 @@ export const getAccounts = async (filters: any = {}, pagination: { page: number,
     const totalSpendMap: Record<string, number> = {}
     if (accountIds.length > 0) {
         const totalSpendData = await MetricsDaily.aggregate([
-            { $match: { accountId: { $in: accountIds } } },
+            { $match: { accountId: { $in: allAccountIds } } },
             {
                 $group: {
                     _id: '$accountId',
@@ -154,7 +160,9 @@ export const getAccounts = async (filters: any = {}, pagination: { page: number,
         ])
         
         totalSpendData.forEach((item: any) => {
-            totalSpendMap[item._id] = item.totalSpend || 0
+            // 统一处理 accountId，去掉 "act_" 前缀以便匹配
+            const normalizedId = item._id?.replace(/^act_/, '') || item._id
+            totalSpendMap[normalizedId] = (totalSpendMap[normalizedId] || 0) + (item.totalSpend || 0)
         })
     }
     
@@ -176,6 +184,11 @@ export const getAccounts = async (filters: any = {}, pagination: { page: number,
         const calculatedBalance = accountBalance - totalSpend
         
         const accountObj = account.toObject ? account.toObject() : account
+        
+        // 添加调试日志（仅在前几个账户时）
+        if (accountsWithMetrics.length < 3) {
+            logger.info(`Account ${accountId}: periodSpend=${periodSpend}, totalSpend=${totalSpend}, accountBalance=${accountBalance}, calculatedBalance=${calculatedBalance}`)
+        }
         
         return {
             ...accountObj,
