@@ -309,8 +309,8 @@ export default function FacebookCampaignsPage() {
         page,
         limit: pagination.limit,
         ...filters,
-        // sortBy: 'spend', // 示例排序
-        // sortOrder: 'desc',
+        sortBy: sortConfig?.key || 'spend',
+        sortOrder: sortConfig?.direction || 'desc',
       })
       setCampaigns(response.data)
       setPagination(response.pagination)
@@ -351,6 +351,12 @@ export default function FacebookCampaignsPage() {
     return () => clearTimeout(timeoutId)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filters.name, filters.accountId, filters.status, filters.objective, filters.startDate, filters.endDate])
+
+  // 当排序配置改变时，重新加载数据
+  useEffect(() => {
+    loadCampaigns(1) // 排序时重置到第一页
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sortConfig?.key, sortConfig?.direction])
 
   // 执行同步
   const handleSync = async () => {
@@ -754,28 +760,7 @@ export default function FacebookCampaignsPage() {
                 ) : campaigns.length === 0 ? (
                   <tr><td colSpan={safeColumnsToRender.length + 1} className="px-6 py-12 text-center text-slate-500">暂无数据</td></tr>
                 ) : (
-                  (() => {
-                    // 排序逻辑
-                    const sortedCampaigns = [...campaigns]
-                    if (sortConfig) {
-                      sortedCampaigns.sort((a, b) => {
-                        const aVal = (a as any)[sortConfig.key]
-                        const bVal = (b as any)[sortConfig.key]
-                        if (aVal === null || aVal === undefined) return 1
-                        if (bVal === null || bVal === undefined) return -1
-                        if (typeof aVal === 'number' && typeof bVal === 'number') {
-                          return sortConfig.direction === 'asc' ? aVal - bVal : bVal - aVal
-                        }
-                        const aStr = String(aVal).toLowerCase()
-                        const bStr = String(bVal).toLowerCase()
-                        if (sortConfig.direction === 'asc') {
-                          return aStr.localeCompare(bStr)
-                        } else {
-                          return bStr.localeCompare(aStr)
-                        }
-                      })
-                    }
-                    return sortedCampaigns.map((campaign) => (
+                  campaigns.map((campaign) => (
                     <tr key={campaign.id || (campaign as any).id} className="group hover:bg-slate-50 transition-colors border-b border-slate-100">
                       {safeColumnsToRender.map(col => (
                         <td key={col.key} className="px-6 py-4">
