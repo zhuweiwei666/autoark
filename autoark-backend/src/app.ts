@@ -107,8 +107,8 @@ if (frontendDistPath) {
   // This must be before 404 handler but after all API routes
   // Use app.use instead of app.get('*') for Express 5.x compatibility
   app.use((req: Request, res: Response, next: NextFunction) => {
-    // Skip API routes and dashboard route - let them be handled by their routes or 404
-    if (req.path.startsWith('/api') || req.path.startsWith('/dashboard')) {
+    // Skip API routes only - let frontend handle all other routes including /dashboard
+    if (req.path.startsWith('/api')) {
       return next()
     }
     
@@ -118,7 +118,7 @@ if (frontendDistPath) {
       return next()
     }
     
-    // For all other routes, serve the React app (for client-side routing)
+    // For all other routes (including /dashboard), serve the React app (for client-side routing)
     const indexPath = path.join(frontendDistPath!, 'index.html')
     res.sendFile(indexPath, (err) => {
       if (err) {
