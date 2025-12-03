@@ -117,7 +117,7 @@ export const getPurchaseValueInfo = async (
       })
     }
 
-    const info = await purchaseCorrectionService.getPurchaseValueInfo(
+    const info = await facebookPurchaseCorrectionService.getPurchaseValueInfo(
       campaignId as string,
       date as string,
       country as string | undefined

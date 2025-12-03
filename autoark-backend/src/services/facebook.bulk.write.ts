@@ -15,7 +15,7 @@ class BulkWriteService {
   /**
    * 添加 MetricsDaily 写入操作
    */
-  addMetricsOperation(operation: mongoose.mongo.AnyBulkWriteOperation<MetricsDaily>) {
+  addMetricsOperation(operation: mongoose.mongo.AnyBulkWriteOperation) {
     this.metricsBulkOps.push(operation)
 
     // 达到批次大小时自动执行
@@ -29,7 +29,7 @@ class BulkWriteService {
   /**
    * 添加 RawInsights 写入操作
    */
-  addRawInsightsOperation(operation: mongoose.mongo.AnyBulkWriteOperation<RawInsights>) {
+  addRawInsightsOperation(operation: mongoose.mongo.AnyBulkWriteOperation) {
     this.rawInsightsBulkOps.push(operation)
 
     // 达到批次大小时自动执行
