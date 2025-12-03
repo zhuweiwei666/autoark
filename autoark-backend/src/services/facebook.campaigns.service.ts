@@ -185,93 +185,127 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
         }
     }
     
+    // 性能优化：只查询当前页的 campaigns 的 metrics
     // 构建日期查询条件：如果有日期范围，使用日期范围；否则使用今天
-    const metricsQuery: any = {
-        campaignId: { $in: campaignIds }
-    }
-    
-    if (filters.startDate || filters.endDate) {
-        metricsQuery.date = {}
-        if (filters.startDate) {
-            metricsQuery.date.$gte = filters.startDate
-        }
-        if (filters.endDate) {
-            metricsQuery.date.$lte = filters.endDate
-        }
-    } else {
-        // 没有日期范围，使用今天
-        const today = dayjs().format('YYYY-MM-DD')
-        metricsQuery.date = today
-    }
-    
-    // 性能优化：使用索引提示，并优化聚合查询
     const startTime = Date.now()
     let metricsData: any[] = []
     
     try {
         if (filters.startDate || filters.endDate) {
-            // 有日期范围：先按日期和 campaignId 聚合，再按 campaignId 汇总
+            // 有日期范围：使用优化的聚合查询
+            const dateQuery: any = {
+                campaignId: { $in: campaignIds }
+            }
+            if (filters.startDate) {
+                dateQuery.date = { $gte: filters.startDate }
+            }
+            if (filters.endDate) {
+                if (dateQuery.date) {
+                    dateQuery.date.$lte = filters.endDate
+                } else {
+                    dateQuery.date = { $lte: filters.endDate }
+                }
+            }
+            
+            // 优化：直接按 campaignId 聚合，不需要先按日期分组
+            // 因为每个 campaignId + date 组合在 MetricsDaily 中已经是唯一的（有唯一索引）
             metricsData = await MetricsDaily.aggregate([
-                { $match: metricsQuery },
-                {
-                    $group: {
-                        _id: { campaignId: '$campaignId', date: '$date' },
-                        spendUsd: { $sum: '$spendUsd' },
-                        impressions: { $sum: '$impressions' },
-                        clicks: { $sum: '$clicks' },
-                        cpc: { $avg: '$cpc' },
-                        ctr: { $avg: '$ctr' },
-                        cpm: { $avg: '$cpm' },
-                        actions: { $first: '$actions' },
-                        action_values: { $first: '$action_values' },
-                        purchase_roas: { $first: '$purchase_roas' },
-                        raw: { $first: '$raw' }
-                    }
+                { 
+                    $match: dateQuery,
+                    // 使用索引提示：优先使用 { campaignId: 1, date: 1 } 复合索引
                 },
                 {
-                    $group: {
-                        _id: '$_id.campaignId',
-                        spendUsd: { $sum: '$spendUsd' },
-                        impressions: { $sum: '$impressions' },
-                        clicks: { $sum: '$clicks' },
-                        cpc: { $avg: '$cpc' },
-                        ctr: { $avg: '$ctr' },
-                        cpm: { $avg: '$cpm' },
-                        actions: { $first: '$actions' },
-                        action_values: { $first: '$action_values' },
-                        purchase_roas: { $first: '$purchase_roas' },
-                        raw: { $first: '$raw' }
-                    }
-                }
-            ]).allowDiskUse(true) // 允许使用磁盘进行大型聚合
-        } else {
-            // 没有日期范围（使用今天）：直接按 campaignId 聚合
-            metricsData = await MetricsDaily.aggregate([
-                { $match: metricsQuery },
+                    $sort: { date: -1 } // 按日期降序排序，确保 $last 获取最新的数据
+                },
                 {
                     $group: {
                         _id: '$campaignId',
                         spendUsd: { $sum: '$spendUsd' },
                         impressions: { $sum: '$impressions' },
                         clicks: { $sum: '$clicks' },
+                        // 对于平均值，需要加权平均或简单平均（根据业务需求）
                         cpc: { $avg: '$cpc' },
                         ctr: { $avg: '$ctr' },
                         cpm: { $avg: '$cpm' },
-                        actions: { $first: '$actions' },
+                        // 取最新的 actions 和 action_values（按日期排序后）
+                        actions: { $first: '$actions' }, // 因为已经按日期降序排序，$first 就是最新的
                         action_values: { $first: '$action_values' },
                         purchase_roas: { $first: '$purchase_roas' },
                         raw: { $first: '$raw' }
                     }
                 }
-            ]).allowDiskUse(true) // 允许使用磁盘进行大型聚合
+            ])
+            .hint({ campaignId: 1, date: 1 }) // 强制使用复合索引
+            .allowDiskUse(true)
+        } else {
+            // 没有日期范围（使用今天）：直接查询，不需要聚合
+            // 因为每个 campaignId + date 组合是唯一的，可以直接 find
+            const today = dayjs().format('YYYY-MM-DD')
+            
+            // 性能优化：如果 campaignIds 数量很大（>100），分批查询
+            const BATCH_SIZE = 100
+            if (campaignIds.length > BATCH_SIZE) {
+                const batches: string[][] = []
+                for (let i = 0; i < campaignIds.length; i += BATCH_SIZE) {
+                    batches.push(campaignIds.slice(i, i + BATCH_SIZE))
+                }
+                
+                const batchResults = await Promise.all(
+                    batches.map(batchIds =>
+                        MetricsDaily.find({
+                            campaignId: { $in: batchIds },
+                            date: today
+                        })
+                        .hint({ campaignId: 1, date: 1 })
+                        .lean()
+                    )
+                )
+                
+                const todayMetrics = batchResults.flat()
+                metricsData = todayMetrics.map((metric: any) => ({
+                    _id: metric.campaignId,
+                    spendUsd: metric.spendUsd || 0,
+                    impressions: metric.impressions || 0,
+                    clicks: metric.clicks || 0,
+                    cpc: metric.cpc,
+                    ctr: metric.ctr,
+                    cpm: metric.cpm,
+                    actions: metric.actions,
+                    action_values: metric.action_values,
+                    purchase_roas: metric.purchase_roas,
+                    raw: metric.raw
+                }))
+            } else {
+                const todayMetrics = await MetricsDaily.find({
+                    campaignId: { $in: campaignIds },
+                    date: today
+                })
+                .hint({ campaignId: 1, date: 1 }) // 强制使用复合索引
+                .lean() // 使用 lean() 提高性能
+                
+                // 转换为聚合结果的格式
+                metricsData = todayMetrics.map((metric: any) => ({
+                    _id: metric.campaignId,
+                    spendUsd: metric.spendUsd || 0,
+                    impressions: metric.impressions || 0,
+                    clicks: metric.clicks || 0,
+                    cpc: metric.cpc,
+                    ctr: metric.ctr,
+                    cpm: metric.cpm,
+                    actions: metric.actions,
+                    action_values: metric.action_values,
+                    purchase_roas: metric.purchase_roas,
+                    raw: metric.raw
+                }))
+            }
         }
         
         const queryTime = Date.now() - startTime
-        if (queryTime > 5000) {
-            logger.warn(`[getCampaigns] Slow query detected: ${queryTime}ms for ${campaignIds.length} campaigns`)
+        if (queryTime > 1000) {
+            logger.warn(`[getCampaigns] Query time: ${queryTime}ms for ${campaignIds.length} campaigns, dateRange: ${filters.startDate || 'today'} - ${filters.endDate || 'today'}`)
         }
     } catch (error: any) {
-        logger.error(`[getCampaigns] Metrics query failed: ${error.message}`)
+        logger.error(`[getCampaigns] Metrics query failed: ${error.message}`, error)
         // 如果查询失败，返回空指标数据，但继续返回 campaigns
         metricsData = []
     }
