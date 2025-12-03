@@ -109,7 +109,7 @@ export const getAccounts = async (filters: any = {}, pagination: { page: number,
 
     // 获取所有账户ID，用于批量查询消耗数据
     // 使用统一工具函数处理格式，兼容历史数据可能存在的格式不一致
-    const accountIds = accounts.map(acc => acc.accountId)
+    const accountIds = allAccounts.map(acc => acc.accountId)
     const allAccountIds = getAccountIdsForQuery(accountIds)
     
     // 计算消耗：如果提供了日期范围，使用日期范围；否则使用今天
