@@ -148,23 +148,11 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
         query.objective = filters.objective
     }
 
-    const sort: any = {}
-    if (pagination.sortBy) {
-      sort[pagination.sortBy] = pagination.sortOrder === 'desc' ? -1 : 1
-    } else {
-      sort.createdAt = -1 // 默认排序
-    }
-
     // 使用读连接进行查询（读写分离）
-    // 注意：Mongoose 的读偏好会在连接级别生效
-    // 如果配置了独立的读连接，使用读连接；否则使用主连接（但会使用读偏好）
     const readConnection = getReadConnection()
     
-    // 如果读连接是独立的连接，需要使用该连接的模型
-    // 否则使用主连接的模型（但会使用读偏好）
     let CampaignModel = Campaign
     if (readConnection !== mongoose) {
-      // 独立的读连接，需要注册模型
       if (!readConnection.models.Campaign) {
         CampaignModel = readConnection.model('Campaign', Campaign.schema)
       } else {
@@ -172,13 +160,216 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
       }
     }
     
-    const total = await CampaignModel.countDocuments(query)
-    const campaigns = await CampaignModel.find(query)
-        .sort(sort)
-        .skip((pagination.page - 1) * pagination.limit)
-        .limit(pagination.limit)
+    // 判断排序字段是否是 metrics 字段（需要从 MetricsDaily 获取）
+    const metricsSortFields = ['spend', 'impressions', 'clicks', 'cpc', 'ctr', 'cpm', 'purchase_roas', 'purchase_value', 'mobile_app_install']
+    const isMetricsSort = metricsSortFields.includes(pagination.sortBy)
+    
+    let campaigns: any[] = []
+    let total = 0
+    
+    if (isMetricsSort) {
+        // 如果按 metrics 字段排序，需要先查询所有符合条件的 campaigns，然后按 metrics 排序
+        const allCampaigns = await CampaignModel.find(query).lean()
+        const allCampaignIds = allCampaigns.map(c => c.campaignId)
+        total = allCampaignIds.length
+        
+        if (allCampaignIds.length === 0) {
+            return {
+                data: [],
+                pagination: {
+                    page: pagination.page,
+                    limit: pagination.limit,
+                    total: 0,
+                    pages: 0,
+                },
+            }
+        }
+        
+        // 查询所有 campaigns 的 metrics 数据
+        const today = dayjs().format('YYYY-MM-DD')
+        const metricsQuery: any = {
+            campaignId: { $in: allCampaignIds, $exists: true, $ne: null } // 只统计 campaign 级别的数据
+        }
+        
+        if (filters.startDate || filters.endDate) {
+            metricsQuery.date = {}
+            if (filters.startDate) {
+                metricsQuery.date.$gte = filters.startDate
+            }
+            if (filters.endDate) {
+                metricsQuery.date.$lte = filters.endDate
+            }
+        } else {
+            metricsQuery.date = today
+        }
+        
+        // 获取所有 campaigns 的 metrics
+        let MetricsDailyRead = MetricsDaily
+        if (readConnection !== mongoose) {
+          if (!readConnection.models.MetricsDaily) {
+            MetricsDailyRead = readConnection.model('MetricsDaily', MetricsDaily.schema)
+          } else {
+            MetricsDailyRead = readConnection.models.MetricsDaily
+          }
+        }
+        
+        let allMetricsData: any[] = []
+        if (filters.startDate || filters.endDate) {
+            allMetricsData = await MetricsDailyRead.aggregate([
+                { $match: metricsQuery },
+                { $sort: { date: -1 } },
+                {
+                    $group: {
+                        _id: '$campaignId',
+                        spendUsd: { $sum: '$spendUsd' },
+                        impressions: { $sum: '$impressions' },
+                        clicks: { $sum: '$clicks' },
+                        cpc: { $avg: '$cpc' },
+                        ctr: { $avg: '$ctr' },
+                        cpm: { $avg: '$cpm' },
+                        purchase_roas: { $first: '$purchase_roas' },
+                        purchase_value: { $sum: { $ifNull: ['$purchase_value', 0] } },
+                        mobile_app_install: { $sum: { $ifNull: ['$mobile_app_install_count', 0] } },
+                    }
+                }
+            ]).allowDiskUse(true)
+        } else {
+            const todayMetrics = await MetricsDailyRead.find(metricsQuery)
+                .hint({ campaignId: 1, date: 1 })
+                .lean()
+            
+            allMetricsData = todayMetrics.map((metric: any) => ({
+                _id: metric.campaignId,
+                spendUsd: metric.spendUsd || 0,
+                impressions: metric.impressions || 0,
+                clicks: metric.clicks || 0,
+                cpc: metric.cpc,
+                ctr: metric.ctr,
+                cpm: metric.cpm,
+                purchase_roas: metric.purchase_roas,
+                purchase_value: metric.purchase_value || 0,
+                mobile_app_install: metric.mobile_app_install_count || 0,
+            }))
+        }
+        
+        // 创建 metrics Map
+        const metricsMap = new Map<string, any>()
+        allMetricsData.forEach((item: any) => {
+            metricsMap.set(item._id, item)
+        })
+        
+        // 合并 campaigns 和 metrics，然后排序
+        const campaignsWithMetrics = allCampaigns.map(campaign => {
+            const metrics = metricsMap.get(campaign.campaignId) || {}
+            return {
+                ...campaign,
+                spend: metrics.spendUsd || 0,
+                impressions: metrics.impressions || 0,
+                clicks: metrics.clicks || 0,
+                cpc: metrics.cpc || 0,
+                ctr: metrics.ctr || 0,
+                cpm: metrics.cpm || 0,
+                purchase_roas: metrics.purchase_roas || 0,
+                purchase_value: metrics.purchase_value || 0,
+                mobile_app_install: metrics.mobile_app_install || 0,
+            }
+        })
+        
+        // 按 metrics 字段排序
+        campaignsWithMetrics.sort((a, b) => {
+            const aValue = a[pagination.sortBy] || 0
+            const bValue = b[pagination.sortBy] || 0
+            if (pagination.sortOrder === 'desc') {
+                return bValue - aValue
+            } else {
+                return aValue - bValue
+            }
+        })
+        
+        // 分页
+        const startIndex = (pagination.page - 1) * pagination.limit
+        campaigns = campaignsWithMetrics.slice(startIndex, startIndex + pagination.limit)
+        
+        // 对于 metrics 排序，已经合并了 metrics 数据，直接返回
+        // 需要将 campaigns 转换为正确的格式
+        const campaignsWithMetricsFormatted = campaigns.map(campaign => {
+            const campaignObj = campaign
+            const metrics = metricsMap.get(campaign.campaignId) || {}
+            
+            // 从 actions 和 action_values 中提取具体字段
+            const actions = (metrics.actions || []) as any[]
+            const actionValues = (metrics.action_values || []) as any[]
+            const purchaseRoas = (metrics.purchase_roas || []) as any[]
+            
+            // 提取各种 action 类型
+            const extractedActions: any = {}
+            actions.forEach((action: any) => {
+                if (action.action_type && action.value !== undefined) {
+                    extractedActions[action.action_type] = parseFloat(action.value) || 0
+                }
+            })
+            
+            // 提取各种 action_value 类型
+            const extractedActionValues: any = {}
+            actionValues.forEach((action: any) => {
+                if (action.action_type && action.value !== undefined) {
+                    extractedActionValues[`${action.action_type}_value`] = parseFloat(action.value) || 0
+                }
+            })
+            
+            // 提取 purchase_roas
+            const extractedRoas: any = {}
+            purchaseRoas.forEach((roas: any) => {
+                if (roas.action_type && roas.value !== undefined) {
+                    extractedRoas[`${roas.action_type}_roas`] = parseFloat(roas.value) || 0
+                }
+            })
+            
+            return {
+                ...campaignObj,
+                id: campaignObj.campaignId,
+                account_id: campaignObj.accountId,
+                impressions: metrics.impressions || 0,
+                clicks: metrics.clicks || 0,
+                spend: metrics.spendUsd || 0,
+                cpc: metrics.cpc,
+                ctr: metrics.ctr,
+                cpm: metrics.cpm,
+                ...(metrics.raw || {}),
+                ...extractedActions,
+                ...extractedActionValues,
+                ...extractedRoas,
+                metrics: metrics,
+                raw_insights: metrics.raw,
+            }
+        })
+        
+        return {
+            data: campaignsWithMetricsFormatted,
+            pagination: {
+                total,
+                page: pagination.page,
+                limit: pagination.limit,
+                pages: Math.ceil(total / pagination.limit)
+            }
+        }
+    } else {
+        // 如果按 Campaign 表字段排序，使用原来的逻辑
+        const sort: any = {}
+        if (pagination.sortBy) {
+          sort[pagination.sortBy] = pagination.sortOrder === 'desc' ? -1 : 1
+        } else {
+          sort.createdAt = -1 // 默认排序
+        }
+        
+        total = await CampaignModel.countDocuments(query)
+        campaigns = await CampaignModel.find(query)
+            .sort(sort)
+            .skip((pagination.page - 1) * pagination.limit)
+            .limit(pagination.limit)
+    }
 
-    // 联表查询 MetricsDaily 数据，以获取消耗、CPM 等实时指标
+    // 联表查询 MetricsDaily 数据，以获取消耗、CPM 等实时指标（仅用于非 metrics 排序的情况）
     const campaignIds = campaigns.map(c => c.campaignId)
     
     // 如果没有 campaignIds，直接返回空数据
