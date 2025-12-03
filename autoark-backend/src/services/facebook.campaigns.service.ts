@@ -153,21 +153,96 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
         .skip((pagination.page - 1) * pagination.limit)
         .limit(pagination.limit)
 
-    // 联表查询最新的 MetricsDaily 数据，以获取消耗、CPM 等实时指标
+    // 联表查询 MetricsDaily 数据，以获取消耗、CPM 等实时指标
     const campaignIds = campaigns.map(c => c.campaignId)
-    const today = dayjs().format('YYYY-MM-DD')
-    const latestMetrics = await MetricsDaily.find({
-        campaignId: { $in: campaignIds },
-        date: today
+    
+    // 构建日期查询条件：如果有日期范围，使用日期范围；否则查询所有历史数据
+    const metricsQuery: any = {
+        campaignId: { $in: campaignIds }
+    }
+    
+    if (filters.startDate || filters.endDate) {
+        metricsQuery.date = {}
+        if (filters.startDate) {
+            metricsQuery.date.$gte = filters.startDate
+        }
+        if (filters.endDate) {
+            metricsQuery.date.$lte = filters.endDate
+        }
+    }
+    
+    // 如果有日期范围，按日期聚合；否则按 campaignId 聚合所有历史数据
+    let metricsData: any[] = []
+    if (filters.startDate || filters.endDate) {
+        // 有日期范围：按日期和 campaignId 聚合
+        metricsData = await MetricsDaily.aggregate([
+            { $match: metricsQuery },
+            {
+                $group: {
+                    _id: { campaignId: '$campaignId', date: '$date' },
+                    spendUsd: { $sum: '$spendUsd' },
+                    impressions: { $sum: '$impressions' },
+                    clicks: { $sum: '$clicks' },
+                    cpc: { $avg: '$cpc' },
+                    ctr: { $avg: '$ctr' },
+                    cpm: { $avg: '$cpm' },
+                    actions: { $first: '$actions' },
+                    action_values: { $first: '$action_values' },
+                    purchase_roas: { $first: '$purchase_roas' },
+                    raw: { $first: '$raw' }
+                }
+            },
+            {
+                $group: {
+                    _id: '$_id.campaignId',
+                    spendUsd: { $sum: '$spendUsd' },
+                    impressions: { $sum: '$impressions' },
+                    clicks: { $sum: '$clicks' },
+                    cpc: { $avg: '$cpc' },
+                    ctr: { $avg: '$ctr' },
+                    cpm: { $avg: '$cpm' },
+                    actions: { $first: '$actions' },
+                    action_values: { $first: '$action_values' },
+                    purchase_roas: { $first: '$purchase_roas' },
+                    raw: { $first: '$raw' }
+                }
+            }
+        ])
+    } else {
+        // 没有日期范围：按 campaignId 聚合所有历史数据
+        metricsData = await MetricsDaily.aggregate([
+            { $match: metricsQuery },
+            {
+                $group: {
+                    _id: '$campaignId',
+                    spendUsd: { $sum: '$spendUsd' },
+                    impressions: { $sum: '$impressions' },
+                    clicks: { $sum: '$clicks' },
+                    cpc: { $avg: '$cpc' },
+                    ctr: { $avg: '$ctr' },
+                    cpm: { $avg: '$cpm' },
+                    actions: { $first: '$actions' },
+                    action_values: { $first: '$action_values' },
+                    purchase_roas: { $first: '$purchase_roas' },
+                    raw: { $first: '$raw' }
+                }
+            }
+        ])
+    }
+    
+    // 转换为 Map 以便快速查找
+    const metricsMap = new Map<string, any>()
+    metricsData.forEach((item: any) => {
+        metricsMap.set(item._id, item)
     })
     
     // 将指标合并到 Campaign 对象中，直接使用 Facebook 原始字段名
     const campaignsWithMetrics = campaigns.map(campaign => {
-        const metrics = latestMetrics.find(m => m.campaignId === campaign.campaignId)
+        const metrics = metricsMap.get(campaign.campaignId)
         const campaignObj = campaign.toObject()
         
         // 合并所有 metrics 字段（使用 Facebook 原始字段名）
-        const metricsObj: any = metrics ? metrics.toObject() : {}
+        const metricsObj: any = metrics || {}
         
         // 从 actions 和 action_values 中提取具体字段
         const actions = (metricsObj.actions || []) as any[]

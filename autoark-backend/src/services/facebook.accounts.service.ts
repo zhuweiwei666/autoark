@@ -168,8 +168,8 @@ export const getAccounts = async (filters: any = {}, pagination: { page: number,
     // 为每个账户添加消耗和计算后的余额
     const accountsWithMetrics = accounts.map((account: any) => {
         const accountId = account.accountId
-        // 只有在提供了日期范围时才计算 periodSpend，否则为 undefined
-        const periodSpend = (filters.startDate || filters.endDate) ? (periodSpendMap[accountId] || 0) : undefined
+        // 如果提供了日期范围，显示日期范围内的消耗；否则显示历史总消耗
+        const periodSpend = (filters.startDate || filters.endDate) ? (periodSpendMap[accountId] || 0) : (totalSpendMap[accountId] || 0)
         const totalSpend = totalSpendMap[accountId] || 0
         
         // Facebook API 返回的 balance 是以账户货币的最小单位（分）返回的，需要除以 100
