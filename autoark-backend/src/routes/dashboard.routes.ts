@@ -23,8 +23,10 @@ router.get('/api/today-spend-trend', dashboardController.getTodaySpendTrendHandl
 router.get('/api/campaign-spend-ranking', dashboardController.getCampaignSpendRankingHandler)
 router.get('/api/country-spend-ranking', dashboardController.getCountrySpendRankingHandler)
 
-// Dashboard UI (GET /dashboard)
-// Mounted at /dashboard in app.ts, so '/' becomes '/dashboard'
+// Dashboard UI 已迁移到 React 前端，不再需要后端返回 HTML
+// 所有 /dashboard 路由现在由前端 React Router 处理
+// 只保留 API 路由，UI 路由已删除
+/*
 router.get('/', (_req, res) => {
   // 确保设置正确的 Content-Type
   res.setHeader('Content-Type', 'text/html; charset=utf-8')
@@ -773,5 +775,6 @@ router.get('/', (_req, res) => {
 </html>
   `)
 })
+*/
 
 export default router

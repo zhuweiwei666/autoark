@@ -54,8 +54,8 @@ app.use('/api/dashboard', dashboardRoutes)
 app.use('/api/fb-token', fbTokenRoutes) // Facebook token management
 app.use('/api/user-settings', userSettingsRoutes) // New: User settings management
 
-// Dashboard UI (accessible at /dashboard)
-app.use('/dashboard', dashboardRoutes)
+// Dashboard UI 已迁移到 React 前端，不再需要后端路由
+// app.use('/dashboard', dashboardRoutes) // 已禁用，让前端 React Router 处理
 
 // Serve frontend static files (if dist directory exists)
 // Try multiple possible paths for frontend dist
