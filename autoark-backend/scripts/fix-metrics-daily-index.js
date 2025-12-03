@@ -42,8 +42,48 @@ async function fixIndexes() {
     }
 
     console.log('\n=== 步骤 2: 清理冲突数据 ===')
-    // 删除 adId 为 null 且 campaignId 也为 null 的重复记录（保留第一个）
-    const duplicateDocs = await collection.aggregate([
+    
+    // 清理 campaignId + date 的重复记录
+    console.log('检查 campaignId + date 的重复记录...')
+    const campaignDuplicates = await collection.aggregate([
+      {
+        $match: {
+          campaignId: { $exists: true, $ne: null }
+        }
+      },
+      {
+        $group: {
+          _id: { campaignId: '$campaignId', date: '$date' },
+          ids: { $push: '$_id' },
+          count: { $sum: 1 }
+        }
+      },
+      {
+        $match: {
+          count: { $gt: 1 }
+        }
+      }
+    ]).toArray()
+
+    if (campaignDuplicates.length > 0) {
+      console.log(`发现 ${campaignDuplicates.length} 组 campaignId + date 重复记录`)
+      let deletedCount = 0
+      for (const group of campaignDuplicates) {
+        // 保留第一个（最新的），删除其余的
+        const idsToDelete = group.ids.slice(1)
+        if (idsToDelete.length > 0) {
+          const result = await collection.deleteMany({ _id: { $in: idsToDelete } })
+          deletedCount += result.deletedCount
+        }
+      }
+      console.log(`✅ 已删除 ${deletedCount} 条 campaignId + date 重复记录`)
+    } else {
+      console.log('✅ 没有发现 campaignId + date 重复记录')
+    }
+
+    // 清理 adId 为 null 的重复记录
+    console.log('检查 adId 为 null 的重复记录...')
+    const adIdNullDuplicates = await collection.aggregate([
       {
         $match: {
           adId: null,
@@ -64,10 +104,10 @@ async function fixIndexes() {
       }
     ]).toArray()
 
-    if (duplicateDocs.length > 0) {
-      console.log(`发现 ${duplicateDocs.length} 组重复记录`)
+    if (adIdNullDuplicates.length > 0) {
+      console.log(`发现 ${adIdNullDuplicates.length} 组 adId 为 null 的重复记录`)
       let deletedCount = 0
-      for (const group of duplicateDocs) {
+      for (const group of adIdNullDuplicates) {
         // 保留第一个，删除其余的
         const idsToDelete = group.ids.slice(1)
         if (idsToDelete.length > 0) {
@@ -75,9 +115,9 @@ async function fixIndexes() {
           deletedCount += result.deletedCount
         }
       }
-      console.log(`✅ 已删除 ${deletedCount} 条重复记录`)
+      console.log(`✅ 已删除 ${deletedCount} 条 adId 为 null 的重复记录`)
     } else {
-      console.log('✅ 没有发现重复记录')
+      console.log('✅ 没有发现 adId 为 null 的重复记录')
     }
 
     console.log('\n=== 步骤 3: 创建新的部分索引 ===')
