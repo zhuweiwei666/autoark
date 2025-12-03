@@ -182,6 +182,8 @@ export interface AccountListResponse {
 export async function getAccounts(params?: {
   page?: number
   limit?: number
+  sortBy?: string
+  sortOrder?: 'asc' | 'desc'
   optimizer?: string
   status?: string
   accountId?: string
@@ -192,6 +194,8 @@ export async function getAccounts(params?: {
   const queryParams = new URLSearchParams()
   if (params?.page) queryParams.append('page', params.page.toString())
   if (params?.limit) queryParams.append('limit', params.limit.toString())
+  if (params?.sortBy) queryParams.append('sortBy', params.sortBy)
+  if (params?.sortOrder) queryParams.append('sortOrder', params.sortOrder)
   if (params?.startDate) queryParams.append('startDate', params.startDate)
   if (params?.endDate) queryParams.append('endDate', params.endDate)
   if (params?.optimizer) queryParams.append('optimizer', params.optimizer)

@@ -87,7 +87,7 @@ const mapAccountStatus = (status: number): string => {
   }
 }
 
-export const getAccounts = async (filters: any = {}, pagination: { page: number, limit: number }) => {
+export const getAccounts = async (filters: any = {}, pagination: { page: number, limit: number, sortBy?: string, sortOrder?: 'asc' | 'desc' }) => {
     const query: any = {}
     
     if (filters.optimizer) {
@@ -103,11 +103,9 @@ export const getAccounts = async (filters: any = {}, pagination: { page: number,
         query.name = { $regex: filters.name, $options: 'i' }
     }
 
-    const total = await Account.countDocuments(query)
-    const accounts = await Account.find(query)
-        .sort({ createdAt: -1 })
-        .skip((pagination.page - 1) * pagination.limit)
-        .limit(pagination.limit)
+    // 先获取所有符合条件的账户（用于排序）
+    const allAccounts = await Account.find(query).lean()
+    const total = allAccounts.length
 
     // 获取所有账户ID，用于批量查询消耗数据
     // 使用统一工具函数处理格式，兼容历史数据可能存在的格式不一致
@@ -185,7 +183,7 @@ export const getAccounts = async (filters: any = {}, pagination: { page: number,
     }
     
     // 为每个账户添加消耗和计算后的余额
-    const accountsWithMetrics = accounts.map((account: any) => {
+    const accountsWithMetrics = allAccounts.map((account: any) => {
         const accountId = account.accountId
         // periodSpend 始终显示（日期范围内的消耗或今天的消耗）
         const periodSpend = periodSpendMap[accountId] || 0
@@ -211,15 +209,55 @@ export const getAccounts = async (filters: any = {}, pagination: { page: number,
         }
     })
     
+    // 排序逻辑：如果指定了排序字段，对所有数据进行排序
+    if (pagination.sortBy) {
+        const sortField = pagination.sortBy
+        const sortOrder = pagination.sortOrder === 'desc' ? -1 : 1
+        
+        accountsWithMetrics.sort((a: any, b: any) => {
+            const aValue = a[sortField]
+            const bValue = b[sortField]
+            
+            // 处理 null/undefined 值
+            if (aValue == null && bValue == null) return 0
+            if (aValue == null) return 1 // null 值排在后面
+            if (bValue == null) return -1
+            
+            // 处理数字比较
+            if (typeof aValue === 'number' && typeof bValue === 'number') {
+                return sortOrder * (aValue - bValue)
+            }
+            
+            // 处理字符串比较
+            if (typeof aValue === 'string' && typeof bValue === 'string') {
+                return sortOrder * aValue.localeCompare(bValue)
+            }
+            
+            // 默认比较
+            return sortOrder * (aValue > bValue ? 1 : aValue < bValue ? -1 : 0)
+        })
+    } else {
+        // 默认按 createdAt 降序
+        accountsWithMetrics.sort((a: any, b: any) => {
+            const aDate = a.createdAt ? new Date(a.createdAt).getTime() : 0
+            const bDate = b.createdAt ? new Date(b.createdAt).getTime() : 0
+            return bDate - aDate
+        })
+    }
+    
+    // 分页
+    const startIndex = (pagination.page - 1) * pagination.limit
+    const paginatedAccounts = accountsWithMetrics.slice(startIndex, startIndex + pagination.limit)
+    
     // 添加调试日志（仅在前几个账户时）
-    if (accountsWithMetrics.length > 0 && accountsWithMetrics.length <= 3) {
-        accountsWithMetrics.slice(0, 3).forEach((acc: any) => {
+    if (paginatedAccounts.length > 0 && paginatedAccounts.length <= 3) {
+        paginatedAccounts.slice(0, 3).forEach((acc: any) => {
             logger.info(`Account ${acc.accountId}: periodSpend=${acc.periodSpend}, totalSpend=${acc.totalSpend}, calculatedBalance=${acc.calculatedBalance}`)
         })
     }
 
     return {
-        data: accountsWithMetrics,
+        data: paginatedAccounts,
         pagination: {
             total,
             page: pagination.page,

@@ -16,8 +16,8 @@ export default function FacebookAccountsPage() {
     pages: 1
   })
   
-  // 排序状态
-  const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(null)
+  // 排序状态 - 默认按消耗降序
+  const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' } | null>({ key: 'periodSpend', direction: 'desc' })
 
   // 筛选条件
   const [filters, setFilters] = useState({
@@ -36,7 +36,9 @@ export default function FacebookAccountsPage() {
       const response = await getAccounts({
         page,
         limit: pagination.limit,
-        ...filters
+        ...filters,
+        sortBy: sortConfig?.key || 'periodSpend',
+        sortOrder: sortConfig?.direction || 'desc',
       })
       console.log('Accounts response:', response.data[0]) // 调试：查看第一条数据
       setAccounts(response.data)
@@ -66,6 +68,12 @@ export default function FacebookAccountsPage() {
     return () => clearTimeout(timeoutId)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filters.optimizer, filters.status, filters.accountId, filters.name, filters.startDate, filters.endDate])
+
+  // 当排序配置改变时，重新加载数据
+  useEffect(() => {
+    loadAccounts(1) // 排序时重置到第一页
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sortConfig?.key, sortConfig?.direction])
 
   // 执行同步
   const handleSync = async () => {
@@ -395,43 +403,7 @@ export default function FacebookAccountsPage() {
                 ) : accounts.length === 0 ? (
                   <tr><td colSpan={6} className="px-6 py-12 text-center text-slate-500">暂无数据</td></tr>
                 ) : (
-                  (() => {
-                    // 排序逻辑
-                    const sortedAccounts = [...accounts]
-                    if (sortConfig) {
-                      sortedAccounts.sort((a, b) => {
-                        let aVal: any, bVal: any
-                        if (sortConfig.key === 'periodSpend') {
-                          aVal = a.periodSpend !== undefined ? Number(a.periodSpend) : 0
-                          bVal = b.periodSpend !== undefined ? Number(b.periodSpend) : 0
-                        } else if (sortConfig.key === 'calculatedBalance') {
-                          aVal = a.calculatedBalance !== undefined ? Number(a.calculatedBalance) : 0
-                          bVal = b.calculatedBalance !== undefined ? Number(b.calculatedBalance) : 0
-                        } else if (sortConfig.key === 'balance') {
-                          aVal = a.balance ? Number(a.balance) : 0
-                          bVal = b.balance ? Number(b.balance) : 0
-                        } else if (sortConfig.key === 'name') {
-                          aVal = a.name || ''
-                          bVal = b.name || ''
-                        } else {
-                          aVal = (a as any)[sortConfig.key]
-                          bVal = (b as any)[sortConfig.key]
-                        }
-                        if (aVal === null || aVal === undefined) return 1
-                        if (bVal === null || bVal === undefined) return -1
-                        if (typeof aVal === 'number' && typeof bVal === 'number') {
-                          return sortConfig.direction === 'asc' ? aVal - bVal : bVal - aVal
-                        }
-                        const aStr = String(aVal).toLowerCase()
-                        const bStr = String(bVal).toLowerCase()
-                        if (sortConfig.direction === 'asc') {
-                          return aStr.localeCompare(bStr)
-                        } else {
-                          return bStr.localeCompare(aStr)
-                        }
-                      })
-                    }
-                    return sortedAccounts.map((account) => (
+                  accounts.map((account) => (
                     <tr key={account.id} className="group hover:bg-white/[0.02] transition-colors">
                       <td className="px-6 py-4">
                         <div>

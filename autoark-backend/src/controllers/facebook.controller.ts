@@ -78,6 +78,8 @@ export const getAccountsList = async (
   try {
     const page = parseInt(req.query.page as string) || 1
     const limit = parseInt(req.query.limit as string) || 20
+    const sortBy = (req.query.sortBy as string) || 'periodSpend'
+    const sortOrder = (req.query.sortOrder as 'asc' | 'desc') || 'desc'
     const filters = {
         optimizer: req.query.optimizer,
         status: req.query.status,
@@ -87,7 +89,7 @@ export const getAccountsList = async (
         endDate: req.query.endDate as string | undefined,
     }
 
-    const result = await facebookAccountsService.getAccounts(filters, { page, limit })
+    const result = await facebookAccountsService.getAccounts(filters, { page, limit, sortBy, sortOrder })
     res.json({
       success: true,
       ...result
