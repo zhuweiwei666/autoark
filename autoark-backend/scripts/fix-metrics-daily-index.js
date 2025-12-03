@@ -83,26 +83,27 @@ async function fixIndexes() {
     console.log('\n=== 步骤 3: 创建新的部分索引 ===')
     
     // 创建 adId 的部分唯一索引
+    // 使用 $exists: true 代替 $ne: null（MongoDB 不支持 $ne: null 在部分索引中）
     await collection.createIndex(
       { adId: 1, date: 1 },
       {
         unique: true,
-        partialFilterExpression: { adId: { $ne: null } },
+        partialFilterExpression: { adId: { $exists: true } },
         name: 'adId_1_date_1'
       }
     )
-    console.log('✅ 已创建部分索引: adId_1_date_1 (只在 adId 不为 null 时唯一)')
+    console.log('✅ 已创建部分索引: adId_1_date_1 (只在 adId 存在时唯一)')
 
     // 创建 campaignId 的部分唯一索引
     await collection.createIndex(
       { campaignId: 1, date: 1 },
       {
         unique: true,
-        partialFilterExpression: { campaignId: { $ne: null } },
+        partialFilterExpression: { campaignId: { $exists: true } },
         name: 'campaignId_1_date_1'
       }
     )
-    console.log('✅ 已创建部分索引: campaignId_1_date_1 (只在 campaignId 不为 null 时唯一)')
+    console.log('✅ 已创建部分索引: campaignId_1_date_1 (只在 campaignId 存在时唯一)')
 
     console.log('\n=== 步骤 4: 验证索引 ===')
     const indexes = await collection.indexes()
