@@ -79,10 +79,29 @@ if (frontendDistPath) {
   logger.info(`Frontend static files served from: ${frontendDistPath}`)
   
   // Explicitly serve assets directory to ensure CSS/JS loading
-  app.use('/assets', express.static(path.join(frontendDistPath, 'assets')))
+  // Serve static assets with no-cache headers to prevent browser caching issues
+  app.use('/assets', express.static(path.join(frontendDistPath, 'assets'), {
+    setHeaders: (res, path) => {
+      // For JS and CSS files, set no-cache to ensure fresh content
+      if (path.endsWith('.js') || path.endsWith('.css')) {
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate')
+        res.setHeader('Pragma', 'no-cache')
+        res.setHeader('Expires', '0')
+      }
+    }
+  }))
   
-  // Serve root static files (favicon, etc.)
-  app.use(express.static(frontendDistPath))
+  // Serve root static files (favicon, etc.) with no-cache for HTML
+  app.use(express.static(frontendDistPath, {
+    setHeaders: (res, path) => {
+      // For HTML files, set no-cache to ensure fresh content
+      if (path.endsWith('.html')) {
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate')
+        res.setHeader('Pragma', 'no-cache')
+        res.setHeader('Expires', '0')
+      }
+    }
+  }))
   
   // Fallback to index.html for client-side routing (React Router)
   // This must be before 404 handler but after all API routes
