@@ -14,83 +14,64 @@ const isRedisAvailable = (): boolean => {
 
 // 队列配置（仅在 Redis 可用时创建）
 let queueOptions: QueueOptions | null = null
-let accountSyncQueue: Queue | null = null
-let adFetchQueue: Queue | null = null
-let insightsQueue: Queue | null = null
+let accountQueue: Queue | null = null
+let campaignQueue: Queue | null = null
+let adQueue: Queue | null = null
 
 if (isRedisAvailable()) {
   try {
     queueOptions = {
       connection: getRedisConnection(),
       defaultJobOptions: {
-        attempts: 3,
+        attempts: 5, // 重试 5 次
         backoff: {
           type: 'exponential',
-          delay: 2000, // 2秒、4秒、8秒
+          delay: 1000, // 1s, 2s, 4s, 8s, 16s
         },
         removeOnComplete: {
           age: 3600, // 保留1小时
           count: 1000, // 最多保留1000个
         },
         removeOnFail: {
-          age: 86400, // 失败任务保留24小时
+          age: 86400 * 3, // 失败任务保留3天，便于排查
         },
       },
     }
 
-    // 账户同步队列：用于推送账户同步任务
-    accountSyncQueue = new Queue('account-sync', queueOptions)
+    // 1. 账户同步队列
+    // 任务：{ accountId, token }
+    accountQueue = new Queue('facebook.account.sync', queueOptions)
 
-    // 广告抓取队列：用于推送广告抓取任务（账户、广告系列、广告等）
-    adFetchQueue = new Queue('ad-fetch', queueOptions)
+    // 2. 广告系列同步队列
+    // 任务：{ accountId, campaignId, token }
+    campaignQueue = new Queue('facebook.campaign.sync', queueOptions)
 
-    // 洞察数据抓取队列：用于推送 Insights 抓取任务
-    insightsQueue = new Queue('insights-fetch', queueOptions)
+    // 3. 广告同步队列 (包含 Insights 拉取)
+    // 任务：{ accountId, campaignId, adId, token }
+    adQueue = new Queue('facebook.ad.sync', queueOptions)
+
   } catch (error) {
     logger.warn('[Queue] Failed to initialize queues, Redis may not be configured:', error)
   }
-} else {
-  logger.warn('[Queue] Redis not available, queues will not be initialized. Queue features will be disabled.')
 }
 
-// 初始化队列监听
 export const initQueues = () => {
-  if (!accountSyncQueue || !adFetchQueue || !insightsQueue) {
-    logger.warn('[Queue] Queues not available, skipping initialization')
-    return
-  }
+  if (!accountQueue || !campaignQueue || !adQueue) return
 
-  // 监听队列事件
-  accountSyncQueue.on('error', (error) => {
-    logger.error('[Queue] Account sync queue error:', error)
+  const queues = [
+    { name: 'facebook.account.sync', queue: accountQueue },
+    { name: 'facebook.campaign.sync', queue: campaignQueue },
+    { name: 'facebook.ad.sync', queue: adQueue },
+  ]
+
+  queues.forEach(({ name, queue }) => {
+    queue.on('error', (err) => {
+      logger.error(`[Queue] ${name} error:`, err)
+    })
+    // 可以在这里添加更多全局事件监听
   })
 
-  adFetchQueue.on('error', (error) => {
-    logger.error('[Queue] Ad fetch queue error:', error)
-  })
-
-  insightsQueue.on('error', (error) => {
-    logger.error('[Queue] Insights queue error:', error)
-  })
-
-  logger.info('[Queue] Facebook queues initialized')
+  logger.info('[Queue] Facebook sync queues initialized')
 }
 
-// 清理所有队列（用于测试或重置）
-export const cleanAllQueues = async () => {
-  if (!accountSyncQueue || !adFetchQueue || !insightsQueue) {
-    logger.warn('[Queue] Queues not available, cannot clean')
-    return
-  }
-
-  await Promise.all([
-    accountSyncQueue.obliterate({ force: true }),
-    adFetchQueue.obliterate({ force: true }),
-    insightsQueue.obliterate({ force: true }),
-  ])
-  logger.info('[Queue] All queues cleaned')
-}
-
-// 导出队列（可能为 null）
-export { accountSyncQueue, adFetchQueue, insightsQueue }
-
+export { accountQueue, campaignQueue, adQueue, queueOptions }

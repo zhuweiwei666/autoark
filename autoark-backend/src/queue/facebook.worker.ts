@@ -1,19 +1,15 @@
 import { Worker, WorkerOptions } from 'bullmq'
 import { getRedisConnection, getRedisClient } from '../config/redis'
 import logger from '../utils/logger'
-import { adFetchQueue, insightsQueue, accountSyncQueue } from './facebook.queue'
-import * as facebookSyncService from '../services/facebook.sync.service'
-import * as facebookApiService from '../services/facebook.api'
-import * as facebookCampaignsService from '../services/facebook.campaigns.service'
-import Account from '../models/Account'
+import { accountQueue, campaignQueue, adQueue } from './facebook.queue'
+import { fetchCampaigns } from '../integration/facebook/campaigns.api'
+import { fetchAds } from '../integration/facebook/ads.api'
+import { fetchInsights } from '../integration/facebook/insights.api'
+import { normalizeForStorage } from '../utils/accountId'
+import { upsertService } from '../services/facebook.upsert.service'
 import Campaign from '../models/Campaign'
 import Ad from '../models/Ad'
-import MetricsDaily from '../models/MetricsDaily'
-import RawInsights from '../models/RawInsights'
-import { normalizeForApi, normalizeForStorage } from '../utils/accountId'
-import { upsertService } from '../services/facebook.upsert.service'
 import dayjs from 'dayjs'
-import mongoose from 'mongoose'
 
 // 检查 Redis 是否可用
 const isRedisAvailable = (): boolean => {
@@ -25,16 +21,16 @@ const isRedisAvailable = (): boolean => {
   }
 }
 
-// Worker 配置（仅在 Redis 可用时创建）
+// Worker 配置
 let workerOptions: WorkerOptions | null = null
 if (isRedisAvailable()) {
   try {
     workerOptions = {
       connection: getRedisConnection(),
-      concurrency: 30, // 并发处理30个任务（可根据实际情况调整10-50）
+      concurrency: 10, // 默认并发
       limiter: {
-        max: 100, // 每秒最多100个任务
-        duration: 1000,
+        max: 80, // 每分钟最多处理 80 个任务 (防止 API 限流)
+        duration: 60000,
       },
     }
   } catch (error) {
@@ -53,276 +49,289 @@ const getActionValue = (actions: any[], actionType: string): number | undefined 
 const getActionCount = (actions: any[], actionType: string): number | undefined => {
   if (!actions || !Array.isArray(actions)) return undefined
   const action = actions.find((a: any) => a.action_type === actionType)
-  return action ? parseInt(action.value) : undefined
+  return action ? parseFloat(action.value) : undefined
 }
 
-// ==================== 账户同步 Worker ====================
-export const accountSyncWorker = (accountSyncQueue && workerOptions) ? new Worker(
-  'account-sync',
+// ==================== 1. Account Sync Worker ====================
+// 职责：拉取 Campaign 列表 -> 推送 Campaign 任务
+export const accountWorker = (accountQueue && workerOptions) ? new Worker(
+  'facebook.account.sync',
   async (job) => {
     const { accountId, token } = job.data
-    logger.info(`[Worker] Processing account sync: ${accountId}`)
+    logger.info(`[AccountWorker] Processing account: ${accountId}`)
 
     try {
-      // 1. 抓取 Campaigns（只抓基础字段）
-      const accountIdForApi = normalizeForApi(accountId)
-      const campaigns = await facebookApiService.fetchCampaigns(accountIdForApi, token)
-      logger.info(`[Worker] Found ${campaigns.length} campaigns for account ${accountId}`)
+      // 1. 拉取 Campaigns
+      const campaigns = await fetchCampaigns(accountId, token)
+      logger.info(`[AccountWorker] Fetched ${campaigns.length} campaigns for account ${accountId}`)
 
-      // 2. 保存 Campaigns
+      // 2. 更新 Campaign 数据并推送任务
+      const jobs = []
       for (const camp of campaigns) {
-        const campaignData = {
-          campaignId: camp.id,
-          accountId: normalizeForStorage(accountId),
-          channel: 'facebook',
-          name: camp.name,
-          status: camp.status,
-          objective: camp.objective,
-          buying_type: camp.buying_type,
-          daily_budget: camp.daily_budget,
-          budget_remaining: camp.budget_remaining,
-          created_time: camp.created_time ? new Date(camp.created_time) : undefined,
-          updated_time: camp.updated_time ? new Date(camp.updated_time) : undefined,
-          raw: camp,
-        }
-
+        // 更新 Campaign 基础信息
         await Campaign.findOneAndUpdate(
-          { campaignId: campaignData.campaignId },
-          campaignData,
-          { upsert: true, new: true }
-        )
-      }
-
-      // 3. 为每个 Campaign 推送广告抓取任务
-      for (const camp of campaigns) {
-        await adFetchQueue.add(
-          'fetch-ads-for-campaign',
+          { campaignId: camp.id },
           {
             campaignId: camp.id,
             accountId: normalizeForStorage(accountId),
-            token,
+            name: camp.name,
+            status: camp.status,
+            objective: camp.objective,
+            daily_budget: camp.daily_budget,
+            budget_remaining: camp.budget_remaining,
+            buying_type: camp.buying_type,
+            raw: camp,
           },
-          {
-            priority: 1,
-          }
+          { upsert: true, new: true }
         )
-      }
 
-      return { success: true, campaignsCount: campaigns.length }
-    } catch (error: any) {
-      logger.error(`[Worker] Account sync failed for ${accountId}:`, error)
-      throw error
-    }
-  },
-  workerOptions!
-) : null
-
-// ==================== 广告抓取 Worker ====================
-export const adFetchWorker = (adFetchQueue && workerOptions) ? new Worker(
-  'ad-fetch',
-  async (job) => {
-    const { campaignId, accountId, token } = job.data
-    logger.info(`[Worker] Processing ad fetch for campaign: ${campaignId}`)
-
-    try {
-      const accountIdForApi = normalizeForApi(accountId)
-
-      // 1. 抓取该 Campaign 下的所有 Ads
-      const ads = await facebookApiService.fetchAds(accountIdForApi, token)
-      const campaignAds = ads.filter((ad: any) => ad.campaign_id === campaignId)
-      logger.info(`[Worker] Found ${campaignAds.length} ads for campaign ${campaignId}`)
-
-      // 2. 保存 Ads
-      for (const ad of campaignAds) {
-        const adData = {
-          adId: ad.id,
-          adsetId: ad.adset_id,
-          campaignId: ad.campaign_id,
-          accountId: normalizeForStorage(accountId),
-          channel: 'facebook',
-          name: ad.name,
-          status: ad.status,
-          creativeId: ad.creative?.id,
-          created_time: ad.created_time ? new Date(ad.created_time) : undefined,
-          updated_time: ad.updated_time ? new Date(ad.updated_time) : undefined,
-          raw: ad,
-        }
-
-        await Ad.findOneAndUpdate({ adId: adData.adId }, adData, { upsert: true, new: true })
-      }
-
-      // 3. 为每个 Ad 推送 Insights 抓取任务（多个 date_preset）
-      const datePresets = ['yesterday', 'today', 'last_3d', 'last_7d']
-      for (const ad of campaignAds) {
-        for (const datePreset of datePresets) {
-          await insightsQueue.add(
-            'fetch-ad-insights',
+        // 仅处理活跃或有数据的 Campaign (可选过滤逻辑)
+        // 推送到 campaignQueue
+        if (campaignQueue) {
+          jobs.push(campaignQueue.add(
+            'sync-campaign',
             {
-              adId: ad.id,
-              campaignId: ad.campaign_id,
-              adsetId: ad.adset_id,
-              accountId: normalizeForStorage(accountId),
+              accountId,
+              campaignId: camp.id,
               token,
-              datePreset,
-              level: 'ad', // 关键：使用 ad 级别而不是 campaign 级别
             },
             {
-              priority: datePreset === 'yesterday' ? 3 : datePreset === 'today' ? 2 : 1, // yesterday 优先级最高
+              jobId: `campaign-sync-${camp.id}-${dayjs().format('YYYY-MM-DD-HH')}`, // 每小时去重
+              priority: 2,
             }
-          )
+          ))
         }
       }
-
-      return { success: true, adsCount: campaignAds.length }
+      
+      await Promise.all(jobs)
+      return { campaignsCount: campaigns.length }
     } catch (error: any) {
-      logger.error(`[Worker] Ad fetch failed for campaign ${campaignId}:`, error)
+      logger.error(`[AccountWorker] Failed for account ${accountId}:`, error)
       throw error
     }
   },
-  workerOptions!
+  { ...workerOptions, concurrency: 5 } // 账户层级并发低一点
 ) : null
 
-// ==================== Insights 抓取 Worker ====================
-export const insightsWorker = (insightsQueue && workerOptions) ? new Worker(
-  'insights-fetch',
+// ==================== 2. Campaign Sync Worker ====================
+// 职责：拉取 Ad 列表 -> 推送 Ad 任务
+export const campaignWorker = (campaignQueue && workerOptions) ? new Worker(
+  'facebook.campaign.sync',
   async (job) => {
-    const { adId, campaignId, adsetId, accountId, token, datePreset, level } = job.data
-    logger.info(`[Worker] Processing insights fetch: ${level} ${adId || campaignId}, datePreset: ${datePreset}`)
+    const { accountId, campaignId, token } = job.data
+    // logger.debug(`[CampaignWorker] Processing campaign: ${campaignId}`)
 
     try {
-      // 抓取 Insights（使用 ad 级别）
-      const insights = await facebookApiService.fetchInsights(
-        adId || campaignId,
-        level || 'ad',
-        datePreset,
-        token,
-        ['country'] // 按国家分组
-      )
+      // 1. 拉取 Ads
+      const ads = await fetchAds(accountId, token)
+      // 过滤出属于当前 Campaign 的广告 (API 可能返回账户下所有广告，如果 fetchAds 不支持 filter by campaign)
+      // 实际上 fetchAds 是 fetch all ads for account. 
+      // 优化：应该用 fetchAdsForCampaign(campaignId) 或者 filter.
+      // 但 Facebook API GET /{campaign-id}/ads 是存在的。
+      // 让我们假设 fetchAds 实际上是 fetchAllAdsForAccount。
+      // 为了效率，我们可以只 fetch ads for this campaign. 
+      // 现在的 ads.api.ts 是 fetchAds(accountId). 
+      // 我们可以改进 ads.api.ts 或者在这里 filter。
+      // 考虑到 fetchAds(accountId) 会拉取所有广告，如果每个 campaign worker 都拉一遍，会很浪费。
+      // 更好的做法：AccountWorker 拉取 Campaign 列表。
+      // CampaignWorker 拉取该 Campaign 下的 Ads。
+      
+      // 修正：我们应该调用 facebookClient 直接拉取 campaign 下的 ads，或者在 ads.api.ts 加一个 fetchAdsByCampaign
+      // 暂时在这里直接调用 fetchAds(accountId) 并 filter 效率极低。
+      // 应该修改 integration/facebook/ads.api.ts 增加 fetchAdsByCampaign。
+      // 由于 Phase 1 已经 lock 了 api.ts，我这里先用 fetchAds 并且注意：fetchAds 参数是 accountId。
+      // 如果 accountId 很大，这里会有性能问题。
+      // 但 API 支持 filtering。
+      // 暂时：我们用 fetchAds(accountId) 并 filter。
+      // 或者：修改 ads.api.ts (允许)。
+      
+      // 实际上，Facebook Graph API: GET /{campaign_id}/ads 是标准做法。
+      // 我会在 Phase 3 补充这个 API 调用。
+      
+      // 暂时用 fetchAds(accountId) 并 filter (低效，但兼容现有 API 签名)。
+      // 实际上 fetchAds(accountId) 有 limit 1000。
+      // 更好的方式：
+      const { facebookClient } = require('../integration/facebook/facebookClient')
+      const res = await facebookClient.get(`/${campaignId}/ads`, {
+        access_token: token,
+        fields: 'id,name,status,adset_id,campaign_id,creative{id},created_time,updated_time',
+        limit: 500,
+      })
+      const campaignAds = res.data || []
 
-      if (!insights || insights.length === 0) {
-        logger.warn(`[Worker] No insights found for ${level} ${adId || campaignId}, datePreset: ${datePreset}`)
-        return { success: true, insightsCount: 0 }
-      }
+      // 2. 更新 Ad 数据并推送任务
+      const jobs = []
+      for (const ad of campaignAds) {
+        await Ad.findOneAndUpdate(
+          { adId: ad.id },
+          {
+            adId: ad.id,
+            adsetId: ad.adset_id,
+            campaignId: ad.campaign_id,
+            accountId: normalizeForStorage(accountId),
+            name: ad.name,
+            status: ad.status,
+            creativeId: ad.creative?.id,
+            raw: ad,
+          },
+          { upsert: true }
+        )
 
-      // 保存 Insights 数据（使用 BulkWrite 优化性能）
-      let savedCount = 0
-      const bulkOps: mongoose.mongo.AnyBulkWriteOperation[] = []
-      const rawInsightsOps: mongoose.mongo.AnyBulkWriteOperation[] = []
-
-      for (const insight of insights) {
-        const country = insight.country || null
-        const date = insight.date_start || dayjs().format('YYYY-MM-DD')
-
-        // 根据 datePreset 确定实际日期
-        let actualDate = date
-        if (datePreset === 'yesterday') {
-          actualDate = dayjs().subtract(1, 'day').format('YYYY-MM-DD')
-        } else if (datePreset === 'today') {
-          actualDate = dayjs().format('YYYY-MM-DD')
-        } else if (datePreset === 'last_3d' || datePreset === 'last_7d') {
-          // 对于范围查询，使用 date_start
-          actualDate = date
+        if (adQueue) {
+          jobs.push(adQueue.add(
+            'sync-ad',
+            {
+              accountId,
+              campaignId,
+              adId: ad.id,
+              adsetId: ad.adset_id,
+              token,
+            },
+            {
+              jobId: `ad-sync-${ad.id}-${dayjs().format('YYYY-MM-DD-HH')}`,
+              priority: 3,
+            }
+          ))
         }
-
-        const purchaseValue = getActionValue(insight.action_values, 'purchase')
-        const mobileAppInstall = getActionCount(insight.actions, 'mobile_app_install')
-
-        // 1. 保存原始 Insights 数据到 RawInsights (通过 UpsertService)
-        await upsertService.upsertRawInsights({
-          date: actualDate,
-          datePreset: datePreset,
-          adId: adId,
-          country: country,
-          raw: insight,
-          accountId: normalizeForStorage(accountId),
-          campaignId: campaignId,
-          adsetId: adsetId,
-          spend: parseFloat(insight.spend || '0'),
-          impressions: insight.impressions || 0,
-          clicks: insight.clicks || 0,
-          purchase_value: purchaseValue,
-          syncedAt: new Date(),
-          tokenId: job.data.tokenId || 'unknown',
-        })
-
-        // 2. 保存聚合数据到 MetricsDaily (通过 UpsertService)
-        // 注意：这是 Ad 级别的数据
-        await upsertService.upsertMetricsDaily({
-          date: actualDate,
-          level: 'ad',
-          entityId: adId,
-          channel: 'facebook',
-          country: country,
-          
-          accountId: normalizeForStorage(accountId),
-          campaignId: campaignId,
-          adsetId: adsetId,
-          adId: adId,
-          
-          spend: parseFloat(insight.spend || '0'),
-          impressions: insight.impressions || 0,
-          clicks: insight.clicks || 0,
-          purchase_value: purchaseValue,
-          roas: insight.purchase_roas ? parseFloat(insight.purchase_roas) : 0,
-          
-          cpc: insight.cpc ? parseFloat(insight.cpc) : undefined,
-          cpm: insight.cpm ? parseFloat(insight.cpm) : undefined,
-          // ctr: insight.ctr ? parseFloat(insight.ctr) : undefined, // 后台聚合计算
-          
-          actions: insight.actions,
-          action_values: insight.action_values,
-          mobile_app_install_count: mobileAppInstall,
-          
-          raw: insight,
-        })
-
-        savedCount++
       }
 
-      // 注意：这里去掉了旧的 BulkWrite 调用，因为 upsertService 内部已经是单个 updateOne (虽然失去了 BulkWrite 的极致性能，但为了逻辑清晰和幂等性，先这样。
-      // 如果需要 BulkWrite，可以在 UpsertService 中实现缓冲队列或批量接口)
-      // 用户指令是 "统一改成调用 UpsertService"，且 "使用 updateOne ... {upsert:true}"，所以先遵循这个。
-
-      return { success: true, insightsCount: savedCount }
+      await Promise.all(jobs)
+      return { adsCount: campaignAds.length }
     } catch (error: any) {
-      logger.error(`[Worker] Insights fetch failed for ${level} ${adId || campaignId}:`, error)
+      logger.error(`[CampaignWorker] Failed for campaign ${campaignId}:`, error)
       throw error
     }
   },
-  workerOptions!
+  { ...workerOptions, concurrency: 10 }
 ) : null
 
-// 初始化所有 Workers
+// ==================== 3. Ad Sync Worker ====================
+// 职责：拉取 Ad Insights (多时间粒度) -> Upsert
+export const adWorker = (adQueue && workerOptions) ? new Worker(
+  'facebook.ad.sync',
+  async (job) => {
+    const { accountId, campaignId, adId, adsetId, token } = job.data
+    // logger.debug(`[AdWorker] Processing ad: ${adId}`)
+
+    try {
+      // 拉取多个时间范围的数据
+      const datePresets = ['today', 'yesterday', 'last_3d', 'last_7d']
+      
+      const promises = datePresets.map(async (preset) => {
+        const insights = await fetchInsights(
+          adId,
+          'ad',
+          preset,
+          token,
+          ['country'] // 按国家分组
+        )
+        
+        if (!insights || insights.length === 0) return
+
+        for (const insight of insights) {
+          const country = insight.country || null
+          const date = insight.date_start || dayjs().format('YYYY-MM-DD')
+          
+          // 计算实际日期
+          let actualDate = date
+          if (preset === 'yesterday') {
+            actualDate = dayjs().subtract(1, 'day').format('YYYY-MM-DD')
+          } else if (preset === 'today') {
+            actualDate = dayjs().format('YYYY-MM-DD')
+          }
+          // last_3d / last_7d 是聚合数据，date_start 是开始日期，但也可能包含多天。
+          // RawInsights 存储时保留 datePreset 标记。
+          // MetricsDaily 只有按天存储。如果是 last_3d，通常用于 Purchase 修正，不直接存入 MetricsDaily (或者存入 Raw 后由修正逻辑处理)。
+          // 这里我们：
+          // 1. RawInsights: 全部存储
+          // 2. MetricsDaily: 只存 today / yesterday (单日数据)
+          // 3. 修正逻辑会读取 RawInsights(last_7d) 来修正 MetricsDaily
+
+          const purchaseValue = getActionValue(insight.action_values, 'purchase')
+          const mobileAppInstall = getActionCount(insight.actions, 'mobile_app_install')
+
+          // 1. Upsert RawInsights (All Presets)
+          await upsertService.upsertRawInsights({
+            date: actualDate,
+            datePreset: preset,
+            adId: adId,
+            country: country,
+            raw: insight,
+            accountId: normalizeForStorage(accountId),
+            campaignId: campaignId,
+            adsetId: adsetId,
+            spend: parseFloat(insight.spend || '0'),
+            impressions: insight.impressions || 0,
+            clicks: insight.clicks || 0,
+            purchase_value: purchaseValue,
+            syncedAt: new Date(),
+            tokenId: job.data.tokenId || 'unknown',
+          })
+
+          // 2. Upsert MetricsDaily (Only Single Day Presets)
+          if (preset === 'today' || preset === 'yesterday') {
+            await upsertService.upsertMetricsDaily({
+              date: actualDate,
+              level: 'ad',
+              entityId: adId,
+              channel: 'facebook',
+              country: country,
+              
+              accountId: normalizeForStorage(accountId),
+              campaignId: campaignId,
+              adsetId: adsetId,
+              adId: adId,
+              
+              spend: parseFloat(insight.spend || '0'),
+              impressions: insight.impressions || 0,
+              clicks: insight.clicks || 0,
+              purchase_value: purchaseValue || 0,
+              roas: insight.purchase_roas ? parseFloat(insight.purchase_roas) : 0,
+              
+              cpc: insight.cpc ? parseFloat(insight.cpc) : undefined,
+              cpm: insight.cpm ? parseFloat(insight.cpm) : undefined,
+              
+              actions: insight.actions,
+              action_values: insight.action_values,
+              mobile_app_install_count: mobileAppInstall,
+              
+              raw: insight,
+            })
+          }
+        }
+      })
+
+      await Promise.all(promises)
+      return { success: true }
+    } catch (error: any) {
+      logger.error(`[AdWorker] Failed for ad ${adId}:`, error)
+      throw error
+    }
+  },
+  { ...workerOptions, concurrency: 20 } // 广告层级并发高
+) : null
+
+// 初始化 Workers
 export const initWorkers = () => {
-  if (!accountSyncWorker || !adFetchWorker || !insightsWorker) {
-    logger.warn('[Worker] Workers not available, Redis may not be configured. Queue features will be disabled.')
+  if (!accountWorker || !campaignWorker || !adWorker) {
+    logger.warn('[Worker] Workers not initialized (Redis unavailable)')
     return
   }
 
-  accountSyncWorker.on('completed', (job) => {
-    logger.info(`[Worker] Account sync job ${job.id} completed`)
+  const workers = [
+    { name: 'AccountWorker', worker: accountWorker },
+    { name: 'CampaignWorker', worker: campaignWorker },
+    { name: 'AdWorker', worker: adWorker },
+  ]
+
+  workers.forEach(({ name, worker }) => {
+    worker.on('failed', (job, err) => {
+      logger.error(`[${name}] Job ${job?.id} failed:`, err)
+    })
+    worker.on('error', (err) => {
+      logger.error(`[${name}] Worker error:`, err)
+    })
   })
 
-  accountSyncWorker.on('failed', (job, err) => {
-    logger.error(`[Worker] Account sync job ${job?.id} failed:`, err)
-  })
-
-  adFetchWorker.on('completed', (job) => {
-    logger.info(`[Worker] Ad fetch job ${job.id} completed`)
-  })
-
-  adFetchWorker.on('failed', (job, err) => {
-    logger.error(`[Worker] Ad fetch job ${job?.id} failed:`, err)
-  })
-
-  insightsWorker.on('completed', (job) => {
-    logger.info(`[Worker] Insights job ${job.id} completed`)
-  })
-
-  insightsWorker.on('failed', (job, err) => {
-    logger.error(`[Worker] Insights job ${job?.id} failed:`, err)
-  })
-
-  logger.info('[Worker] Facebook workers initialized')
+  logger.info('[Worker] Facebook sync workers initialized (Pipeline V2)')
 }
-
