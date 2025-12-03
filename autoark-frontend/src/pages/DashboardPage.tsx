@@ -241,7 +241,7 @@ export default function DashboardPage() {
         <section className="bg-white rounded-3xl border border-slate-200 p-6 shadow-lg shadow-black/5">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-xl font-bold text-slate-900">📊 数据看板</h2>
-            <div className="flex items-center gap-4">
+            <div className="grid grid-cols-2 gap-4 items-end">
               <div className="group">
                 <label className="block text-xs font-medium text-slate-400 mb-2 group-focus-within:text-indigo-400 transition-colors">开始日期</label>
                 <DatePicker
