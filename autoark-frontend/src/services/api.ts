@@ -313,7 +313,27 @@ export async function getCampaigns(params?: {
   const response = await fetch(url)
 
   if (!response.ok) {
-    throw new Error('Failed to fetch campaigns')
+    const errorText = await response.text()
+    let errorMessage = 'Failed to fetch campaigns'
+    try {
+      const errorJson = JSON.parse(errorText)
+      errorMessage = errorJson.message || errorMessage
+    } catch {
+      // 如果不是 JSON，使用原始文本（可能是 HTML）
+      if (errorText.includes('<!DOCTYPE')) {
+        errorMessage = `服务器返回了 HTML 响应，请检查 API 路由配置。状态码: ${response.status}`
+      } else {
+        errorMessage = errorText || errorMessage
+      }
+    }
+    throw new Error(errorMessage)
+  }
+
+  // 检查 Content-Type 确保是 JSON
+  const contentType = response.headers.get('content-type')
+  if (!contentType || !contentType.includes('application/json')) {
+    const text = await response.text()
+    throw new Error(`服务器返回了非 JSON 响应: ${contentType}. 响应内容: ${text.substring(0, 100)}`)
   }
 
   return response.json()
