@@ -660,3 +660,33 @@ export async function saveCampaignColumnSettings(columns: string[]): Promise<Use
   return response.json()
 }
 
+
+// === Token Pool & Permissions ===
+
+export interface PurchaseValueInfo {
+  today: number
+  yesterday: number
+  last7d: number
+  corrected: number
+  lastUpdated: string
+}
+
+// 获取 Purchase 值信息（用于 Tooltip）
+export async function getPurchaseValueInfo(params: {
+  campaignId: string
+  date: string
+  country?: string
+}): Promise<{ success: boolean; data: PurchaseValueInfo }> {
+  const queryParams = new URLSearchParams()
+  queryParams.append('campaignId', params.campaignId)
+  queryParams.append('date', params.date)
+  if (params.country) queryParams.append('country', params.country)
+
+  const response = await fetch(`${API_BASE_URL}/api/facebook/purchase-value-info?${queryParams.toString()}`)
+
+  if (!response.ok) {
+    throw new Error('Failed to fetch purchase value info')
+  }
+
+  return response.json()
+}
