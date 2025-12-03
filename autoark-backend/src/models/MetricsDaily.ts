@@ -9,6 +9,10 @@ const metricsDailySchema = new mongoose.Schema(
     adsetId: String,
     adId: String,
     country: String, // 国家代码（从 Facebook API breakdowns 获取）
+    
+    // 统一 Key 字段
+    level: { type: String, enum: ['account', 'campaign', 'adset', 'ad'], index: true },
+    entityId: { type: String, index: true }, // accountId/campaignId/adsetId/adId 的值
 
     // Metrics
     impressions: { type: Number, default: 0 },
@@ -37,25 +41,13 @@ const metricsDailySchema = new mongoose.Schema(
   { timestamps: true },
 )
 
-// Compound unique index for upsert (ad level with country)
-// 使用部分索引：只在 adId 存在时才应用唯一约束，避免 campaign 级别指标冲突
+// 复合索引：确保唯一性 (date + level + entityId + country)
 metricsDailySchema.index(
-  { adId: 1, date: 1, country: 1 }, 
-  { 
-    unique: true,
-    partialFilterExpression: { adId: { $exists: true } } // 只在 adId 存在时唯一
-  }
+  { date: 1, level: 1, entityId: 1, country: 1 },
+  { unique: true }
 )
-// New compound unique index for campaign level insights (with country)
-// 使用部分索引：只在 campaignId 存在时才应用唯一约束
-// 注意：country 字段可能为 null（如果没有 breakdowns），所以需要包含在索引中
-metricsDailySchema.index(
-  { campaignId: 1, date: 1, country: 1 }, 
-  { 
-    unique: true,
-    partialFilterExpression: { campaignId: { $exists: true } } // 只在 campaignId 存在时唯一
-  }
-)
+
+// 兼容旧索引 (虽然新写入会用上面的索引，但查询可能还会用到这些)
 // 性能优化：为日期范围查询添加索引
 metricsDailySchema.index({ date: 1 })
 metricsDailySchema.index({ date: 1, campaignId: 1 })
