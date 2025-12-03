@@ -134,8 +134,15 @@ export const getAccounts = async (filters: any = {}, pagination: { page: number,
             dateQuery.date = today
         }
         
+        // 重要：只统计 campaign 级别的数据（campaignId 存在），确保与广告系列页面数据一致
+        // 这样可以避免重复计算 ad 级别和 adset 级别的数据
         const periodSpendData = await MetricsDaily.aggregate([
-            { $match: dateQuery },
+            { 
+                $match: {
+                    ...dateQuery,
+                    campaignId: { $exists: true, $ne: null } // 只统计 campaign 级别的数据
+                } 
+            },
             {
                 $group: {
                     _id: '$accountId',
