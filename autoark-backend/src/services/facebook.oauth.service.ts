@@ -2,6 +2,7 @@ import axios from 'axios'
 import logger from '../utils/logger'
 import FbToken from '../models/FbToken'
 import { tokenPool } from './facebook.token.pool'
+import { fbClient } from './facebook.api'
 import * as facebookPermissionsService from './facebook.permissions.service'
 
 /**
@@ -143,7 +144,8 @@ export const handleOAuthCallback = async (code: string): Promise<{
   tokenId: string
   fbUserId: string
   fbUserName: string
-  permissions: any
+  userDetails?: any
+  permissions?: any
 }> => {
   try {
     logger.info('[OAuth] Handling OAuth callback')
