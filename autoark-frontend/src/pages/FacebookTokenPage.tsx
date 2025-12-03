@@ -59,14 +59,25 @@ export default function FacebookTokenPage() {
     const checkOAuthConfig = async () => {
       try {
         const response = await getOAuthConfig()
-        setOauthConfigured(response.data.configured)
-        if (!response.data.configured && response.data.missing.length > 0) {
+        const configured = response.data.configured
+        setOauthConfigured(configured)
+        
+        if (!configured && response.data.missing.length > 0) {
           console.warn('OAuth 未配置，缺少:', response.data.missing.join(', '))
+          // 显示提示信息
+          setMessage({
+            type: 'error',
+            text: `OAuth 未配置。缺少环境变量: ${response.data.missing.join(', ')}\n\n请配置后刷新页面，或使用"手动添加 Token"功能。`,
+          })
         }
-      } catch (error) {
+      } catch (error: any) {
         // OAuth 配置检查失败不影响页面使用
         console.error('Failed to check OAuth config:', error)
         setOauthConfigured(false)
+        setMessage({
+          type: 'error',
+          text: `无法检查 OAuth 配置: ${error.message || '未知错误'}\n\n请使用"手动添加 Token"功能。`,
+        })
       }
     }
     checkOAuthConfig()
@@ -229,9 +240,13 @@ export default function FacebookTokenPage() {
           <div className="flex gap-3">
             <button
               onClick={handleFacebookLogin}
-              disabled={oauthLoading || !oauthConfigured}
-              className="group px-6 py-3 bg-blue-600 hover:bg-blue-700 rounded-2xl text-sm font-semibold text-white shadow-md hover:shadow-lg transition-all duration-200 flex items-center gap-2 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
-              title={!oauthConfigured ? 'OAuth 未配置，请联系管理员' : ''}
+              disabled={oauthLoading}
+              className={`group px-6 py-3 rounded-2xl text-sm font-semibold text-white shadow-md hover:shadow-lg transition-all duration-200 flex items-center gap-2 active:scale-95 ${
+                oauthConfigured
+                  ? 'bg-blue-600 hover:bg-blue-700'
+                  : 'bg-gray-400 hover:bg-gray-500 cursor-not-allowed'
+              } ${oauthLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
+              title={!oauthConfigured ? 'OAuth 未配置，请联系管理员配置环境变量' : '点击连接 Facebook 账号'}
             >
               <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
                 <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
