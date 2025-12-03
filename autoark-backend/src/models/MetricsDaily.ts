@@ -55,5 +55,8 @@ metricsDailySchema.index(
 metricsDailySchema.index({ date: 1 })
 metricsDailySchema.index({ date: 1, campaignId: 1 })
 metricsDailySchema.index({ date: 1, accountId: 1 })
+// 为国家维度查询添加索引
+metricsDailySchema.index({ country: 1, date: 1 })
+metricsDailySchema.index({ country: 1, campaignId: 1, date: 1 })
 
 export default mongoose.model('MetricsDaily', metricsDailySchema)
