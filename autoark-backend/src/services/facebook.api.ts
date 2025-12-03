@@ -93,6 +93,9 @@ export const fetchInsights = async (
   datePreset = 'today',
   token?: string,
 ) => {
+  // Facebook Insights API 有效字段列表
+  // 注意：cpa, conversion_rate, value, mobile_app_install 不是有效字段
+  // 这些数据应该从 actions 和 action_values 中获取
   const fields = [
     'campaign_id',
     'adset_id',
@@ -107,17 +110,13 @@ export const fetchInsights = async (
     'ctr',
     'cpm',
     'cpp',
-    'cpa',
-    'cost_per_conversion',
-    'conversion_rate',
-    'conversions',
-    'actions', // for conversions
-    'action_values', // for conversion values
+    'cost_per_conversion', // 有效字段
+    'conversions', // 有效字段
+    'actions', // 用于获取转化数据（包括 mobile_app_install）
+    'action_values', // 用于获取转化价值（包括 purchase value）
     'unique_actions',
     'purchase_roas', // Return on Ad Spend
-    'value',
-    'cost_per_action_type',
-    'mobile_app_install',
+    'cost_per_action_type', // 有效字段
     'video_play_actions',
     'video_30_sec_watched_actions',
     'video_avg_time_watched_actions',
