@@ -779,7 +779,9 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
         
         // 优先使用 metricsObj 中的 purchase_value，如果没有则从 action_values 中提取
         let purchase_value = metricsObj.purchase_value
-        if (!purchase_value && actionValues && actionValues.length > 0) {
+        
+        // 如果 purchase_value 是 undefined 或 null，尝试从 action_values 中提取
+        if ((purchase_value === undefined || purchase_value === null) && actionValues && actionValues.length > 0) {
             // 尝试从 action_values 中提取 purchase value
             const purchaseAction = actionValues.find((a: any) => 
                 a.action_type === 'purchase' || a.action_type === 'mobile_app_purchase'
@@ -789,11 +791,16 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
             }
         }
         // 如果还是没有，尝试从 extractedActionValues 中获取
-        if (!purchase_value && extractedActionValues.purchase_value !== undefined) {
+        if ((purchase_value === undefined || purchase_value === null) && extractedActionValues.purchase_value !== undefined) {
             purchase_value = extractedActionValues.purchase_value
         }
-        if (!purchase_value && extractedActionValues.mobile_app_purchase_value !== undefined) {
+        if ((purchase_value === undefined || purchase_value === null) && extractedActionValues.mobile_app_purchase_value !== undefined) {
             purchase_value = extractedActionValues.mobile_app_purchase_value
+        }
+        
+        // 调试日志：如果 purchase_value 仍然为 0，记录相关信息
+        if (campaignObj.campaignId && (!purchase_value || purchase_value === 0)) {
+            logger.debug(`[getCampaigns] Campaign ${campaignObj.campaignId}: purchase_value=${purchase_value}, metricsObj.purchase_value=${metricsObj.purchase_value}, actionValues.length=${actionValues?.length || 0}, extractedActionValues=${JSON.stringify(extractedActionValues)}`)
         }
         
         return {
