@@ -354,19 +354,57 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
             }
         }
     } else {
-        // 如果按 Campaign 表字段排序，使用原来的逻辑
-        const sort: any = {}
-        if (pagination.sortBy) {
-          sort[pagination.sortBy] = pagination.sortOrder === 'desc' ? -1 : 1
-        } else {
-          sort.createdAt = -1 // 默认排序
+        // 如果按 Campaign 表字段排序，也需要先获取所有符合条件的 campaigns，排序后再分页
+        const allCampaigns = await CampaignModel.find(query).lean()
+        total = allCampaigns.length
+        
+        if (allCampaigns.length === 0) {
+            return {
+                data: [],
+                pagination: {
+                    page: pagination.page,
+                    limit: pagination.limit,
+                    total: 0,
+                    pages: 0,
+                },
+            }
         }
         
-        total = await CampaignModel.countDocuments(query)
-        campaigns = await CampaignModel.find(query)
-            .sort(sort)
-            .skip((pagination.page - 1) * pagination.limit)
-            .limit(pagination.limit)
+        // 对所有 campaigns 进行排序
+        const sortField = pagination.sortBy || 'createdAt'
+        const sortOrder = pagination.sortOrder === 'desc' ? -1 : 1
+        
+        allCampaigns.sort((a: any, b: any) => {
+            const aValue = a[sortField]
+            const bValue = b[sortField]
+            
+            // 处理 null/undefined 值
+            if (aValue == null && bValue == null) return 0
+            if (aValue == null) return 1 // null 值排在后面
+            if (bValue == null) return -1
+            
+            // 处理字符串比较
+            if (typeof aValue === 'string' && typeof bValue === 'string') {
+                return sortOrder * aValue.localeCompare(bValue)
+            }
+            
+            // 处理数字比较
+            if (typeof aValue === 'number' && typeof bValue === 'number') {
+                return sortOrder * (aValue - bValue)
+            }
+            
+            // 处理日期比较
+            if (aValue instanceof Date && bValue instanceof Date) {
+                return sortOrder * (aValue.getTime() - bValue.getTime())
+            }
+            
+            // 默认比较
+            return sortOrder * (aValue > bValue ? 1 : aValue < bValue ? -1 : 0)
+        })
+        
+        // 分页
+        const startIndex = (pagination.page - 1) * pagination.limit
+        campaigns = allCampaigns.slice(startIndex, startIndex + pagination.limit)
     }
 
     // 联表查询 MetricsDaily 数据，以获取消耗、CPM 等实时指标（仅用于非 metrics 排序的情况）
@@ -482,7 +520,7 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
             } else {
                 // 没有日期范围（使用今天）：直接查询，不需要聚合
                 // 因为每个 campaignId + date 组合是唯一的，可以直接 find
-                const today = dayjs().format('YYYY-MM-DD')
+    const today = dayjs().format('YYYY-MM-DD')
                 
                 // 性能优化：如果 campaignIds 数量很大（>100），分批查询
                 const BATCH_SIZE = 100
@@ -519,8 +557,8 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
                     }))
                 } else {
                     const todayMetrics = await MetricsDailyRead.find({
-                        campaignId: { $in: campaignIds },
-                        date: today
+        campaignId: { $in: campaignIds },
+        date: today
                     })
                     .hint({ campaignId: 1, date: 1 }) // 强制使用复合索引
                     .lean() // 使用 lean() 提高性能
