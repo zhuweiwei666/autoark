@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express'
 import * as facebookService from '../services/facebook.service'
 import * as facebookAccountsService from '../services/facebook.accounts.service'
 import * as facebookCampaignsService from '../services/facebook.campaigns.service'
+import * as facebookCountriesService from '../services/facebook.countries.service'
 import { getEffectiveAdAccounts } from '../services/facebook.sync.service'
 
 export const syncCampaigns = async (

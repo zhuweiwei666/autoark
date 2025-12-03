@@ -4,6 +4,7 @@ import DashboardPage from './pages/DashboardPage'
 import FacebookTokenPage from './pages/FacebookTokenPage'
 import FacebookAccountsPage from './pages/FacebookAccountsPage'
 import FacebookCampaignsPage from './pages/FacebookCampaignsPage' // New: Campaign management page
+import FacebookCountriesPage from './pages/FacebookCountriesPage' // New: Country management page
 
 function App() {
   return (
@@ -13,6 +14,7 @@ function App() {
           <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/fb-token" element={<FacebookTokenPage />} />
           <Route path="/fb-accounts" element={<FacebookAccountsPage />} />
+          <Route path="/fb-countries" element={<FacebookCountriesPage />} /> {/* New: Country management route */}
           <Route path="/fb-campaigns" element={<FacebookCampaignsPage />} /> {/* New: Campaign management route */}
           <Route path="/" element={<DashboardPage />} />
         </Routes>

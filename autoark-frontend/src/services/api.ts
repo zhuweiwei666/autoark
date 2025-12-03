@@ -285,6 +285,32 @@ export interface CampaignListResponse {
   }
 }
 
+export interface FbCountry {
+  id: string
+  country: string
+  campaignCount: number
+  spend: number
+  impressions: number
+  clicks: number
+  cpc: number
+  ctr: number
+  cpm: number
+  purchase_roas: number
+  purchase_value: number
+  mobile_app_install: number
+}
+
+export interface CountryListResponse {
+  success: boolean
+  data: FbCountry[]
+  pagination: {
+    total: number
+    page: number
+    limit: number
+    pages: number
+  }
+}
+
 // 获取广告系列列表
 export async function getCampaigns(params?: {
   page?: number
