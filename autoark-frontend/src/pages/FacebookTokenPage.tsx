@@ -204,13 +204,41 @@ export default function FacebookTokenPage() {
 
   // Facebook OAuth 登录
   const handleFacebookLogin = async () => {
+    // 如果未配置，先检查一次配置状态
+    if (!oauthConfigured) {
+      try {
+        const configResponse = await getOAuthConfig()
+        if (!configResponse.data.configured) {
+          const missing = configResponse.data.missing || []
+          setMessage({
+            type: 'error',
+            text: `OAuth 未配置！\n\n缺少环境变量：${missing.join(', ')}\n\n请在服务器上配置以下环境变量：\n- FACEBOOK_APP_ID\n- FACEBOOK_APP_SECRET\n- FACEBOOK_REDIRECT_URI\n\n配置完成后刷新页面即可使用自动登录功能。\n\n或者使用"手动添加 Token"功能。`,
+          })
+          return
+        } else {
+          // 配置已更新，重新设置状态
+          setOauthConfigured(true)
+        }
+      } catch (error: any) {
+        setMessage({
+          type: 'error',
+          text: `无法检查 OAuth 配置：${error.message || '未知错误'}\n\n请使用"手动添加 Token"功能。`,
+        })
+        return
+      }
+    }
+
     setOauthLoading(true)
     try {
       const response = await getFacebookLoginUrl()
       // 跳转到 Facebook 登录页面
       window.location.href = response.data.loginUrl
     } catch (error: any) {
-      setMessage({ type: 'error', text: error.message || '获取登录链接失败' })
+      const errorMsg = error.message || '获取登录链接失败'
+      setMessage({
+        type: 'error',
+        text: `${errorMsg}\n\n请检查 OAuth 配置是否正确，或使用"手动添加 Token"功能。`,
+      })
       setOauthLoading(false)
     }
   }
