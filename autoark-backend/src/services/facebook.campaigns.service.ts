@@ -349,9 +349,6 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
                     raw: metric.raw
                 }))
             }
-        }
-        
-            }
             
             const queryTime = Date.now() - startTime
             if (queryTime > 1000) {
