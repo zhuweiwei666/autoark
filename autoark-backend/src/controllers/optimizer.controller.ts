@@ -2,12 +2,14 @@ import { Request, Response } from 'express'
 import { OptimizerRunner } from '../domain/optimizer/optimizer.runner'
 import { SimpleRoasPolicy } from '../domain/optimizer/policies/simpleRoas.policy'
 import { StopLossPolicy } from '../domain/optimizer/policies/stopLoss.policy'
+import { AiAdvisorPolicy } from '../domain/optimizer/policies/aiAdvisor.policy'
 import Campaign from '../models/Campaign'
 import logger from '../utils/logger'
 
 // 初始化 Runner，注入策略
-// 策略顺序很重要：先检查止损，再做常规优化
+// 策略顺序：AI 分析 -> 止损 -> 常规优化
 const runner = new OptimizerRunner([
+  new AiAdvisorPolicy(), // 先让 AI 分析并保存建议
   new StopLossPolicy(),
   new SimpleRoasPolicy(),
 ])

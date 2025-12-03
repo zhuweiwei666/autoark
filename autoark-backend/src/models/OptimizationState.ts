@@ -20,6 +20,26 @@ const optimizationStateSchema = new mongoose.Schema(
     lastAction: String,
     lastActionTime: Date,
     lastCheckTime: Date,
+
+    // AI 建议 (最新)
+    aiSuggestion: {
+      analysis: String,
+      strategy: String,
+      suggestedTargetRoas: Number,
+      suggestedBudgetMultiplier: Number,
+      reasoning: String,
+      updatedAt: Date
+    },
+
+    // 历史记录 (保留最近 N 条)
+    history: [
+      {
+        action: String,
+        reason: String,
+        timestamp: Date,
+        details: Object
+      }
+    ]
   },
   { timestamps: true }
 )
