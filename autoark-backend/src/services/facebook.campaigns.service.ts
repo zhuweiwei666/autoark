@@ -161,6 +161,30 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
     // 联表查询 MetricsDaily 数据，以获取消耗、CPM 等实时指标
     const campaignIds = campaigns.map(c => c.campaignId)
     
+    // 如果没有 campaignIds，直接返回空数据
+    if (campaignIds.length === 0) {
+        return {
+            data: campaigns.map((campaign: any) => ({
+                ...campaign.toObject(),
+                spend: 0,
+                impressions: 0,
+                clicks: 0,
+                cpc: 0,
+                ctr: 0,
+                cpm: 0,
+                purchase_roas: 0,
+                purchase_value: 0,
+                mobile_app_install: 0,
+            })),
+            pagination: {
+                page: pagination.page,
+                limit: pagination.limit,
+                total,
+                pages: Math.ceil(total / pagination.limit),
+            },
+        }
+    }
+    
     // 构建日期查询条件：如果有日期范围，使用日期范围；否则使用今天
     const metricsQuery: any = {
         campaignId: { $in: campaignIds }
@@ -180,63 +204,76 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
         metricsQuery.date = today
     }
     
-    // 按日期和 campaignId 聚合数据
+    // 性能优化：使用索引提示，并优化聚合查询
+    const startTime = Date.now()
     let metricsData: any[] = []
-    if (filters.startDate || filters.endDate) {
-        // 有日期范围：先按日期和 campaignId 聚合，再按 campaignId 汇总
-        metricsData = await MetricsDaily.aggregate([
-            { $match: metricsQuery },
-            {
-                $group: {
-                    _id: { campaignId: '$campaignId', date: '$date' },
-                    spendUsd: { $sum: '$spendUsd' },
-                    impressions: { $sum: '$impressions' },
-                    clicks: { $sum: '$clicks' },
-                    cpc: { $avg: '$cpc' },
-                    ctr: { $avg: '$ctr' },
-                    cpm: { $avg: '$cpm' },
-                    actions: { $first: '$actions' },
-                    action_values: { $first: '$action_values' },
-                    purchase_roas: { $first: '$purchase_roas' },
-                    raw: { $first: '$raw' }
+    
+    try {
+        if (filters.startDate || filters.endDate) {
+            // 有日期范围：先按日期和 campaignId 聚合，再按 campaignId 汇总
+            metricsData = await MetricsDaily.aggregate([
+                { $match: metricsQuery },
+                {
+                    $group: {
+                        _id: { campaignId: '$campaignId', date: '$date' },
+                        spendUsd: { $sum: '$spendUsd' },
+                        impressions: { $sum: '$impressions' },
+                        clicks: { $sum: '$clicks' },
+                        cpc: { $avg: '$cpc' },
+                        ctr: { $avg: '$ctr' },
+                        cpm: { $avg: '$cpm' },
+                        actions: { $first: '$actions' },
+                        action_values: { $first: '$action_values' },
+                        purchase_roas: { $first: '$purchase_roas' },
+                        raw: { $first: '$raw' }
+                    }
+                },
+                {
+                    $group: {
+                        _id: '$_id.campaignId',
+                        spendUsd: { $sum: '$spendUsd' },
+                        impressions: { $sum: '$impressions' },
+                        clicks: { $sum: '$clicks' },
+                        cpc: { $avg: '$cpc' },
+                        ctr: { $avg: '$ctr' },
+                        cpm: { $avg: '$cpm' },
+                        actions: { $first: '$actions' },
+                        action_values: { $first: '$action_values' },
+                        purchase_roas: { $first: '$purchase_roas' },
+                        raw: { $first: '$raw' }
+                    }
                 }
-            },
-            {
-                $group: {
-                    _id: '$_id.campaignId',
-                    spendUsd: { $sum: '$spendUsd' },
-                    impressions: { $sum: '$impressions' },
-                    clicks: { $sum: '$clicks' },
-                    cpc: { $avg: '$cpc' },
-                    ctr: { $avg: '$ctr' },
-                    cpm: { $avg: '$cpm' },
-                    actions: { $first: '$actions' },
-                    action_values: { $first: '$action_values' },
-                    purchase_roas: { $first: '$purchase_roas' },
-                    raw: { $first: '$raw' }
+            ]).allowDiskUse(true) // 允许使用磁盘进行大型聚合
+        } else {
+            // 没有日期范围（使用今天）：直接按 campaignId 聚合
+            metricsData = await MetricsDaily.aggregate([
+                { $match: metricsQuery },
+                {
+                    $group: {
+                        _id: '$campaignId',
+                        spendUsd: { $sum: '$spendUsd' },
+                        impressions: { $sum: '$impressions' },
+                        clicks: { $sum: '$clicks' },
+                        cpc: { $avg: '$cpc' },
+                        ctr: { $avg: '$ctr' },
+                        cpm: { $avg: '$cpm' },
+                        actions: { $first: '$actions' },
+                        action_values: { $first: '$action_values' },
+                        purchase_roas: { $first: '$purchase_roas' },
+                        raw: { $first: '$raw' }
+                    }
                 }
-            }
-        ])
-    } else {
-        // 没有日期范围（使用今天）：直接按 campaignId 聚合
-        metricsData = await MetricsDaily.aggregate([
-            { $match: metricsQuery },
-            {
-                $group: {
-                    _id: '$campaignId',
-                    spendUsd: { $sum: '$spendUsd' },
-                    impressions: { $sum: '$impressions' },
-                    clicks: { $sum: '$clicks' },
-                    cpc: { $avg: '$cpc' },
-                    ctr: { $avg: '$ctr' },
-                    cpm: { $avg: '$cpm' },
-                    actions: { $first: '$actions' },
-                    action_values: { $first: '$action_values' },
-                    purchase_roas: { $first: '$purchase_roas' },
-                    raw: { $first: '$raw' }
-                }
-            }
-        ])
+            ]).allowDiskUse(true) // 允许使用磁盘进行大型聚合
+        }
+        
+        const queryTime = Date.now() - startTime
+        if (queryTime > 5000) {
+            logger.warn(`[getCampaigns] Slow query detected: ${queryTime}ms for ${campaignIds.length} campaigns`)
+        }
+    } catch (error: any) {
+        logger.error(`[getCampaigns] Metrics query failed: ${error.message}`)
+        // 如果查询失败，返回空指标数据，但继续返回 campaigns
+        metricsData = []
     }
     
     // 转换为 Map 以便快速查找
