@@ -6,76 +6,162 @@ import { getReadConnection } from '../config/db'
 import { getFromCache, setToCache, getCacheKey, CACHE_TTL } from '../utils/cache'
 import mongoose from 'mongoose'
 
-// 从广告系列名称中提取国家代码（简单实现，可以根据实际命名规则优化）
-const extractCountryFromCampaignName = (campaignName: string): string => {
-  if (!campaignName) return 'UNKNOWN'
-  
-  // 常见的国家代码模式（2-3个字母，通常在名称末尾或特定位置）
-  // 这里使用简单的启发式方法：查找常见的国家代码
-  const countryCodes = [
-    'US', 'GB', 'CA', 'AU', 'NZ', 'IE', 'SG', 'MY', 'PH', 'TH', 'VN', 'ID', 'IN', 'PK', 'BD',
-    'CN', 'JP', 'KR', 'TW', 'HK', 'MO',
-    'DE', 'FR', 'IT', 'ES', 'NL', 'BE', 'AT', 'CH', 'SE', 'NO', 'DK', 'FI', 'PL', 'CZ', 'HU', 'RO', 'GR',
-    'BR', 'MX', 'AR', 'CL', 'CO', 'PE', 'VE',
-    'ZA', 'EG', 'KE', 'NG', 'GH',
-    'AE', 'SA', 'IL', 'TR'
-  ]
-  
-  // 尝试从名称中提取国家代码（通常在最后几个字符中）
-  const upperName = campaignName.toUpperCase()
-  for (const code of countryCodes) {
-    if (upperName.includes(`_${code}_`) || upperName.endsWith(`_${code}`) || upperName.includes(`-${code}-`) || upperName.endsWith(`-${code}`)) {
-      return code
-    }
-  }
-  
-  // 如果没有找到，返回 UNKNOWN
-  return 'UNKNOWN'
-}
-
 export const getCountries = async (filters: any = {}, pagination: { page: number, limit: number, sortBy: string, sortOrder: 'asc' | 'desc' }) => {
     // 使用读连接进行查询（读写分离）
     const readConnection = getReadConnection()
     
-    let CampaignModel = Campaign
+    // 构建查询条件 - 直接从 MetricsDaily 中按 country 分组
+    const metricsQuery: any = {
+        campaignId: { $exists: true, $ne: null }, // 只统计 campaign 级别的数据
+        country: { $exists: true, $ne: null } // 只统计有国家信息的数据
+    }
+    
+    // 如果提供了账户筛选，需要先查找对应的 campaignIds
+    if (filters.accountId) {
+        let CampaignModel = Campaign
+        if (readConnection !== mongoose) {
+          if (!readConnection.models.Campaign) {
+            CampaignModel = readConnection.model('Campaign', Campaign.schema)
+          } else {
+            CampaignModel = readConnection.models.Campaign
+          }
+        }
+        const campaigns = await CampaignModel.find({ accountId: filters.accountId }).lean()
+        const campaignIds = campaigns.map(c => c.campaignId)
+        if (campaignIds.length === 0) {
+            return {
+                data: [],
+                pagination: {
+                    page: pagination.page,
+                    limit: pagination.limit,
+                    total: 0,
+                    pages: 0,
+                },
+            }
+        }
+        metricsQuery.campaignId = { $in: campaignIds, $exists: true, $ne: null }
+    }
+    
+    // 如果提供了广告系列名称筛选，需要先查找对应的 campaignIds
+    if (filters.name) {
+        let CampaignModel = Campaign
+        if (readConnection !== mongoose) {
+          if (!readConnection.models.Campaign) {
+            CampaignModel = readConnection.model('Campaign', Campaign.schema)
+          } else {
+            CampaignModel = readConnection.models.Campaign
+          }
+        }
+        const campaigns = await CampaignModel.find({ name: { $regex: filters.name, $options: 'i' } }).lean()
+        const campaignIds = campaigns.map(c => c.campaignId)
+        if (campaignIds.length === 0) {
+            return {
+                data: [],
+                pagination: {
+                    page: pagination.page,
+                    limit: pagination.limit,
+                    total: 0,
+                    pages: 0,
+                },
+            }
+        }
+        if (metricsQuery.campaignId && metricsQuery.campaignId.$in) {
+            // 取交集
+            metricsQuery.campaignId.$in = metricsQuery.campaignId.$in.filter((id: string) => campaignIds.includes(id))
+        } else {
+            metricsQuery.campaignId = { $in: campaignIds, $exists: true, $ne: null }
+        }
+    }
+    
+    // 日期筛选
+    const today = dayjs().format('YYYY-MM-DD')
+    if (filters.startDate || filters.endDate) {
+        metricsQuery.date = {}
+        if (filters.startDate) {
+            metricsQuery.date.$gte = filters.startDate
+        }
+        if (filters.endDate) {
+            metricsQuery.date.$lte = filters.endDate
+        }
+    } else {
+        metricsQuery.date = today
+    }
+    
+    // 获取所有国家的 metrics 数据 - 直接从 MetricsDaily 按 country 分组
+    let MetricsDailyRead = MetricsDaily
     if (readConnection !== mongoose) {
-      if (!readConnection.models.Campaign) {
-        CampaignModel = readConnection.model('Campaign', Campaign.schema)
+      if (!readConnection.models.MetricsDaily) {
+        MetricsDailyRead = readConnection.model('MetricsDaily', MetricsDaily.schema)
       } else {
-        CampaignModel = readConnection.models.Campaign
+        MetricsDailyRead = readConnection.models.MetricsDaily
       }
     }
     
-    // 构建查询条件
-    const campaignQuery: any = {}
-    if (filters.name) {
-        campaignQuery.name = { $regex: filters.name, $options: 'i' }
-    }
-    if (filters.accountId) {
-        campaignQuery.accountId = filters.accountId
-    }
-    if (filters.status) {
-        campaignQuery.status = filters.status
-    }
-    if (filters.objective) {
-        campaignQuery.objective = filters.objective
-    }
-    
-    // 获取所有符合条件的广告系列
-    const allCampaigns = await CampaignModel.find(campaignQuery).lean()
-    
-    // 从广告系列名称中提取国家，并创建国家到广告系列的映射
-    const countryToCampaigns = new Map<string, string[]>()
-    allCampaigns.forEach((campaign: any) => {
-        const country = extractCountryFromCampaignName(campaign.name || '')
-        if (!countryToCampaigns.has(country)) {
-            countryToCampaigns.set(country, [])
+    // 按国家聚合数据
+    const allMetricsData = await MetricsDailyRead.aggregate([
+        { $match: metricsQuery },
+        {
+            $group: {
+                _id: '$country',
+                spendUsd: { $sum: '$spendUsd' },
+                impressions: { $sum: '$impressions' },
+                clicks: { $sum: '$clicks' },
+                purchase_value: { $sum: { $ifNull: ['$purchase_value', 0] } },
+                mobile_app_install: { $sum: { $ifNull: ['$mobile_app_install_count', 0] } },
+                // 计算加权平均值
+                totalCpc: { $sum: { $multiply: [{ $ifNull: ['$cpc', 0] }, { $ifNull: ['$clicks', 0] }] } },
+                totalCtr: { $sum: { $multiply: [{ $ifNull: ['$ctr', 0] }, { $ifNull: ['$impressions', 0] }] } },
+                totalCpm: { $sum: { $multiply: [{ $ifNull: ['$cpm', 0] }, { $ifNull: ['$impressions', 0] }] } },
+                totalClicks: { $sum: '$clicks' },
+                totalImpressions: { $sum: '$impressions' },
+                // 统计该国家的广告系列数量
+                campaignIds: { $addToSet: '$campaignId' }
+            }
+        },
+        {
+            $project: {
+                _id: 0,
+                country: '$_id',
+                spend: '$spendUsd',
+                impressions: 1,
+                clicks: 1,
+                purchase_value: 1,
+                mobile_app_install: 1,
+                campaignCount: { $size: '$campaignIds' },
+                // 计算平均值
+                cpc: {
+                    $cond: [
+                        { $gt: ['$totalClicks', 0] },
+                        { $divide: ['$totalCpc', '$totalClicks'] },
+                        0
+                    ]
+                },
+                ctr: {
+                    $cond: [
+                        { $gt: ['$totalImpressions', 0] },
+                        { $divide: ['$totalCtr', '$totalImpressions'] },
+                        0
+                    ]
+                },
+                cpm: {
+                    $cond: [
+                        { $gt: ['$totalImpressions', 0] },
+                        { $divide: ['$totalCpm', '$totalImpressions'] },
+                        0
+                    ]
+                },
+                purchase_roas: {
+                    $cond: [
+                        { $and: [{ $gt: ['$spendUsd', 0] }, { $gt: ['$purchase_value', 0] }] },
+                        { $divide: ['$purchase_value', '$spendUsd'] },
+                        0
+                    ]
+                }
+            }
         }
-        countryToCampaigns.get(country)!.push(campaign.campaignId)
-    })
+    ]).allowDiskUse(true)
     
-    const allCountryCodes = Array.from(countryToCampaigns.keys())
-    const total = allCountryCodes.length
+    const total = allMetricsData.length
     
     if (total === 0) {
         return {
@@ -89,123 +175,20 @@ export const getCountries = async (filters: any = {}, pagination: { page: number
         }
     }
     
-    // 查询所有国家的 metrics 数据
-    const today = dayjs().format('YYYY-MM-DD')
-    const allCampaignIds = allCampaigns.map(c => c.campaignId)
-    
-    const metricsQuery: any = {
-        campaignId: { $in: allCampaignIds, $exists: true, $ne: null }
-    }
-    
-    if (filters.startDate || filters.endDate) {
-        metricsQuery.date = {}
-        if (filters.startDate) {
-            metricsQuery.date.$gte = filters.startDate
-        }
-        if (filters.endDate) {
-            metricsQuery.date.$lte = filters.endDate
-        }
-    } else {
-        metricsQuery.date = today
-    }
-    
-    // 获取所有 campaigns 的 metrics
-    let MetricsDailyRead = MetricsDaily
-    if (readConnection !== mongoose) {
-      if (!readConnection.models.MetricsDaily) {
-        MetricsDailyRead = readConnection.model('MetricsDaily', MetricsDaily.schema)
-      } else {
-        MetricsDailyRead = readConnection.models.MetricsDaily
-      }
-    }
-    
-    let allMetricsData: any[] = []
-    if (filters.startDate || filters.endDate) {
-        allMetricsData = await MetricsDailyRead.aggregate([
-            { $match: metricsQuery },
-            { $sort: { date: -1 } },
-            {
-                $group: {
-                    _id: '$campaignId',
-                    spendUsd: { $sum: '$spendUsd' },
-                    impressions: { $sum: '$impressions' },
-                    clicks: { $sum: '$clicks' },
-                    cpc: { $avg: '$cpc' },
-                    ctr: { $avg: '$ctr' },
-                    cpm: { $avg: '$cpm' },
-                    purchase_roas: { $first: '$purchase_roas' },
-                    purchase_value: { $sum: { $ifNull: ['$purchase_value', 0] } },
-                    mobile_app_install: { $sum: { $ifNull: ['$mobile_app_install_count', 0] } },
-                }
-            }
-        ]).allowDiskUse(true)
-    } else {
-        const todayMetrics = await MetricsDailyRead.find(metricsQuery)
-            .hint({ campaignId: 1, date: 1 })
-            .lean()
-        
-        allMetricsData = todayMetrics.map((metric: any) => ({
-            _id: metric.campaignId,
-            spendUsd: metric.spendUsd || 0,
-            impressions: metric.impressions || 0,
-            clicks: metric.clicks || 0,
-            cpc: metric.cpc,
-            ctr: metric.ctr,
-            cpm: metric.cpm,
-            purchase_roas: metric.purchase_roas,
-            purchase_value: metric.purchase_value || 0,
-            mobile_app_install: metric.mobile_app_install_count || 0,
-        }))
-    }
-    
-    // 创建 campaignId 到 metrics 的映射
-    const metricsMap = new Map<string, any>()
-    allMetricsData.forEach((item: any) => {
-        metricsMap.set(item._id, item)
-    })
-    
-    // 按国家聚合数据
-    const countriesWithMetrics = allCountryCodes.map(country => {
-        const campaignIds = countryToCampaigns.get(country) || []
-        const countryMetrics = campaignIds.reduce((acc, campaignId) => {
-            const metrics = metricsMap.get(campaignId) || {}
-            return {
-                spendUsd: acc.spendUsd + (metrics.spendUsd || 0),
-                impressions: acc.impressions + (metrics.impressions || 0),
-                clicks: acc.clicks + (metrics.clicks || 0),
-                purchase_value: acc.purchase_value + (metrics.purchase_value || 0),
-                mobile_app_install: acc.mobile_app_install + (metrics.mobile_app_install || 0),
-            }
-        }, { spendUsd: 0, impressions: 0, clicks: 0, purchase_value: 0, mobile_app_install: 0 })
-        
-        // 计算平均值指标
-        const campaignCount = campaignIds.length
-        const avgCpc = campaignIds.length > 0 
-            ? campaignIds.reduce((sum, id) => sum + ((metricsMap.get(id)?.cpc || 0) * (metricsMap.get(id)?.clicks || 0)), 0) / Math.max(campaignIds.reduce((sum, id) => sum + (metricsMap.get(id)?.clicks || 0), 0), 1)
-            : 0
-        const avgCtr = campaignIds.length > 0
-            ? campaignIds.reduce((sum, id) => sum + ((metricsMap.get(id)?.ctr || 0) * (metricsMap.get(id)?.impressions || 0)), 0) / Math.max(campaignIds.reduce((sum, id) => sum + (metricsMap.get(id)?.impressions || 0), 0), 1)
-            : 0
-        const avgCpm = campaignIds.length > 0
-            ? campaignIds.reduce((sum, id) => sum + ((metricsMap.get(id)?.cpm || 0) * (metricsMap.get(id)?.impressions || 0)), 0) / Math.max(campaignIds.reduce((sum, id) => sum + (metricsMap.get(id)?.impressions || 0), 0), 1)
-            : 0
-        
-        return {
-            country: country,
-            campaignCount: campaignCount,
-            spend: countryMetrics.spendUsd || 0,
-            impressions: countryMetrics.impressions || 0,
-            clicks: countryMetrics.clicks || 0,
-            cpc: avgCpc || 0,
-            ctr: avgCtr || 0,
-            cpm: avgCpm || 0,
-            purchase_roas: countryMetrics.purchase_value > 0 && countryMetrics.spendUsd > 0 
-                ? countryMetrics.purchase_value / countryMetrics.spendUsd 
-                : 0,
-            purchase_value: countryMetrics.purchase_value || 0,
-            mobile_app_install: countryMetrics.mobile_app_install || 0,
-        }
-    })
+    // 转换为数组格式
+    const countriesWithMetrics = allMetricsData.map((item: any) => ({
+        country: item.country,
+        campaignCount: item.campaignCount,
+        spend: item.spend || 0,
+        impressions: item.impressions || 0,
+        clicks: item.clicks || 0,
+        cpc: item.cpc || 0,
+        ctr: item.ctr || 0,
+        cpm: item.cpm || 0,
+        purchase_roas: item.purchase_roas || 0,
+        purchase_value: item.purchase_value || 0,
+        mobile_app_install: item.mobile_app_install || 0,
+    }))
     
     // 判断排序字段是否是 metrics 字段
     const metricsSortFields = ['spend', 'impressions', 'clicks', 'cpc', 'ctr', 'cpm', 'purchase_roas', 'purchase_value', 'mobile_app_install', 'campaignCount']

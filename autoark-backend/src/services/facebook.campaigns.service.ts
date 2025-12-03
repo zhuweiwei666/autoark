@@ -58,21 +58,27 @@ export const syncCampaignsFromAdAccounts = async () => {
           syncedCampaigns++
 
           // 3. 拉取广告系列的日级别洞察数据 (今天的数据)
+          // 使用 breakdowns: ['country'] 来获取按国家分组的数据
           const today = dayjs().format('YYYY-MM-DD')
           const insights = await fetchInsights(
             camp.id,
             'campaign',
             'today', // 或者选择一个日期范围
-            account.token
+            account.token,
+            ['country'] // 按国家分组
           )
 
           if (insights && insights.length > 0) {
             for (const insight of insights) {
+              // Facebook API 返回的 country 字段在 breakdowns 中
+              const country = insight.country || null
+              
               const metricsData: any = {
                 date: today,
                 channel: 'facebook',
                 accountId: normalizeForStorage(account.accountId), // 统一格式：数据库存储时去掉前缀
                 campaignId: camp.id,
+                country: country, // 国家代码
                 impressions: insight.impressions || 0,
                 clicks: insight.clicks || 0,
                 spendUsd: parseFloat(insight.spend || '0'),
@@ -87,10 +93,10 @@ export const syncCampaignsFromAdAccounts = async () => {
                 raw: insight,
               }
               
-              // Campaign 级别的指标，不设置 adId 和 adsetId，避免与 { adId: 1, date: 1 } 唯一索引冲突
+              // Campaign + Country 级别的指标，不设置 adId 和 adsetId，避免与 { adId: 1, date: 1 } 唯一索引冲突
               // 使用 $set 更新数据，$unset 移除可能存在的 adId 和 adsetId 字段
               await MetricsDaily.findOneAndUpdate(
-                { campaignId: metricsData.campaignId, date: metricsData.date },
+                { campaignId: metricsData.campaignId, date: metricsData.date, country: country || null },
                 {
                   $set: metricsData,
                   $unset: { adId: '', adsetId: '' } // 移除 adId 和 adsetId，避免唯一索引冲突

@@ -92,6 +92,7 @@ export const fetchInsights = async (
   level: 'account' | 'campaign' | 'adset' | 'ad',
   datePreset = 'today',
   token?: string,
+  breakdowns?: string[], // 支持 breakdowns，如 ['country'] 来按国家分组
 ) => {
   // Facebook Insights API 有效字段列表
   // 注意：cpa, conversion_rate, value, mobile_app_install 不是有效字段
@@ -137,6 +138,12 @@ export const fetchInsights = async (
     fields,
     limit: 1000,
   }
+  
+  // 如果指定了 breakdowns，添加到参数中
+  if (breakdowns && breakdowns.length > 0) {
+    params.breakdowns = breakdowns.join(',')
+  }
+  
   if (token) {
     params.access_token = token
   }
