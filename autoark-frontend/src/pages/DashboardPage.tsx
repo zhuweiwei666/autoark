@@ -30,7 +30,6 @@ export default function DashboardPage() {
   const [spendTrend, setSpendTrend] = useState<any[]>([])
   const [campaignRanking, setCampaignRanking] = useState<any[]>([])
   const [accountRanking, setAccountRanking] = useState<any[]>([])
-  const [loading, setLoading] = useState(false)
 
   // 图表引用
   const spendTrendChartRef = useRef<any>(null)
@@ -39,7 +38,6 @@ export default function DashboardPage() {
 
   // 加载数据
   const loadData = async () => {
-    setLoading(true)
     try {
       const [metricsRes, trendRes, campaignRes, accountRes] = await Promise.all([
         getCoreMetrics(filters.startDate, filters.endDate),
@@ -54,8 +52,6 @@ export default function DashboardPage() {
       setAccountRanking(accountRes.data || [])
     } catch (error: any) {
       console.error('Failed to load dashboard data:', error)
-    } finally {
-      setLoading(false)
     }
   }
 
