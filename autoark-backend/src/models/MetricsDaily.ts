@@ -32,9 +32,23 @@ const metricsDailySchema = new mongoose.Schema(
 )
 
 // Compound unique index for upsert (ad level)
-metricsDailySchema.index({ adId: 1, date: 1 }, { unique: true })
+// 使用部分索引：只在 adId 不为 null 时才应用唯一约束，避免 campaign 级别指标冲突
+metricsDailySchema.index(
+  { adId: 1, date: 1 }, 
+  { 
+    unique: true,
+    partialFilterExpression: { adId: { $ne: null } } // 只在 adId 不为 null 时唯一
+  }
+)
 // New compound unique index for campaign level insights
-metricsDailySchema.index({ campaignId: 1, date: 1 }, { unique: true })
+// 使用部分索引：只在 campaignId 不为 null 时才应用唯一约束
+metricsDailySchema.index(
+  { campaignId: 1, date: 1 }, 
+  { 
+    unique: true,
+    partialFilterExpression: { campaignId: { $ne: null } } // 只在 campaignId 不为 null 时唯一
+  }
+)
 // 性能优化：为日期范围查询添加索引
 metricsDailySchema.index({ date: 1 })
 metricsDailySchema.index({ date: 1, campaignId: 1 })
