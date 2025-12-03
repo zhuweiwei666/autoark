@@ -37,6 +37,7 @@ export default function FacebookAccountsPage() {
         limit: pagination.limit,
         ...filters
       })
+      console.log('Accounts response:', response.data[0]) // 调试：查看第一条数据
       setAccounts(response.data)
       setPagination(response.pagination)
     } catch (error: any) {
@@ -324,18 +325,39 @@ export default function FacebookAccountsPage() {
                   <th 
                     className="px-6 py-5 font-semibold text-slate-900 cursor-pointer hover:bg-slate-100 transition-colors select-none"
                     onClick={() => {
-                      const direction = sortConfig?.key === 'balance' && sortConfig.direction === 'asc' ? 'desc' : 'asc'
-                      setSortConfig({ key: 'balance', direction })
+                      const direction = sortConfig?.key === 'periodSpend' && sortConfig.direction === 'asc' ? 'desc' : 'asc'
+                      setSortConfig({ key: 'periodSpend', direction })
                     }}
                   >
                     <div className="flex items-center gap-2">
-                      <span>余额 / 花费</span>
-                      {sortConfig?.key === 'balance' && (
+                      <span>消耗</span>
+                      {sortConfig?.key === 'periodSpend' && (
                         <svg className={`w-4 h-4 ${sortConfig.direction === 'asc' ? '' : 'rotate-180'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 15l7-7 7 7" />
                         </svg>
                       )}
-                      {sortConfig?.key !== 'balance' && (
+                      {sortConfig?.key !== 'periodSpend' && (
+                        <svg className="w-4 h-4 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
+                        </svg>
+                      )}
+                    </div>
+                  </th>
+                  <th 
+                    className="px-6 py-5 font-semibold text-slate-900 cursor-pointer hover:bg-slate-100 transition-colors select-none"
+                    onClick={() => {
+                      const direction = sortConfig?.key === 'calculatedBalance' && sortConfig.direction === 'asc' ? 'desc' : 'asc'
+                      setSortConfig({ key: 'calculatedBalance', direction })
+                    }}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span>余额</span>
+                      {sortConfig?.key === 'calculatedBalance' && (
+                        <svg className={`w-4 h-4 ${sortConfig.direction === 'asc' ? '' : 'rotate-180'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 15l7-7 7 7" />
+                        </svg>
+                      )}
+                      {sortConfig?.key !== 'calculatedBalance' && (
                         <svg className="w-4 h-4 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
                         </svg>
@@ -368,9 +390,9 @@ export default function FacebookAccountsPage() {
               </thead>
               <tbody>
                 {loading ? (
-                  <tr><td colSpan={5} className="px-6 py-12 text-center text-slate-500 animate-pulse">加载中...</td></tr>
+                  <tr><td colSpan={6} className="px-6 py-12 text-center text-slate-500 animate-pulse">加载中...</td></tr>
                 ) : accounts.length === 0 ? (
-                  <tr><td colSpan={5} className="px-6 py-12 text-center text-slate-500">暂无数据</td></tr>
+                  <tr><td colSpan={6} className="px-6 py-12 text-center text-slate-500">暂无数据</td></tr>
                 ) : (
                   (() => {
                     // 排序逻辑
@@ -378,7 +400,13 @@ export default function FacebookAccountsPage() {
                     if (sortConfig) {
                       sortedAccounts.sort((a, b) => {
                         let aVal: any, bVal: any
-                        if (sortConfig.key === 'balance') {
+                        if (sortConfig.key === 'periodSpend') {
+                          aVal = a.periodSpend !== undefined ? Number(a.periodSpend) : 0
+                          bVal = b.periodSpend !== undefined ? Number(b.periodSpend) : 0
+                        } else if (sortConfig.key === 'calculatedBalance') {
+                          aVal = a.calculatedBalance !== undefined ? Number(a.calculatedBalance) : 0
+                          bVal = b.calculatedBalance !== undefined ? Number(b.calculatedBalance) : 0
+                        } else if (sortConfig.key === 'balance') {
                           aVal = a.balance ? Number(a.balance) : 0
                           bVal = b.balance ? Number(b.balance) : 0
                         } else if (sortConfig.key === 'name') {
@@ -417,9 +445,21 @@ export default function FacebookAccountsPage() {
                         </span>
                       </td>
                       <td className="px-6 py-4">
-                        <div className="text-slate-300 text-xs space-y-1">
-                          <div>余额: <span className="text-emerald-400 font-mono">{formatCurrency(account.balance, account.currency || 'USD')}</span></div>
-                          <div>已用: <span className="text-slate-400 font-mono">{formatCurrency(account.amountSpent, account.currency || 'USD')}</span></div>
+                        <div className="text-slate-300 text-xs">
+                          {account.periodSpend !== undefined && account.periodSpend > 0 ? (
+                            <span className="text-slate-400 font-mono">{formatCurrency(account.periodSpend * 100, account.currency || 'USD')}</span>
+                          ) : (
+                            <span className="text-slate-500">-</span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="text-slate-300 text-xs">
+                          {account.calculatedBalance !== undefined ? (
+                            <span className="text-emerald-400 font-mono">{formatCurrency(account.calculatedBalance * 100, account.currency || 'USD')}</span>
+                          ) : (
+                            <span className="text-slate-500">-</span>
+                          )}
                         </div>
                       </td>
                       <td className="px-6 py-4">

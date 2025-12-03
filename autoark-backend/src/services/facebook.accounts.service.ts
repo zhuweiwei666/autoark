@@ -1,5 +1,6 @@
 import Account from '../models/Account'
 import FbToken from '../models/FbToken'
+import MetricsDaily from '../models/MetricsDaily'
 import { fetchUserAdAccounts } from './facebook.api'
 import logger from '../utils/logger'
 
@@ -107,8 +108,85 @@ export const getAccounts = async (filters: any = {}, pagination: { page: number,
         .skip((pagination.page - 1) * pagination.limit)
         .limit(pagination.limit)
 
+    // 获取所有账户ID，用于批量查询消耗数据
+    const accountIds = accounts.map(acc => acc.accountId)
+    
+    // 计算日期范围内的消耗（如果提供了日期范围）
+    let periodSpendMap: Record<string, number> = {}
+    if (accountIds.length > 0 && (filters.startDate || filters.endDate)) {
+        const dateQuery: any = { accountId: { $in: accountIds } }
+        if (filters.startDate || filters.endDate) {
+            dateQuery.date = {}
+            if (filters.startDate) {
+                dateQuery.date.$gte = filters.startDate
+            }
+            if (filters.endDate) {
+                dateQuery.date.$lte = filters.endDate
+            }
+        }
+        
+        const periodSpendData = await MetricsDaily.aggregate([
+            { $match: dateQuery },
+            {
+                $group: {
+                    _id: '$accountId',
+                    spend: { $sum: '$spendUsd' }
+                }
+            }
+        ])
+        
+        periodSpendData.forEach((item: any) => {
+            periodSpendMap[item._id] = item.spend || 0
+        })
+    }
+    
+    // 计算所有账户的历史总消耗
+    const totalSpendMap: Record<string, number> = {}
+    if (accountIds.length > 0) {
+        const totalSpendData = await MetricsDaily.aggregate([
+            { $match: { accountId: { $in: accountIds } } },
+            {
+                $group: {
+                    _id: '$accountId',
+                    totalSpend: { $sum: '$spendUsd' }
+                }
+            }
+        ])
+        
+        totalSpendData.forEach((item: any) => {
+            totalSpendMap[item._id] = item.totalSpend || 0
+        })
+    }
+    
+    // 为每个账户添加消耗和计算后的余额
+    const accountsWithMetrics = accounts.map((account: any) => {
+        const accountId = account.accountId
+        // 只有在提供了日期范围时才计算 periodSpend，否则为 undefined
+        const periodSpend = (filters.startDate || filters.endDate) ? (periodSpendMap[accountId] || 0) : undefined
+        const totalSpend = totalSpendMap[accountId] || 0
+        
+        // Facebook API 返回的 balance 是以账户货币的最小单位（分）返回的，需要除以 100
+        // 但这里假设 balance 已经是正确的单位，如果后端存储时已经转换过，就不需要再除以 100
+        // 需要根据实际情况调整
+        const accountBalance = account.balance ? (typeof account.balance === 'number' ? account.balance : parseFloat(account.balance)) / 100 : 0
+        
+        // 余额 = 账户总余额 - 历史总消耗金额
+        // 注意：这里假设 spendUsd 是美元，如果账户货币不是美元，需要转换
+        // 简化处理：假设都是美元，实际项目中需要根据 currency 进行转换
+        const calculatedBalance = accountBalance - totalSpend
+        
+        const accountObj = account.toObject ? account.toObject() : account
+        
+        return {
+            ...accountObj,
+            periodSpend: periodSpend, // 日期范围内的消耗（美元）
+            calculatedBalance: calculatedBalance, // 计算后的余额（美元）
+            totalSpend: totalSpend // 历史总消耗（美元，用于调试）
+        }
+    })
+
     return {
-        data: accounts,
+        data: accountsWithMetrics,
         pagination: {
             total,
             page: pagination.page,
