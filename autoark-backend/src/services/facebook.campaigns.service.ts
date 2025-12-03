@@ -65,7 +65,7 @@ export const syncCampaignsFromAdAccounts = async () => {
 
           if (insights && insights.length > 0) {
             for (const insight of insights) {
-              const metricsData = {
+              const metricsData: any = {
                 date: today,
                 channel: 'facebook',
                 accountId: normalizeForStorage(account.accountId), // 统一格式：数据库存储时去掉前缀
@@ -84,9 +84,14 @@ export const syncCampaignsFromAdAccounts = async () => {
                 raw: insight,
               }
               
+              // Campaign 级别的指标，不设置 adId 和 adsetId，避免与 { adId: 1, date: 1 } 唯一索引冲突
+              // 使用 $set 更新数据，$unset 移除可能存在的 adId 和 adsetId 字段
               await MetricsDaily.findOneAndUpdate(
                 { campaignId: metricsData.campaignId, date: metricsData.date },
-                metricsData,
+                {
+                  $set: metricsData,
+                  $unset: { adId: '', adsetId: '' } // 移除 adId 和 adsetId，避免唯一索引冲突
+                },
                 { upsert: true, new: true }
               )
               syncedMetrics++
