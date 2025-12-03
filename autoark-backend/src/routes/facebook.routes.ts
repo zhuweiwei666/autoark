@@ -23,6 +23,12 @@ router.get('/pixels', pixelsController.getPixels) // Get all pixels
 router.get('/pixels/:id', pixelsController.getPixelDetails) // Get pixel details
 router.get('/pixels/:id/events', pixelsController.getPixelEvents) // Get pixel events
 
+// OAuth routes
+import * as oauthController from '../controllers/facebook.oauth.controller'
+router.get('/oauth/login-url', oauthController.getLoginUrl) // Get Facebook login URL
+router.get('/oauth/callback', oauthController.handleCallback) // OAuth callback handler
+router.get('/oauth/config', oauthController.getOAuthConfig) // Get OAuth config status
+
 // Country management
 router.get('/countries-list', facebookController.getCountriesList) // New: Country management list
 

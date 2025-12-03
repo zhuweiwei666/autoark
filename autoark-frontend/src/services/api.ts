@@ -691,6 +691,43 @@ export async function getPurchaseValueInfo(params: {
   return response.json()
 }
 
+// === Facebook OAuth ===
+
+export interface OAuthConfig {
+  configured: boolean
+  missing: string[]
+  redirectUri: string
+}
+
+// 获取 OAuth 配置状态
+export async function getOAuthConfig(): Promise<{ success: boolean; data: OAuthConfig }> {
+  const response = await fetch(`${API_BASE_URL}/api/facebook/oauth/config`)
+
+  if (!response.ok) {
+    throw new Error('Failed to get OAuth config')
+  }
+
+  return response.json()
+}
+
+// 获取 Facebook 登录 URL
+export async function getFacebookLoginUrl(state?: string): Promise<{ success: boolean; data: { loginUrl: string } }> {
+  const queryParams = new URLSearchParams()
+  if (state) queryParams.append('state', state)
+
+  const url = `${API_BASE_URL}/api/facebook/oauth/login-url${
+    queryParams.toString() ? `?${queryParams.toString()}` : ''
+  }`
+
+  const response = await fetch(url)
+
+  if (!response.ok) {
+    throw new Error('Failed to get Facebook login URL')
+  }
+
+  return response.json()
+}
+
 // === Pixel 管理 ===
 
 export interface FbPixel {

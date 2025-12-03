@@ -1,19 +1,25 @@
 import { useState, useEffect } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
   bindToken,
   getTokens,
   checkTokenStatus,
   updateToken,
   deleteToken,
+  getFacebookLoginUrl,
+  getOAuthConfig,
   type FbToken,
 } from '../services/api'
 
 export default function FacebookTokenPage() {
+  const [searchParams, setSearchParams] = useSearchParams()
   const [showAddModal, setShowAddModal] = useState(false)
   const [token, setToken] = useState('')
   const [optimizer, setOptimizer] = useState('')
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const [oauthConfigured, setOauthConfigured] = useState(false)
+  const [oauthLoading, setOauthLoading] = useState(false)
 
   // 列表相关
   const [tokens, setTokens] = useState<FbToken[]>([])
@@ -47,6 +53,47 @@ export default function FacebookTokenPage() {
       setLoadingList(false)
     }
   }
+
+  // 检查 OAuth 配置
+  useEffect(() => {
+    const checkOAuthConfig = async () => {
+      try {
+        const response = await getOAuthConfig()
+        setOauthConfigured(response.data.configured)
+      } catch (error) {
+        // OAuth 配置检查失败不影响页面使用
+        console.error('Failed to check OAuth config:', error)
+      }
+    }
+    checkOAuthConfig()
+  }, [])
+
+  // 处理 OAuth 回调
+  useEffect(() => {
+    const oauthSuccess = searchParams.get('oauth_success')
+    const oauthError = searchParams.get('oauth_error')
+    const tokenId = searchParams.get('token_id')
+    const fbUserId = searchParams.get('fb_user_id')
+    const fbUserName = searchParams.get('fb_user_name')
+
+    if (oauthSuccess === 'true' && tokenId) {
+      setMessage({
+        type: 'success',
+        text: `Facebook 登录成功！用户: ${fbUserName || fbUserId || 'Unknown'}`,
+      })
+      // 清除 URL 参数
+      setSearchParams({})
+      // 重新加载 token 列表
+      loadTokens()
+    } else if (oauthError) {
+      setMessage({
+        type: 'error',
+        text: `Facebook 登录失败: ${decodeURIComponent(oauthError)}`,
+      })
+      // 清除 URL 参数
+      setSearchParams({})
+    }
+  }, [searchParams, setSearchParams])
 
   // 初始加载
   useEffect(() => {
@@ -140,6 +187,19 @@ export default function FacebookTokenPage() {
     setTimeout(loadTokens, 100)
   }
 
+  // Facebook OAuth 登录
+  const handleFacebookLogin = async () => {
+    setOauthLoading(true)
+    try {
+      const response = await getFacebookLoginUrl()
+      // 跳转到 Facebook 登录页面
+      window.location.href = response.data.loginUrl
+    } catch (error: any) {
+      setMessage({ type: 'error', text: error.message || '获取登录链接失败' })
+      setOauthLoading(false)
+    }
+  }
+
   // 格式化日期
   const formatDate = (dateStr?: string) => {
     if (!dateStr) return '-'
@@ -163,6 +223,18 @@ export default function FacebookTokenPage() {
             </span>
           </div>
           <div className="flex gap-3">
+            {oauthConfigured && (
+              <button
+                onClick={handleFacebookLogin}
+                disabled={oauthLoading}
+                className="group px-6 py-3 bg-blue-600 hover:bg-blue-700 rounded-2xl text-sm font-semibold text-white shadow-md hover:shadow-lg transition-all duration-200 flex items-center gap-2 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
+                </svg>
+                {oauthLoading ? '连接中...' : '连接 Facebook'}
+              </button>
+            )}
             <button
               onClick={() => setShowAddModal(true)}
               className="group px-6 py-3 bg-slate-900 hover:bg-slate-800 rounded-2xl text-sm font-semibold text-white shadow-md hover:shadow-lg transition-all duration-200 flex items-center gap-2 active:scale-95"
@@ -170,14 +242,14 @@ export default function FacebookTokenPage() {
               <svg className="w-5 h-5 transition-transform group-hover:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" />
               </svg>
-              添加 Token
+              手动添加 Token
             </button>
-          <button
-            onClick={loadTokens}
+            <button
+              onClick={loadTokens}
               className="px-6 py-3 bg-white hover:bg-slate-50 border border-slate-300 rounded-2xl text-sm font-semibold text-slate-700 transition-all shadow-sm active:scale-95"
-          >
-            刷新列表
-          </button>
+            >
+              刷新列表
+            </button>
           </div>
         </header>
 
@@ -435,8 +507,24 @@ export default function FacebookTokenPage() {
                 <div className="bg-slate-100 border border-slate-200 p-2.5 rounded-2xl text-slate-700">
                     <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" /></svg>
                 </div>
-                绑定新 Token
+                手动绑定 Token
             </h2>
+            
+            {oauthConfigured && (
+              <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-2xl">
+                <div className="flex items-start gap-3">
+                  <svg className="w-5 h-5 text-blue-600 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <div className="flex-1">
+                    <p className="text-sm font-semibold text-blue-900 mb-1">推荐使用自动登录</p>
+                    <p className="text-xs text-blue-700">
+                      点击页面顶部的"连接 Facebook"按钮，可以自动获取长期有效的 Token，并自动检查权限。
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
             
             <div className="space-y-6">
               <div>
