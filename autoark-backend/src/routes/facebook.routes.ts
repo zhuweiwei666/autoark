@@ -17,6 +17,12 @@ router.get('/diagnose', facebookController.diagnoseTokens) // New: Diagnose toke
 router.get('/token-pool/status', facebookController.getTokenPoolStatus) // New: Get token pool status
 router.get('/purchase-value-info', facebookController.getPurchaseValueInfo) // New: Get purchase value info for tooltip
 
+// Pixel routes
+import * as pixelsController from '../controllers/facebook.pixels.controller'
+router.get('/pixels', pixelsController.getPixels) // Get all pixels
+router.get('/pixels/:id', pixelsController.getPixelDetails) // Get pixel details
+router.get('/pixels/:id/events', pixelsController.getPixelEvents) // Get pixel events
+
 // Country management
 router.get('/countries-list', facebookController.getCountriesList) // New: Country management list
 
