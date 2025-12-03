@@ -159,10 +159,16 @@ export const getAccounts = async (filters: any = {}, pagination: { page: number,
     }
     
     // 计算所有账户的历史总消耗
+    // 重要：只统计 campaign 级别的数据（campaignId 存在），确保与广告系列页面数据一致
     const totalSpendMap: Record<string, number> = {}
     if (accountIds.length > 0) {
         const totalSpendData = await MetricsDaily.aggregate([
-            { $match: { accountId: { $in: allAccountIds } } },
+            { 
+                $match: { 
+                    accountId: { $in: allAccountIds },
+                    campaignId: { $exists: true, $ne: null } // 只统计 campaign 级别的数据
+                } 
+            },
             {
                 $group: {
                     _id: '$accountId',
