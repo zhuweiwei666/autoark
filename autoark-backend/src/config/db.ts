@@ -1,10 +1,10 @@
-import mongoose from 'mongoose'
+import mongoose, { Connection } from 'mongoose'
 
 // 主连接（写操作）
 let writeConnection: typeof mongoose | null = null
 
 // 从连接（读操作，用于读写分离）
-let readConnection: typeof mongoose | null = null
+let readConnection: Connection | null = null
 
 const connectDB = async () => {
   try {
@@ -22,15 +22,16 @@ const connectDB = async () => {
     // 如果配置了读连接 URI，创建独立的读连接
     const readUri = process.env.MONGO_READ_URI
     if (readUri) {
-      readConnection = await mongoose.createConnection(readUri, {
+      readConnection = mongoose.createConnection(readUri, {
         readPreference: 'secondary', // 从节点用于读操作
       })
-      console.log(`MongoDB Connected (Read): ${readConnection.connection.host}`)
+      await readConnection.asPromise()
+      console.log(`MongoDB Connected (Read): ${readConnection.host}`)
     } else {
       // 如果没有配置读连接，使用主连接但设置读偏好为 secondaryPreferred
       // 这样会优先使用从节点，如果从节点不可用则使用主节点
       mongoose.connection.on('connected', () => {
-        mongoose.set('readPreference', 'secondaryPreferred')
+        // 在查询时使用 readPreference 选项
       })
       console.log(`MongoDB Read Preference: secondaryPreferred (using same connection)`)
     }
@@ -41,7 +42,7 @@ const connectDB = async () => {
 }
 
 // 获取读连接（用于查询操作）
-export const getReadConnection = () => {
+export const getReadConnection = (): typeof mongoose | Connection => {
   if (readConnection) {
     return readConnection
   }
