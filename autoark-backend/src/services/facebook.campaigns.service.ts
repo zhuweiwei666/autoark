@@ -156,7 +156,7 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
     // 联表查询 MetricsDaily 数据，以获取消耗、CPM 等实时指标
     const campaignIds = campaigns.map(c => c.campaignId)
     
-    // 构建日期查询条件：如果有日期范围，使用日期范围；否则查询所有历史数据
+    // 构建日期查询条件：如果有日期范围，使用日期范围；否则使用今天
     const metricsQuery: any = {
         campaignId: { $in: campaignIds }
     }
@@ -169,12 +169,16 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
         if (filters.endDate) {
             metricsQuery.date.$lte = filters.endDate
         }
+    } else {
+        // 没有日期范围，使用今天
+        const today = dayjs().format('YYYY-MM-DD')
+        metricsQuery.date = today
     }
     
-    // 如果有日期范围，按日期聚合；否则按 campaignId 聚合所有历史数据
+    // 按日期和 campaignId 聚合数据
     let metricsData: any[] = []
     if (filters.startDate || filters.endDate) {
-        // 有日期范围：按日期和 campaignId 聚合
+        // 有日期范围：先按日期和 campaignId 聚合，再按 campaignId 汇总
         metricsData = await MetricsDaily.aggregate([
             { $match: metricsQuery },
             {
@@ -209,7 +213,7 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
             }
         ])
     } else {
-        // 没有日期范围：按 campaignId 聚合所有历史数据
+        // 没有日期范围（使用今天）：直接按 campaignId 聚合
         metricsData = await MetricsDaily.aggregate([
             { $match: metricsQuery },
             {

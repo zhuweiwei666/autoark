@@ -114,10 +114,12 @@ export const getAccounts = async (filters: any = {}, pagination: { page: number,
     const accountIds = accounts.map(acc => acc.accountId)
     const allAccountIds = getAccountIdsForQuery(accountIds)
     
-    // 计算日期范围内的消耗（如果提供了日期范围）
+    // 计算消耗：如果提供了日期范围，使用日期范围；否则使用今天
     let periodSpendMap: Record<string, number> = {}
-    if (accountIds.length > 0 && (filters.startDate || filters.endDate)) {
+    if (accountIds.length > 0) {
         const dateQuery: any = { accountId: { $in: allAccountIds } }
+        
+        // 如果提供了日期范围，使用日期范围；否则使用今天
         if (filters.startDate || filters.endDate) {
             dateQuery.date = {}
             if (filters.startDate) {
@@ -126,6 +128,10 @@ export const getAccounts = async (filters: any = {}, pagination: { page: number,
             if (filters.endDate) {
                 dateQuery.date.$lte = filters.endDate
             }
+        } else {
+            // 没有日期范围，使用今天
+            const today = new Date().toISOString().split('T')[0]
+            dateQuery.date = today
         }
         
         const periodSpendData = await MetricsDaily.aggregate([
@@ -168,8 +174,8 @@ export const getAccounts = async (filters: any = {}, pagination: { page: number,
     // 为每个账户添加消耗和计算后的余额
     const accountsWithMetrics = accounts.map((account: any) => {
         const accountId = account.accountId
-        // 如果提供了日期范围，显示日期范围内的消耗；否则显示历史总消耗
-        const periodSpend = (filters.startDate || filters.endDate) ? (periodSpendMap[accountId] || 0) : (totalSpendMap[accountId] || 0)
+        // periodSpend 始终显示（日期范围内的消耗或今天的消耗）
+        const periodSpend = periodSpendMap[accountId] || 0
         const totalSpend = totalSpendMap[accountId] || 0
         
         // Facebook API 返回的 balance 是以账户货币的最小单位（分）返回的，需要除以 100
