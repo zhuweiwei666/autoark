@@ -29,8 +29,11 @@ router.get('/oauth/login-url', oauthController.getLoginUrl) // Get Facebook logi
 router.get('/oauth/callback', oauthController.handleCallback) // OAuth callback handler
 router.get('/oauth/config', oauthController.getOAuthConfig) // Get OAuth config status
 
-// Country management
-router.get('/countries-list', facebookController.getCountriesList) // New: Country management list
+// AI routes
+import * as aiController from '../controllers/ai.controller'
+router.post('/campaigns/:campaignId/ai-suggestion', aiController.generateAiSuggestion) // Generate suggestion
+router.get('/ai-suggestions', aiController.getAiSuggestions) // Get history
+router.post('/ai-suggestions/:id/apply', aiController.applyAiSuggestion) // Apply suggestion
 
 router.get('/accounts/:id/campaigns', facebookController.getCampaigns)
 router.get('/accounts/:id/adsets', facebookController.getAdSets)
