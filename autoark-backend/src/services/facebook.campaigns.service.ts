@@ -95,6 +95,8 @@ export const syncCampaignsFromAdAccounts = async () => {
               
               // Campaign + Country 级别的指标，不设置 adId 和 adsetId，避免与 { adId: 1, date: 1 } 唯一索引冲突
               // 使用 $set 更新数据，$unset 移除可能存在的 adId 和 adsetId 字段
+              // 注意：这里仍然使用 findOneAndUpdate，因为这是旧的同步方式
+              // 新的队列系统会使用 BulkWrite
               await MetricsDaily.findOneAndUpdate(
                 { campaignId: metricsData.campaignId, date: metricsData.date, country: country || null },
                 {

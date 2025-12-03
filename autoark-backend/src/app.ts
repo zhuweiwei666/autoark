@@ -23,6 +23,12 @@ connectDB()
 import { initRedis } from './config/redis'
 initRedis()
 
+// Initialize Token Pool
+import { tokenPool } from './services/facebook.token.pool'
+tokenPool.initialize().catch((error) => {
+  logger.error('[App] Failed to initialize token pool:', error)
+})
+
 // Initialize Queues and Workers
 import { initQueues } from './queue/facebook.queue'
 import { initWorkers } from './queue/facebook.worker'

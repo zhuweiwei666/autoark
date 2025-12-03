@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
 import DatePicker from '../components/DatePicker'
+import PurchaseValueTooltip from '../components/PurchaseValueTooltip'
 
 // 获取今天的日期字符串 (YYYY-MM-DD)
 const getToday = () => {
@@ -785,6 +786,17 @@ export default function FacebookCampaignsPage() {
                                 </span>
                           ) : col.key === 'account_id' || col.key === 'accountId' ? (
                             <div className="text-xs text-slate-700 font-mono">{(campaign as any)[col.key] || campaign.accountId || '-'}</div>
+                          ) : col.key === 'purchase_value' ? (
+                            // Purchase Value 带 Tooltip
+                            <PurchaseValueTooltip
+                              campaignId={campaign.campaignId || (campaign as any).id}
+                              date={filters.startDate || filters.endDate || getToday()}
+                              value={(campaign as any)[col.key] || 0}
+                            >
+                              <span className="text-slate-900 cursor-help underline decoration-dotted">
+                                {(campaign as any)[col.key] !== undefined && (campaign as any)[col.key] !== null ? col.format((campaign as any)[col.key]) : '-'}
+                              </span>
+                            </PurchaseValueTooltip>
                           ) : (
                             <span className="text-slate-900">{(campaign as any)[col.key] !== undefined && (campaign as any)[col.key] !== null ? col.format((campaign as any)[col.key]) : '-'}</span>
                           )}

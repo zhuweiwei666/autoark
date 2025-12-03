@@ -13,6 +13,9 @@ router.post('/accounts/sync', facebookController.syncAccounts) // New: Trigger s
 router.get('/campaigns-list', facebookController.getCampaignsList) // New: Campaign management list
 router.post('/campaigns/sync', facebookController.syncCampaigns) // New: Trigger sync
 router.get('/queue/status', facebookController.getQueueStatus) // New: Get queue status
+router.get('/diagnose', facebookController.diagnoseTokens) // New: Diagnose token permissions
+router.get('/token-pool/status', facebookController.getTokenPoolStatus) // New: Get token pool status
+router.get('/purchase-value-info', facebookController.getPurchaseValueInfo) // New: Get purchase value info for tooltip
 
 // Country management
 router.get('/countries-list', facebookController.getCountriesList) // New: Country management list

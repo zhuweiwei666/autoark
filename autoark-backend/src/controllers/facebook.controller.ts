@@ -3,6 +3,8 @@ import * as facebookService from '../services/facebook.service'
 import * as facebookAccountsService from '../services/facebook.accounts.service'
 import * as facebookCampaignsService from '../services/facebook.campaigns.service'
 import * as facebookCampaignsV2Service from '../services/facebook.campaigns.v2.service'
+import * as facebookPermissionsService from '../services/facebook.permissions.service'
+import { tokenPool } from '../services/facebook.token.pool'
 import * as facebookCountriesService from '../services/facebook.countries.service'
 import { getEffectiveAdAccounts } from '../services/facebook.sync.service'
 
@@ -47,6 +49,83 @@ export const getQueueStatus = async (
     res.json({
       success: true,
       data: status,
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
+// 诊断 Token 权限
+export const diagnoseTokens = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
+  try {
+    const { tokenId } = req.query
+    
+    if (tokenId) {
+      // 诊断单个 token
+      const result = await facebookPermissionsService.diagnoseToken(tokenId as string)
+      res.json({
+        success: true,
+        data: result,
+      })
+    } else {
+      // 诊断所有 token
+      const results = await facebookPermissionsService.diagnoseAllTokens()
+      res.json({
+        success: true,
+        data: results,
+      })
+    }
+  } catch (error) {
+    next(error)
+  }
+}
+
+// 获取 Token Pool 状态
+export const getTokenPoolStatus = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
+  try {
+    const status = tokenPool.getTokenStatus()
+    res.json({
+      success: true,
+      data: status,
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
+// 获取 Purchase 值信息（用于前端 Tooltip）
+export const getPurchaseValueInfo = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
+  try {
+    const { campaignId, date, country } = req.query
+    
+    if (!campaignId || !date) {
+      return res.status(400).json({
+        success: false,
+        message: 'campaignId and date are required',
+      })
+    }
+
+    const info = await purchaseCorrectionService.getPurchaseValueInfo(
+      campaignId as string,
+      date as string,
+      country as string | undefined
+    )
+
+    res.json({
+      success: true,
+      data: info,
     })
   } catch (error) {
     next(error)

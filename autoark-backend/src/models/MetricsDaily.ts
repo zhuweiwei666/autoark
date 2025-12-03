@@ -25,6 +25,11 @@ const metricsDailySchema = new mongoose.Schema(
     action_values: mongoose.Schema.Types.Mixed, // Array of {action_type, value}
     purchase_roas: Number,
     purchase_value: Number,
+    // Purchase 值修正相关字段
+    purchase_value_corrected: Number, // 修正后的值（推荐使用）
+    purchase_value_last7d: Number, // last_7d 的值
+    purchase_correction_applied: Boolean, // 是否已应用修正
+    purchase_correction_date: Date, // 修正时间
     mobile_app_install_count: Number, // Example for specific event count
 
     raw: Object,

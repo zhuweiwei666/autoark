@@ -9,8 +9,11 @@ import Account from '../models/Account'
 import Campaign from '../models/Campaign'
 import Ad from '../models/Ad'
 import MetricsDaily from '../models/MetricsDaily'
+import RawInsights from '../models/RawInsights'
 import { normalizeForApi, normalizeForStorage } from '../utils/accountId'
+import { createUpdateOneOperation } from '../services/facebook.bulk.write'
 import dayjs from 'dayjs'
+import mongoose from 'mongoose'
 
 // 检查 Redis 是否可用
 const isRedisAvailable = (): boolean => {
@@ -201,8 +204,11 @@ export const insightsWorker = (insightsQueue && workerOptions) ? new Worker(
         return { success: true, insightsCount: 0 }
       }
 
-      // 保存 Insights 数据
+      // 保存 Insights 数据（使用 BulkWrite 优化性能）
       let savedCount = 0
+      const bulkOps: mongoose.mongo.AnyBulkWriteOperation[] = []
+      const rawInsightsOps: mongoose.mongo.AnyBulkWriteOperation[] = []
+
       for (const insight of insights) {
         const country = insight.country || null
         const date = insight.date_start || dayjs().format('YYYY-MM-DD')
@@ -218,39 +224,104 @@ export const insightsWorker = (insightsQueue && workerOptions) ? new Worker(
           actualDate = date
         }
 
+        const purchaseValue = getActionValue(insight.action_values, 'purchase')
+        const mobileAppInstall = getActionCount(insight.actions, 'mobile_app_install')
+
+        // 1. 保存原始 Insights 数据到 RawInsights
+        const rawInsightsData = {
+          date: actualDate,
+          datePreset: datePreset,
+          channel: 'facebook',
+          accountId: normalizeForStorage(accountId),
+          campaignId: campaignId,
+          adsetId: adsetId,
+          adId: adId,
+          country: country,
+          raw: insight,
+          impressions: insight.impressions || 0,
+          clicks: insight.clicks || 0,
+          spend: parseFloat(insight.spend || '0'),
+          reach: insight.reach || 0,
+          frequency: insight.frequency || 0,
+          cpc: insight.cpc ? parseFloat(insight.cpc) : undefined,
+          ctr: insight.ctr ? parseFloat(insight.ctr) : undefined,
+          cpm: insight.cpm ? parseFloat(insight.cpm) : undefined,
+          cpp: insight.cpp ? parseFloat(insight.cpp) : undefined,
+          actions: insight.actions,
+          action_values: insight.action_values,
+          purchase_roas: insight.purchase_roas,
+          purchase_value: purchaseValue,
+          purchase_count: getActionCount(insight.actions, 'purchase'),
+          mobile_app_install_count: mobileAppInstall,
+          tokenId: job.data.tokenId || 'unknown',
+          syncedAt: new Date(),
+        }
+
+        rawInsightsOps.push(
+          createUpdateOneOperation(
+            {
+              adId: adId,
+              date: actualDate,
+              country: country || null,
+              datePreset: datePreset,
+            },
+            rawInsightsData,
+            { upsert: true }
+          )
+        )
+
+        // 2. 保存聚合数据到 MetricsDaily
         const metricsData: any = {
           date: actualDate,
           channel: 'facebook',
           accountId: normalizeForStorage(accountId),
           campaignId: campaignId,
           adsetId: adsetId,
-          adId: adId, // 关键：保存 adId
+          adId: adId,
           country: country,
           impressions: insight.impressions || 0,
           clicks: insight.clicks || 0,
           spendUsd: parseFloat(insight.spend || '0'),
           cpc: insight.cpc ? parseFloat(insight.cpc) : undefined,
-          ctr: insight.ctr ? parseFloat(insight.ctr) : undefined,
+          // CTR 在后台计算，不直接使用 Facebook 的值
+          ctr: undefined, // 将在聚合时计算
           cpm: insight.cpm ? parseFloat(insight.cpm) : undefined,
           actions: insight.actions,
           action_values: insight.action_values,
           purchase_roas: insight.purchase_roas ? parseFloat(insight.purchase_roas) : undefined,
-          purchase_value: getActionValue(insight.action_values, 'purchase'),
-          mobile_app_install_count: getActionCount(insight.actions, 'mobile_app_install'),
+          purchase_value: purchaseValue,
+          mobile_app_install_count: mobileAppInstall,
           raw: insight,
         }
 
-        // 保存到 MetricsDaily（使用 adId + date + country 作为唯一键）
-        // 注意：这是 Ad 级别的数据，后续会通过聚合服务向上聚合
-        await MetricsDaily.findOneAndUpdate(
-          { adId: metricsData.adId, date: metricsData.date, country: country || null },
-          { 
-            $set: metricsData,
-            $unset: { adsetId: '', campaignId: '' } // 确保是 Ad 级别数据
-          },
-          { upsert: true, new: true }
+        bulkOps.push(
+          createUpdateOneOperation(
+            {
+              adId: metricsData.adId,
+              date: metricsData.date,
+              country: country || null,
+            },
+            {
+              ...metricsData,
+              $unset: { adsetId: '', campaignId: '' }, // 确保是 Ad 级别数据
+            },
+            { upsert: true }
+          )
         )
+
         savedCount++
+      }
+
+      // 批量写入 MetricsDaily
+      if (bulkOps.length > 0) {
+        await MetricsDaily.bulkWrite(bulkOps, { ordered: false })
+        logger.debug(`[Worker] BulkWrite MetricsDaily: ${bulkOps.length} operations`)
+      }
+
+      // 批量写入 RawInsights
+      if (rawInsightsOps.length > 0) {
+        await RawInsights.bulkWrite(rawInsightsOps, { ordered: false })
+        logger.debug(`[Worker] BulkWrite RawInsights: ${rawInsightsOps.length} operations`)
       }
 
       return { success: true, insightsCount: savedCount }
