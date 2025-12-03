@@ -231,7 +231,7 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
         try {
             // 使用读连接进行查询（读写分离）
             const readConnection = getReadConnection()
-            let MetricsDailyRead = MetricsDaily
+            let MetricsDailyRead: any = MetricsDaily
             
             // 如果读连接是独立的连接，需要使用该连接的模型
             if (readConnection !== mongoose) {
@@ -289,65 +289,66 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
                 .hint({ campaignId: 1, date: 1 }) // 强制使用复合索引
                 .allowDiskUse(true)
             } else {
-            // 没有日期范围（使用今天）：直接查询，不需要聚合
-            // 因为每个 campaignId + date 组合是唯一的，可以直接 find
-            const today = dayjs().format('YYYY-MM-DD')
-            
-            // 性能优化：如果 campaignIds 数量很大（>100），分批查询
-            const BATCH_SIZE = 100
-            if (campaignIds.length > BATCH_SIZE) {
+                // 没有日期范围（使用今天）：直接查询，不需要聚合
+                // 因为每个 campaignId + date 组合是唯一的，可以直接 find
+                const today = dayjs().format('YYYY-MM-DD')
+                
+                // 性能优化：如果 campaignIds 数量很大（>100），分批查询
+                const BATCH_SIZE = 100
+                if (campaignIds.length > BATCH_SIZE) {
                 const batches: string[][] = []
                 for (let i = 0; i < campaignIds.length; i += BATCH_SIZE) {
                     batches.push(campaignIds.slice(i, i + BATCH_SIZE))
                 }
                 
-                const batchResults = await Promise.all(
-                    batches.map(batchIds =>
-                        MetricsDailyRead.find({
-                            campaignId: { $in: batchIds },
-                            date: today
-                        })
-                        .hint({ campaignId: 1, date: 1 })
-                        .lean()
+                    const batchResults = await Promise.all(
+                        batches.map(batchIds =>
+                            MetricsDailyRead.find({
+                                campaignId: { $in: batchIds },
+                                date: today
+                            })
+                            .hint({ campaignId: 1, date: 1 })
+                            .lean()
+                        )
                     )
-                )
-                
-                const todayMetrics = batchResults.flat()
-                metricsData = todayMetrics.map((metric: any) => ({
-                    _id: metric.campaignId,
-                    spendUsd: metric.spendUsd || 0,
-                    impressions: metric.impressions || 0,
-                    clicks: metric.clicks || 0,
-                    cpc: metric.cpc,
-                    ctr: metric.ctr,
-                    cpm: metric.cpm,
-                    actions: metric.actions,
-                    action_values: metric.action_values,
-                    purchase_roas: metric.purchase_roas,
-                    raw: metric.raw
-                }))
-            } else {
-                const todayMetrics = await MetricsDailyRead.find({
-                    campaignId: { $in: campaignIds },
-                    date: today
-                })
-                .hint({ campaignId: 1, date: 1 }) // 强制使用复合索引
-                .lean() // 使用 lean() 提高性能
-                
-                // 转换为聚合结果的格式
-                metricsData = todayMetrics.map((metric: any) => ({
-                    _id: metric.campaignId,
-                    spendUsd: metric.spendUsd || 0,
-                    impressions: metric.impressions || 0,
-                    clicks: metric.clicks || 0,
-                    cpc: metric.cpc,
-                    ctr: metric.ctr,
-                    cpm: metric.cpm,
-                    actions: metric.actions,
-                    action_values: metric.action_values,
-                    purchase_roas: metric.purchase_roas,
-                    raw: metric.raw
-                }))
+                    
+                    const todayMetrics = batchResults.flat()
+                    metricsData = todayMetrics.map((metric: any) => ({
+                        _id: metric.campaignId,
+                        spendUsd: metric.spendUsd || 0,
+                        impressions: metric.impressions || 0,
+                        clicks: metric.clicks || 0,
+                        cpc: metric.cpc,
+                        ctr: metric.ctr,
+                        cpm: metric.cpm,
+                        actions: metric.actions,
+                        action_values: metric.action_values,
+                        purchase_roas: metric.purchase_roas,
+                        raw: metric.raw
+                    }))
+                } else {
+                    const todayMetrics = await MetricsDailyRead.find({
+                        campaignId: { $in: campaignIds },
+                        date: today
+                    })
+                    .hint({ campaignId: 1, date: 1 }) // 强制使用复合索引
+                    .lean() // 使用 lean() 提高性能
+                    
+                    // 转换为聚合结果的格式
+                    metricsData = todayMetrics.map((metric: any) => ({
+                        _id: metric.campaignId,
+                        spendUsd: metric.spendUsd || 0,
+                        impressions: metric.impressions || 0,
+                        clicks: metric.clicks || 0,
+                        cpc: metric.cpc,
+                        ctr: metric.ctr,
+                        cpm: metric.cpm,
+                        actions: metric.actions,
+                        action_values: metric.action_values,
+                        purchase_roas: metric.purchase_roas,
+                        raw: metric.raw
+                    }))
+                }
             }
             
             const queryTime = Date.now() - startTime
