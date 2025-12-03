@@ -185,11 +185,6 @@ export const getAccounts = async (filters: any = {}, pagination: { page: number,
         
         const accountObj = account.toObject ? account.toObject() : account
         
-        // 添加调试日志（仅在前几个账户时）
-        if (accountsWithMetrics.length < 3) {
-            logger.info(`Account ${accountId}: periodSpend=${periodSpend}, totalSpend=${totalSpend}, accountBalance=${accountBalance}, calculatedBalance=${calculatedBalance}`)
-        }
-        
         return {
             ...accountObj,
             periodSpend: periodSpend, // 日期范围内的消耗（美元）
@@ -197,6 +192,13 @@ export const getAccounts = async (filters: any = {}, pagination: { page: number,
             totalSpend: totalSpend // 历史总消耗（美元，用于调试）
         }
     })
+    
+    // 添加调试日志（仅在前几个账户时）
+    if (accountsWithMetrics.length > 0 && accountsWithMetrics.length <= 3) {
+        accountsWithMetrics.slice(0, 3).forEach((acc: any) => {
+            logger.info(`Account ${acc.accountId}: periodSpend=${acc.periodSpend}, totalSpend=${acc.totalSpend}, calculatedBalance=${acc.calculatedBalance}`)
+        })
+    }
 
     return {
         data: accountsWithMetrics,
