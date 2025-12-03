@@ -20,7 +20,7 @@ router.get('/api/ops-logs', dashboardController.getOpsLogsHandler)
 // 数据看板 V1 API
 router.get('/api/core-metrics', dashboardController.getCoreMetricsHandler)
 router.get('/api/today-spend-trend', dashboardController.getTodaySpendTrendHandler)
-router.get('/api/campaign-spend-ranking', dashboardController.getCampaignRankingHandler)
+router.get('/api/campaign-spend-ranking', dashboardController.getCampaignSpendRankingHandler)
 router.get('/api/country-spend-ranking', dashboardController.getCountrySpendRankingHandler)
 
 // Dashboard UI 已迁移到 React 前端，不再需要后端返回 HTML
