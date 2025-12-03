@@ -772,18 +772,43 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
             }
         })
         
+        // 计算正确的 CTR（clicks / impressions），而不是直接使用存储的 CTR
+        const impressions = metricsObj.impressions || 0
+        const clicks = metricsObj.clicks || 0
+        const calculatedCtr = impressions > 0 ? clicks / impressions : 0
+        
+        // 优先使用 metricsObj 中的 purchase_value，如果没有则从 action_values 中提取
+        let purchase_value = metricsObj.purchase_value
+        if (!purchase_value && actionValues && actionValues.length > 0) {
+            // 尝试从 action_values 中提取 purchase value
+            const purchaseAction = actionValues.find((a: any) => 
+                a.action_type === 'purchase' || a.action_type === 'mobile_app_purchase'
+            )
+            if (purchaseAction && purchaseAction.value !== undefined) {
+                purchase_value = parseFloat(purchaseAction.value) || 0
+            }
+        }
+        // 如果还是没有，尝试从 extractedActionValues 中获取
+        if (!purchase_value && extractedActionValues.purchase_value !== undefined) {
+            purchase_value = extractedActionValues.purchase_value
+        }
+        if (!purchase_value && extractedActionValues.mobile_app_purchase_value !== undefined) {
+            purchase_value = extractedActionValues.mobile_app_purchase_value
+        }
+        
         return {
             ...campaignObj,
             // Campaign 基础字段（使用 Facebook 原始字段名）
             id: campaignObj.campaignId,
             account_id: campaignObj.accountId,
             // Insights 基础字段
-            impressions: metricsObj.impressions || 0,
-            clicks: metricsObj.clicks || 0,
+            impressions: impressions,
+            clicks: clicks,
             spend: metricsObj.spendUsd || 0,
             cpc: metricsObj.cpc,
-            ctr: metricsObj.ctr,
+            ctr: calculatedCtr, // 使用计算出的 CTR
             cpm: metricsObj.cpm,
+            purchase_value: purchase_value || 0, // 确保 purchase_value 被包含
             // 从 raw 中提取其他字段（如果存在）
             ...(metricsObj.raw || {}),
             // 提取的 actions
