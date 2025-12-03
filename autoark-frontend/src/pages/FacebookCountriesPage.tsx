@@ -54,7 +54,7 @@ const formatBudget = (v: any) => {
 const ALL_COUNTRY_COLUMNS = [
   // 国家基础字段
   { key: 'country', label: '国家', defaultVisible: true, format: (v: any) => v || '-' },
-  { key: 'countryCount', label: '广告系列数', defaultVisible: true, format: formatNumber },
+  { key: 'campaignCount', label: '广告系列数', defaultVisible: true, format: formatNumber },
   { key: 'status', label: 'status', defaultVisible: true, format: (v: any) => v ? String(v).toUpperCase() : '-' },
   { key: 'objective', label: 'objective', defaultVisible: false, format: (v: any) => v || '-' },
   { key: 'buying_type', label: 'buying_type', defaultVisible: false, format: (v: any) => v || '-' },

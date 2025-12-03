@@ -100,6 +100,38 @@ export const getAccountsList = async (
   }
 }
 
+export const getCountriesList = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
+  try {
+    // 确保设置正确的 Content-Type
+    res.setHeader('Content-Type', 'application/json; charset=utf-8')
+    
+    const page = parseInt(req.query.page as string) || 1
+    const limit = parseInt(req.query.limit as string) || 20
+    const sortBy = (req.query.sortBy as string) || 'spend'
+    const sortOrder = (req.query.sortOrder as 'asc' | 'desc') || 'desc'
+    const filters = {
+        name: req.query.name,
+        accountId: req.query.accountId,
+        status: req.query.status,
+        objective: req.query.objective,
+        startDate: req.query.startDate as string | undefined,
+        endDate: req.query.endDate as string | undefined,
+    }
+
+    const result = await facebookCountriesService.getCountries(filters, { page, limit, sortBy, sortOrder })
+    res.json({
+      success: true,
+      ...result
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
 export const getCampaigns = async (
   req: Request,
   res: Response,
