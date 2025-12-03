@@ -312,8 +312,19 @@ export default function FacebookCampaignsPage() {
       })
       setCampaigns(response.data)
       setPagination(response.pagination)
+      // 如果加载成功，清除之前的错误消息
+      if (message?.type === 'error') {
+        setMessage(null)
+      }
     } catch (error: any) {
-      setMessage({ type: 'error', text: error.message || '加载失败' })
+      // 只在真正失败时显示错误
+      const errorMessage = error.message || '加载失败'
+      // 如果错误消息包含 HTML 相关的内容，提供更友好的提示
+      if (errorMessage.includes('HTML') || errorMessage.includes('<!DOCTYPE')) {
+        setMessage({ type: 'error', text: 'API 响应格式错误，请刷新页面重试' })
+      } else {
+        setMessage({ type: 'error', text: errorMessage })
+      }
     } finally {
       setLoading(false)
     }

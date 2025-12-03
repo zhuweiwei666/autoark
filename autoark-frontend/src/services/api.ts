@@ -350,8 +350,26 @@ export async function syncCampaigns(): Promise<{
   })
 
   if (!response.ok) {
-    const error = await response.json()
-    throw new Error(error.message || 'Failed to sync campaigns')
+    const errorText = await response.text()
+    let errorMessage = 'Failed to sync campaigns'
+    try {
+      const errorJson = JSON.parse(errorText)
+      errorMessage = errorJson.message || errorMessage
+    } catch {
+      if (errorText.includes('<!DOCTYPE')) {
+        errorMessage = `服务器返回了 HTML 响应，请检查 API 路由配置。状态码: ${response.status}`
+      } else {
+        errorMessage = errorText || errorMessage
+      }
+    }
+    throw new Error(errorMessage)
+  }
+
+  // 检查 Content-Type 确保是 JSON
+  const contentType = response.headers.get('content-type')
+  if (!contentType || !contentType.includes('application/json')) {
+    const text = await response.text()
+    throw new Error(`服务器返回了非 JSON 响应: ${contentType}. 响应内容: ${text.substring(0, 100)}`)
   }
 
   return response.json()
@@ -496,7 +514,26 @@ export async function getCampaignColumnSettings(): Promise<UserSettingsResponse>
   const response = await fetch(`${API_BASE_URL}/api/user-settings/campaign-columns`)
 
   if (!response.ok) {
-    throw new Error('Failed to fetch campaign column settings')
+    const errorText = await response.text()
+    let errorMessage = 'Failed to fetch campaign column settings'
+    try {
+      const errorJson = JSON.parse(errorText)
+      errorMessage = errorJson.message || errorMessage
+    } catch {
+      if (errorText.includes('<!DOCTYPE')) {
+        errorMessage = `服务器返回了 HTML 响应，请检查 API 路由配置。状态码: ${response.status}`
+      } else {
+        errorMessage = errorText || errorMessage
+      }
+    }
+    throw new Error(errorMessage)
+  }
+
+  // 检查 Content-Type 确保是 JSON
+  const contentType = response.headers.get('content-type')
+  if (!contentType || !contentType.includes('application/json')) {
+    const text = await response.text()
+    throw new Error(`服务器返回了非 JSON 响应: ${contentType}. 响应内容: ${text.substring(0, 100)}`)
   }
 
   return response.json()
@@ -511,8 +548,26 @@ export async function saveCampaignColumnSettings(columns: string[]): Promise<Use
   })
 
   if (!response.ok) {
-    const error = await response.json()
-    throw new Error(error.message || 'Failed to save campaign column settings')
+    const errorText = await response.text()
+    let errorMessage = 'Failed to save campaign column settings'
+    try {
+      const errorJson = JSON.parse(errorText)
+      errorMessage = errorJson.message || errorMessage
+    } catch {
+      if (errorText.includes('<!DOCTYPE')) {
+        errorMessage = `服务器返回了 HTML 响应，请检查 API 路由配置。状态码: ${response.status}`
+      } else {
+        errorMessage = errorText || errorMessage
+      }
+    }
+    throw new Error(errorMessage)
+  }
+
+  // 检查 Content-Type 确保是 JSON
+  const contentType = response.headers.get('content-type')
+  if (!contentType || !contentType.includes('application/json')) {
+    const text = await response.text()
+    throw new Error(`服务器返回了非 JSON 响应: ${contentType}. 响应内容: ${text.substring(0, 100)}`)
   }
 
   return response.json()
