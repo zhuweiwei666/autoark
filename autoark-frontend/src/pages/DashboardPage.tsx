@@ -241,22 +241,23 @@ export default function DashboardPage() {
         <section className="bg-white rounded-3xl border border-slate-200 p-6 shadow-lg shadow-black/5">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-xl font-bold text-slate-900">📊 数据看板</h2>
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-4">
               <div className="group">
+                <label className="block text-xs font-medium text-slate-400 mb-2 group-focus-within:text-indigo-400 transition-colors">开始日期</label>
                 <DatePicker
                   value={filters.startDate}
                   onChange={(date) => setFilters({...filters, startDate: date})}
                   placeholder="选择开始日期"
-                  className="w-48"
+                  className="w-full"
                 />
               </div>
-              <span className="text-slate-600">至</span>
               <div className="group">
+                <label className="block text-xs font-medium text-slate-400 mb-2 group-focus-within:text-indigo-400 transition-colors">结束日期</label>
                 <DatePicker
                   value={filters.endDate}
                   onChange={(date) => setFilters({...filters, endDate: date})}
                   placeholder="选择结束日期"
-                  className="w-48"
+                  className="w-full"
                 />
               </div>
             </div>
