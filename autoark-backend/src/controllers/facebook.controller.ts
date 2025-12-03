@@ -27,6 +27,9 @@ export const getCampaignsList = async (
   next: NextFunction,
 ) => {
   try {
+    // 确保设置正确的 Content-Type
+    res.setHeader('Content-Type', 'application/json; charset=utf-8')
+    
     const page = parseInt(req.query.page as string) || 1
     const limit = parseInt(req.query.limit as string) || 20
     const sortBy = (req.query.sortBy as string) || 'createdAt'
