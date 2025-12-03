@@ -6,7 +6,8 @@
 const mongoose = require('mongoose')
 require('dotenv').config()
 
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/autoark'
+// 优先使用 MONGO_URI，如果没有则使用 MONGODB_URI
+const MONGODB_URI = process.env.MONGO_URI || process.env.MONGODB_URI || 'mongodb://localhost:27017/autoark'
 
 async function fixIndexes() {
   try {
