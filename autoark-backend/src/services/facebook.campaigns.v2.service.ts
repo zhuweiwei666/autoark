@@ -2,11 +2,20 @@ import Account from '../models/Account'
 import { accountSyncQueue, adFetchQueue, insightsQueue } from '../queue/facebook.queue'
 import logger from '../utils/logger'
 
+// 检查队列是否可用
+const isQueueAvailable = (): boolean => {
+  return accountSyncQueue !== null && adFetchQueue !== null && insightsQueue !== null
+}
+
 /**
  * 新版本的广告系列同步服务
  * 使用 BullMQ 队列 + 并发 Worker 实现高性能抓取
  */
 export const syncCampaignsFromAdAccountsV2 = async () => {
+  if (!isQueueAvailable()) {
+    throw new Error('Queue system not available. Please configure REDIS_URL environment variable.')
+  }
+
   const startTime = Date.now()
   
   try {
@@ -27,7 +36,7 @@ export const syncCampaignsFromAdAccountsV2 = async () => {
         continue
       }
 
-      const job = await accountSyncQueue.add(
+      const job = await accountSyncQueue!.add(
         'sync-account',
         {
           accountId: account.accountId,
@@ -53,25 +62,33 @@ export const syncCampaignsFromAdAccountsV2 = async () => {
  * 获取队列状态
  */
 export const getQueueStatus = async () => {
+  if (!isQueueAvailable()) {
+    return {
+      accountSync: { waiting: 0, active: 0, completed: 0, failed: 0, error: 'Queue system not available' },
+      adFetch: { waiting: 0, active: 0, completed: 0, failed: 0, error: 'Queue system not available' },
+      insights: { waiting: 0, active: 0, completed: 0, failed: 0, error: 'Queue system not available' },
+    }
+  }
+
   const [accountSyncWaiting, accountSyncActive, accountSyncCompleted, accountSyncFailed] = await Promise.all([
-    accountSyncQueue.getWaitingCount(),
-    accountSyncQueue.getActiveCount(),
-    accountSyncQueue.getCompletedCount(),
-    accountSyncQueue.getFailedCount(),
+    accountSyncQueue!.getWaitingCount(),
+    accountSyncQueue!.getActiveCount(),
+    accountSyncQueue!.getCompletedCount(),
+    accountSyncQueue!.getFailedCount(),
   ])
 
   const [adFetchWaiting, adFetchActive, adFetchCompleted, adFetchFailed] = await Promise.all([
-    adFetchQueue.getWaitingCount(),
-    adFetchQueue.getActiveCount(),
-    adFetchQueue.getCompletedCount(),
-    adFetchQueue.getFailedCount(),
+    adFetchQueue!.getWaitingCount(),
+    adFetchQueue!.getActiveCount(),
+    adFetchQueue!.getCompletedCount(),
+    adFetchQueue!.getFailedCount(),
   ])
 
   const [insightsWaiting, insightsActive, insightsCompleted, insightsFailed] = await Promise.all([
-    insightsQueue.getWaitingCount(),
-    insightsQueue.getActiveCount(),
-    insightsQueue.getCompletedCount(),
-    insightsQueue.getFailedCount(),
+    insightsQueue!.getWaitingCount(),
+    insightsQueue!.getActiveCount(),
+    insightsQueue!.getCompletedCount(),
+    insightsQueue!.getFailedCount(),
   ])
 
   return {

@@ -1,7 +1,7 @@
 import { Worker, WorkerOptions } from 'bullmq'
 import { getRedisConnection } from '../config/redis'
 import logger from '../utils/logger'
-import { adFetchQueue, insightsQueue } from './facebook.queue'
+import { adFetchQueue, insightsQueue, accountSyncQueue } from './facebook.queue'
 import * as facebookSyncService from '../services/facebook.sync.service'
 import * as facebookApiService from '../services/facebook.api'
 import * as facebookCampaignsService from '../services/facebook.campaigns.service'
@@ -37,7 +37,7 @@ const getActionCount = (actions: any[], actionType: string): number | undefined 
 }
 
 // ==================== 账户同步 Worker ====================
-export const accountSyncWorker = new Worker(
+export const accountSyncWorker = accountSyncQueue ? new Worker(
   'account-sync',
   async (job) => {
     const { accountId, token } = job.data
@@ -95,10 +95,10 @@ export const accountSyncWorker = new Worker(
     }
   },
   workerOptions
-)
+) : null
 
 // ==================== 广告抓取 Worker ====================
-export const adFetchWorker = new Worker(
+export const adFetchWorker = adFetchQueue ? new Worker(
   'ad-fetch',
   async (job) => {
     const { campaignId, accountId, token } = job.data
@@ -160,10 +160,10 @@ export const adFetchWorker = new Worker(
     }
   },
   workerOptions
-)
+) : null
 
 // ==================== Insights 抓取 Worker ====================
-export const insightsWorker = new Worker(
+export const insightsWorker = insightsQueue ? new Worker(
   'insights-fetch',
   async (job) => {
     const { adId, campaignId, adsetId, accountId, token, datePreset, level } = job.data
@@ -243,10 +243,15 @@ export const insightsWorker = new Worker(
     }
   },
   workerOptions
-)
+) : null
 
 // 初始化所有 Workers
 export const initWorkers = () => {
+  if (!accountSyncWorker || !adFetchWorker || !insightsWorker) {
+    logger.warn('[Worker] Workers not available, Redis may not be configured. Queue features will be disabled.')
+    return
+  }
+
   accountSyncWorker.on('completed', (job) => {
     logger.info(`[Worker] Account sync job ${job.id} completed`)
   })
