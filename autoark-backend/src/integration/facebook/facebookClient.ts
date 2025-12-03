@@ -35,80 +35,104 @@ const handleApiError = (context: string, error: any, token?: string) => {
 
 export const facebookClient = {
   get: async (endpoint: string, params: any = {}) => {
-    const startTime = Date.now()
-    const url = `${FB_BASE_URL}/${FB_API_VERSION}${endpoint}`
+    // ... (existing get logic implementation details omitted for brevity, but logically present)
+    return request('GET', endpoint, params)
+  },
 
-    // 尝试使用 Token Pool（如果可用）
-    let token = params.access_token
+  post: async (endpoint: string, data: any = {}, params: any = {}) => {
+    return request('POST', endpoint, { ...params, ...data }) // FB API often takes data as params/query for POST too, but typically body. 
+    // Graph API can take params in URL or body. Axios 'params' is URL query, 'data' is body.
+    // For FB Graph API, simple fields can go in params or formData.
+    // Let's refine the request helper.
+  }
+}
+
+// 统一请求处理函数
+const request = async (method: 'GET' | 'POST', endpoint: string, dataOrParams: any = {}) => {
+  const startTime = Date.now()
+  const url = `${FB_BASE_URL}/${FB_API_VERSION}${endpoint}`
+
+  // 尝试使用 Token Pool（如果可用）
+  let token = dataOrParams.access_token
+  if (!token) {
+    if (tokenPool && tokenPool.getNextToken) {
+      token = tokenPool.getNextToken()
+    }
+    
     if (!token) {
-      if (tokenPool && tokenPool.getNextToken) {
-        token = tokenPool.getNextToken()
+      token = await getFacebookAccessToken()
+    }
+  }
+
+  let retries = 0
+  const maxRetries = 3
+  
+  while (retries < maxRetries) {
+    try {
+      const config: any = {
+        method,
+        url,
+      }
+
+      if (method === 'GET') {
+        config.params = {
+          access_token: token,
+          ...dataOrParams,
+        }
+      } else {
+        // POST
+        config.params = { access_token: token } // Token 通常放在 URL 参数中
+        config.data = dataOrParams
+      }
+
+      const res = await axios(config)
+      
+      // 标记成功
+      if (tokenPool && tokenPool.markTokenSuccess) {
+        tokenPool.markTokenSuccess(token)
       }
       
-      if (!token) {
-        token = await getFacebookAccessToken()
-      }
-    }
-
-    let retries = 0
-    const maxRetries = 3
-    
-    while (retries < maxRetries) {
-      try {
-        const res = await axios.get(url, {
-          params: {
-            access_token: token,
-            ...params,
-          },
-        })
-        
-        // 标记成功
-        if (tokenPool && tokenPool.markTokenSuccess) {
-          tokenPool.markTokenSuccess(token)
+      logger.timerLog(`[Facebook API] ${method} ${endpoint}`, startTime)
+      return res.data
+    } catch (error: any) {
+      const errorCode = error.response?.data?.error?.code
+      const errMsg = error.response?.data?.error?.message || error.message
+      
+      // 限流错误：尝试切换 token 或等待
+      if (
+        (errorCode === 4 || errorCode === 17 || errMsg.includes('rate limit')) &&
+        retries < maxRetries - 1
+      ) {
+        // 标记当前 token 失败
+        if (tokenPool && tokenPool.markTokenFailure) {
+          tokenPool.markTokenFailure(token, error)
         }
         
-        logger.timerLog(`[Facebook API] GET ${endpoint}`, startTime)
-        return res.data
-      } catch (error: any) {
-        const errorCode = error.response?.data?.error?.code
-        const errMsg = error.response?.data?.error?.message || error.message
-        
-        // 限流错误：尝试切换 token 或等待
-        if (
-          (errorCode === 4 || errorCode === 17 || errMsg.includes('rate limit')) &&
-          retries < maxRetries - 1
-        ) {
-          // 标记当前 token 失败
-          if (tokenPool && tokenPool.markTokenFailure) {
-            tokenPool.markTokenFailure(token, error)
+        // 尝试获取新 token
+        if (tokenPool && tokenPool.getNextToken) {
+          const newToken = tokenPool.getNextToken()
+          if (newToken && newToken !== token) {
+            token = newToken
+            logger.info(`[Facebook API] Switched to new token due to rate limit`)
+            retries++
+            continue
           }
-          
-          // 尝试获取新 token
-          if (tokenPool && tokenPool.getNextToken) {
-            const newToken = tokenPool.getNextToken()
-            if (newToken && newToken !== token) {
-              token = newToken
-              logger.info(`[Facebook API] Switched to new token due to rate limit`)
-              retries++
-              continue
-            }
-          }
-          
-          // 随机退避
-          const backoff = 2000 + Math.random() * 500
-          logger.warn(`[Facebook API] Rate limited, backing off ${backoff}ms`)
-          await new Promise((resolve) => setTimeout(resolve, backoff))
-          retries++
-          continue
         }
         
-        // 其他错误：直接抛出
-        handleApiError(`GET ${endpoint}`, error, token)
+        // 随机退避
+        const backoff = 2000 + Math.random() * 500
+        logger.warn(`[Facebook API] Rate limited, backing off ${backoff}ms`)
+        await new Promise((resolve) => setTimeout(resolve, backoff))
+        retries++
+        continue
       }
+      
+      // 其他错误：直接抛出
+      handleApiError(`${method} ${endpoint}`, error, token)
     }
-    
-    // 所有重试都失败
-    throw new Error(`Facebook API [GET ${endpoint}] failed after ${maxRetries} retries`)
-  },
+  }
+  
+  // 所有重试都失败
+  throw new Error(`Facebook API [${method} ${endpoint}] failed after ${maxRetries} retries`)
 }
 
