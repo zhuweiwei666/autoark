@@ -1,5 +1,5 @@
 import { Worker, WorkerOptions } from 'bullmq'
-import { getRedisConnection } from '../config/redis'
+import { getRedisConnection, getRedisClient } from '../config/redis'
 import logger from '../utils/logger'
 import { adFetchQueue, insightsQueue, accountSyncQueue } from './facebook.queue'
 import * as facebookSyncService from '../services/facebook.sync.service'
@@ -12,14 +12,31 @@ import MetricsDaily from '../models/MetricsDaily'
 import { normalizeForApi, normalizeForStorage } from '../utils/accountId'
 import dayjs from 'dayjs'
 
-// Worker 配置
-const workerOptions: WorkerOptions = {
-  connection: getRedisConnection(),
-  concurrency: 30, // 并发处理30个任务（可根据实际情况调整10-50）
-  limiter: {
-    max: 100, // 每秒最多100个任务
-    duration: 1000,
-  },
+// 检查 Redis 是否可用
+const isRedisAvailable = (): boolean => {
+  try {
+    const client = getRedisClient()
+    return client !== null
+  } catch {
+    return false
+  }
+}
+
+// Worker 配置（仅在 Redis 可用时创建）
+let workerOptions: WorkerOptions | null = null
+if (isRedisAvailable()) {
+  try {
+    workerOptions = {
+      connection: getRedisConnection(),
+      concurrency: 30, // 并发处理30个任务（可根据实际情况调整10-50）
+      limiter: {
+        max: 100, // 每秒最多100个任务
+        duration: 1000,
+      },
+    }
+  } catch (error) {
+    logger.warn('[Worker] Failed to create worker options, Redis may not be configured:', error)
+  }
 }
 
 // 辅助函数：从 actions 数组中获取特定 action_type 的 value
@@ -37,7 +54,7 @@ const getActionCount = (actions: any[], actionType: string): number | undefined 
 }
 
 // ==================== 账户同步 Worker ====================
-export const accountSyncWorker = accountSyncQueue ? new Worker(
+export const accountSyncWorker = (accountSyncQueue && workerOptions) ? new Worker(
   'account-sync',
   async (job) => {
     const { accountId, token } = job.data
@@ -94,11 +111,11 @@ export const accountSyncWorker = accountSyncQueue ? new Worker(
       throw error
     }
   },
-  workerOptions
+  workerOptions!
 ) : null
 
 // ==================== 广告抓取 Worker ====================
-export const adFetchWorker = adFetchQueue ? new Worker(
+export const adFetchWorker = (adFetchQueue && workerOptions) ? new Worker(
   'ad-fetch',
   async (job) => {
     const { campaignId, accountId, token } = job.data
@@ -159,11 +176,11 @@ export const adFetchWorker = adFetchQueue ? new Worker(
       throw error
     }
   },
-  workerOptions
+  workerOptions!
 ) : null
 
 // ==================== Insights 抓取 Worker ====================
-export const insightsWorker = insightsQueue ? new Worker(
+export const insightsWorker = (insightsQueue && workerOptions) ? new Worker(
   'insights-fetch',
   async (job) => {
     const { adId, campaignId, adsetId, accountId, token, datePreset, level } = job.data
@@ -242,7 +259,7 @@ export const insightsWorker = insightsQueue ? new Worker(
       throw error
     }
   },
-  workerOptions
+  workerOptions!
 ) : null
 
 // 初始化所有 Workers
