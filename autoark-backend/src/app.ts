@@ -19,9 +19,15 @@ dotenv.config()
 // Connect to DB
 connectDB()
 
+// Initialize Redis
+import { initRedis } from './config/redis'
+initRedis()
+
 // Initialize Crons
+import initPreaggregationCron from './cron/preaggregation.cron'
 initCronJobs()
 initSyncCron()
+initPreaggregationCron()
 initTokenValidationCron() // Token validation cron (每小时检查一次)
 
 const app = express()

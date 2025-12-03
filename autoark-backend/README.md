@@ -41,9 +41,15 @@ cp .env.example .env
 
 编辑 `.env` 文件填入以下必要信息：
 
-- **MONGO_URI**: MongoDB Atlas 连接字符串
+- **MONGO_URI**: MongoDB Atlas 连接字符串（主连接，用于写操作）
   - 格式: `mongodb+srv://<username>:<password>@cluster0.mongodb.net/autoark?retryWrites=true&w=majority`
   - 获取方式: 登录 MongoDB Atlas -> Connect -> Drivers -> Node.js -> Copy connection string
+- **MONGO_READ_URI** (可选): MongoDB 从节点连接字符串（用于读操作，实现读写分离）
+  - 如果未配置，将使用主连接但设置读偏好为 `secondaryPreferred`
+  - 格式: `mongodb+srv://<username>:<password>@cluster0-shard-00-01.mongodb.net/autoark?readPreference=secondary`
+- **REDIS_URL** (可选): Redis 连接字符串（用于缓存）
+  - 格式: `redis://localhost:6379` 或 `redis://:password@host:port`
+  - 如果未配置，缓存功能将被禁用，但系统仍可正常运行
 - **FB_ACCESS_TOKEN**: Facebook Graph API 访问令牌
   - 获取方式: Meta for Developers -> Tools -> Graph API Explorer -> Generate Token (需包含 `ads_read`, `read_insights` 权限)
 - **PORT**: 后端服务端口 (默认 3001)
@@ -52,8 +58,28 @@ cp .env.example .env
 ```properties
 PORT=3001
 MONGO_URI=mongodb+srv://admin:securepassword@cluster0.xyz.mongodb.net/autoark
+MONGO_READ_URI=mongodb+srv://admin:securepassword@cluster0-shard-00-01.xyz.mongodb.net/autoark?readPreference=secondary
+REDIS_URL=redis://localhost:6379
 FB_ACCESS_TOKEN=EAAB...
 ```
+
+### 性能优化配置说明
+
+系统已实现以下性能优化：
+
+1. **Redis 缓存**: 
+   - 今天的数据缓存 5 分钟
+   - 日期范围数据缓存 10 分钟
+   - 自动缓存常用查询结果
+
+2. **数据预聚合**:
+   - 每小时自动预聚合今天的数据
+   - 每天凌晨 2 点预聚合所有常用日期范围（今天、昨天、最近7天、最近30天）
+
+3. **MongoDB 读写分离**:
+   - 写操作使用主节点
+   - 读操作优先使用从节点（如果配置了 `MONGO_READ_URI`）
+   - 如果未配置从节点，使用主节点但设置读偏好为 `secondaryPreferred`
 
 ### 3. 启动开发服务器
 

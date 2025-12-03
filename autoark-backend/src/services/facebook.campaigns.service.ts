@@ -5,6 +5,9 @@ import { fetchCampaigns, fetchInsights } from './facebook.api'
 import logger from '../utils/logger'
 import dayjs from 'dayjs'
 import { normalizeForApi, normalizeForStorage } from '../utils/accountId'
+import { getReadConnection } from '../config/db'
+import { getFromCache, setToCache, getCacheKey, CACHE_TTL } from '../utils/cache'
+import mongoose from 'mongoose'
 
 export const syncCampaignsFromAdAccounts = async () => {
   const startTime = Date.now()
@@ -152,8 +155,25 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
       sort.createdAt = -1 // 默认排序
     }
 
-    const total = await Campaign.countDocuments(query)
-    const campaigns = await Campaign.find(query)
+    // 使用读连接进行查询（读写分离）
+    // 注意：Mongoose 的读偏好会在连接级别生效
+    // 如果配置了独立的读连接，使用读连接；否则使用主连接（但会使用读偏好）
+    const readConnection = getReadConnection()
+    
+    // 如果读连接是独立的连接，需要使用该连接的模型
+    // 否则使用主连接的模型（但会使用读偏好）
+    let CampaignModel = Campaign
+    if (readConnection !== mongoose) {
+      // 独立的读连接，需要注册模型
+      if (!readConnection.models.Campaign) {
+        CampaignModel = readConnection.model('Campaign', Campaign.schema)
+      } else {
+        CampaignModel = readConnection.models.Campaign
+      }
+    }
+    
+    const total = await CampaignModel.countDocuments(query)
+    const campaigns = await CampaignModel.find(query)
         .sort(sort)
         .skip((pagination.page - 1) * pagination.limit)
         .limit(pagination.limit)
@@ -190,8 +210,39 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
     const startTime = Date.now()
     let metricsData: any[] = []
     
-    try {
-        if (filters.startDate || filters.endDate) {
+    // 尝试从缓存获取数据
+    const cacheKey = getCacheKey('campaigns:metrics', {
+        campaignIds: campaignIds.sort().join(','),
+        startDate: filters.startDate || '',
+        endDate: filters.endDate || '',
+        page: pagination.page,
+        limit: pagination.limit,
+    })
+    
+    const isToday = !filters.startDate && !filters.endDate
+    const cacheTtl = isToday ? CACHE_TTL.TODAY : CACHE_TTL.DATE_RANGE
+    
+    const cachedData = await getFromCache<any[]>(cacheKey)
+    if (cachedData) {
+        logger.info(`[getCampaigns] Cache hit for key: ${cacheKey}`)
+        metricsData = cachedData
+    } else {
+        // 缓存未命中，从数据库查询
+        try {
+            // 使用读连接进行查询（读写分离）
+            const readConnection = getReadConnection()
+            let MetricsDailyRead = MetricsDaily
+            
+            // 如果读连接是独立的连接，需要使用该连接的模型
+            if (readConnection !== mongoose) {
+              if (!readConnection.models.MetricsDaily) {
+                MetricsDailyRead = readConnection.model('MetricsDaily', MetricsDaily.schema)
+              } else {
+                MetricsDailyRead = readConnection.models.MetricsDaily
+              }
+            }
+            
+            if (filters.startDate || filters.endDate) {
             // 有日期范围：使用优化的聚合查询
             const dateQuery: any = {
                 campaignId: { $in: campaignIds }
@@ -207,9 +258,9 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
                 }
             }
             
-            // 优化：直接按 campaignId 聚合，不需要先按日期分组
-            // 因为每个 campaignId + date 组合在 MetricsDaily 中已经是唯一的（有唯一索引）
-            metricsData = await MetricsDaily.aggregate([
+                // 优化：直接按 campaignId 聚合，不需要先按日期分组
+                // 因为每个 campaignId + date 组合在 MetricsDaily 中已经是唯一的（有唯一索引）
+                metricsData = await MetricsDailyRead.aggregate([
                 { 
                     $match: dateQuery,
                     // 使用索引提示：优先使用 { campaignId: 1, date: 1 } 复合索引
@@ -252,7 +303,7 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
                 
                 const batchResults = await Promise.all(
                     batches.map(batchIds =>
-                        MetricsDaily.find({
+                        MetricsDailyRead.find({
                             campaignId: { $in: batchIds },
                             date: today
                         })
@@ -276,7 +327,7 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
                     raw: metric.raw
                 }))
             } else {
-                const todayMetrics = await MetricsDaily.find({
+                const todayMetrics = await MetricsDailyRead.find({
                     campaignId: { $in: campaignIds },
                     date: today
                 })
@@ -300,14 +351,20 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
             }
         }
         
-        const queryTime = Date.now() - startTime
-        if (queryTime > 1000) {
-            logger.warn(`[getCampaigns] Query time: ${queryTime}ms for ${campaignIds.length} campaigns, dateRange: ${filters.startDate || 'today'} - ${filters.endDate || 'today'}`)
+            }
+            
+            const queryTime = Date.now() - startTime
+            if (queryTime > 1000) {
+                logger.warn(`[getCampaigns] Query time: ${queryTime}ms for ${campaignIds.length} campaigns, dateRange: ${filters.startDate || 'today'} - ${filters.endDate || 'today'}`)
+            }
+            
+            // 将查询结果存入缓存
+            await setToCache(cacheKey, metricsData, cacheTtl)
+        } catch (error: any) {
+            logger.error(`[getCampaigns] Metrics query failed: ${error.message}`, error)
+            // 如果查询失败，返回空指标数据，但继续返回 campaigns
+            metricsData = []
         }
-    } catch (error: any) {
-        logger.error(`[getCampaigns] Metrics query failed: ${error.message}`, error)
-        // 如果查询失败，返回空指标数据，但继续返回 campaigns
-        metricsData = []
     }
     
     // 转换为 Map 以便快速查找
