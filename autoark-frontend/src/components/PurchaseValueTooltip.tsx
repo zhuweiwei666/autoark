@@ -5,7 +5,6 @@ interface PurchaseValueTooltipProps {
   campaignId: string
   date: string
   country?: string
-  value?: number
   children: React.ReactNode
 }
 
