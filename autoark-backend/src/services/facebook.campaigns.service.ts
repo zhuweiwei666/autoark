@@ -25,7 +25,9 @@ export const syncCampaignsFromAdAccounts = async () => {
 
       try {
         // 2. 拉取该账户下的所有广告系列
-        const campaigns = await fetchCampaigns(account.accountId, account.token)
+        // Facebook API 要求 accountId 必须有 "act_" 前缀
+        const accountIdForApi = account.accountId.startsWith('act_') ? account.accountId : `act_${account.accountId}`
+        const campaigns = await fetchCampaigns(accountIdForApi, account.token)
         logger.info(`Found ${campaigns.length} campaigns for account ${account.accountId}`)
 
         for (const camp of campaigns) {
