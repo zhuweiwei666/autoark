@@ -413,18 +413,22 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
     // 如果没有 campaignIds，直接返回空数据
     if (campaignIds.length === 0) {
         return {
-            data: campaigns.map((campaign: any) => ({
-                ...campaign.toObject(),
-                spend: 0,
-                impressions: 0,
-                clicks: 0,
-                cpc: 0,
-                ctr: 0,
-                cpm: 0,
-                purchase_roas: 0,
-                purchase_value: 0,
-                mobile_app_install: 0,
-            })),
+            data: campaigns.map((campaign: any) => {
+                // 使用 .lean() 后，campaign 已经是普通对象，不需要 toObject()
+                const campaignObj = campaign.toObject ? campaign.toObject() : campaign
+                return {
+                    ...campaignObj,
+                    spend: 0,
+                    impressions: 0,
+                    clicks: 0,
+                    cpc: 0,
+                    ctr: 0,
+                    cpm: 0,
+                    purchase_roas: 0,
+                    purchase_value: 0,
+                    mobile_app_install: 0,
+                }
+            }),
             pagination: {
                 page: pagination.page,
                 limit: pagination.limit,
@@ -603,7 +607,8 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
     // 将指标合并到 Campaign 对象中，直接使用 Facebook 原始字段名
     const campaignsWithMetrics = campaigns.map(campaign => {
         const metrics = metricsMap.get(campaign.campaignId)
-        const campaignObj = campaign.toObject()
+        // 使用 .lean() 后，campaign 已经是普通对象，不需要 toObject()
+        const campaignObj = campaign.toObject ? campaign.toObject() : campaign
         
         // 合并所有 metrics 字段（使用 Facebook 原始字段名）
         const metricsObj: any = metrics || {}
