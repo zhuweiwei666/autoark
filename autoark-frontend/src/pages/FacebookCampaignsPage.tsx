@@ -254,10 +254,12 @@ export default function FacebookCampaignsPage() {
         setColumnOrder(ALL_CAMPAIGN_COLUMNS.map(col => col.key))
       }
     } catch (error: any) {
-      setMessage({ type: 'error', text: error.message || '加载列设置失败' })
+      // 静默处理错误，避免显示 HTML 解析错误（列设置是可选的）
+      console.warn('Failed to load column settings:', error.message)
       const defaultVisible = ALL_CAMPAIGN_COLUMNS.filter(col => col.defaultVisible).map(col => col.key)
       setVisibleColumns(defaultVisible)
       setColumnOrder(ALL_CAMPAIGN_COLUMNS.map(col => col.key))
+      // 不设置错误消息，因为这是可选的设置，失败时使用默认设置即可
     }
   }
 
