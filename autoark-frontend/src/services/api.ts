@@ -690,3 +690,100 @@ export async function getPurchaseValueInfo(params: {
 
   return response.json()
 }
+
+// === Pixel 管理 ===
+
+export interface FbPixel {
+  id: string
+  name: string
+  owner_business?: {
+    id: string
+    name: string
+  }
+  is_created_by_business?: boolean
+  creation_time?: string
+  last_fired_time?: string
+  data_use_setting?: string
+  enable_automatic_matching?: boolean
+  tokenId?: string
+  fbUserId?: string
+  fbUserName?: string
+}
+
+export interface PixelDetails extends FbPixel {
+  code?: string
+}
+
+export interface PixelEvent {
+  event_name: string
+  event_time: number
+  event_id?: string
+  user_data?: any
+  custom_data?: any
+}
+
+// 获取 Pixels 列表
+export async function getPixels(params?: {
+  tokenId?: string
+  allTokens?: boolean
+}): Promise<{ success: boolean; data: FbPixel[]; count: number }> {
+  const queryParams = new URLSearchParams()
+  if (params?.tokenId) queryParams.append('tokenId', params.tokenId)
+  if (params?.allTokens) queryParams.append('allTokens', 'true')
+
+  const url = `${API_BASE_URL}/api/facebook/pixels${
+    queryParams.toString() ? `?${queryParams.toString()}` : ''
+  }`
+
+  const response = await fetch(url)
+
+  if (!response.ok) {
+    throw new Error('Failed to fetch pixels')
+  }
+
+  return response.json()
+}
+
+// 获取 Pixel 详情
+export async function getPixelDetails(
+  pixelId: string,
+  tokenId?: string
+): Promise<{ success: boolean; data: PixelDetails }> {
+  const queryParams = new URLSearchParams()
+  if (tokenId) queryParams.append('tokenId', tokenId)
+
+  const url = `${API_BASE_URL}/api/facebook/pixels/${pixelId}${
+    queryParams.toString() ? `?${queryParams.toString()}` : ''
+  }`
+
+  const response = await fetch(url)
+
+  if (!response.ok) {
+    throw new Error('Failed to fetch pixel details')
+  }
+
+  return response.json()
+}
+
+// 获取 Pixel 事件
+export async function getPixelEvents(
+  pixelId: string,
+  tokenId?: string,
+  limit?: number
+): Promise<{ success: boolean; data: PixelEvent[]; count: number }> {
+  const queryParams = new URLSearchParams()
+  if (tokenId) queryParams.append('tokenId', tokenId)
+  if (limit) queryParams.append('limit', limit.toString())
+
+  const url = `${API_BASE_URL}/api/facebook/pixels/${pixelId}/events${
+    queryParams.toString() ? `?${queryParams.toString()}` : ''
+  }`
+
+  const response = await fetch(url)
+
+  if (!response.ok) {
+    throw new Error('Failed to fetch pixel events')
+  }
+
+  return response.json()
+}
