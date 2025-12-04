@@ -3,9 +3,10 @@ import { facebookClient } from './facebookClient'
 export const fetchInsights = async (
   entityId: string, // 可以是 accountId, campaignId, adsetId, adId
   level: 'account' | 'campaign' | 'adset' | 'ad',
-  datePreset = 'today',
+  datePreset?: string,
   token?: string,
   breakdowns?: string[], // 支持 breakdowns，如 ['country'] 来按国家分组
+  timeRange?: { since: string; until: string }, // 支持自定义日期范围
 ) => {
   // Facebook Insights API 有效字段列表
   // 注意：cpa, conversion_rate, value, mobile_app_install 不是有效字段
@@ -47,9 +48,17 @@ export const fetchInsights = async (
 
   const params: any = {
     level: level,
-    date_preset: datePreset,
     fields,
     limit: 1000,
+  }
+  
+  // 优先使用 timeRange，否则使用 datePreset
+  if (timeRange) {
+    params.time_range = JSON.stringify(timeRange)
+  } else if (datePreset) {
+    params.date_preset = datePreset
+  } else {
+    params.date_preset = 'today'
   }
   
   // 如果指定了 breakdowns，添加到参数中

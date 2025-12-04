@@ -1,9 +1,9 @@
 import Account from '../models/Account'
 import FbToken from '../models/FbToken'
 import MetricsDaily from '../models/MetricsDaily'
-import { fetchUserAdAccounts } from './facebook.api'
+import { fetchUserAdAccounts, fetchInsights } from './facebook.api'
 import logger from '../utils/logger'
-import { normalizeForStorage, getAccountIdsForQuery, normalizeFromQuery } from '../utils/accountId'
+import { normalizeForStorage, getAccountIdsForQuery, normalizeFromQuery, normalizeForApi } from '../utils/accountId'
 
 export const syncAccountsFromTokens = async () => {
   const startTime = Date.now()
@@ -107,92 +107,71 @@ export const getAccounts = async (filters: any = {}, pagination: { page: number,
     const allAccounts = await Account.find(query).lean()
     const total = allAccounts.length
 
-    // 获取所有账户ID，用于批量查询消耗数据
-    // 使用统一工具函数处理格式，兼容历史数据可能存在的格式不一致
+    // 获取所有账户ID
     const accountIds = allAccounts.map(acc => acc.accountId)
-    const allAccountIds = getAccountIdsForQuery(accountIds)
     
-    // 计算消耗：如果提供了日期范围，使用日期范围；否则使用今天
+    // 直接从 Facebook Insights API 获取消耗数据（更准确）
     let periodSpendMap: Record<string, number> = {}
-    if (accountIds.length > 0) {
-        const dateQuery: any = { accountId: { $in: allAccountIds } }
-        
-        // 如果提供了日期范围，使用日期范围；否则使用今天
-        if (filters.startDate || filters.endDate) {
-            dateQuery.date = {}
-            if (filters.startDate) {
-                dateQuery.date.$gte = filters.startDate
-            }
-            if (filters.endDate) {
-                dateQuery.date.$lte = filters.endDate
-            }
-        } else {
-            // 没有日期范围，使用今天
-            const today = new Date().toISOString().split('T')[0]
-            dateQuery.date = today
+    
+    // 构建日期参数
+    let datePreset = 'today'
+    let timeRange: { since: string; until: string } | undefined
+    
+    if (filters.startDate && filters.endDate) {
+        timeRange = { since: filters.startDate, until: filters.endDate }
+        datePreset = ''
+    } else if (filters.startDate) {
+        timeRange = { since: filters.startDate, until: new Date().toISOString().split('T')[0] }
+        datePreset = ''
+    } else if (filters.endDate) {
+        timeRange = { since: '2020-01-01', until: filters.endDate }
+        datePreset = ''
+    }
+    
+    // 获取有效 token
+    const tokenDoc = await FbToken.findOne({ status: 'active' })
+    const token = tokenDoc?.token
+    
+    if (token && accountIds.length > 0) {
+        // 并发获取所有账户的 insights（限制并发数）
+        const batchSize = 10
+        for (let i = 0; i < accountIds.length; i += batchSize) {
+            const batch = accountIds.slice(i, i + batchSize)
+            const promises = batch.map(async (accountId) => {
+                try {
+                    const accountIdForApi = normalizeForApi(accountId)
+                    const insights = await fetchInsights(
+                        accountIdForApi,
+                        'account',
+                        datePreset || undefined,
+                        token,
+                        undefined,
+                        timeRange
+                    )
+                    if (insights && insights.length > 0) {
+                        const spend = parseFloat(insights[0].spend || '0')
+                        return { accountId, spend }
+                    }
+                    return { accountId, spend: 0 }
+                } catch (error) {
+                    logger.warn(`Failed to fetch insights for account ${accountId}`)
+                    return { accountId, spend: 0 }
+                }
+            })
+            
+            const results = await Promise.all(promises)
+            results.forEach(({ accountId, spend }) => {
+                periodSpendMap[accountId] = spend
+            })
         }
-        
-        // 重要：只统计 campaign 级别的数据（campaignId 存在），确保与广告系列页面数据一致
-        // 这样可以避免重复计算 ad 级别和 adset 级别的数据
-        const periodSpendData = await MetricsDaily.aggregate([
-            { 
-                $match: {
-                    ...dateQuery,
-                    campaignId: { $exists: true, $ne: null } // 只统计 campaign 级别的数据
-                } 
-            },
-            {
-                $group: {
-                    _id: '$accountId',
-                    spend: { $sum: '$spendUsd' }
-                }
-            }
-        ])
-        
-        periodSpendData.forEach((item: any) => {
-            // 统一处理 accountId，转换为数据库存储格式以便匹配
-            const normalizedId = normalizeFromQuery(item._id)
-            periodSpendMap[normalizedId] = (periodSpendMap[normalizedId] || 0) + (item.spend || 0)
-        })
     }
-    
-    // 计算所有账户的历史总消耗
-    // 重要：只统计 campaign 级别的数据（campaignId 存在），确保与广告系列页面数据一致
-    const totalSpendMap: Record<string, number> = {}
-    if (accountIds.length > 0) {
-        const totalSpendData = await MetricsDaily.aggregate([
-            { 
-                $match: { 
-                    accountId: { $in: allAccountIds },
-                    campaignId: { $exists: true, $ne: null } // 只统计 campaign 级别的数据
-                } 
-            },
-            {
-                $group: {
-                    _id: '$accountId',
-                    totalSpend: { $sum: '$spendUsd' }
-                }
-            }
-        ])
-        
-        totalSpendData.forEach((item: any) => {
-            // 统一处理 accountId，转换为数据库存储格式以便匹配
-            const normalizedId = normalizeFromQuery(item._id)
-            totalSpendMap[normalizedId] = (totalSpendMap[normalizedId] || 0) + (item.totalSpend || 0)
-        })
-    }
-    
-    // 判断是否有日期筛选
-    const hasDateFilter = filters.startDate || filters.endDate
     
     // 为每个账户添加消耗和计算后的余额
     const accountsWithMetrics = allAccounts.map((account: any) => {
         const accountId = account.accountId
         
-        // periodSpend: 来自 MetricsDaily 的消耗（日期范围内或今天）
-        const periodSpendFromMetrics = periodSpendMap[accountId] || 0
-        // totalSpendFromMetrics: 来自 MetricsDaily 的历史总消耗
-        const totalSpendFromMetrics = totalSpendMap[accountId] || 0
+        // periodSpend: 来自 Facebook Insights API 的消耗（日期范围内或今天）
+        const periodSpend = periodSpendMap[accountId] || 0
         
         // Facebook API 返回的 amount_spent 是以账户货币的最小单位（分）返回的
         const amountSpentRaw = account.amountSpent ? 
@@ -206,16 +185,11 @@ export const getAccounts = async (filters: any = {}, pagination: { page: number,
         
         const accountObj = account.toObject ? account.toObject() : account
         
-        // 消耗显示逻辑：
-        // - 有日期筛选：显示该日期范围内的消耗（来自 MetricsDaily）
-        // - 无日期筛选：显示当日消耗（来自 MetricsDaily 的今天数据）
-        const periodSpend = periodSpendFromMetrics
-        
         return {
             ...accountObj,
-            periodSpend: periodSpend, // 日期范围/当日消耗
+            periodSpend: periodSpend, // 日期范围/当日消耗（来自 Facebook Insights API）
             calculatedBalance: balanceUsd, // 账户余额（美元）
-            totalSpend: amountSpentUsd, // 账户历史总消耗（来自 Facebook API）
+            totalSpend: amountSpentUsd, // 账户历史总消耗（来自 Facebook API amount_spent）
         }
     })
     
