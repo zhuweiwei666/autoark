@@ -13,6 +13,7 @@ const ads_api_1 = require("../integration/facebook/ads.api");
 const insights_api_1 = require("../integration/facebook/insights.api");
 const accountId_1 = require("../utils/accountId");
 const facebook_upsert_service_1 = require("../services/facebook.upsert.service");
+const facebookPurchase_1 = require("../utils/facebookPurchase");
 const Campaign_1 = __importDefault(require("../models/Campaign"));
 const Ad_1 = __importDefault(require("../models/Ad"));
 const dayjs_1 = __importDefault(require("dayjs"));
@@ -207,7 +208,7 @@ exports.adWorker = (facebook_queue_1.adQueue && workerOptions) ? new bullmq_1.Wo
                 // 1. RawInsights: 全部存储
                 // 2. MetricsDaily: 只存 today / yesterday (单日数据)
                 // 3. 修正逻辑会读取 RawInsights(last_7d) 来修正 MetricsDaily
-                const purchaseValue = getActionValue(insight.action_values, 'purchase');
+                const purchaseValue = (0, facebookPurchase_1.extractPurchaseValue)(insight.action_values);
                 const mobileAppInstall = getActionCount(insight.actions, 'mobile_app_install');
                 // 1. Upsert RawInsights (All Presets)
                 await facebook_upsert_service_1.upsertService.upsertRawInsights({

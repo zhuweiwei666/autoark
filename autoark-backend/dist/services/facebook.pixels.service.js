@@ -4,51 +4,32 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getAllPixelsFromAllTokens = exports.getPixelEvents = exports.getPixelDetails = exports.getPixelsByToken = exports.getAllPixels = void 0;
-const facebook_api_1 = require("./facebook.api");
 const logger_1 = __importDefault(require("../utils/logger"));
 const FbToken_1 = __importDefault(require("../models/FbToken"));
 const facebook_token_pool_1 = require("./facebook.token.pool");
+const pixels_api_1 = require("../integration/facebook/pixels.api");
 /**
  * 获取所有 Pixels（通过 Token Pool 自动选择 token）
  */
 const getAllPixels = async () => {
     try {
         // 使用 Token Pool 获取 token
-        const token = facebook_token_pool_1.tokenPool.getNextToken();
+        let token = facebook_token_pool_1.tokenPool.getNextToken();
+        // 如果 Token Pool 没有可用 token，尝试从数据库获取第一个活跃的 token
         if (!token) {
-            throw new Error('No available token in token pool');
+            logger_1.default.warn('[Pixels] No token from token pool, trying to get from database');
+            const tokenDoc = await FbToken_1.default.findOne({ status: 'active' }).sort({ createdAt: 1 }).lean();
+            if (tokenDoc) {
+                token = tokenDoc.token;
+                logger_1.default.info('[Pixels] Using token from database as fallback');
+            }
+            else {
+                throw new Error('No available token in token pool or database');
+            }
         }
         logger_1.default.info('[Pixels] Fetching pixels using token pool');
-        // 获取用户拥有的所有 pixels
-        const response = await facebook_api_1.fbClient.get('/me/pixels', {
-            access_token: token,
-            fields: [
-                'id',
-                'name',
-                'owner_business',
-                'is_created_by_business',
-                'creation_time',
-                'last_fired_time',
-                'data_use_setting',
-                'enable_automatic_matching',
-            ].join(','),
-        });
-        const pixels = (response.data || []).map((pixel) => ({
-            id: pixel.id,
-            name: pixel.name || 'Unnamed Pixel',
-            owner_business: pixel.owner_business
-                ? {
-                    id: pixel.owner_business.id,
-                    name: pixel.owner_business.name || 'Unknown Business',
-                }
-                : undefined,
-            is_created_by_business: pixel.is_created_by_business || false,
-            creation_time: pixel.creation_time,
-            last_fired_time: pixel.last_fired_time,
-            data_use_setting: pixel.data_use_setting,
-            enable_automatic_matching: pixel.enable_automatic_matching,
-            raw: pixel,
-        }));
+        // 使用集成层的 API
+        const pixels = await (0, pixels_api_1.getPixels)(token);
         logger_1.default.info(`[Pixels] Fetched ${pixels.length} pixels`);
         return pixels;
     }
@@ -68,35 +49,8 @@ const getPixelsByToken = async (tokenId) => {
             throw new Error(`Token ${tokenId} not found`);
         }
         logger_1.default.info(`[Pixels] Fetching pixels for token ${tokenId}`);
-        const response = await facebook_api_1.fbClient.get('/me/pixels', {
-            access_token: tokenDoc.token,
-            fields: [
-                'id',
-                'name',
-                'owner_business',
-                'is_created_by_business',
-                'creation_time',
-                'last_fired_time',
-                'data_use_setting',
-                'enable_automatic_matching',
-            ].join(','),
-        });
-        const pixels = (response.data || []).map((pixel) => ({
-            id: pixel.id,
-            name: pixel.name || 'Unnamed Pixel',
-            owner_business: pixel.owner_business
-                ? {
-                    id: pixel.owner_business.id,
-                    name: pixel.owner_business.name || 'Unknown Business',
-                }
-                : undefined,
-            is_created_by_business: pixel.is_created_by_business || false,
-            creation_time: pixel.creation_time,
-            last_fired_time: pixel.last_fired_time,
-            data_use_setting: pixel.data_use_setting,
-            enable_automatic_matching: pixel.enable_automatic_matching,
-            raw: pixel,
-        }));
+        // 使用集成层的 API
+        const pixels = await (0, pixels_api_1.getPixels)(tokenDoc.token);
         logger_1.default.info(`[Pixels] Fetched ${pixels.length} pixels for token ${tokenId}`);
         return pixels;
     }
@@ -126,50 +80,9 @@ const getPixelDetails = async (pixelId, tokenId) => {
             }
         }
         logger_1.default.info(`[Pixels] Fetching details for pixel ${pixelId}`);
-        // 获取 pixel 详情
-        const pixel = await facebook_api_1.fbClient.get(`/${pixelId}`, {
-            access_token: token,
-            fields: [
-                'id',
-                'name',
-                'owner_business',
-                'is_created_by_business',
-                'creation_time',
-                'last_fired_time',
-                'data_use_setting',
-                'enable_automatic_matching',
-            ].join(','),
-        });
-        // 获取 pixel 代码（需要额外请求）
-        let code;
-        try {
-            const codeResponse = await facebook_api_1.fbClient.get(`/${pixelId}`, {
-                access_token: token,
-                fields: 'code',
-            });
-            code = codeResponse.code;
-        }
-        catch (error) {
-            logger_1.default.warn(`[Pixels] Failed to fetch code for pixel ${pixelId}:`, error);
-            // 代码获取失败不影响主要信息
-        }
-        return {
-            id: pixel.id,
-            name: pixel.name || 'Unnamed Pixel',
-            owner_business: pixel.owner_business
-                ? {
-                    id: pixel.owner_business.id,
-                    name: pixel.owner_business.name || 'Unknown Business',
-                }
-                : undefined,
-            is_created_by_business: pixel.is_created_by_business || false,
-            creation_time: pixel.creation_time,
-            last_fired_time: pixel.last_fired_time,
-            data_use_setting: pixel.data_use_setting,
-            enable_automatic_matching: pixel.enable_automatic_matching,
-            code,
-            raw: pixel,
-        };
+        // 使用集成层的 API
+        const pixel = await (0, pixels_api_1.getPixelDetails)(pixelId, token);
+        return pixel;
     }
     catch (error) {
         logger_1.default.error(`[Pixels] Failed to fetch pixel details for ${pixelId}:`, error);
@@ -197,19 +110,8 @@ const getPixelEvents = async (pixelId, tokenId, limit = 100) => {
             }
         }
         logger_1.default.info(`[Pixels] Fetching events for pixel ${pixelId}`);
-        const response = await facebook_api_1.fbClient.get(`/${pixelId}/events`, {
-            access_token: token,
-            limit,
-            fields: ['event_name', 'event_time', 'event_id', 'user_data', 'custom_data'].join(','),
-        });
-        const events = (response.data || []).map((event) => ({
-            event_name: event.event_name,
-            event_time: event.event_time,
-            event_id: event.event_id,
-            user_data: event.user_data,
-            custom_data: event.custom_data,
-            raw: event,
-        }));
+        // 使用集成层的 API
+        const events = await (0, pixels_api_1.getPixelEvents)(pixelId, token, limit);
         logger_1.default.info(`[Pixels] Fetched ${events.length} events for pixel ${pixelId}`);
         return events;
     }

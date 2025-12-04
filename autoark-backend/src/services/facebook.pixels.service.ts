@@ -1,7 +1,7 @@
-import { fbClient } from './facebook.api'
 import logger from '../utils/logger'
 import FbToken from '../models/FbToken'
 import { tokenPool } from './facebook.token.pool'
+import { getPixels as getPixelsApi, getPixelDetails as getPixelDetailsApi, getPixelEvents as getPixelEventsApi } from '../integration/facebook/pixels.api'
 
 /**
  * Facebook Pixel 服务
@@ -40,44 +40,24 @@ export interface PixelEvent {
 export const getAllPixels = async (): Promise<PixelInfo[]> => {
   try {
     // 使用 Token Pool 获取 token
-    const token = tokenPool.getNextToken()
+    let token = tokenPool.getNextToken()
+    
+    // 如果 Token Pool 没有可用 token，尝试从数据库获取第一个活跃的 token
     if (!token) {
-      throw new Error('No available token in token pool')
+      logger.warn('[Pixels] No token from token pool, trying to get from database')
+      const tokenDoc = await FbToken.findOne({ status: 'active' }).sort({ createdAt: 1 }).lean()
+      if (tokenDoc) {
+        token = tokenDoc.token
+        logger.info('[Pixels] Using token from database as fallback')
+      } else {
+        throw new Error('No available token in token pool or database')
+      }
     }
 
     logger.info('[Pixels] Fetching pixels using token pool')
 
-    // 获取用户拥有的所有 pixels
-    const response = await fbClient.get('/me/pixels', {
-      access_token: token,
-      fields: [
-        'id',
-        'name',
-        'owner_business',
-        'is_created_by_business',
-        'creation_time',
-        'last_fired_time',
-        'data_use_setting',
-        'enable_automatic_matching',
-      ].join(','),
-    })
-
-    const pixels: PixelInfo[] = (response.data || []).map((pixel: any) => ({
-      id: pixel.id,
-      name: pixel.name || 'Unnamed Pixel',
-      owner_business: pixel.owner_business
-        ? {
-            id: pixel.owner_business.id,
-            name: pixel.owner_business.name || 'Unknown Business',
-          }
-        : undefined,
-      is_created_by_business: pixel.is_created_by_business || false,
-      creation_time: pixel.creation_time,
-      last_fired_time: pixel.last_fired_time,
-      data_use_setting: pixel.data_use_setting,
-      enable_automatic_matching: pixel.enable_automatic_matching,
-      raw: pixel,
-    }))
+    // 使用集成层的 API
+    const pixels = await getPixelsApi(token)
 
     logger.info(`[Pixels] Fetched ${pixels.length} pixels`)
     return pixels
@@ -99,36 +79,8 @@ export const getPixelsByToken = async (tokenId: string): Promise<PixelInfo[]> =>
 
     logger.info(`[Pixels] Fetching pixels for token ${tokenId}`)
 
-    const response = await fbClient.get('/me/pixels', {
-      access_token: tokenDoc.token,
-      fields: [
-        'id',
-        'name',
-        'owner_business',
-        'is_created_by_business',
-        'creation_time',
-        'last_fired_time',
-        'data_use_setting',
-        'enable_automatic_matching',
-      ].join(','),
-    })
-
-    const pixels: PixelInfo[] = (response.data || []).map((pixel: any) => ({
-      id: pixel.id,
-      name: pixel.name || 'Unnamed Pixel',
-      owner_business: pixel.owner_business
-        ? {
-            id: pixel.owner_business.id,
-            name: pixel.owner_business.name || 'Unknown Business',
-          }
-        : undefined,
-      is_created_by_business: pixel.is_created_by_business || false,
-      creation_time: pixel.creation_time,
-      last_fired_time: pixel.last_fired_time,
-      data_use_setting: pixel.data_use_setting,
-      enable_automatic_matching: pixel.enable_automatic_matching,
-      raw: pixel,
-    }))
+    // 使用集成层的 API
+    const pixels = await getPixelsApi(tokenDoc.token)
 
     logger.info(`[Pixels] Fetched ${pixels.length} pixels for token ${tokenId}`)
     return pixels
@@ -163,51 +115,10 @@ export const getPixelDetails = async (
 
     logger.info(`[Pixels] Fetching details for pixel ${pixelId}`)
 
-    // 获取 pixel 详情
-    const pixel = await fbClient.get(`/${pixelId}`, {
-      access_token: token,
-      fields: [
-        'id',
-        'name',
-        'owner_business',
-        'is_created_by_business',
-        'creation_time',
-        'last_fired_time',
-        'data_use_setting',
-        'enable_automatic_matching',
-      ].join(','),
-    })
+    // 使用集成层的 API
+    const pixel = await getPixelDetailsApi(pixelId, token)
 
-    // 获取 pixel 代码（需要额外请求）
-    let code: string | undefined
-    try {
-      const codeResponse = await fbClient.get(`/${pixelId}`, {
-        access_token: token,
-        fields: 'code',
-      })
-      code = codeResponse.code
-    } catch (error: any) {
-      logger.warn(`[Pixels] Failed to fetch code for pixel ${pixelId}:`, error)
-      // 代码获取失败不影响主要信息
-    }
-
-    return {
-      id: pixel.id,
-      name: pixel.name || 'Unnamed Pixel',
-      owner_business: pixel.owner_business
-        ? {
-            id: pixel.owner_business.id,
-            name: pixel.owner_business.name || 'Unknown Business',
-          }
-        : undefined,
-      is_created_by_business: pixel.is_created_by_business || false,
-      creation_time: pixel.creation_time,
-      last_fired_time: pixel.last_fired_time,
-      data_use_setting: pixel.data_use_setting,
-      enable_automatic_matching: pixel.enable_automatic_matching,
-      code,
-      raw: pixel,
-    }
+    return pixel
   } catch (error: any) {
     logger.error(`[Pixels] Failed to fetch pixel details for ${pixelId}:`, error)
     throw error
@@ -240,20 +151,8 @@ export const getPixelEvents = async (
 
     logger.info(`[Pixels] Fetching events for pixel ${pixelId}`)
 
-    const response = await fbClient.get(`/${pixelId}/events`, {
-      access_token: token,
-      limit,
-      fields: ['event_name', 'event_time', 'event_id', 'user_data', 'custom_data'].join(','),
-    })
-
-    const events: PixelEvent[] = (response.data || []).map((event: any) => ({
-      event_name: event.event_name,
-      event_time: event.event_time,
-      event_id: event.event_id,
-      user_data: event.user_data,
-      custom_data: event.custom_data,
-      raw: event,
-    }))
+    // 使用集成层的 API
+    const events = await getPixelEventsApi(pixelId, token, limit)
 
     logger.info(`[Pixels] Fetched ${events.length} events for pixel ${pixelId}`)
     return events

@@ -7,13 +7,24 @@ exports.getRedisConnection = exports.getRedisClient = exports.initRedis = void 0
 const ioredis_1 = __importDefault(require("ioredis"));
 const logger_1 = __importDefault(require("../utils/logger"));
 let redisClient = null;
+let redisInitialized = false;
+let redisWarningLogged = false;
 const initRedis = () => {
     if (redisClient) {
         return redisClient;
     }
+    // 如果已经初始化过但没有配置，直接返回 null，不再打印警告
+    if (redisInitialized) {
+        return null;
+    }
+    redisInitialized = true;
     const redisUrl = process.env.REDIS_URL;
     if (!redisUrl) {
-        logger_1.default.warn('REDIS_URL not configured, Redis caching will be disabled');
+        // 只打印一次警告
+        if (!redisWarningLogged) {
+            logger_1.default.warn('REDIS_URL not configured, Redis caching will be disabled');
+            redisWarningLogged = true;
+        }
         return null;
     }
     try {

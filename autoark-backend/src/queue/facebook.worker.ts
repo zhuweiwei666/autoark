@@ -7,6 +7,7 @@ import { fetchAds } from '../integration/facebook/ads.api'
 import { fetchInsights } from '../integration/facebook/insights.api'
 import { normalizeForStorage } from '../utils/accountId'
 import { upsertService } from '../services/facebook.upsert.service'
+import { extractPurchaseValue } from '../utils/facebookPurchase'
 import Campaign from '../models/Campaign'
 import Ad from '../models/Ad'
 import dayjs from 'dayjs'
@@ -247,7 +248,7 @@ export const adWorker = (adQueue && workerOptions) ? new Worker(
           // 2. MetricsDaily: 只存 today / yesterday (单日数据)
           // 3. 修正逻辑会读取 RawInsights(last_7d) 来修正 MetricsDaily
 
-          const purchaseValue = getActionValue(insight.action_values, 'purchase')
+          const purchaseValue = extractPurchaseValue(insight.action_values)
           const mobileAppInstall = getActionCount(insight.actions, 'mobile_app_install')
 
           // 1. Upsert RawInsights (All Presets)

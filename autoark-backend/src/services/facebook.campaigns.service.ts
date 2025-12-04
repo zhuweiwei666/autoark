@@ -7,6 +7,7 @@ import dayjs from 'dayjs'
 import { normalizeForApi, normalizeForStorage } from '../utils/accountId'
 import { getReadConnection } from '../config/db'
 import { getFromCache, setToCache, getCacheKey, CACHE_TTL } from '../utils/cache'
+import { extractPurchaseValue } from '../utils/facebookPurchase'
 import mongoose from 'mongoose'
 
 export const syncCampaignsFromAdAccounts = async () => {
@@ -79,6 +80,8 @@ export const syncCampaignsFromAdAccounts = async () => {
                 accountId: normalizeForStorage(account.accountId), // 统一格式：数据库存储时去掉前缀
                 campaignId: camp.id,
                 country: country, // 国家代码
+                level: 'campaign', // 明确设置级别
+                entityId: camp.id, // 设置 entityId 为 campaignId
                 impressions: insight.impressions || 0,
                 clicks: insight.clicks || 0,
                 spendUsd: parseFloat(insight.spend || '0'),
@@ -88,17 +91,22 @@ export const syncCampaignsFromAdAccounts = async () => {
                 actions: insight.actions, // Raw actions array
                 action_values: insight.action_values, // Raw action_values array
                 purchase_roas: insight.purchase_roas ? parseFloat(insight.purchase_roas) : undefined,
-                purchase_value: getActionValue(insight.action_values, 'purchase'), // 自行计算购物转化价值
+                purchase_value: extractPurchaseValue(insight.action_values), // 自行计算购物转化价值
                 mobile_app_install_count: getActionCount(insight.actions, 'mobile_app_install'), // 自行计算事件转化次数
                 raw: insight,
               }
               
               // Campaign + Country 级别的指标，不设置 adId 和 adsetId，避免与 { adId: 1, date: 1 } 唯一索引冲突
-              // 使用 $set 更新数据，$unset 移除可能存在的 adId 和 adsetId 字段
+              // 使用新的唯一索引：{ date: 1, level: 1, entityId: 1, country: 1 }
               // 注意：这里仍然使用 findOneAndUpdate，因为这是旧的同步方式
-              // 新的队列系统会使用 BulkWrite
+              // 新的队列系统会使用 UpsertService
               await MetricsDaily.findOneAndUpdate(
-                { campaignId: metricsData.campaignId, date: metricsData.date, country: country || null },
+                { 
+                  date: metricsData.date, 
+                  level: 'campaign',
+                  entityId: camp.id,
+                  country: country || null 
+                },
                 {
                   $set: metricsData,
                   $unset: { adId: '', adsetId: '' } // 移除 adId 和 adsetId，避免唯一索引冲突
@@ -195,8 +203,14 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
         
         // 查询所有 campaigns 的 metrics 数据
         const today = dayjs().format('YYYY-MM-DD')
+        // 优先查询新格式（有 level 和 entityId），如果没有则查询旧格式（只有 campaignId）
         const metricsQuery: any = {
-            campaignId: { $in: allCampaignIds, $exists: true, $ne: null } // 只统计 campaign 级别的数据
+            $or: [
+              // 新格式：使用 level 和 entityId
+              { level: 'campaign', entityId: { $in: allCampaignIds } },
+              // 旧格式：兼容没有 level 字段的数据
+              { level: { $exists: false }, campaignId: { $in: allCampaignIds, $exists: true, $ne: null } }
+            ]
         }
         
         if (filters.startDate || filters.endDate) {
@@ -779,26 +793,33 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
         const clicks = metricsObj.clicks || 0
         const calculatedCtr = impressions > 0 ? clicks / impressions : 0
         
-        // 优先使用 metricsObj 中的 purchase_value，如果没有则从 action_values 中提取
-        let purchase_value = metricsObj.purchase_value
+        // 按照优先级提取 purchase_value
+        // 1) 优先使用 purchase_value_corrected（如果有）
+        // 2) 否则使用 purchase_value
+        // 3) 如果 purchase_value 为 0，则尝试从 action_values 重新提取
+        // 4) 最终仍无则返回 0
+        let purchase_value = metricsObj.purchase_value_corrected
         
-        // 如果 purchase_value 是 undefined 或 null，尝试从 action_values 中提取
-        if ((purchase_value === undefined || purchase_value === null) && actionValues && actionValues.length > 0) {
-            // 尝试从 action_values 中提取 purchase value
-            const purchaseAction = actionValues.find((a: any) => 
-                a.action_type === 'purchase' || a.action_type === 'mobile_app_purchase'
-            )
-            if (purchaseAction && purchaseAction.value !== undefined) {
-                purchase_value = parseFloat(purchaseAction.value) || 0
-            }
+        // 如果没有 corrected 值，使用原始 purchase_value
+        if (purchase_value === undefined || purchase_value === null) {
+            purchase_value = metricsObj.purchase_value
         }
-        // 如果还是没有，尝试从 extractedActionValues 中获取
-        if ((purchase_value === undefined || purchase_value === null) && extractedActionValues.purchase_value !== undefined) {
+        
+        // 如果 purchase_value 为 0 或不存在，尝试从 action_values 重新提取
+        if ((!purchase_value || purchase_value === 0) && actionValues && Array.isArray(actionValues) && actionValues.length > 0) {
+            purchase_value = extractPurchaseValue(actionValues)
+        }
+        
+        // 如果还是没有，尝试从 extractedActionValues 中获取（兼容旧逻辑）
+        if ((!purchase_value || purchase_value === 0) && extractedActionValues.purchase_value !== undefined) {
             purchase_value = extractedActionValues.purchase_value
         }
-        if ((purchase_value === undefined || purchase_value === null) && extractedActionValues.mobile_app_purchase_value !== undefined) {
+        if ((!purchase_value || purchase_value === 0) && extractedActionValues.mobile_app_purchase_value !== undefined) {
             purchase_value = extractedActionValues.mobile_app_purchase_value
         }
+        
+        // 确保最终值不为 undefined 或 null
+        purchase_value = purchase_value || 0
         
         // 调试日志：如果 purchase_value 仍然为 0，记录相关信息
         if (campaignObj.campaignId && (!purchase_value || purchase_value === 0)) {

@@ -8,6 +8,7 @@ import dashboardRoutes from './routes/dashboard.routes'
 import facebookSyncRoutes from './routes/facebook.sync.routes'
 import fbTokenRoutes from './routes/fbToken.routes'
 import userSettingsRoutes from './routes/user.settings.routes' // New: User settings routes
+import bulkAdRoutes from './routes/bulkAd.routes' // New: Bulk ad creation routes
 import logger from './utils/logger'
 import initSyncCron from './cron/sync.cron'
 import initCronJobs from './cron'
@@ -32,8 +33,10 @@ tokenPool.initialize().catch((error) => {
 // Initialize Queues and Workers
 import { initQueues } from './queue/facebook.queue'
 import { initWorkers } from './queue/facebook.worker'
+import { initBulkAdWorker } from './queue/bulkAd.worker'
 initQueues()
 initWorkers()
+initBulkAdWorker() // Initialize bulk ad creation worker
 
 // Initialize Crons
 import initPreaggregationCron from './cron/preaggregation.cron'
@@ -67,6 +70,7 @@ app.use('/api/facebook', facebookSyncRoutes)
 app.use('/api/dashboard', dashboardRoutes)
 app.use('/api/fb-token', fbTokenRoutes) // Facebook token management
 app.use('/api/user-settings', userSettingsRoutes) // New: User settings management
+app.use('/api/bulk-ad', bulkAdRoutes) // New: Bulk ad creation management
 
 // Dashboard UI 已迁移到 React 前端，不再需要后端路由
 // app.use('/dashboard', dashboardRoutes) // 已禁用，让前端 React Router 处理

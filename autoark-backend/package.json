@@ -9,7 +9,8 @@
     "dev": "nodemon src/server.ts",
     "build": "tsc",
     "lint": "eslint 'src/**/*.ts' --fix",
-    "webhook": "node src/webhook.js"
+    "webhook": "node src/webhook.js",
+    "debug:purchase": "node scripts/debug_facebook_purchase.js"
   },
   "keywords": [],
   "author": "",

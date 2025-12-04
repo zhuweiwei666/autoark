@@ -2,15 +2,28 @@ import Redis from 'ioredis'
 import logger from '../utils/logger'
 
 let redisClient: Redis | null = null
+let redisInitialized = false
+let redisWarningLogged = false
 
 export const initRedis = (): Redis | null => {
   if (redisClient) {
     return redisClient
   }
 
+  // 如果已经初始化过但没有配置，直接返回 null，不再打印警告
+  if (redisInitialized) {
+    return null
+  }
+
+  redisInitialized = true
+
   const redisUrl = process.env.REDIS_URL
   if (!redisUrl) {
-    logger.warn('REDIS_URL not configured, Redis caching will be disabled')
+    // 只打印一次警告
+    if (!redisWarningLogged) {
+      logger.warn('REDIS_URL not configured, Redis caching will be disabled')
+      redisWarningLogged = true
+    }
     return null
   }
 

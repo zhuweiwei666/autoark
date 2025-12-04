@@ -7,3 +7,10 @@ export { default as MetricsDaily } from './MetricsDaily'
 export { default as OpsLog } from './OpsLog'
 export { default as Rule } from './Rule'
 export { default as SyncLog } from './SyncLog'
+
+// 批量广告创建相关模型
+export { default as TargetingPackage } from './TargetingPackage'
+export { default as CopywritingPackage } from './CopywritingPackage'
+export { default as CreativeGroup } from './CreativeGroup'
+export { default as AdDraft } from './AdDraft'
+export { default as AdTask } from './AdTask'
