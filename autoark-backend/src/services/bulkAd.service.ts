@@ -493,26 +493,22 @@ export const executeTaskForAccount = async (
         continue
       }
       
-      // 上传素材到 Facebook
+      // 处理素材引用
+      // 优先使用 image_url，避免开发模式下图片上传 API 权限问题
       let materialRef: any = {}
       if (material.type === 'image') {
         if (material.facebookImageHash) {
           materialRef.image_hash = material.facebookImageHash
         } else if (material.url) {
-          const uploadResult = await uploadImageFromUrl({
-            accountId,
-            token,
-            imageUrl: material.url,
-            name: material.name,
-          })
-          if (uploadResult.success) {
-            materialRef.image_hash = uploadResult.hash
-          }
+          // 直接使用图片 URL，Facebook 会自动处理
+          materialRef.image_url = material.url
+          logger.info(`[BulkAd] Using image URL directly: ${material.url}`)
         }
       } else if (material.type === 'video') {
         if (material.facebookVideoId) {
           materialRef.video_id = material.facebookVideoId
         } else if (material.url) {
+          // 视频必须先上传到 Facebook
           const uploadResult = await uploadVideoFromUrl({
             accountId,
             token,
@@ -521,8 +517,17 @@ export const executeTaskForAccount = async (
           })
           if (uploadResult.success) {
             materialRef.video_id = uploadResult.id
+          } else {
+            logger.error(`[BulkAd] Video upload failed, skipping ad: ${uploadResult.error}`)
+            continue
           }
         }
+      }
+      
+      // 检查是否有有效素材
+      if (!materialRef.image_hash && !materialRef.image_url && !materialRef.video_id) {
+        logger.warn(`[BulkAd] No valid material reference for creative group: ${creativeGroup.name}, skipping`)
+        continue
       }
       
       // 创建 Ad Creative
@@ -543,6 +548,9 @@ export const executeTaskForAccount = async (
       
       if (materialRef.image_hash) {
         objectStorySpec.link_data.image_hash = materialRef.image_hash
+      } else if (materialRef.image_url) {
+        // 使用图片 URL 直接创建创意
+        objectStorySpec.link_data.picture = materialRef.image_url
       } else if (materialRef.video_id) {
         objectStorySpec.link_data.video_data = {
           video_id: materialRef.video_id,
