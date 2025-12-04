@@ -74,19 +74,20 @@ const request = async (method: 'GET' | 'POST', endpoint: string, dataOrParams: a
         url,
       }
 
-      if (method === 'GET') {
-        config.params = {
-          access_token: token,
-          ...dataOrParams,
-        }
-      } else {
-        // POST - Facebook Graph API 接受 URL params 方式
-        // 将所有参数放在 params 中（不使用 JSON body）
-        config.params = {
-          access_token: token,
-          ...dataOrParams,
+      // Facebook Graph API: 所有参数都放在 URL query string 中
+      // 对于 POST 请求，参数也放在 query string 而不是 body
+      const allParams: any = {
+        access_token: token,
+      }
+      
+      // 处理参数，确保不重复添加 access_token
+      for (const [key, value] of Object.entries(dataOrParams)) {
+        if (key !== 'access_token' && value !== undefined) {
+          allParams[key] = value
         }
       }
+      
+      config.params = allParams
 
       const res = await axios(config)
       
