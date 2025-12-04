@@ -240,7 +240,14 @@ export const createAdCreative = async (params: CreateAdCreativeParams) => {
     logger.info(`[BulkCreate] Ad Creative created: ${res.id}`)
     return { success: true, id: res.id, data: res }
   } catch (error: any) {
-    logger.error(`[BulkCreate] Failed to create ad creative - Full error:`, JSON.stringify(error.response?.data, null, 2))
+    const fbError = error.response?.data?.error
+    logger.error(`[BulkCreate] Failed to create ad creative - Full error:`)
+    logger.error(`[BulkCreate] Error code: ${fbError?.code}`)
+    logger.error(`[BulkCreate] Error message: ${fbError?.message}`)
+    logger.error(`[BulkCreate] Error type: ${fbError?.type}`)
+    logger.error(`[BulkCreate] Error subcode: ${fbError?.error_subcode}`)
+    logger.error(`[BulkCreate] Error user_msg: ${fbError?.error_user_msg}`)
+    logger.error(`[BulkCreate] Full response: ${JSON.stringify(error.response?.data, null, 2)}`)
     logger.error(`[BulkCreate] Creative failed params: ${JSON.stringify(requestParams, null, 2)}`)
     return {
       success: false,
