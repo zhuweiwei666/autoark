@@ -525,11 +525,13 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
     const isToday = !filters.startDate && !filters.endDate
     const cacheTtl = isToday ? CACHE_TTL.TODAY : CACHE_TTL.DATE_RANGE
     
-    const cachedData = await getFromCache<any[]>(cacheKey)
+    // 暂时禁用缓存以确保从 Facebook API 获取最新数据
+    const cachedData = null // await getFromCache<any[]>(cacheKey)
     if (cachedData) {
         logger.info(`[getCampaigns] Cache hit for key: ${cacheKey}`)
         metricsData = cachedData
     } else {
+        logger.info(`[getCampaigns] Cache miss, fetching from Facebook API`)
         // 缓存未命中，从数据库查询
         try {
             // 使用读连接进行查询（读写分离）
@@ -599,6 +601,8 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
                     })
                     
                     const allInsights = (await Promise.all(accountPromises)).flat()
+                    
+                    logger.info(`[getCampaigns] Raw insights from Facebook API: ${JSON.stringify(allInsights.slice(0, 3))}`)
                     
                     // 转换 insights 为 metricsData 格式
                     metricsData = allInsights.map((insight: any) => {
