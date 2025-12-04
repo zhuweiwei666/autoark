@@ -130,13 +130,14 @@ export default function DashboardPage() {
         })
       }
 
-      // Campaign 消耗排行
+      // Campaign 消耗排行（保持后端返回的降序排列：消耗高的在上面）
       const campaignCtx = document.getElementById('campaign-ranking-chart') as HTMLCanvasElement
       if (campaignCtx) {
         if (campaignRankingChartRef.current) {
           campaignRankingChartRef.current.destroy()
         }
-        const sortedData = campaignRanking.length === 1 ? campaignRanking : [...campaignRanking].reverse()
+        // 不需要反转，后端已经按 spend 降序排列
+        const sortedData = campaignRanking
         campaignRankingChartRef.current = new Chart(campaignCtx, {
           type: 'bar',
           data: {
@@ -166,6 +167,7 @@ export default function DashboardPage() {
               y: {
                 ticks: { color: '#94a3b8' },
                 grid: { display: false },
+                reverse: true, // 反转 Y 轴，让消耗最高的显示在最上面
               },
             },
           },
