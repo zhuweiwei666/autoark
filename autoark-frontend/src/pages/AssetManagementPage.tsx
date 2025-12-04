@@ -3,6 +3,57 @@ import { useSearchParams, useNavigate } from 'react-router-dom'
 
 const API_BASE = '/api'
 
+// 视频缩略图组件
+function VideoThumbnail({ src, className }: { src: string; className?: string }) {
+  const [thumbnail, setThumbnail] = useState<string | null>(null)
+  
+  useEffect(() => {
+    const video = document.createElement('video')
+    video.crossOrigin = 'anonymous'
+    video.muted = true
+    video.preload = 'metadata'
+    
+    video.onloadeddata = () => { video.currentTime = 0.1 }
+    video.onseeked = () => {
+      try {
+        const canvas = document.createElement('canvas')
+        canvas.width = video.videoWidth
+        canvas.height = video.videoHeight
+        const ctx = canvas.getContext('2d')
+        if (ctx) {
+          ctx.drawImage(video, 0, 0)
+          setThumbnail(canvas.toDataURL('image/jpeg', 0.8))
+        }
+      } catch {}
+    }
+    video.src = src
+    return () => { video.src = '' }
+  }, [src])
+  
+  if (!thumbnail) {
+    return (
+      <div className={`flex items-center justify-center bg-slate-800 ${className}`}>
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-6 h-6 text-white">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.985V5.653z" />
+        </svg>
+      </div>
+    )
+  }
+  
+  return (
+    <div className={`relative ${className}`}>
+      <img src={thumbnail} alt="" className="w-full h-full object-cover" />
+      <div className="absolute inset-0 flex items-center justify-center">
+        <div className="w-6 h-6 bg-black/50 rounded-full flex items-center justify-center">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="white" className="w-3 h-3 ml-0.5">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.985V5.653z" />
+          </svg>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 type AssetType = 'targeting' | 'copywriting' | 'creative'
 
 const TAB_CONFIG = {
@@ -251,11 +302,7 @@ export default function AssetManagementPage() {
                       {m.type === 'image' ? (
                         <img src={m.url} alt="" className="w-full h-full object-cover" />
                       ) : (
-                        <div className="w-full h-full flex items-center justify-center bg-slate-800">
-                          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-6 h-6 text-white">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.985V5.653z" />
-                          </svg>
-                        </div>
+                        <VideoThumbnail src={m.url} className="w-full h-full" />
                       )}
                       <button
                         onClick={() => removeMaterial(i)}
@@ -338,11 +385,7 @@ export default function AssetManagementPage() {
                     {m.type === 'image' ? (
                       <img src={m.url} alt="" className="w-full h-full object-cover" />
                     ) : (
-                      <div className="w-full h-full flex items-center justify-center bg-slate-800">
-                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-4 h-4 text-white">
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.985V5.653z" />
-                        </svg>
-                      </div>
+                      <VideoThumbnail src={m.url} className="w-full h-full" />
                     )}
                   </div>
                 ))}
@@ -469,11 +512,7 @@ export default function AssetManagementPage() {
                             {m.type === 'image' ? (
                               <img src={m.storage.url} alt={m.name} className="w-full h-full object-cover" />
                             ) : (
-                              <div className="w-full h-full flex items-center justify-center bg-slate-800">
-                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-8 h-8 text-white">
-                                  <path strokeLinecap="round" strokeLinejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.985V5.653z" />
-                                </svg>
-                              </div>
+                              <VideoThumbnail src={m.storage.url} className="w-full h-full" />
                             )}
                             {isSelected && (
                               <div className="absolute top-1 right-1 w-5 h-5 bg-blue-500 rounded-full flex items-center justify-center">

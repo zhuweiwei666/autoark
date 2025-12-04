@@ -1,6 +1,72 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 
 const API_BASE = '/api'
+
+// 视频缩略图组件 - 显示首帧
+function VideoThumbnail({ src, className }: { src: string; className?: string }) {
+  const [thumbnail, setThumbnail] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
+  
+  useEffect(() => {
+    const video = document.createElement('video')
+    video.crossOrigin = 'anonymous'
+    video.muted = true
+    video.preload = 'metadata'
+    
+    video.onloadeddata = () => {
+      video.currentTime = 0.1 // 跳到0.1秒获取首帧
+    }
+    
+    video.onseeked = () => {
+      try {
+        const canvas = document.createElement('canvas')
+        canvas.width = video.videoWidth
+        canvas.height = video.videoHeight
+        const ctx = canvas.getContext('2d')
+        if (ctx) {
+          ctx.drawImage(video, 0, 0)
+          setThumbnail(canvas.toDataURL('image/jpeg', 0.8))
+        }
+      } catch (e) {
+        console.error('Failed to generate thumbnail:', e)
+      }
+      setLoading(false)
+    }
+    
+    video.onerror = () => {
+      setLoading(false)
+    }
+    
+    video.src = src
+    
+    return () => {
+      video.src = ''
+    }
+  }, [src])
+  
+  if (loading || !thumbnail) {
+    return (
+      <div className={`flex items-center justify-center bg-slate-800 ${className}`}>
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-8 h-8 text-white">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.985V5.653z" />
+        </svg>
+      </div>
+    )
+  }
+  
+  return (
+    <div className={`relative ${className}`}>
+      <img src={thumbnail} alt="视频封面" className="w-full h-full object-cover" />
+      <div className="absolute inset-0 flex items-center justify-center">
+        <div className="w-10 h-10 bg-black/50 rounded-full flex items-center justify-center">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="white" className="w-5 h-5 ml-0.5">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.985V5.653z" />
+          </svg>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 interface Material {
   _id: string
@@ -413,6 +479,7 @@ export default function MaterialLibraryPage() {
   const renderFolderNode = (folder: Folder, depth: number = 0) => {
     const children = getChildren(folder._id)
     const hasChildren = children.length > 0
+    const childCount = children.length // 子文件夹数量
     const isExpanded = expandedFolders.has(folder._id)
     const isSelected = currentPath === folder.path
     const isEditing = editingFolderId === folder._id
@@ -475,8 +542,10 @@ export default function MaterialLibraryPage() {
             <span className="flex-1 text-sm truncate">{folder.name}</span>
           )}
           
-          {/* 数量 */}
-          <span className="text-xs text-slate-400 flex-shrink-0">{folder.count}</span>
+          {/* 子文件夹数量 */}
+          {childCount > 0 && (
+            <span className="text-xs text-slate-400 flex-shrink-0">{childCount}</span>
+          )}
         </div>
         
         {/* 子文件夹 */}
@@ -814,11 +883,7 @@ export default function MaterialLibraryPage() {
                           loading="lazy"
                         />
                       ) : (
-                        <div className="w-full h-full flex items-center justify-center bg-slate-800">
-                          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-8 h-8 text-white">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.985V5.653z" />
-                          </svg>
-                        </div>
+                        <VideoThumbnail src={m.storage.url} className="w-full h-full" />
                       )}
                     </div>
                     
