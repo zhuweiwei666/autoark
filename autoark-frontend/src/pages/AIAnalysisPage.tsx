@@ -1,7 +1,7 @@
 import { useState } from 'react'
 
 export default function AIAnalysisPage() {
-  const [analyzing, setAnalyzing] = useState(false)
+  const [, setAnalyzing] = useState(false)
 
   return (
     <div className="h-full bg-gradient-to-br from-slate-50 to-blue-50 p-8">

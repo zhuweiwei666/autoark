@@ -11,10 +11,6 @@ export default function Layout({ children }: LayoutProps) {
     return location.pathname === path
   }
 
-  const isActivePrefix = (prefix: string) => {
-    return location.pathname.startsWith(prefix)
-  }
-
   // 菜单项组件
   const MenuItem = ({ to, icon, label, activeColor = 'slate' }: { to: string; icon: React.ReactNode; label: string; activeColor?: string }) => {
     const active = isActive(to)
