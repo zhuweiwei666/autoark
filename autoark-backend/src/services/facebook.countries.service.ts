@@ -1,5 +1,6 @@
 import Campaign from '../models/Campaign'
-import FacebookToken from '../models/FacebookToken'
+import Account from '../models/Account'
+import FbToken from '../models/FbToken'
 import logger from '../utils/logger'
 import dayjs from 'dayjs'
 import { fetchInsights } from '../integration/facebook/insights.api'
@@ -22,9 +23,14 @@ const COUNTRY_NAMES: Record<string, string> = {
 
 export const getCountries = async (filters: any = {}, pagination: { page: number, limit: number, sortBy: string, sortOrder: 'asc' | 'desc' }) => {
     try {
-        // 获取所有活跃的 token
-        const tokens = await FacebookToken.find({ status: 'active' }).lean()
-        if (tokens.length === 0) {
+        // 获取所有账户
+        let accountQuery: any = {}
+    if (filters.accountId) {
+            accountQuery.accountId = filters.accountId
+        }
+        const accounts = await Account.find(accountQuery).lean()
+        
+        if (accounts.length === 0) {
             return {
                 data: [],
                 pagination: {
@@ -36,21 +42,9 @@ export const getCountries = async (filters: any = {}, pagination: { page: number
             }
         }
 
-        // 获取所有账户
-        const allAccounts: string[] = []
-        for (const token of tokens) {
-            if (token.adAccounts) {
-                allAccounts.push(...token.adAccounts.map(a => a.accountId))
-            }
-        }
-
-        // 如果指定了账户筛选
-        let targetAccounts = allAccounts
-        if (filters.accountId) {
-            targetAccounts = allAccounts.filter(id => id === filters.accountId)
-        }
-
-        if (targetAccounts.length === 0) {
+        // 获取所有活跃的 token
+        const tokens = await FbToken.find({ status: 'active' }).lean()
+        if (tokens.length === 0) {
             return {
                 data: [],
                 pagination: {
@@ -84,15 +78,15 @@ export const getCountries = async (filters: any = {}, pagination: { page: number
         }> = {}
 
         // 从每个账户获取按国家细分的数据
-        for (const accountId of targetAccounts) {
-            // 找到对应的 token
-            const token = tokens.find(t => t.adAccounts?.some(a => a.accountId === accountId))
+        for (const account of accounts) {
+            // 使用第一个可用的 token
+            const token = tokens[0]
             if (!token) continue
 
             try {
                 // 使用 breakdown=country 获取按国家细分的数据
                 const insights = await fetchInsights(
-                    `act_${accountId}`,
+                    `act_${account.accountId}`,
                     'campaign', // 使用 campaign 级别以获取 campaignId
                     undefined,
                     token.token,
@@ -168,7 +162,7 @@ export const getCountries = async (filters: any = {}, pagination: { page: number
                     }
                 }
             } catch (error: any) {
-                logger.error(`Error fetching insights for account ${accountId}: ${error.message}`)
+                logger.error(`Error fetching insights for account ${account.accountId}: ${error.message}`)
                 // 继续处理其他账户
             }
         }
@@ -198,18 +192,18 @@ export const getCountries = async (filters: any = {}, pagination: { page: number
         })
 
         const total = countriesWithMetrics.length
-
-        if (total === 0) {
-            return {
-                data: [],
-                pagination: {
-                    page: pagination.page,
-                    limit: pagination.limit,
-                    total: 0,
-                    pages: 0,
-                },
-            }
+    
+    if (total === 0) {
+        return {
+            data: [],
+            pagination: {
+                page: pagination.page,
+                limit: pagination.limit,
+                total: 0,
+                pages: 0,
+            },
         }
+    }
 
         // 排序
         const sortField = pagination.sortBy || 'spend'
@@ -223,19 +217,19 @@ export const getCountries = async (filters: any = {}, pagination: { page: number
             }
             return pagination.sortOrder === 'desc' ? bValue - aValue : aValue - bValue
         })
-
-        // 分页
-        const startIndex = (pagination.page - 1) * pagination.limit
-        const paginatedCountries = countriesWithMetrics.slice(startIndex, startIndex + pagination.limit)
-
-        return {
+    
+    // 分页
+    const startIndex = (pagination.page - 1) * pagination.limit
+    const paginatedCountries = countriesWithMetrics.slice(startIndex, startIndex + pagination.limit)
+    
+    return {
             data: paginatedCountries,
-            pagination: {
-                total,
-                page: pagination.page,
-                limit: pagination.limit,
-                pages: Math.ceil(total / pagination.limit)
-            }
+        pagination: {
+            total,
+            page: pagination.page,
+            limit: pagination.limit,
+            pages: Math.ceil(total / pagination.limit)
+        }
         }
     } catch (error: any) {
         logger.error('Error in getCountries:', error)
