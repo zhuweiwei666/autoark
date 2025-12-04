@@ -3,6 +3,75 @@ import { useSearchParams, useNavigate } from 'react-router-dom'
 
 const API_BASE = '/api'
 
+// 全球国家列表（按洲分组）
+const COUNTRIES = {
+  '北美洲': [
+    { code: 'US', name: '美国' },
+    { code: 'CA', name: '加拿大' },
+    { code: 'MX', name: '墨西哥' },
+  ],
+  '南美洲': [
+    { code: 'BR', name: '巴西' },
+    { code: 'AR', name: '阿根廷' },
+    { code: 'CL', name: '智利' },
+    { code: 'CO', name: '哥伦比亚' },
+    { code: 'PE', name: '秘鲁' },
+  ],
+  '欧洲': [
+    { code: 'GB', name: '英国' },
+    { code: 'DE', name: '德国' },
+    { code: 'FR', name: '法国' },
+    { code: 'IT', name: '意大利' },
+    { code: 'ES', name: '西班牙' },
+    { code: 'NL', name: '荷兰' },
+    { code: 'BE', name: '比利时' },
+    { code: 'AT', name: '奥地利' },
+    { code: 'CH', name: '瑞士' },
+    { code: 'SE', name: '瑞典' },
+    { code: 'NO', name: '挪威' },
+    { code: 'DK', name: '丹麦' },
+    { code: 'FI', name: '芬兰' },
+    { code: 'PL', name: '波兰' },
+    { code: 'PT', name: '葡萄牙' },
+    { code: 'IE', name: '爱尔兰' },
+    { code: 'GR', name: '希腊' },
+    { code: 'CZ', name: '捷克' },
+    { code: 'RO', name: '罗马尼亚' },
+    { code: 'HU', name: '匈牙利' },
+  ],
+  '亚洲': [
+    { code: 'CN', name: '中国' },
+    { code: 'JP', name: '日本' },
+    { code: 'KR', name: '韩国' },
+    { code: 'IN', name: '印度' },
+    { code: 'ID', name: '印度尼西亚' },
+    { code: 'TH', name: '泰国' },
+    { code: 'VN', name: '越南' },
+    { code: 'MY', name: '马来西亚' },
+    { code: 'SG', name: '新加坡' },
+    { code: 'PH', name: '菲律宾' },
+    { code: 'TW', name: '中国台湾' },
+    { code: 'HK', name: '中国香港' },
+    { code: 'AE', name: '阿联酋' },
+    { code: 'SA', name: '沙特阿拉伯' },
+    { code: 'IL', name: '以色列' },
+    { code: 'TR', name: '土耳其' },
+    { code: 'PK', name: '巴基斯坦' },
+    { code: 'BD', name: '孟加拉国' },
+  ],
+  '大洋洲': [
+    { code: 'AU', name: '澳大利亚' },
+    { code: 'NZ', name: '新西兰' },
+  ],
+  '非洲': [
+    { code: 'ZA', name: '南非' },
+    { code: 'EG', name: '埃及' },
+    { code: 'NG', name: '尼日利亚' },
+    { code: 'KE', name: '肯尼亚' },
+    { code: 'MA', name: '摩洛哥' },
+  ],
+}
+
 // 视频缩略图组件
 function VideoThumbnail({ src, className }: { src: string; className?: string }) {
   const [thumbnail, setThumbnail] = useState<string | null>(null)
@@ -242,8 +311,64 @@ export default function AssetManagementPage() {
             <div className="border-t pt-4 mt-4">
               <h4 className="text-sm font-medium text-slate-700 mb-3">受众定向</h4>
               <div className="space-y-3">
-                <div><label className="block text-sm text-slate-600 mb-1">国家（逗号分隔）</label>
-                  <input type="text" value={formData.geoLocations?.countries?.join(',') || ''} onChange={(e) => setFormData({...formData, geoLocations: {...formData.geoLocations, countries: e.target.value.split(',').map((s: string) => s.trim().toUpperCase()).filter(Boolean)}})} placeholder="US,CA,GB" className="w-full px-3 py-2 border rounded-lg" /></div>
+                <div>
+                  <label className="block text-sm text-slate-600 mb-1">国家/地区</label>
+                  <div className="border rounded-lg">
+                    {/* 已选国家显示 */}
+                    <div className="flex flex-wrap gap-1 p-2 min-h-[40px] border-b bg-slate-50">
+                      {(formData.geoLocations?.countries || []).length === 0 ? (
+                        <span className="text-sm text-slate-400">点击下方选择国家...</span>
+                      ) : (
+                        (formData.geoLocations?.countries || []).map((code: string) => {
+                          const country = Object.values(COUNTRIES).flat().find(c => c.code === code)
+                          return (
+                            <span key={code} className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-100 text-blue-700 rounded text-sm">
+                              {country?.name || code}
+                              <button type="button" onClick={() => setFormData({...formData, geoLocations: {...formData.geoLocations, countries: (formData.geoLocations?.countries || []).filter((c: string) => c !== code)}})} className="hover:text-blue-900">×</button>
+                            </span>
+                          )
+                        })
+                      )}
+                    </div>
+                    {/* 国家列表 */}
+                    <div className="max-h-48 overflow-y-auto p-2 space-y-2">
+                      {Object.entries(COUNTRIES).map(([continent, countries]) => (
+                        <div key={continent}>
+                          <div className="flex items-center gap-2 text-xs font-medium text-slate-500 mb-1">
+                            <span>{continent}</span>
+                            <button type="button" onClick={() => {
+                              const codes = countries.map(c => c.code)
+                              const current = formData.geoLocations?.countries || []
+                              const allSelected = codes.every(c => current.includes(c))
+                              if (allSelected) {
+                                setFormData({...formData, geoLocations: {...formData.geoLocations, countries: current.filter((c: string) => !codes.includes(c))}})
+                              } else {
+                                setFormData({...formData, geoLocations: {...formData.geoLocations, countries: [...new Set([...current, ...codes])]}})
+                              }
+                            }} className="text-blue-600 hover:underline">
+                              {countries.every(c => (formData.geoLocations?.countries || []).includes(c.code)) ? '取消全选' : '全选'}
+                            </button>
+                          </div>
+                          <div className="flex flex-wrap gap-1">
+                            {countries.map(c => (
+                              <label key={c.code} className={`inline-flex items-center gap-1 px-2 py-1 rounded cursor-pointer text-sm border transition-colors ${(formData.geoLocations?.countries || []).includes(c.code) ? 'bg-blue-600 text-white border-blue-600' : 'bg-white hover:bg-slate-50 border-slate-200'}`}>
+                                <input type="checkbox" checked={(formData.geoLocations?.countries || []).includes(c.code)} onChange={(e) => {
+                                  const countries = formData.geoLocations?.countries || []
+                                  if (e.target.checked) {
+                                    setFormData({...formData, geoLocations: {...formData.geoLocations, countries: [...countries, c.code]}})
+                                  } else {
+                                    setFormData({...formData, geoLocations: {...formData.geoLocations, countries: countries.filter((x: string) => x !== c.code)}})
+                                  }
+                                }} className="hidden" />
+                                {c.name}
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div><label className="block text-sm text-slate-600 mb-1">最小年龄</label>
                     <input type="number" value={formData.demographics?.ageMin || 18} onChange={(e) => setFormData({...formData, demographics: {...formData.demographics, ageMin: Number(e.target.value)}})} min="13" max="65" className="w-full px-3 py-2 border rounded-lg" /></div>
