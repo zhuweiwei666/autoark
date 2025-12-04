@@ -72,7 +72,7 @@ class AgentService {
         $group: {
           _id: accountId ? '$accountId' : null,
           totalSpend: { $sum: '$spendUsd' },
-          totalRevenue: { $sum: { $ifNull: ['$purchaseValue', 0] } },
+          totalRevenue: { $sum: { $ifNull: ['$purchase_value', 0] } },
           totalImpressions: { $sum: '$impressions' },
           totalClicks: { $sum: '$clicks' },
           campaigns: { $addToSet: '$campaignId' },
@@ -99,7 +99,7 @@ class AgentService {
         $group: {
           _id: null,
           totalSpend: { $sum: '$spendUsd' },
-          totalRevenue: { $sum: { $ifNull: ['$purchaseValue', 0] } },
+          totalRevenue: { $sum: { $ifNull: ['$purchase_value', 0] } },
         }
       }
     ])
@@ -124,7 +124,7 @@ class AgentService {
           _id: '$campaignId',
           name: { $first: '$campaignName' },
           spend: { $sum: '$spendUsd' },
-          revenue: { $sum: { $ifNull: ['$purchaseValue', 0] } },
+          revenue: { $sum: { $ifNull: ['$purchase_value', 0] } },
         }
       },
       { $addFields: { roas: { $cond: [{ $gt: ['$spend', 0] }, { $divide: ['$revenue', '$spend'] }, 0] } } },
@@ -166,7 +166,7 @@ class AgentService {
           _id: '$campaignId',
           name: { $first: '$campaignName' },
           spend: { $sum: '$spendUsd' },
-          revenue: { $sum: { $ifNull: ['$purchaseValue', 0] } },
+          revenue: { $sum: { $ifNull: ['$purchase_value', 0] } },
         }
       },
       { $addFields: { roas: { $cond: [{ $gt: ['$spend', 0] }, { $divide: ['$revenue', '$spend'] }, 0] } } },
@@ -459,7 +459,7 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
         $group: {
           _id: '$date',
           spend: { $sum: '$spendUsd' },
-          revenue: { $sum: { $ifNull: ['$purchaseValue', 0] } },
+          revenue: { $sum: { $ifNull: ['$purchase_value', 0] } },
           impressions: { $sum: '$impressions' },
           clicks: { $sum: '$clicks' },
         }
@@ -508,7 +508,7 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
             $arrayElemAt: [{ $split: ['$name', '_'] }, 0]
           },
           spend: { $ifNull: ['$todayMetrics.spendUsd', 0] },
-          revenue: { $ifNull: ['$todayMetrics.purchaseValue', 0] },
+          revenue: { $ifNull: ['$todayMetrics.purchase_value', 0] },
           impressions: { $ifNull: ['$todayMetrics.impressions', 0] },
           clicks: { $ifNull: ['$todayMetrics.clicks', 0] },
         }
@@ -557,7 +557,7 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
         $group: {
           _id: '$country',
           spend: { $sum: '$spendUsd' },
-          revenue: { $sum: { $ifNull: ['$purchaseValue', 0] } },
+          revenue: { $sum: { $ifNull: ['$purchase_value', 0] } },
           impressions: { $sum: '$impressions' },
           clicks: { $sum: '$clicks' },
         }
@@ -594,7 +594,7 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
           _id: '$campaignId',
           name: { $first: '$campaignName' },
           spend: { $sum: '$spendUsd' },
-          revenue: { $sum: { $ifNull: ['$purchaseValue', 0] } },
+          revenue: { $sum: { $ifNull: ['$purchase_value', 0] } },
           impressions: { $sum: '$impressions' },
           clicks: { $sum: '$clicks' },
         }
@@ -632,7 +632,7 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
           _id: '$campaignId',
           name: { $first: '$campaignName' },
           spend: { $sum: '$spendUsd' },
-          revenue: { $sum: { $ifNull: ['$purchaseValue', 0] } },
+          revenue: { $sum: { $ifNull: ['$purchase_value', 0] } },
         }
       },
       {
@@ -697,7 +697,7 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
         $group: {
           _id: null,
           spend: { $sum: '$spendUsd' },
-          revenue: { $sum: { $ifNull: ['$purchaseValue', 0] } },
+          revenue: { $sum: { $ifNull: ['$purchase_value', 0] } },
           impressions: { $sum: '$impressions' },
           clicks: { $sum: '$clicks' },
           campaigns: { $addToSet: '$campaignId' }
@@ -712,7 +712,7 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
         $group: {
           _id: null,
           spend: { $sum: '$spendUsd' },
-          revenue: { $sum: { $ifNull: ['$purchaseValue', 0] } },
+          revenue: { $sum: { $ifNull: ['$purchase_value', 0] } },
         }
       }
     ])
@@ -724,7 +724,7 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
         $group: {
           _id: null,
           avgSpend: { $avg: '$spendUsd' },
-          avgRevenue: { $avg: { $ifNull: ['$purchaseValue', 0] } },
+          avgRevenue: { $avg: { $ifNull: ['$purchase_value', 0] } },
         }
       }
     ])
@@ -874,13 +874,13 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
           campaignName: { $first: '$campaignName' },
           accountId: { $first: '$accountId' },
           totalSpend: { $sum: '$spendUsd' },
-          totalRevenue: { $sum: { $ifNull: ['$purchaseValue', 0] } },
+          totalRevenue: { $sum: { $ifNull: ['$purchase_value', 0] } },
           days: { $addToSet: '$date' },
           dailyData: {
             $push: {
               date: '$date',
               spend: '$spendUsd',
-              revenue: { $ifNull: ['$purchaseValue', 0] },
+              revenue: { $ifNull: ['$purchase_value', 0] },
             }
           }
         }

@@ -258,7 +258,7 @@ router.get('/analysis/health', async (req: Request, res: Response) => {
         $group: {
           _id: '$date',
           spend: { $sum: '$spendUsd' },
-          revenue: { $sum: { $ifNull: ['$purchaseValue', 0] } },
+          revenue: { $sum: { $ifNull: ['$purchase_value', 0] } },
           impressions: { $sum: '$impressions' },
           clicks: { $sum: '$clicks' },
           conversions: { $sum: { $ifNull: ['$conversions', 0] } },
