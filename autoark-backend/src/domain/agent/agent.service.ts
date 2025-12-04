@@ -356,6 +356,12 @@ ${JSON.stringify(allData.losingCampaigns, null, 2)}
 ### 📱 所有账户概况
 ${JSON.stringify(allData.accountsSummary, null, 2)}
 
+### 📋 所有广告系列详细数据（今日消耗 > $1，共 ${allData.totalCampaigns || 0} 个）
+${JSON.stringify(allData.allCampaignsToday?.slice(0, 30), null, 2)}
+
+### 📈 广告系列7天趋势（消耗 > $50）
+${JSON.stringify(allData.campaignTrends?.slice(0, 10), null, 2)}
+
 ## 历史对话
 ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户' : 'AI'}: ${m.content}`).join('\n')}
 
@@ -665,6 +671,105 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
       amountSpent: a.amountSpent,
     }))
 
+    // 8. 所有广告系列详细数据（今日）
+    const allCampaignsToday = await MetricsDaily.aggregate([
+      {
+        $match: {
+          campaignId: { $exists: true, $ne: null },
+          date: today
+        }
+      },
+      {
+        $group: {
+          _id: '$campaignId',
+          name: { $first: '$campaignName' },
+          accountId: { $first: '$accountId' },
+          spend: { $sum: '$spendUsd' },
+          revenue: { $sum: { $ifNull: ['$purchase_value', 0] } },
+          impressions: { $sum: '$impressions' },
+          clicks: { $sum: '$clicks' },
+          installs: { $sum: { $ifNull: ['$mobile_app_install_count', 0] } },
+        }
+      },
+      {
+        $addFields: {
+          roas: { $cond: [{ $gt: ['$spend', 0] }, { $divide: ['$revenue', '$spend'] }, 0] },
+          ctr: { $cond: [{ $gt: ['$impressions', 0] }, { $multiply: [{ $divide: ['$clicks', '$impressions'] }, 100] }, 0] },
+          cpc: { $cond: [{ $gt: ['$clicks', 0] }, { $divide: ['$spend', '$clicks'] }, 0] },
+          cpi: { $cond: [{ $gt: ['$installs', 0] }, { $divide: ['$spend', '$installs'] }, 0] },
+          optimizer: { $arrayElemAt: [{ $split: ['$name', '_'] }, 0] }
+        }
+      },
+      { $match: { spend: { $gt: 1 } } },
+      { $sort: { spend: -1 } },
+      { $limit: 50 },
+      {
+        $project: {
+          campaignId: '$_id',
+          name: 1,
+          optimizer: 1,
+          accountId: 1,
+          spend: { $round: ['$spend', 2] },
+          revenue: { $round: ['$revenue', 2] },
+          roas: { $round: ['$roas', 2] },
+          impressions: 1,
+          clicks: 1,
+          installs: 1,
+          ctr: { $concat: [{ $toString: { $round: ['$ctr', 2] } }, '%'] },
+          cpc: { $round: ['$cpc', 2] },
+          cpi: { $round: ['$cpi', 2] },
+          status: { $cond: [{ $gte: ['$roas', 1] }, '盈利', { $cond: [{ $gte: ['$roas', 0.5] }, '微亏', '亏损'] }] }
+        }
+      }
+    ])
+
+    // 9. 最近7天广告系列表现对比
+    const campaignTrends = await MetricsDaily.aggregate([
+      {
+        $match: {
+          campaignId: { $exists: true, $ne: null },
+          date: { $gte: sevenDaysAgo, $lte: today }
+        }
+      },
+      {
+        $group: {
+          _id: { campaignId: '$campaignId', date: '$date' },
+          name: { $first: '$campaignName' },
+          spend: { $sum: '$spendUsd' },
+          revenue: { $sum: { $ifNull: ['$purchase_value', 0] } },
+        }
+      },
+      {
+        $group: {
+          _id: '$_id.campaignId',
+          name: { $first: '$name' },
+          dailyData: {
+            $push: {
+              date: '$_id.date',
+              spend: { $round: ['$spend', 2] },
+              revenue: { $round: ['$revenue', 2] },
+              roas: { $cond: [{ $gt: ['$spend', 0] }, { $round: [{ $divide: ['$revenue', '$spend'] }, 2] }, 0] }
+            }
+          },
+          totalSpend: { $sum: '$spend' },
+          totalRevenue: { $sum: '$revenue' },
+        }
+      },
+      { $match: { totalSpend: { $gt: 50 } } },
+      { $sort: { totalSpend: -1 } },
+      { $limit: 20 },
+      {
+        $project: {
+          name: 1,
+          optimizer: { $arrayElemAt: [{ $split: ['$name', '_'] }, 0] },
+          totalSpend: { $round: ['$totalSpend', 2] },
+          totalRevenue: { $round: ['$totalRevenue', 2] },
+          avgRoas: { $round: [{ $cond: [{ $gt: ['$totalSpend', 0] }, { $divide: ['$totalRevenue', '$totalSpend'] }, 0] }, 2] },
+          dailyData: 1,
+        }
+      }
+    ])
+
     return {
       todaySummary,
       last7DaysTrend,
@@ -673,6 +778,9 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
       topCampaigns,
       losingCampaigns,
       accountsSummary,
+      allCampaignsToday,
+      campaignTrends,
+      totalCampaigns: allCampaignsToday.length,
       dataTime: dayjs().format('YYYY-MM-DD HH:mm:ss'),
     }
   }

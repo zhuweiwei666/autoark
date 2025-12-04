@@ -43,7 +43,29 @@ export default function AIAnalysisPage() {
   useEffect(() => {
     loadHealthData()
     loadReports()
+    loadChatHistory()
   }, [])
+
+  // 加载聊天历史
+  const loadChatHistory = async () => {
+    try {
+      const res = await fetch('/api/agent/chat/history?limit=1')
+      const data = await res.json()
+      if (data.success && data.data.length > 0) {
+        // 获取最近的会话消息
+        const recentConversation = data.data[0]
+        if (recentConversation.messages && recentConversation.messages.length > 0) {
+          const messages = recentConversation.messages.map((m: any) => ({
+            role: m.role,
+            content: m.content
+          }))
+          setChatMessages(messages)
+        }
+      }
+    } catch (error) {
+      console.error('Failed to load chat history:', error)
+    }
+  }
 
   const loadHealthData = async () => {
     setLoading(true)
