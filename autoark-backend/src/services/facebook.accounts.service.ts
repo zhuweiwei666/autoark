@@ -182,16 +182,19 @@ export const getAccounts = async (filters: any = {}, pagination: { page: number,
         })
     }
     
+    // 判断是否有日期筛选
+    const hasDateFilter = filters.startDate || filters.endDate
+    
     // 为每个账户添加消耗和计算后的余额
     const accountsWithMetrics = allAccounts.map((account: any) => {
         const accountId = account.accountId
-        // periodSpend: 日期范围内的消耗（来自 MetricsDaily）
-        const periodSpend = periodSpendMap[accountId] || 0
+        
+        // periodSpend: 来自 MetricsDaily 的消耗（日期范围内或今天）
+        const periodSpendFromMetrics = periodSpendMap[accountId] || 0
         // totalSpendFromMetrics: 来自 MetricsDaily 的历史总消耗
         const totalSpendFromMetrics = totalSpendMap[accountId] || 0
         
         // Facebook API 返回的 amount_spent 是以账户货币的最小单位（分）返回的
-        // 需要除以 100 转换为美元/人民币等
         const amountSpentRaw = account.amountSpent ? 
             (typeof account.amountSpent === 'string' ? parseFloat(account.amountSpent) : account.amountSpent) : 0
         const amountSpentUsd = amountSpentRaw / 100 // Facebook API 返回的是美分
@@ -203,18 +206,16 @@ export const getAccounts = async (filters: any = {}, pagination: { page: number,
         
         const accountObj = account.toObject ? account.toObject() : account
         
+        // 消耗显示逻辑：
+        // - 有日期筛选：显示该日期范围内的消耗（来自 MetricsDaily）
+        // - 无日期筛选：显示当日消耗（来自 MetricsDaily 的今天数据）
+        const periodSpend = periodSpendFromMetrics
+        
         return {
             ...accountObj,
-            // 使用 Facebook API 的 amount_spent 作为实际消耗（更准确）
-            periodSpend: amountSpentUsd, // 账户实际总消耗（美元）- 这是 Facebook API 的真实数据
+            periodSpend: periodSpend, // 日期范围/当日消耗
             calculatedBalance: balanceUsd, // 账户余额（美元）
-            totalSpend: totalSpendFromMetrics, // MetricsDaily 中记录的消耗（用于对比调试）
-            // 额外字段用于调试
-            _debug: {
-                amountSpentRaw,
-                balanceRaw,
-                metricsSpend: totalSpendFromMetrics
-            }
+            totalSpend: amountSpentUsd, // 账户历史总消耗（来自 Facebook API）
         }
     })
     

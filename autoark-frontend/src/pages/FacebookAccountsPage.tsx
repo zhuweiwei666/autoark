@@ -316,13 +316,34 @@ export default function FacebookAccountsPage() {
                     }}
                   >
                     <div className="flex items-center gap-2">
-                      <span>消耗</span>
+                      <span>{filters.startDate || filters.endDate ? '期间消耗' : '当日消耗'}</span>
                       {sortConfig?.key === 'periodSpend' && (
                         <svg className={`w-4 h-4 ${sortConfig.direction === 'asc' ? '' : 'rotate-180'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 15l7-7 7 7" />
                         </svg>
                       )}
                       {sortConfig?.key !== 'periodSpend' && (
+                        <svg className="w-4 h-4 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
+                        </svg>
+                      )}
+                    </div>
+                  </th>
+                  <th 
+                    className="px-6 py-5 font-semibold text-slate-900 cursor-pointer hover:bg-slate-100 transition-colors select-none"
+                    onClick={() => {
+                      const direction = sortConfig?.key === 'totalSpend' && sortConfig.direction === 'asc' ? 'desc' : 'asc'
+                      setSortConfig({ key: 'totalSpend', direction })
+                    }}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span>总消耗</span>
+                      {sortConfig?.key === 'totalSpend' && (
+                        <svg className={`w-4 h-4 ${sortConfig.direction === 'asc' ? '' : 'rotate-180'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 15l7-7 7 7" />
+                        </svg>
+                      )}
+                      {sortConfig?.key !== 'totalSpend' && (
                         <svg className="w-4 h-4 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
                         </svg>
@@ -376,9 +397,9 @@ export default function FacebookAccountsPage() {
               </thead>
               <tbody>
                 {loading ? (
-                  <tr><td colSpan={6} className="px-6 py-12 text-center text-slate-500 animate-pulse">加载中...</td></tr>
+                  <tr><td colSpan={7} className="px-6 py-12 text-center text-slate-500 animate-pulse">加载中...</td></tr>
                 ) : accounts.length === 0 ? (
-                  <tr><td colSpan={6} className="px-6 py-12 text-center text-slate-500">暂无数据</td></tr>
+                  <tr><td colSpan={7} className="px-6 py-12 text-center text-slate-500">暂无数据</td></tr>
                 ) : (
                   accounts.map((account) => (
                     <tr key={account.id} className="group hover:bg-white/[0.02] transition-colors">
@@ -398,6 +419,15 @@ export default function FacebookAccountsPage() {
                         <div className="text-slate-300 text-xs">
                           {account.periodSpend !== undefined && account.periodSpend > 0 ? (
                             <span className="text-slate-400 font-mono">${account.periodSpend.toFixed(2)}</span>
+                          ) : (
+                            <span className="text-slate-500">$0.00</span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="text-slate-300 text-xs">
+                          {account.totalSpend !== undefined && account.totalSpend > 0 ? (
+                            <span className="text-orange-400 font-mono">${account.totalSpend.toFixed(2)}</span>
                           ) : (
                             <span className="text-slate-500">$0.00</span>
                           )}
