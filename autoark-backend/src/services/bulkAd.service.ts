@@ -552,11 +552,23 @@ export const executeTaskForAccount = async (
         // 使用图片 URL 直接创建创意
         objectStorySpec.link_data.picture = materialRef.image_url
       } else if (materialRef.video_id) {
-        objectStorySpec.link_data.video_data = {
+        // 视频广告：使用 video_data 替代 link_data
+        const cta = objectStorySpec.link_data.call_to_action
+        const link = objectStorySpec.link_data.link
+        const message = objectStorySpec.link_data.message
+        const title = objectStorySpec.link_data.name
+        
+        // 删除 link_data，改用 video_data
+        delete objectStorySpec.link_data
+        objectStorySpec.video_data = {
           video_id: materialRef.video_id,
-          call_to_action: objectStorySpec.link_data.call_to_action,
+          message: message,
+          title: title,
+          call_to_action: {
+            type: cta?.type || 'SHOP_NOW',
+            value: { link: link },
+          },
         }
-        delete objectStorySpec.link_data.call_to_action
       }
       
       if (accountConfig.instagramAccountId) {
