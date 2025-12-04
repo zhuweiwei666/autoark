@@ -300,8 +300,29 @@ export default function FacebookCountriesPage() {
     setDraggedIndex(null)
   }
 
-  // 加载广告系列列表
-  const loadCountries = async (page = 1) => {
+  // 缓存 key
+  const getCacheKey = () => `fb-countries-${JSON.stringify(filters)}-${sortConfig?.key}-${sortConfig?.direction}`
+  
+  // 加载国家列表（支持缓存优先）
+  const loadCountries = async (page = 1, forceRefresh = false) => {
+    // 如果不是强制刷新，先尝试从缓存加载
+    if (!forceRefresh) {
+      const cachedData = localStorage.getItem(getCacheKey())
+      if (cachedData) {
+        try {
+          const { data, pagination: cachedPagination, timestamp } = JSON.parse(cachedData)
+          // 缓存 5 分钟内有效
+          if (Date.now() - timestamp < 5 * 60 * 1000) {
+            setCountries(data)
+            setPagination(cachedPagination)
+            return // 使用缓存数据，不请求 API
+          }
+        } catch (e) {
+          // 缓存解析失败，继续请求 API
+        }
+      }
+    }
+    
     setLoading(true)
     try {
       const response = await getCountries({
@@ -313,6 +334,14 @@ export default function FacebookCountriesPage() {
       })
       setCountries(response.data)
       setPagination(response.pagination)
+      
+      // 保存到缓存
+      localStorage.setItem(getCacheKey(), JSON.stringify({
+        data: response.data,
+        pagination: response.pagination,
+        timestamp: Date.now()
+      }))
+      
       // 如果加载成功，清除之前的错误消息
       if (message?.type === 'error') {
         setMessage(null)
@@ -331,9 +360,9 @@ export default function FacebookCountriesPage() {
     }
   }
 
-  // 初始加载数据和列设置
+  // 初始加载数据和列设置（使用缓存）
   useEffect(() => {
-    loadCountries()
+    loadCountries(1, false)
     loadColumnSettings()
   }, [])
 
@@ -344,7 +373,7 @@ export default function FacebookCountriesPage() {
     if (!hasFilters) return
 
     const timeoutId = setTimeout(() => {
-      loadCountries(1) // 筛选时重置到第一页
+      loadCountries(1, false) // 筛选时重置到第一页，使用缓存优先
     }, 500) // 500ms 防抖
 
     return () => clearTimeout(timeoutId)
@@ -353,11 +382,11 @@ export default function FacebookCountriesPage() {
 
   // 当排序配置改变时，重新加载数据
   useEffect(() => {
-    loadCountries(1) // 排序时重置到第一页
+    loadCountries(1, false) // 排序时重置到第一页，使用缓存优先
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sortConfig?.key, sortConfig?.direction])
 
-  // 执行同步
+  // 执行同步（强制刷新）
   const handleSync = async () => {
     setSyncing(true)
     setMessage(null)
@@ -368,7 +397,9 @@ export default function FacebookCountriesPage() {
         text: `同步完成！成功: ${result.data.syncedCampaigns}个广告系列, ${result.data.syncedMetrics}个指标, 失败: ${result.data.errorCount}个`,
         errors: result.data.errors || [],
       })
-      loadCountries(1) // 刷新列表
+      // 清除缓存并强制刷新
+      localStorage.removeItem(getCacheKey())
+      loadCountries(1, true)
     } catch (error: any) {
       setMessage({ type: 'error', text: error.message || '同步失败' })
     } finally {

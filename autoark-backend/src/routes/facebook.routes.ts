@@ -12,6 +12,9 @@ router.post('/accounts/sync', facebookController.syncAccounts) // New: Trigger s
 // Campaign management
 router.get('/campaigns-list', facebookController.getCampaignsList) // New: Campaign management list
 router.post('/campaigns/sync', facebookController.syncCampaigns) // New: Trigger sync
+
+// Country management
+router.get('/countries-list', facebookController.getCountriesList) // New: Country management list
 router.get('/queue/status', facebookController.getQueueStatus) // New: Get queue status
 router.get('/diagnose', facebookController.diagnoseTokens) // New: Diagnose token permissions
 router.get('/token-pool/status', facebookController.getTokenPoolStatus) // New: Get token pool status

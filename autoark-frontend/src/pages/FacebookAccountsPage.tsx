@@ -29,8 +29,29 @@ export default function FacebookAccountsPage() {
     endDate: ''
   })
 
-  // 加载列表
-  const loadAccounts = async (page = 1) => {
+  // 缓存 key
+  const getCacheKey = () => `fb-accounts-${JSON.stringify(filters)}-${sortConfig?.key}-${sortConfig?.direction}`
+  
+  // 加载列表（支持缓存优先）
+  const loadAccounts = async (page = 1, forceRefresh = false) => {
+    // 如果不是强制刷新，先尝试从缓存加载
+    if (!forceRefresh) {
+      const cachedData = localStorage.getItem(getCacheKey())
+      if (cachedData) {
+        try {
+          const { data, pagination: cachedPagination, timestamp } = JSON.parse(cachedData)
+          // 缓存 5 分钟内有效
+          if (Date.now() - timestamp < 5 * 60 * 1000) {
+            setAccounts(data)
+            setPagination(cachedPagination)
+            return // 使用缓存数据，不请求 API
+          }
+        } catch (e) {
+          // 缓存解析失败，继续请求 API
+        }
+      }
+    }
+    
     setLoading(true)
     try {
       const response = await getAccounts({
@@ -40,9 +61,15 @@ export default function FacebookAccountsPage() {
         sortBy: sortConfig?.key || 'periodSpend',
         sortOrder: sortConfig?.direction || 'desc',
       })
-      console.log('Accounts response:', response.data[0]) // 调试：查看第一条数据
       setAccounts(response.data)
       setPagination(response.pagination)
+      
+      // 保存到缓存
+      localStorage.setItem(getCacheKey(), JSON.stringify({
+        data: response.data,
+        pagination: response.pagination,
+        timestamp: Date.now()
+      }))
     } catch (error: any) {
       setMessage({ type: 'error', text: error.message || '加载失败' })
     } finally {
@@ -50,9 +77,9 @@ export default function FacebookAccountsPage() {
     }
   }
 
-  // 初始加载
+  // 初始加载（使用缓存）
   useEffect(() => {
-    loadAccounts()
+    loadAccounts(1, false)
   }, [])
 
   // 优化：使用防抖，避免筛选时频繁请求
@@ -62,7 +89,7 @@ export default function FacebookAccountsPage() {
     if (!hasFilters) return
 
     const timeoutId = setTimeout(() => {
-      loadAccounts(1) // 筛选时重置到第一页
+      loadAccounts(1, false) // 筛选时重置到第一页，使用缓存优先
     }, 500) // 500ms 防抖
 
     return () => clearTimeout(timeoutId)
@@ -71,11 +98,11 @@ export default function FacebookAccountsPage() {
 
   // 当排序配置改变时，重新加载数据
   useEffect(() => {
-    loadAccounts(1) // 排序时重置到第一页
+    loadAccounts(1, false) // 排序时重置到第一页，使用缓存优先
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sortConfig?.key, sortConfig?.direction])
 
-  // 执行同步
+  // 执行同步（强制刷新）
   const handleSync = async () => {
     setSyncing(true)
     setMessage(null)
@@ -86,7 +113,9 @@ export default function FacebookAccountsPage() {
         text: `同步完成！成功: ${result.data.syncedCount}, 失败: ${result.data.errorCount}`,
         errors: result.data.errors || []
       })
-      loadAccounts(1) // 刷新列表
+      // 清除缓存并强制刷新
+      localStorage.removeItem(getCacheKey())
+      loadAccounts(1, true)
     } catch (error: any) {
       setMessage({ type: 'error', text: error.message || '同步失败' })
     } finally {
