@@ -64,7 +64,7 @@ export default function BulkAdCreatePage() {
   })
   const [adset, setAdset] = useState({
     nameTemplate: '{campaignName}_adset',
-    status: 'PAUSED',
+    status: 'ACTIVE', // 默认开启
     targetingPackageId: '',
     optimizationGoal: 'OFFSITE_CONVERSIONS',
     billingEvent: 'IMPRESSIONS',
@@ -73,7 +73,7 @@ export default function BulkAdCreatePage() {
   })
   const [ad, setAd] = useState({
     nameTemplate: '{adsetName}_ad_{index}',
-    status: 'PAUSED',
+    status: 'ACTIVE', // 默认开启
     creativeGroupIds: [] as string[],
     copywritingPackageIds: [] as string[],
     format: 'SINGLE',
@@ -582,6 +582,10 @@ export default function BulkAdCreatePage() {
               <div className="grid grid-cols-2 gap-6">
                 <div><label className="block text-sm text-slate-600 mb-1">广告组名称模板</label>
                   <input type="text" value={adset.nameTemplate} onChange={(e) => setAdset({...adset, nameTemplate: e.target.value})} className="w-full px-3 py-2 border rounded-lg" /></div>
+                <div><label className="block text-sm text-slate-600 mb-1">初始状态</label>
+                  <select value={adset.status} onChange={(e) => setAdset({...adset, status: e.target.value})} className="w-full px-3 py-2 border rounded-lg">
+                    <option value="ACTIVE">启用</option><option value="PAUSED">暂停</option>
+                  </select></div>
                 <div><label className="block text-sm text-slate-600 mb-1">定向包</label>
                   <select value={adset.targetingPackageId} onChange={(e) => {
                     const pkgId = e.target.value
@@ -665,9 +669,13 @@ export default function BulkAdCreatePage() {
           {currentStep === 4 && (
             <div className="space-y-6">
               <h3 className="text-lg font-semibold">广告创意设置</h3>
-              <div className="grid grid-cols-2 gap-6">
+              <div className="grid grid-cols-3 gap-6">
                 <div><label className="block text-sm text-slate-600 mb-1">广告名称模板</label>
                   <input type="text" value={ad.nameTemplate} onChange={(e) => setAd({...ad, nameTemplate: e.target.value})} className="w-full px-3 py-2 border rounded-lg" /></div>
+                <div><label className="block text-sm text-slate-600 mb-1">初始状态</label>
+                  <select value={ad.status} onChange={(e) => setAd({...ad, status: e.target.value})} className="w-full px-3 py-2 border rounded-lg">
+                    <option value="ACTIVE">启用</option><option value="PAUSED">暂停</option>
+                  </select></div>
                 <div><label className="block text-sm text-slate-600 mb-1">广告格式</label>
                   <select value={ad.format} onChange={(e) => setAd({...ad, format: e.target.value})} className="w-full px-3 py-2 border rounded-lg">
                     <option value="SINGLE">单图/视频</option><option value="CAROUSEL">轮播</option>

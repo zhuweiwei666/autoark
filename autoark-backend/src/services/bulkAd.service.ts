@@ -480,170 +480,157 @@ export const executeTaskForAccount = async (
     
     // ==================== 5. 创建广告 ====================
     const adIds: string[] = []
-    let totalMaterialIndex = 0
     
     for (let cgIndex = 0; cgIndex < creativeGroups.length; cgIndex++) {
       const creativeGroup = creativeGroups[cgIndex]
       const copywriting = copywritingPackages[cgIndex % copywritingPackages.length]
       
-      // 获取创意组中的所有有效素材
-      const materials = creativeGroup.materials?.filter((m: any) => 
-        m.status === 'uploaded' || m.url
-      ) || []
-      
-      if (materials.length === 0) {
-        logger.warn(`[BulkAd] No materials found in creative group: ${creativeGroup.name}`)
+      // 获取素材
+      const material = creativeGroup.materials?.find((m: any) => m.status === 'uploaded') || 
+                       creativeGroup.materials?.[0]
+      if (!material) {
+        logger.warn(`[BulkAd] No material found in creative group: ${creativeGroup.name}`)
         continue
       }
       
-      logger.info(`[BulkAd] Processing creative group "${creativeGroup.name}" with ${materials.length} materials`)
+      // 处理素材引用
+      // 优先使用 image_url，避免开发模式下图片上传 API 权限问题
+      let materialRef: any = {}
+      if (material.type === 'image') {
+        if (material.facebookImageHash) {
+          materialRef.image_hash = material.facebookImageHash
+        } else if (material.url) {
+          // 直接使用图片 URL，Facebook 会自动处理
+          materialRef.image_url = material.url
+          logger.info(`[BulkAd] Using image URL directly: ${material.url}`)
+        }
+      } else if (material.type === 'video') {
+        if (material.facebookVideoId) {
+          materialRef.video_id = material.facebookVideoId
+          // 使用素材中的缩略图
+          if (material.thumbnailUrl) {
+            materialRef.thumbnail_url = material.thumbnailUrl
+          }
+        } else if (material.url) {
+          // 视频必须先上传到 Facebook
+          const uploadResult = await uploadVideoFromUrl({
+            accountId,
+            token,
+            videoUrl: material.url,
+            title: material.name,
+          })
+          if (uploadResult.success) {
+            materialRef.video_id = uploadResult.id
+            // 使用 Facebook 返回的缩略图，或素材中的缩略图，或原始视频 URL
+            materialRef.thumbnail_url = uploadResult.thumbnailUrl || material.thumbnailUrl || material.url
+          } else {
+            logger.error(`[BulkAd] Video upload failed, skipping ad: ${uploadResult.error}`)
+            continue
+          }
+        }
+      }
       
-      // 遍历创意组中的每个素材，为每个素材创建一条广告
-      for (let matIndex = 0; matIndex < materials.length; matIndex++) {
-        const material = materials[matIndex]
-        totalMaterialIndex++
+      // 检查是否有有效素材
+      if (!materialRef.image_hash && !materialRef.image_url && !materialRef.video_id) {
+        logger.warn(`[BulkAd] No valid material reference for creative group: ${creativeGroup.name}, skipping`)
+        continue
+      }
+      
+      // 创建 Ad Creative
+      const creativeName = `${adsetName}_creative_${cgIndex + 1}`
+      const objectStorySpec: any = {
+        page_id: accountConfig.pageId,
+        link_data: {
+          link: copywriting.links?.websiteUrl || '',
+          message: copywriting.content?.primaryTexts?.[0] || '',
+          name: copywriting.content?.headlines?.[0] || '',
+          description: copywriting.content?.descriptions?.[0] || '',
+          call_to_action: {
+            type: copywriting.callToAction || 'SHOP_NOW',
+            value: { link: copywriting.links?.websiteUrl || '' },
+          },
+        },
+      }
+      
+      if (materialRef.image_hash) {
+        objectStorySpec.link_data.image_hash = materialRef.image_hash
+      } else if (materialRef.image_url) {
+        // 使用图片 URL 直接创建创意
+        objectStorySpec.link_data.picture = materialRef.image_url
+      } else if (materialRef.video_id) {
+        // 视频广告：使用 video_data 替代 link_data
+        const link = objectStorySpec.link_data.link
+        const message = objectStorySpec.link_data.message
+        const title = objectStorySpec.link_data.name
+        const description = objectStorySpec.link_data.description
         
-        // 处理素材引用
-        // 优先使用 image_url，避免开发模式下图片上传 API 权限问题
-        let materialRef: any = {}
-        if (material.type === 'image') {
-          if (material.facebookImageHash) {
-            materialRef.image_hash = material.facebookImageHash
-          } else if (material.url) {
-            // 直接使用图片 URL，Facebook 会自动处理
-            materialRef.image_url = material.url
-            logger.info(`[BulkAd] Using image URL directly: ${material.url}`)
-          }
-        } else if (material.type === 'video') {
-          if (material.facebookVideoId) {
-            materialRef.video_id = material.facebookVideoId
-            // 使用素材中的缩略图
-            if (material.thumbnailUrl) {
-              materialRef.thumbnail_url = material.thumbnailUrl
-            }
-          } else if (material.url) {
-            // 视频必须先上传到 Facebook
-            const uploadResult = await uploadVideoFromUrl({
-              accountId,
-              token,
-              videoUrl: material.url,
-              title: material.name,
-            })
-            if (uploadResult.success) {
-              materialRef.video_id = uploadResult.id
-              // 使用 Facebook 返回的缩略图，或素材中的缩略图，或原始视频 URL
-              materialRef.thumbnail_url = uploadResult.thumbnailUrl || material.thumbnailUrl || material.url
-            } else {
-              logger.error(`[BulkAd] Video upload failed, skipping ad: ${uploadResult.error}`)
-              continue
-            }
-          }
+        // 获取 CTA 类型，确保与 OUTCOME_SALES 兼容
+        let ctaType = copywriting.callToAction || 'SHOP_NOW'
+        // DOWNLOAD 只适用于 APP_INSTALLS 目标，对于 SALES 目标改为 SHOP_NOW
+        if (ctaType === 'DOWNLOAD' || ctaType === 'INSTALL_MOBILE_APP') {
+          ctaType = 'SHOP_NOW'
         }
         
-        // 检查是否有有效素材
-        if (!materialRef.image_hash && !materialRef.image_url && !materialRef.video_id) {
-          logger.warn(`[BulkAd] No valid material reference for material ${matIndex + 1} in creative group: ${creativeGroup.name}, skipping`)
-          continue
-        }
-        
-        // 创建 Ad Creative
-        const creativeName = `${adsetName}_creative_${totalMaterialIndex}`
-        const objectStorySpec: any = {
-          page_id: accountConfig.pageId,
-          link_data: {
-            link: copywriting.links?.websiteUrl || '',
-            message: copywriting.content?.primaryTexts?.[0] || '',
-            name: copywriting.content?.headlines?.[0] || '',
-            description: copywriting.content?.descriptions?.[0] || '',
-            call_to_action: {
-              type: copywriting.callToAction || 'SHOP_NOW',
-              value: { link: copywriting.links?.websiteUrl || '' },
-            },
+        // 删除 link_data，改用 video_data
+        delete objectStorySpec.link_data
+        objectStorySpec.video_data = {
+          video_id: materialRef.video_id,
+          image_url: materialRef.thumbnail_url, // 视频封面图（必需）
+          message: message,
+          link_description: description || title,
+          call_to_action: {
+            type: ctaType,
+            value: { link: link },
           },
         }
-        
-        if (materialRef.image_hash) {
-          objectStorySpec.link_data.image_hash = materialRef.image_hash
-        } else if (materialRef.image_url) {
-          // 使用图片 URL 直接创建创意
-          objectStorySpec.link_data.picture = materialRef.image_url
-        } else if (materialRef.video_id) {
-          // 视频广告：使用 video_data 替代 link_data
-          const link = objectStorySpec.link_data.link
-          const message = objectStorySpec.link_data.message
-          const title = objectStorySpec.link_data.name
-          const description = objectStorySpec.link_data.description
-          
-          // 获取 CTA 类型，确保与 OUTCOME_SALES 兼容
-          let ctaType = copywriting.callToAction || 'SHOP_NOW'
-          // DOWNLOAD 只适用于 APP_INSTALLS 目标，对于 SALES 目标改为 SHOP_NOW
-          if (ctaType === 'DOWNLOAD' || ctaType === 'INSTALL_MOBILE_APP') {
-            ctaType = 'SHOP_NOW'
-          }
-          
-          // 删除 link_data，改用 video_data
-          delete objectStorySpec.link_data
-          objectStorySpec.video_data = {
-            video_id: materialRef.video_id,
-            image_url: materialRef.thumbnail_url, // 视频封面图（必需）
-            message: message,
-            link_description: description || title,
-            call_to_action: {
-              type: ctaType,
-              value: { link: link },
-            },
-          }
-          logger.info(`[BulkAd] Video creative with thumbnail: ${materialRef.thumbnail_url}`)
-        }
-        
-        if (accountConfig.instagramAccountId) {
-          objectStorySpec.instagram_actor_id = accountConfig.instagramAccountId
-        }
-        
-        const creativeResult = await createAdCreative({
-          accountId,
-          token,
-          name: creativeName,
-          objectStorySpec,
-        })
-        
-        if (!creativeResult.success) {
-          logger.error(`[BulkAd] Failed to create creative:`, creativeResult.error)
-          continue
-        }
-        
-        const creativeId = creativeResult.id
-        
-        // 创建 Ad
-        const adName = generateName(config.ad.nameTemplate, {
-          accountName: accountConfig.accountName,
-          campaignName,
-          adsetName,
-          creativeGroupName: creativeGroup.name,
-          materialName: material.name || `material_${matIndex + 1}`,
-          index: totalMaterialIndex,
-          date: new Date().toISOString().slice(0, 10),
-        })
-        
-        const adResult = await createAd({
-          accountId,
-          token,
-          adsetId,
-          creativeId,
-          name: adName,
-          status: config.ad.status || 'PAUSED',
-          urlTags: config.ad.tracking?.urlTags,
-        })
-        
-        if (!adResult.success) {
-          logger.error(`[BulkAd] Failed to create ad:`, adResult.error)
-          continue
-        }
-        
-        adIds.push(adResult.id)
-        logger.info(`[BulkAd] Ad created: ${adResult.id} (material ${matIndex + 1}/${materials.length})`)
-      } // end of materials loop
-    } // end of creativeGroups loop
+        logger.info(`[BulkAd] Video creative with thumbnail: ${materialRef.thumbnail_url}`)
+      }
+      
+      if (accountConfig.instagramAccountId) {
+        objectStorySpec.instagram_actor_id = accountConfig.instagramAccountId
+      }
+      
+      const creativeResult = await createAdCreative({
+        accountId,
+        token,
+        name: creativeName,
+        objectStorySpec,
+      })
+      
+      if (!creativeResult.success) {
+        logger.error(`[BulkAd] Failed to create creative:`, creativeResult.error)
+        continue
+      }
+      
+      const creativeId = creativeResult.id
+      
+      // 创建 Ad
+      const adName = generateName(config.ad.nameTemplate, {
+        accountName: accountConfig.accountName,
+        campaignName,
+        adsetName,
+        creativeGroupName: creativeGroup.name,
+        index: cgIndex + 1,
+        date: new Date().toISOString().slice(0, 10),
+      })
+      
+      const adResult = await createAd({
+        accountId,
+        token,
+        adsetId,
+        creativeId,
+        name: adName,
+        status: config.ad.status || 'PAUSED',
+        urlTags: config.ad.tracking?.urlTags,
+      })
+      
+      if (!adResult.success) {
+        logger.error(`[BulkAd] Failed to create ad:`, adResult.error)
+        continue
+      }
+      
+      adIds.push(adResult.id)
+    }
     
     // ==================== 6. 完成任务 ====================
     item.status = 'success'
