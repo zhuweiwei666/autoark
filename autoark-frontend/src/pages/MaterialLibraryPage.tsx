@@ -39,6 +39,7 @@ export default function MaterialLibraryPage() {
   const [folders, setFolders] = useState<Folder[]>([])
   const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState(0)
   
   // 当前选中的文件夹路径
   const [currentPath, setCurrentPath] = useState<string>('')
@@ -143,56 +144,69 @@ export default function MaterialLibraryPage() {
     if (!files || files.length === 0) return
     
     setUploading(true)
+    setUploadProgress(0)
     
     const formData = new FormData()
     const fileArray = Array.from(files)
     const targetFolder = currentPath || '默认'
     
-    if (fileArray.length === 1) {
+    const isSingle = fileArray.length === 1
+    const url = isSingle ? `${API_BASE}/materials/upload` : `${API_BASE}/materials/upload-batch`
+    
+    if (isSingle) {
       formData.append('file', fileArray[0])
-      formData.append('folder', targetFolder)
-      
-      try {
-        const res = await fetch(`${API_BASE}/materials/upload`, {
-          method: 'POST',
-          body: formData,
-        })
-        const data = await res.json()
-        if (data.success) {
-          loadMaterials()
-          loadFolders()
-        } else {
-          alert(`上传失败：${data.error}`)
-        }
-      } catch (err: any) {
-        alert(`上传失败：${err.message}`)
-      }
     } else {
       fileArray.forEach(f => formData.append('files', f))
-      formData.append('folder', targetFolder)
-      
+    }
+    formData.append('folder', targetFolder)
+    
+    // 使用 XMLHttpRequest 支持上传进度
+    const xhr = new XMLHttpRequest()
+    
+    xhr.upload.addEventListener('progress', (e) => {
+      if (e.lengthComputable) {
+        const percent = Math.round((e.loaded / e.total) * 100)
+        setUploadProgress(percent)
+      }
+    })
+    
+    xhr.addEventListener('load', () => {
       try {
-        const res = await fetch(`${API_BASE}/materials/upload-batch`, {
-          method: 'POST',
-          body: formData,
-        })
-        const data = await res.json()
-        if (data.success) {
-          alert(`上传完成：成功 ${data.data.successCount} 个`)
+        const data = JSON.parse(xhr.responseText)
+        if (xhr.status === 200 && data.success) {
+          if (!isSingle && data.data) {
+            alert(`上传完成：成功 ${data.data.successCount} 个`)
+          }
           loadMaterials()
           loadFolders()
         } else {
-          alert(`上传失败：${data.error}`)
+          alert(`上传失败：${data.error || '未知错误'}`)
         }
-      } catch (err: any) {
-        alert(`上传失败：${err.message}`)
+      } catch {
+        alert(`上传失败：服务器响应异常`)
       }
-    }
+      setUploading(false)
+      setUploadProgress(0)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    })
     
-    setUploading(false)
-    if (fileInputRef.current) {
-      fileInputRef.current.value = ''
-    }
+    xhr.addEventListener('error', () => {
+      alert('上传失败：网络错误，请检查文件大小或网络连接')
+      setUploading(false)
+      setUploadProgress(0)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    })
+    
+    xhr.addEventListener('timeout', () => {
+      alert('上传超时，请尝试上传更小的文件')
+      setUploading(false)
+      setUploadProgress(0)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    })
+    
+    xhr.open('POST', url)
+    xhr.timeout = 300000 // 5分钟超时
+    xhr.send(formData)
   }
   
   const handleDelete = async (id: string) => {
@@ -530,24 +544,32 @@ export default function MaterialLibraryPage() {
         <button
           onClick={() => fileInputRef.current?.click()}
           disabled={uploading}
-          className="px-3 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1.5 text-sm"
+          className="px-3 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1.5 text-sm relative overflow-hidden min-w-[80px]"
         >
-          {uploading ? (
-            <>
-              <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-              </svg>
-              上传中...
-            </>
-          ) : (
-            <>
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-4 h-4">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
-              </svg>
-              上传
-            </>
+          {uploading && (
+            <div 
+              className="absolute inset-0 bg-blue-500 transition-all duration-300"
+              style={{ width: `${uploadProgress}%` }}
+            />
           )}
+          <span className="relative flex items-center gap-1.5">
+            {uploading ? (
+              <>
+                <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                {uploadProgress}%
+              </>
+            ) : (
+              <>
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-4 h-4">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
+                </svg>
+                上传
+              </>
+            )}
+          </span>
         </button>
         
         <div className="w-px h-6 bg-slate-200" />
