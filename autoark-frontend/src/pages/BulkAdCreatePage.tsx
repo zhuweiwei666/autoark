@@ -129,7 +129,8 @@ export default function BulkAdCreatePage() {
   const handleFacebookLogin = async () => {
     setLoginLoading(true)
     try {
-      const res = await fetch(`${API_BASE}/bulk-ad/auth/login-url`)
+      // 使用原有 OAuth 服务，通过 state 参数标记来源
+      const res = await fetch(`${API_BASE}/facebook/oauth/login-url?state=bulk-ad`)
       const data = await res.json()
       if (data.success && data.data.loginUrl) {
         // 跳转到 Facebook 授权页面

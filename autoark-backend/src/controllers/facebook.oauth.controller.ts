@@ -36,24 +36,28 @@ export const getLoginUrl = async (req: Request, res: Response, next: NextFunctio
  */
 export const handleCallback = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { code, error, error_reason, error_description } = req.query
+    const { code, error, error_reason, error_description, state } = req.query
+    
+    // 根据 state 参数决定重定向目标
+    const isBulkAd = state === 'bulk-ad'
+    const redirectBase = isBulkAd ? '/bulk-ad/create' : '/fb-token'
 
     // 检查是否有错误
     if (error) {
       logger.error('[OAuth] Facebook returned error:', { error, error_reason, error_description })
       return res.redirect(
-        `/fb-token?oauth_error=${encodeURIComponent(error_description as string || error as string)}`
+        `${redirectBase}?oauth_error=${encodeURIComponent(error_description as string || error as string)}`
       )
     }
 
     if (!code) {
-      return res.redirect('/fb-token?oauth_error=No authorization code received')
+      return res.redirect(`${redirectBase}?oauth_error=No authorization code received`)
     }
 
     // 处理 OAuth 回调
     const result = await oauthService.handleOAuthCallback(code as string)
 
-    // 重定向到 Token 管理页面，显示成功消息和用户信息
+    // 重定向到目标页面，显示成功消息和用户信息
     const params = new URLSearchParams({
       oauth_success: 'true',
       token_id: result.tokenId,
@@ -68,10 +72,12 @@ export const handleCallback = async (req: Request, res: Response, next: NextFunc
       }
     }
 
-    res.redirect(`/fb-token?${params.toString()}`)
+    res.redirect(`${redirectBase}?${params.toString()}`)
   } catch (error: any) {
     logger.error('[OAuth] Callback handler failed:', error)
-    res.redirect(`/fb-token?oauth_error=${encodeURIComponent(error.message || 'OAuth callback failed')}`)
+    const isBulkAd = req.query.state === 'bulk-ad'
+    const redirectBase = isBulkAd ? '/bulk-ad/create' : '/fb-token'
+    res.redirect(`${redirectBase}?oauth_error=${encodeURIComponent(error.message || 'OAuth callback failed')}`)
   }
 }
 
