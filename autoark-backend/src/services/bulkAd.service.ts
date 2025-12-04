@@ -417,6 +417,15 @@ export const executeTaskForAccount = async (
       date: new Date().toISOString().slice(0, 10),
     })
     
+    // 计算 AdSet 预算
+    // 如果启用 CBO，预算在 Campaign 级别，AdSet 不设置预算
+    // 否则，AdSet 必须设置预算
+    const adsetBudget = config.campaign.budgetOptimization 
+      ? undefined 
+      : (config.adset.budget || config.campaign.budget || 50) // 默认 50 USD
+    
+    logger.info(`[BulkAd] AdSet budget config: budgetOptimization=${config.campaign.budgetOptimization}, adsetBudget=${adsetBudget}`)
+    
     const adsetResult = await createAdSet({
       accountId,
       token,
@@ -428,7 +437,7 @@ export const executeTaskForAccount = async (
       billingEvent: config.adset.billingEvent || 'IMPRESSIONS',
       bidStrategy: config.adset.bidStrategy,
       bidAmount: config.adset.bidAmount,
-      dailyBudget: config.campaign.budgetOptimization ? undefined : config.adset.budget,
+      dailyBudget: adsetBudget,
       startTime: config.adset.startTime?.toISOString?.(),
       endTime: config.adset.endTime?.toISOString?.(),
       promotedObject: accountConfig.pixelId ? {
