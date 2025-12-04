@@ -547,7 +547,7 @@ ${conversation.messages.slice(-10).map((m: any) => `${m.role}: ${m.content}`).jo
         campaign.daysCount >= rules.minDays) {
       // 获取当前预算
       const campaignDoc = await Campaign.findOne({ campaignId: campaign._id })
-      const currentBudget = campaignDoc?.dailyBudget || campaignDoc?.lifetimeBudget || 0
+      const currentBudget = parseFloat(campaignDoc?.daily_budget || '0') || 0
       const newBudget = currentBudget * (1 + rules.budgetIncrease)
       
       // 检查最大预算限制
