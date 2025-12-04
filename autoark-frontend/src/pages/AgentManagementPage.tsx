@@ -12,9 +12,9 @@ interface Agent {
     dailyBudgetLimit?: number
   }
   rules: {
-    autoStop: { enabled: boolean; roasThreshold: number; minDays: number }
-    autoScale: { enabled: boolean; roasThreshold: number; budgetIncrease: number }
-    budgetAdjust: { enabled: boolean; maxAdjustPercent: number }
+    autoStop: { enabled: boolean; roasThreshold: number; minDays: number; minSpend?: number }
+    autoScale: { enabled: boolean; roasThreshold: number; minDays?: number; budgetIncrease: number }
+    budgetAdjust: { enabled: boolean; maxAdjustPercent: number; minAdjustPercent?: number }
   }
   createdAt: string
 }
@@ -186,8 +186,30 @@ export default function AgentManagementPage() {
       description: agent.description || '',
       status: agent.status,
       mode: agent.mode,
-      objectives: agent.objectives || { targetRoas: 1.5, maxCpa: 0, dailyBudgetLimit: 0 },
-      rules: agent.rules || formData.rules,
+      objectives: {
+        targetRoas: agent.objectives?.targetRoas || 1.5,
+        maxCpa: agent.objectives?.maxCpa || 0,
+        dailyBudgetLimit: agent.objectives?.dailyBudgetLimit || 0,
+      },
+      rules: {
+        autoStop: {
+          enabled: agent.rules?.autoStop?.enabled ?? true,
+          roasThreshold: agent.rules?.autoStop?.roasThreshold || 0.5,
+          minDays: agent.rules?.autoStop?.minDays || 3,
+          minSpend: agent.rules?.autoStop?.minSpend || 50,
+        },
+        autoScale: {
+          enabled: agent.rules?.autoScale?.enabled ?? true,
+          roasThreshold: agent.rules?.autoScale?.roasThreshold || 2.0,
+          minDays: agent.rules?.autoScale?.minDays || 3,
+          budgetIncrease: agent.rules?.autoScale?.budgetIncrease || 0.2,
+        },
+        budgetAdjust: {
+          enabled: agent.rules?.budgetAdjust?.enabled ?? true,
+          minAdjustPercent: agent.rules?.budgetAdjust?.minAdjustPercent || 0.1,
+          maxAdjustPercent: agent.rules?.budgetAdjust?.maxAdjustPercent || 0.3,
+        },
+      },
       aiConfig: formData.aiConfig,
     })
     setShowModal(true)
