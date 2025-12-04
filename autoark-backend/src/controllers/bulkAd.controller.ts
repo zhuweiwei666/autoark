@@ -13,6 +13,8 @@ import {
 } from '../integration/facebook/bulkCreate.api'
 import FbToken from '../models/FbToken'
 import logger from '../utils/logger'
+import * as oauthService from '../services/facebook.oauth.service'
+import { facebookClient } from '../integration/facebook/facebookClient'
 
 // ==================== 草稿管理 ====================
 
@@ -604,6 +606,200 @@ export const getFacebookCustomConversions = async (req: Request, res: Response) 
     res.json({ success: true, data: result.data })
   } catch (error: any) {
     logger.error('[BulkAd] Get custom conversions failed:', error)
+    res.status(500).json({ success: false, error: error.message })
+  }
+}
+
+// ==================== 独立 OAuth 授权 ====================
+
+/**
+ * 获取 Facebook 登录 URL（批量广告专用）
+ * GET /api/bulk-ad/auth/login-url
+ */
+export const getAuthLoginUrl = async (req: Request, res: Response) => {
+  try {
+    const config = oauthService.validateOAuthConfig()
+    if (!config.valid) {
+      return res.status(500).json({
+        success: false,
+        error: `OAuth 配置不完整，缺少: ${config.missing.join(', ')}`,
+      })
+    }
+    
+    // 使用特殊 state 标记来自批量广告模块
+    const loginUrl = oauthService.getFacebookLoginUrl('bulk-ad')
+    
+    res.json({
+      success: true,
+      data: { loginUrl },
+    })
+  } catch (error: any) {
+    logger.error('[BulkAd] Get login URL failed:', error)
+    res.status(500).json({ success: false, error: error.message })
+  }
+}
+
+/**
+ * OAuth 回调处理（批量广告专用）
+ * GET /api/bulk-ad/auth/callback
+ */
+export const handleAuthCallback = async (req: Request, res: Response) => {
+  try {
+    const { code, error, error_description, state } = req.query
+    
+    if (error) {
+      logger.error('[BulkAd OAuth] Facebook returned error:', { error, error_description })
+      return res.redirect(
+        `/bulk-ad/create?oauth_error=${encodeURIComponent(error_description as string || error as string)}`
+      )
+    }
+    
+    if (!code) {
+      return res.redirect('/bulk-ad/create?oauth_error=No authorization code received')
+    }
+    
+    // 处理 OAuth 回调
+    const result = await oauthService.handleOAuthCallback(code as string)
+    
+    // 重定向到批量广告创建页面
+    const params = new URLSearchParams({
+      oauth_success: 'true',
+      token_id: result.tokenId,
+      fb_user_id: result.fbUserId,
+      fb_user_name: encodeURIComponent(result.fbUserName || ''),
+    })
+    
+    res.redirect(`/bulk-ad/create?${params.toString()}`)
+  } catch (error: any) {
+    logger.error('[BulkAd OAuth] Callback handler failed:', error)
+    res.redirect(`/bulk-ad/create?oauth_error=${encodeURIComponent(error.message || 'OAuth callback failed')}`)
+  }
+}
+
+/**
+ * 检查授权状态
+ * GET /api/bulk-ad/auth/status
+ */
+export const getAuthStatus = async (req: Request, res: Response) => {
+  try {
+    const fbToken: any = await FbToken.findOne({ status: 'active' }).sort({ updatedAt: -1 })
+    
+    if (!fbToken) {
+      return res.json({
+        success: true,
+        data: {
+          authorized: false,
+          message: '未授权 Facebook 账号',
+        },
+      })
+    }
+    
+    res.json({
+      success: true,
+      data: {
+        authorized: true,
+        tokenId: fbToken._id,
+        fbUserId: fbToken.fbUserId,
+        fbUserName: fbToken.fbUserName,
+        expiresAt: fbToken.expiresAt,
+      },
+    })
+  } catch (error: any) {
+    logger.error('[BulkAd] Get auth status failed:', error)
+    res.status(500).json({ success: false, error: error.message })
+  }
+}
+
+/**
+ * 获取当前授权用户的广告账户列表
+ * GET /api/bulk-ad/auth/ad-accounts
+ */
+export const getAuthAdAccounts = async (req: Request, res: Response) => {
+  try {
+    const fbToken: any = await FbToken.findOne({ status: 'active' }).sort({ updatedAt: -1 })
+    if (!fbToken) {
+      return res.status(401).json({ success: false, error: '未授权 Facebook 账号' })
+    }
+    
+    // 获取用户的广告账户
+    const result = await facebookClient.get('/me/adaccounts', {
+      access_token: fbToken.token,
+      fields: 'id,account_id,name,account_status,currency,timezone_name,amount_spent,balance',
+      limit: 100,
+    })
+    
+    const accounts = (result.data || []).map((acc: any) => ({
+      id: acc.id,
+      account_id: acc.account_id,
+      name: acc.name,
+      account_status: acc.account_status,
+      currency: acc.currency,
+      timezone_name: acc.timezone_name,
+      amount_spent: acc.amount_spent,
+      balance: acc.balance,
+    }))
+    
+    res.json({ success: true, data: accounts })
+  } catch (error: any) {
+    logger.error('[BulkAd] Get ad accounts failed:', error)
+    res.status(500).json({ success: false, error: error.message })
+  }
+}
+
+/**
+ * 获取账户的 Pages
+ * GET /api/bulk-ad/auth/pages
+ */
+export const getAuthPages = async (req: Request, res: Response) => {
+  try {
+    const { accountId } = req.query
+    if (!accountId) {
+      return res.status(400).json({ success: false, error: 'accountId is required' })
+    }
+    
+    const fbToken: any = await FbToken.findOne({ status: 'active' }).sort({ updatedAt: -1 })
+    if (!fbToken) {
+      return res.status(401).json({ success: false, error: '未授权 Facebook 账号' })
+    }
+    
+    const result = await facebookClient.get(`/act_${accountId}/promote_pages`, {
+      access_token: fbToken.token,
+      fields: 'id,name,picture',
+      limit: 100,
+    })
+    
+    res.json({ success: true, data: result.data || [] })
+  } catch (error: any) {
+    logger.error('[BulkAd] Get pages failed:', error)
+    res.status(500).json({ success: false, error: error.message })
+  }
+}
+
+/**
+ * 获取账户的 Pixels
+ * GET /api/bulk-ad/auth/pixels
+ */
+export const getAuthPixels = async (req: Request, res: Response) => {
+  try {
+    const { accountId } = req.query
+    if (!accountId) {
+      return res.status(400).json({ success: false, error: 'accountId is required' })
+    }
+    
+    const fbToken: any = await FbToken.findOne({ status: 'active' }).sort({ updatedAt: -1 })
+    if (!fbToken) {
+      return res.status(401).json({ success: false, error: '未授权 Facebook 账号' })
+    }
+    
+    const result = await facebookClient.get(`/act_${accountId}/adspixels`, {
+      access_token: fbToken.token,
+      fields: 'id,name,code,last_fired_time',
+      limit: 100,
+    })
+    
+    res.json({ success: true, data: result.data || [] })
+  } catch (error: any) {
+    logger.error('[BulkAd] Get pixels failed:', error)
     res.status(500).json({ success: false, error: error.message })
   }
 }

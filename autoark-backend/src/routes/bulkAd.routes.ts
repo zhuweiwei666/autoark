@@ -3,6 +3,14 @@ import * as bulkAdController from '../controllers/bulkAd.controller'
 
 const router = Router()
 
+// ==================== 独立 OAuth 授权（批量广告专用）====================
+router.get('/auth/login-url', bulkAdController.getAuthLoginUrl)
+router.get('/auth/callback', bulkAdController.handleAuthCallback)
+router.get('/auth/status', bulkAdController.getAuthStatus)
+router.get('/auth/ad-accounts', bulkAdController.getAuthAdAccounts)
+router.get('/auth/pages', bulkAdController.getAuthPages)
+router.get('/auth/pixels', bulkAdController.getAuthPixels)
+
 // ==================== 草稿管理 ====================
 router.post('/drafts', bulkAdController.createDraft)
 router.get('/drafts', bulkAdController.getDraftList)
@@ -42,7 +50,7 @@ router.delete('/creative-groups/:id/materials/:materialId', bulkAdController.rem
 router.get('/search/interests', bulkAdController.searchInterests)
 router.get('/search/locations', bulkAdController.searchLocations)
 
-// ==================== Facebook 资产 API ====================
+// ==================== Facebook 资产 API（旧版，保留兼容）====================
 router.get('/facebook/pages', bulkAdController.getFacebookPages)
 router.get('/facebook/instagram-accounts', bulkAdController.getFacebookInstagramAccounts)
 router.get('/facebook/pixels', bulkAdController.getFacebookPixels)
