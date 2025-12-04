@@ -417,11 +417,23 @@ export default function FacebookCountriesPage() {
     // 如果 visibleColumns 为空，使用默认可见列
     const visible = visibleColumns.length > 0 ? visibleColumns : ALL_COUNTRY_COLUMNS.filter(col => col.defaultVisible).map(col => col.key)
     
+    // 确保 country 和 countryName 始终在可见列中
+    const visibleWithCountry = [...new Set(['country', 'countryName', ...visible])]
+    
     // 按照 columnOrder 的顺序，只包含可见的列
-    return order
-      .filter(key => visible.includes(key))
+    let result = order
+      .filter(key => visibleWithCountry.includes(key))
       .map(key => ALL_COUNTRY_COLUMNS.find(col => col.key === key))
       .filter((col): col is typeof ALL_COUNTRY_COLUMNS[0] => col !== undefined)
+    
+    // 强制确保 country 和 countryName 在最前面
+    const countryCol = ALL_COUNTRY_COLUMNS.find(col => col.key === 'country')
+    const countryNameCol = ALL_COUNTRY_COLUMNS.find(col => col.key === 'countryName')
+    result = result.filter(col => col.key !== 'country' && col.key !== 'countryName')
+    if (countryNameCol) result.unshift(countryNameCol)
+    if (countryCol) result.unshift(countryCol)
+    
+    return result
   }, [visibleColumns, columnOrder])
 
   // 错误处理：如果 columnsToRender 为空，使用默认列 - 也使用 useMemo
