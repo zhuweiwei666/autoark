@@ -256,9 +256,13 @@ export default function MaterialLibraryPage() {
   // ==================== 文件夹操作 ====================
   
   const handleCreateFolder = async (parentId: string | null) => {
-    if (!newFolderName.trim()) {
-      setCreatingInParent(null)
-      setNewFolderName('')
+    const name = newFolderName.trim()
+    
+    // 立即清除状态，防止重复触发
+    setCreatingInParent(null)
+    setNewFolderName('')
+    
+    if (!name) {
       return
     }
     
@@ -266,7 +270,7 @@ export default function MaterialLibraryPage() {
       const res = await fetch(`${API_BASE}/materials/create-folder`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: newFolderName.trim(), parentId }),
+        body: JSON.stringify({ name, parentId }),
       })
       const data = await res.json()
       if (data.success) {
@@ -281,14 +285,17 @@ export default function MaterialLibraryPage() {
     } catch (err: any) {
       alert(`创建失败：${err.message}`)
     }
-    
-    setCreatingInParent(null)
-    setNewFolderName('')
   }
   
   const handleRenameFolder = async (folderId: string) => {
-    if (!editingName.trim()) {
-      setEditingFolderId(null)
+    const newName = editingName.trim()
+    const folder = folders.find(f => f._id === folderId)
+    
+    // 立即清除状态，防止重复触发
+    setEditingFolderId(null)
+    setEditingName('')
+    
+    if (!newName || !folder || newName === folder.name) {
       return
     }
     
@@ -296,13 +303,12 @@ export default function MaterialLibraryPage() {
       const res = await fetch(`${API_BASE}/materials/rename-folder`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ folderId, newName: editingName.trim() }),
+        body: JSON.stringify({ folderId, newName }),
       })
       const data = await res.json()
       if (data.success) {
         // 如果当前选中的是被重命名的文件夹，更新路径
-        const folder = folders.find(f => f._id === folderId)
-        if (folder && currentPath === folder.path) {
+        if (currentPath === folder.path) {
           setCurrentPath(data.data.path)
         }
         loadFolders()
@@ -313,9 +319,6 @@ export default function MaterialLibraryPage() {
     } catch (err: any) {
       alert(`重命名失败：${err.message}`)
     }
-    
-    setEditingFolderId(null)
-    setEditingName('')
   }
   
   const handleDeleteFolder = async (folderId: string) => {
