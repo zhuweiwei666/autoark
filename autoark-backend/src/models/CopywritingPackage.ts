@@ -7,7 +7,7 @@ import mongoose from 'mongoose'
 const copywritingPackageSchema = new mongoose.Schema(
   {
     name: { type: String, required: true },
-    accountId: { type: String, required: true, index: true },
+    accountId: { type: String, index: true },  // 可选，文案包可跨账户使用
     platform: { type: String, default: 'facebook', enum: ['facebook', 'tiktok', 'google'] },
     
     // 文案内容（支持多条，用于 A/B 测试或动态素材）

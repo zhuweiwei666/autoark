@@ -7,7 +7,7 @@ import mongoose from 'mongoose'
 const targetingPackageSchema = new mongoose.Schema(
   {
     name: { type: String, required: true },
-    accountId: { type: String, required: true, index: true },
+    accountId: { type: String, index: true },  // 可选，定向包可跨账户使用
     platform: { type: String, default: 'facebook', enum: ['facebook', 'tiktok', 'google'] },
     
     // 地理位置定向
