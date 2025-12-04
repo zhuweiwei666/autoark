@@ -583,19 +583,51 @@ export default function BulkAdCreatePage() {
                 <div><label className="block text-sm text-slate-600 mb-1">广告组名称模板</label>
                   <input type="text" value={adset.nameTemplate} onChange={(e) => setAdset({...adset, nameTemplate: e.target.value})} className="w-full px-3 py-2 border rounded-lg" /></div>
                 <div><label className="block text-sm text-slate-600 mb-1">定向包</label>
-                  <select value={adset.targetingPackageId} onChange={(e) => setAdset({...adset, targetingPackageId: e.target.value})} className="w-full px-3 py-2 border rounded-lg">
-                    <option value="">选择定向包</option>{targetingPackages.map(pkg => <option key={pkg._id} value={pkg._id}>{pkg.name}</option>)}
+                  <select value={adset.targetingPackageId} onChange={(e) => {
+                    const pkgId = e.target.value
+                    const pkg = targetingPackages.find((p: any) => p._id === pkgId)
+                    setAdset({
+                      ...adset, 
+                      targetingPackageId: pkgId,
+                      // 从定向包同步版位和优化目标设置
+                      optimizationGoal: pkg?.optimizationGoal || adset.optimizationGoal,
+                      placementType: pkg?.placement?.type === 'manual' ? 'MANUAL' : 'AUTOMATIC',
+                    })
+                  }} className="w-full px-3 py-2 border rounded-lg">
+                    <option value="">选择定向包</option>{targetingPackages.map((pkg: any) => <option key={pkg._id} value={pkg._id}>{pkg.name}</option>)}
                   </select>
                   <button onClick={() => navigate('/bulk-ad/assets?tab=targeting')} className="text-xs text-blue-500 mt-1 hover:underline">+ 新建定向包</button></div>
-                <div><label className="block text-sm text-slate-600 mb-1">优化目标</label>
-                  <select value={adset.optimizationGoal} onChange={(e) => setAdset({...adset, optimizationGoal: e.target.value})} className="w-full px-3 py-2 border rounded-lg">
-                    <option value="OFFSITE_CONVERSIONS">网站转化</option><option value="VALUE">转化价值</option><option value="LINK_CLICKS">链接点击</option>
-                  </select></div>
-                <div><label className="block text-sm text-slate-600 mb-1">版位设置</label>
-                  <select value={adset.placementType} onChange={(e) => setAdset({...adset, placementType: e.target.value})} className="w-full px-3 py-2 border rounded-lg">
-                    <option value="AUTOMATIC">自动版位（推荐）</option><option value="MANUAL">手动版位</option>
-                  </select></div>
               </div>
+              
+              {/* 从定向包读取的配置（只读显示） */}
+              {adset.targetingPackageId && (() => {
+                const pkg = targetingPackages.find((p: any) => p._id === adset.targetingPackageId) as any
+                return pkg ? (
+                  <div className="mt-4 p-4 bg-slate-50 rounded-lg">
+                    <div className="text-sm text-slate-500 mb-2">以下设置来自定向包「{pkg.name}」</div>
+                    <div className="grid grid-cols-3 gap-4 text-sm">
+                      <div>
+                        <span className="text-slate-500">版位：</span>
+                        <span className="ml-1 font-medium">{pkg.placement?.type === 'manual' ? '手动版位' : '自动版位'}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500">优化目标：</span>
+                        <span className="ml-1 font-medium">
+                          {pkg.optimizationGoal === 'OFFSITE_CONVERSIONS' ? '网站转化' : 
+                           pkg.optimizationGoal === 'LINK_CLICKS' ? '链接点击' : 
+                           pkg.optimizationGoal === 'LANDING_PAGE_VIEWS' ? '落地页浏览' : '网站转化'}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500">受众：</span>
+                        <span className="ml-1 font-medium">
+                          {pkg.geoLocations?.countries?.join(', ') || '全球'} / {pkg.demographics?.ageMin || 18}-{pkg.demographics?.ageMax || 65}岁
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                ) : null
+              })()}
               
               {/* 广告组预算（非 CBO 模式） */}
               {!campaign.budgetOptimization && (

@@ -82,6 +82,38 @@ const targetingPackageSchema = new mongoose.Schema(
     },
     targetingRelaxationTypes: [{ type: String }],
     
+    // 版位设置
+    placement: {
+      type: { type: String, default: 'automatic', enum: ['automatic', 'manual'] },
+      // 手动版位时的详细配置
+      platforms: [{
+        type: String,
+        enum: ['facebook', 'instagram', 'messenger', 'audience_network'],
+      }],
+      positions: [{
+        type: String,
+        // Facebook 版位
+        // feed, right_hand_column, instant_article, marketplace, video_feeds, story, search, instream_video
+        // Instagram 版位
+        // stream, story, explore, reels
+        // Messenger 版位
+        // messenger_home, sponsored_messages, story
+        // Audience Network 版位
+        // classic, instream_video, rewarded_video
+      }],
+      devicePlatforms: [{
+        type: String,
+        enum: ['mobile', 'desktop'],
+      }],
+    },
+    
+    // 优化目标
+    optimizationGoal: {
+      type: String,
+      default: 'OFFSITE_CONVERSIONS',
+      enum: ['OFFSITE_CONVERSIONS', 'LINK_CLICKS', 'IMPRESSIONS', 'REACH', 'LANDING_PAGE_VIEWS', 'APP_INSTALLS'],
+    },
+    
     // 预估受众规模
     estimatedAudienceSize: {
       lower: Number,

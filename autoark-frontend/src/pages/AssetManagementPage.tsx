@@ -237,18 +237,92 @@ export default function AssetManagementPage() {
           <div className="space-y-4">
             <div><label className="block text-sm text-slate-600 mb-1">名称 *</label>
               <input type="text" value={formData.name || ''} onChange={(e) => setFormData({...formData, name: e.target.value})} className="w-full px-3 py-2 border rounded-lg" required /></div>
-            <div><label className="block text-sm text-slate-600 mb-1">国家（逗号分隔）</label>
-              <input type="text" value={formData.geoLocations?.countries?.join(',') || ''} onChange={(e) => setFormData({...formData, geoLocations: {...formData.geoLocations, countries: e.target.value.split(',').map((s: string) => s.trim().toUpperCase()).filter(Boolean)}})} placeholder="US,CA,GB" className="w-full px-3 py-2 border rounded-lg" /></div>
-            <div className="grid grid-cols-2 gap-4">
-              <div><label className="block text-sm text-slate-600 mb-1">最小年龄</label>
-                <input type="number" value={formData.demographics?.ageMin || 18} onChange={(e) => setFormData({...formData, demographics: {...formData.demographics, ageMin: Number(e.target.value)}})} min="13" max="65" className="w-full px-3 py-2 border rounded-lg" /></div>
-              <div><label className="block text-sm text-slate-600 mb-1">最大年龄</label>
-                <input type="number" value={formData.demographics?.ageMax || 65} onChange={(e) => setFormData({...formData, demographics: {...formData.demographics, ageMax: Number(e.target.value)}})} min="13" max="65" className="w-full px-3 py-2 border rounded-lg" /></div>
+            
+            {/* 受众定向 */}
+            <div className="border-t pt-4 mt-4">
+              <h4 className="text-sm font-medium text-slate-700 mb-3">受众定向</h4>
+              <div className="space-y-3">
+                <div><label className="block text-sm text-slate-600 mb-1">国家（逗号分隔）</label>
+                  <input type="text" value={formData.geoLocations?.countries?.join(',') || ''} onChange={(e) => setFormData({...formData, geoLocations: {...formData.geoLocations, countries: e.target.value.split(',').map((s: string) => s.trim().toUpperCase()).filter(Boolean)}})} placeholder="US,CA,GB" className="w-full px-3 py-2 border rounded-lg" /></div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div><label className="block text-sm text-slate-600 mb-1">最小年龄</label>
+                    <input type="number" value={formData.demographics?.ageMin || 18} onChange={(e) => setFormData({...formData, demographics: {...formData.demographics, ageMin: Number(e.target.value)}})} min="13" max="65" className="w-full px-3 py-2 border rounded-lg" /></div>
+                  <div><label className="block text-sm text-slate-600 mb-1">最大年龄</label>
+                    <input type="number" value={formData.demographics?.ageMax || 65} onChange={(e) => setFormData({...formData, demographics: {...formData.demographics, ageMax: Number(e.target.value)}})} min="13" max="65" className="w-full px-3 py-2 border rounded-lg" /></div>
+                </div>
+                <div><label className="block text-sm text-slate-600 mb-1">性别</label>
+                  <select value={formData.demographics?.genders?.[0] || ''} onChange={(e) => setFormData({...formData, demographics: {...formData.demographics, genders: e.target.value ? [Number(e.target.value)] : []}})} className="w-full px-3 py-2 border rounded-lg">
+                    <option value="">全部</option><option value="1">男性</option><option value="2">女性</option>
+                  </select></div>
+              </div>
             </div>
-            <div><label className="block text-sm text-slate-600 mb-1">性别</label>
-              <select value={formData.demographics?.genders?.[0] || ''} onChange={(e) => setFormData({...formData, demographics: {...formData.demographics, genders: e.target.value ? [Number(e.target.value)] : []}})} className="w-full px-3 py-2 border rounded-lg">
-                <option value="">全部</option><option value="1">男性</option><option value="2">女性</option>
-              </select></div>
+            
+            {/* 版位设置 */}
+            <div className="border-t pt-4 mt-4">
+              <h4 className="text-sm font-medium text-slate-700 mb-3">版位设置</h4>
+              <div className="space-y-3">
+                <div><label className="block text-sm text-slate-600 mb-1">版位类型</label>
+                  <select value={formData.placement?.type || 'automatic'} onChange={(e) => setFormData({...formData, placement: {...formData.placement, type: e.target.value}})} className="w-full px-3 py-2 border rounded-lg">
+                    <option value="automatic">自动版位（推荐）</option>
+                    <option value="manual">手动版位</option>
+                  </select></div>
+                
+                {formData.placement?.type === 'manual' && (
+                  <>
+                    <div><label className="block text-sm text-slate-600 mb-1">投放平台</label>
+                      <div className="grid grid-cols-2 gap-2">
+                        {['facebook', 'instagram', 'messenger', 'audience_network'].map(p => (
+                          <label key={p} className="flex items-center gap-2 p-2 border rounded hover:bg-slate-50 cursor-pointer">
+                            <input type="checkbox" checked={formData.placement?.platforms?.includes(p) || false}
+                              onChange={(e) => {
+                                const platforms = formData.placement?.platforms || []
+                                if (e.target.checked) {
+                                  setFormData({...formData, placement: {...formData.placement, platforms: [...platforms, p]}})
+                                } else {
+                                  setFormData({...formData, placement: {...formData.placement, platforms: platforms.filter((x: string) => x !== p)}})
+                                }
+                              }}
+                              className="rounded" />
+                            <span className="text-sm capitalize">{p.replace('_', ' ')}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                    <div><label className="block text-sm text-slate-600 mb-1">设备</label>
+                      <div className="flex gap-4">
+                        {['mobile', 'desktop'].map(d => (
+                          <label key={d} className="flex items-center gap-2 cursor-pointer">
+                            <input type="checkbox" checked={formData.placement?.devicePlatforms?.includes(d) || false}
+                              onChange={(e) => {
+                                const devices = formData.placement?.devicePlatforms || []
+                                if (e.target.checked) {
+                                  setFormData({...formData, placement: {...formData.placement, devicePlatforms: [...devices, d]}})
+                                } else {
+                                  setFormData({...formData, placement: {...formData.placement, devicePlatforms: devices.filter((x: string) => x !== d)}})
+                                }
+                              }}
+                              className="rounded" />
+                            <span className="text-sm">{d === 'mobile' ? '移动端' : '桌面端'}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+            
+            {/* 优化目标 */}
+            <div className="border-t pt-4 mt-4">
+              <h4 className="text-sm font-medium text-slate-700 mb-3">优化目标</h4>
+              <select value={formData.optimizationGoal || 'OFFSITE_CONVERSIONS'} onChange={(e) => setFormData({...formData, optimizationGoal: e.target.value})} className="w-full px-3 py-2 border rounded-lg">
+                <option value="OFFSITE_CONVERSIONS">网站转化</option>
+                <option value="LINK_CLICKS">链接点击</option>
+                <option value="LANDING_PAGE_VIEWS">落地页浏览</option>
+                <option value="IMPRESSIONS">展示次数</option>
+                <option value="REACH">覆盖人数</option>
+              </select>
+            </div>
           </div>
         )
       case 'copywriting':
@@ -339,10 +413,22 @@ export default function AssetManagementPage() {
                 <button onClick={() => handleDelete(item._id)} className="text-xs text-red-500 hover:underline">删除</button>
               </div>
             </div>
-            <div className="text-sm text-slate-600">
-              {item.geoLocations?.countries?.length > 0 && <span className="mr-3">🌍 {item.geoLocations.countries.join(', ')}</span>}
-              <span className="mr-3">👤 {item.demographics?.ageMin || 18}-{item.demographics?.ageMax || 65}岁</span>
-              {item.interests?.length > 0 && <span>🎯 {item.interests.length} 个兴趣</span>}
+            <div className="text-sm text-slate-600 space-y-1">
+              <div>
+                {item.geoLocations?.countries?.length > 0 && <span className="mr-3">🌍 {item.geoLocations.countries.join(', ')}</span>}
+                <span className="mr-3">👤 {item.demographics?.ageMin || 18}-{item.demographics?.ageMax || 65}岁</span>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <span className="inline-block px-2 py-0.5 bg-slate-100 rounded text-xs">
+                  {item.placement?.type === 'manual' ? '手动版位' : '自动版位'}
+                </span>
+                <span className="inline-block px-2 py-0.5 bg-blue-50 text-blue-600 rounded text-xs">
+                  {item.optimizationGoal === 'OFFSITE_CONVERSIONS' ? '转化' : 
+                   item.optimizationGoal === 'LINK_CLICKS' ? '点击' : 
+                   item.optimizationGoal === 'LANDING_PAGE_VIEWS' ? '浏览' : 
+                   item.optimizationGoal || '转化'}
+                </span>
+              </div>
             </div>
           </div>
         )
