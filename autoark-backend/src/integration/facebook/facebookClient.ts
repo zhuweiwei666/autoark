@@ -75,7 +75,7 @@ const request = async (method: 'GET' | 'POST', endpoint: string, dataOrParams: a
       }
 
       // Facebook Graph API: 所有参数都放在 URL query string 中
-      // 对于 POST 请求，参数也放在 query string 而不是 body
+      // 手动构建查询字符串，确保 JSON 参数正确编码
       const allParams: any = {
         access_token: token,
       }
@@ -87,7 +87,17 @@ const request = async (method: 'GET' | 'POST', endpoint: string, dataOrParams: a
         }
       }
       
+      // 使用自定义序列化器确保 JSON 字符串正确编码
       config.params = allParams
+      config.paramsSerializer = (params: any) => {
+        const parts: string[] = []
+        for (const [key, value] of Object.entries(params)) {
+          if (value !== undefined && value !== null) {
+            parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`)
+          }
+        }
+        return parts.join('&')
+      }
 
       const res = await axios(config)
       
