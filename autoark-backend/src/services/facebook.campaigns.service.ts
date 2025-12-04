@@ -377,7 +377,7 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
             // 从 actions 和 action_values 中提取具体字段
             const actions = (metrics.actions || []) as any[]
             const actionValues = (metrics.action_values || []) as any[]
-            const purchaseRoas = (metrics.purchase_roas || []) as any[]
+            const purchaseRoas = metrics.purchase_roas
             
             // 提取各种 action 类型
             const extractedActions: any = {}
@@ -395,13 +395,17 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
                 }
             })
             
-            // 提取 purchase_roas
+            // 提取 purchase_roas（兼容数值和数组两种格式）
             const extractedRoas: any = {}
-            purchaseRoas.forEach((roas: any) => {
-                if (roas.action_type && roas.value !== undefined) {
-                    extractedRoas[`${roas.action_type}_roas`] = parseFloat(roas.value) || 0
-                }
-            })
+            if (Array.isArray(purchaseRoas)) {
+                purchaseRoas.forEach((roas: any) => {
+                    if (roas.action_type && roas.value !== undefined) {
+                        extractedRoas[`${roas.action_type}_roas`] = parseFloat(roas.value) || 0
+                    }
+                })
+            } else if (typeof purchaseRoas === 'number') {
+                extractedRoas['purchase_roas'] = purchaseRoas
+            }
             
             return {
                 ...campaignObj,
