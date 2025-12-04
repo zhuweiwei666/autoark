@@ -11,6 +11,21 @@ const TAB_CONFIG = {
   creative: { label: '创意组', endpoint: 'creative-groups' },
 }
 
+interface Material {
+  _id: string
+  name: string
+  type: 'image' | 'video'
+  storage: { url: string }
+  folder: string
+}
+
+interface Folder {
+  _id: string
+  name: string
+  path: string
+  count: number
+}
+
 export default function AssetManagementPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const navigate = useNavigate()
@@ -20,6 +35,14 @@ export default function AssetManagementPage() {
   const [showForm, setShowForm] = useState(false)
   const [formData, setFormData] = useState<any>({})
   const [saving, setSaving] = useState(false)
+  
+  // 素材选择器
+  const [showMaterialPicker, setShowMaterialPicker] = useState(false)
+  const [materials, setMaterials] = useState<Material[]>([])
+  const [folders, setFolders] = useState<Folder[]>([])
+  const [selectedMaterials, setSelectedMaterials] = useState<Material[]>([])
+  const [materialFilter, setMaterialFilter] = useState({ folder: '', type: '' })
+  const [loadingMaterials, setLoadingMaterials] = useState(false)
   
   useEffect(() => {
     loadItems()
@@ -35,6 +58,30 @@ export default function AssetManagementPage() {
       console.error('Failed to load items:', err)
     } finally {
       setLoading(false)
+    }
+  }
+  
+  const loadMaterials = async () => {
+    setLoadingMaterials(true)
+    try {
+      const params = new URLSearchParams({ pageSize: '100' })
+      if (materialFilter.folder) params.append('folder', materialFilter.folder)
+      if (materialFilter.type) params.append('type', materialFilter.type)
+      
+      const [matRes, folderRes] = await Promise.all([
+        fetch(`${API_BASE}/materials?${params}`),
+        fetch(`${API_BASE}/materials/folder-tree`)
+      ])
+      
+      const matData = await matRes.json()
+      const folderData = await folderRes.json()
+      
+      if (matData.success) setMaterials(matData.data.list || [])
+      if (folderData.success) setFolders(folderData.data.folders || [])
+    } catch (err) {
+      console.error('Failed to load materials:', err)
+    } finally {
+      setLoadingMaterials(false)
     }
   }
   
@@ -89,6 +136,49 @@ export default function AssetManagementPage() {
     setShowForm(true)
   }
   
+  const openMaterialPicker = () => {
+    // 初始化已选中的素材
+    const currentMaterials = formData.materials || []
+    setSelectedMaterials(currentMaterials.map((m: any) => ({
+      _id: m._id || m.url,
+      name: m.name || m.url,
+      type: m.type,
+      storage: { url: m.url },
+      folder: ''
+    })))
+    loadMaterials()
+    setShowMaterialPicker(true)
+  }
+  
+  const toggleMaterialSelect = (material: Material) => {
+    setSelectedMaterials(prev => {
+      const exists = prev.some(m => m._id === material._id)
+      if (exists) {
+        return prev.filter(m => m._id !== material._id)
+      } else {
+        return [...prev, material]
+      }
+    })
+  }
+  
+  const confirmMaterialSelection = () => {
+    const materials = selectedMaterials.map(m => ({
+      _id: m._id,
+      type: m.type,
+      url: m.storage.url,
+      name: m.name,
+      status: 'ready'
+    }))
+    setFormData({ ...formData, materials })
+    setShowMaterialPicker(false)
+  }
+  
+  const removeMaterial = (index: number) => {
+    const materials = [...(formData.materials || [])]
+    materials.splice(index, 1)
+    setFormData({ ...formData, materials })
+  }
+  
   const renderForm = () => {
     switch (activeTab) {
       case 'targeting':
@@ -96,10 +186,8 @@ export default function AssetManagementPage() {
           <div className="space-y-4">
             <div><label className="block text-sm text-slate-600 mb-1">名称 *</label>
               <input type="text" value={formData.name || ''} onChange={(e) => setFormData({...formData, name: e.target.value})} className="w-full px-3 py-2 border rounded-lg" required /></div>
-            <div><label className="block text-sm text-slate-600 mb-1">账户 ID *</label>
-              <input type="text" value={formData.accountId || ''} onChange={(e) => setFormData({...formData, accountId: e.target.value})} className="w-full px-3 py-2 border rounded-lg" required /></div>
             <div><label className="block text-sm text-slate-600 mb-1">国家（逗号分隔）</label>
-              <input type="text" value={formData.geoLocations?.countries?.join(',') || ''} onChange={(e) => setFormData({...formData, geoLocations: {...formData.geoLocations, countries: e.target.value.split(',').map((s: string) => s.trim()).filter(Boolean)}})} placeholder="US,CA,GB" className="w-full px-3 py-2 border rounded-lg" /></div>
+              <input type="text" value={formData.geoLocations?.countries?.join(',') || ''} onChange={(e) => setFormData({...formData, geoLocations: {...formData.geoLocations, countries: e.target.value.split(',').map((s: string) => s.trim().toUpperCase()).filter(Boolean)}})} placeholder="US,CA,GB" className="w-full px-3 py-2 border rounded-lg" /></div>
             <div className="grid grid-cols-2 gap-4">
               <div><label className="block text-sm text-slate-600 mb-1">最小年龄</label>
                 <input type="number" value={formData.demographics?.ageMin || 18} onChange={(e) => setFormData({...formData, demographics: {...formData.demographics, ageMin: Number(e.target.value)}})} min="13" max="65" className="w-full px-3 py-2 border rounded-lg" /></div>
@@ -117,8 +205,6 @@ export default function AssetManagementPage() {
           <div className="space-y-4">
             <div><label className="block text-sm text-slate-600 mb-1">名称 *</label>
               <input type="text" value={formData.name || ''} onChange={(e) => setFormData({...formData, name: e.target.value})} className="w-full px-3 py-2 border rounded-lg" required /></div>
-            <div><label className="block text-sm text-slate-600 mb-1">账户 ID *</label>
-              <input type="text" value={formData.accountId || ''} onChange={(e) => setFormData({...formData, accountId: e.target.value})} className="w-full px-3 py-2 border rounded-lg" required /></div>
             <div><label className="block text-sm text-slate-600 mb-1">正文（每行一条）</label>
               <textarea value={formData.content?.primaryTexts?.join('\n') || ''} onChange={(e) => setFormData({...formData, content: {...formData.content, primaryTexts: e.target.value.split('\n').filter(Boolean)}})} rows={3} className="w-full px-3 py-2 border rounded-lg" /></div>
             <div><label className="block text-sm text-slate-600 mb-1">标题（每行一条）</label>
@@ -138,14 +224,53 @@ export default function AssetManagementPage() {
           <div className="space-y-4">
             <div><label className="block text-sm text-slate-600 mb-1">名称 *</label>
               <input type="text" value={formData.name || ''} onChange={(e) => setFormData({...formData, name: e.target.value})} className="w-full px-3 py-2 border rounded-lg" required /></div>
-            <div><label className="block text-sm text-slate-600 mb-1">账户 ID *</label>
-              <input type="text" value={formData.accountId || ''} onChange={(e) => setFormData({...formData, accountId: e.target.value})} className="w-full px-3 py-2 border rounded-lg" required /></div>
             <div><label className="block text-sm text-slate-600 mb-1">广告格式</label>
               <select value={formData.config?.format || 'single'} onChange={(e) => setFormData({...formData, config: {...formData.config, format: e.target.value}})} className="w-full px-3 py-2 border rounded-lg">
                 <option value="single">单图/视频</option><option value="carousel">轮播</option>
               </select></div>
-            <div><label className="block text-sm text-slate-600 mb-1">素材 URL（每行一个）</label>
-              <textarea value={formData.materials?.map((m: any) => m.url).join('\n') || ''} onChange={(e) => setFormData({...formData, materials: e.target.value.split('\n').filter(Boolean).map((url: string) => ({ type: url.match(/\.(mp4|mov|webm)$/i) ? 'video' : 'image', url, status: 'pending' }))})} rows={4} placeholder="https://example.com/image.jpg" className="w-full px-3 py-2 border rounded-lg" /></div>
+            
+            {/* 素材选择 */}
+            <div>
+              <label className="block text-sm text-slate-600 mb-2">素材</label>
+              <button
+                type="button"
+                onClick={openMaterialPicker}
+                className="w-full px-4 py-3 border-2 border-dashed border-slate-300 rounded-lg hover:border-blue-400 hover:bg-blue-50 transition-colors flex items-center justify-center gap-2 text-slate-600"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-5 h-5">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z" />
+                </svg>
+                从素材库选择
+              </button>
+              
+              {/* 已选素材列表 */}
+              {formData.materials?.length > 0 && (
+                <div className="mt-3 grid grid-cols-4 gap-2">
+                  {formData.materials.map((m: any, i: number) => (
+                    <div key={i} className="relative group aspect-square bg-slate-100 rounded-lg overflow-hidden">
+                      {m.type === 'image' ? (
+                        <img src={m.url} alt="" className="w-full h-full object-cover" />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center bg-slate-800">
+                          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-6 h-6 text-white">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.985V5.653z" />
+                          </svg>
+                        </div>
+                      )}
+                      <button
+                        onClick={() => removeMaterial(i)}
+                        className="absolute top-1 right-1 w-5 h-5 bg-red-500 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor" className="w-3 h-3">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            
             <div><label className="block text-sm text-slate-600 mb-1">描述</label>
               <textarea value={formData.description || ''} onChange={(e) => setFormData({...formData, description: e.target.value})} rows={2} className="w-full px-3 py-2 border rounded-lg" /></div>
           </div>
@@ -161,7 +286,7 @@ export default function AssetManagementPage() {
         return (
           <div className="p-4 border rounded-lg hover:border-slate-300 transition-colors">
             <div className="flex justify-between items-start mb-2">
-              <div><div className="font-semibold">{item.name}</div><div className="text-xs text-slate-500">{item.accountId}</div></div>
+              <div className="font-semibold">{item.name}</div>
               <div className="flex gap-2">
                 <button onClick={() => handleEdit(item)} className="text-xs text-blue-500 hover:underline">编辑</button>
                 <button onClick={() => handleDelete(item._id)} className="text-xs text-red-500 hover:underline">删除</button>
@@ -178,7 +303,7 @@ export default function AssetManagementPage() {
         return (
           <div className="p-4 border rounded-lg hover:border-slate-300 transition-colors">
             <div className="flex justify-between items-start mb-2">
-              <div><div className="font-semibold">{item.name}</div><div className="text-xs text-slate-500">{item.accountId}</div></div>
+              <div className="font-semibold">{item.name}</div>
               <div className="flex gap-2">
                 <button onClick={() => handleEdit(item)} className="text-xs text-blue-500 hover:underline">编辑</button>
                 <button onClick={() => handleDelete(item._id)} className="text-xs text-red-500 hover:underline">删除</button>
@@ -194,17 +319,40 @@ export default function AssetManagementPage() {
         return (
           <div className="p-4 border rounded-lg hover:border-slate-300 transition-colors">
             <div className="flex justify-between items-start mb-2">
-              <div><div className="font-semibold">{item.name}</div><div className="text-xs text-slate-500">{item.accountId}</div></div>
+              <div className="font-semibold">{item.name}</div>
               <div className="flex gap-2">
                 <button onClick={() => handleEdit(item)} className="text-xs text-blue-500 hover:underline">编辑</button>
                 <button onClick={() => handleDelete(item._id)} className="text-xs text-red-500 hover:underline">删除</button>
               </div>
             </div>
-            <div className="text-sm text-slate-600">
+            <div className="text-sm text-slate-600 mb-2">
               <span className="mr-3">📷 {item.materialStats?.imageCount || 0} 图片</span>
               <span className="mr-3">🎬 {item.materialStats?.videoCount || 0} 视频</span>
               <span className="inline-block px-2 py-0.5 bg-slate-100 rounded text-xs">{item.config?.format || 'single'}</span>
             </div>
+            {/* 素材预览 */}
+            {item.materials?.length > 0 && (
+              <div className="flex gap-1 mt-2">
+                {item.materials.slice(0, 4).map((m: any, i: number) => (
+                  <div key={i} className="w-10 h-10 bg-slate-100 rounded overflow-hidden">
+                    {m.type === 'image' ? (
+                      <img src={m.url} alt="" className="w-full h-full object-cover" />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center bg-slate-800">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-4 h-4 text-white">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.985V5.653z" />
+                        </svg>
+                      </div>
+                    )}
+                  </div>
+                ))}
+                {item.materials.length > 4 && (
+                  <div className="w-10 h-10 bg-slate-200 rounded flex items-center justify-center text-xs text-slate-500">
+                    +{item.materials.length - 4}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )
       default:
@@ -252,6 +400,112 @@ export default function AssetManagementPage() {
           </div>
         )}
         
+        {/* Material Picker Modal */}
+        {showMaterialPicker && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div className="bg-white rounded-xl w-full max-w-4xl max-h-[90vh] flex flex-col">
+              <div className="p-4 border-b border-slate-200 flex items-center justify-between">
+                <h3 className="text-lg font-semibold">选择素材</h3>
+                <button onClick={() => setShowMaterialPicker(false)} className="text-slate-400 hover:text-slate-600">
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-6 h-6">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+              
+              {/* Filters */}
+              <div className="p-4 border-b border-slate-200 flex gap-4">
+                <select
+                  value={materialFilter.folder}
+                  onChange={(e) => { setMaterialFilter(f => ({ ...f, folder: e.target.value })); setTimeout(loadMaterials, 0) }}
+                  className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm"
+                >
+                  <option value="">全部文件夹</option>
+                  {folders.map(f => (
+                    <option key={f._id} value={f.path}>{f.name} ({f.count})</option>
+                  ))}
+                </select>
+                <select
+                  value={materialFilter.type}
+                  onChange={(e) => { setMaterialFilter(f => ({ ...f, type: e.target.value })); setTimeout(loadMaterials, 0) }}
+                  className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm"
+                >
+                  <option value="">全部类型</option>
+                  <option value="image">图片</option>
+                  <option value="video">视频</option>
+                </select>
+                <span className="ml-auto text-sm text-slate-500">
+                  已选 {selectedMaterials.length} 个
+                </span>
+              </div>
+              
+              {/* Materials Grid */}
+              <div className="flex-1 overflow-y-auto p-4">
+                {loadingMaterials ? (
+                  <div className="text-center py-12 text-slate-500">加载中...</div>
+                ) : materials.length === 0 ? (
+                  <div className="text-center py-12 text-slate-500">
+                    <p>暂无素材</p>
+                    <button
+                      onClick={() => { setShowMaterialPicker(false); navigate('/bulk-ad/materials') }}
+                      className="mt-2 text-blue-600 hover:underline text-sm"
+                    >
+                      前往素材库上传
+                    </button>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-6 gap-3">
+                    {materials.map(m => {
+                      const isSelected = selectedMaterials.some(s => s._id === m._id)
+                      return (
+                        <div
+                          key={m._id}
+                          onClick={() => toggleMaterialSelect(m)}
+                          className={`cursor-pointer rounded-lg overflow-hidden border-2 transition-all ${
+                            isSelected ? 'border-blue-500 ring-2 ring-blue-200' : 'border-transparent hover:border-slate-300'
+                          }`}
+                        >
+                          <div className="aspect-square bg-slate-100 relative">
+                            {m.type === 'image' ? (
+                              <img src={m.storage.url} alt={m.name} className="w-full h-full object-cover" />
+                            ) : (
+                              <div className="w-full h-full flex items-center justify-center bg-slate-800">
+                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-8 h-8 text-white">
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.985V5.653z" />
+                                </svg>
+                              </div>
+                            )}
+                            {isSelected && (
+                              <div className="absolute top-1 right-1 w-5 h-5 bg-blue-500 rounded-full flex items-center justify-center">
+                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="3" stroke="white" className="w-3 h-3">
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                                </svg>
+                              </div>
+                            )}
+                          </div>
+                          <p className="text-xs text-center truncate p-1">{m.name}</p>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+              
+              {/* Footer */}
+              <div className="p-4 border-t border-slate-200 flex justify-end gap-3">
+                <button onClick={() => setShowMaterialPicker(false)} className="px-4 py-2 border border-slate-300 rounded-lg hover:bg-slate-50">取消</button>
+                <button
+                  onClick={confirmMaterialSelection}
+                  disabled={selectedMaterials.length === 0}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                >
+                  确认选择 ({selectedMaterials.length})
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        
         {/* Items list */}
         {loading ? (
           <div className="text-center py-12 text-slate-500">加载中...</div>
@@ -266,4 +520,3 @@ export default function AssetManagementPage() {
     </div>
   )
 }
-
