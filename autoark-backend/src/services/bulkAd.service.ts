@@ -236,7 +236,89 @@ export const publishDraft = async (draftId: string, userId?: string) => {
   await draft.save()
   
   logger.info(`[BulkAd] Draft published, task created: ${task._id}`)
+  
+  // 如果 Redis 不可用，直接同步执行任务
+  const { getRedisClient } = await import('../config/redis')
+  const redisAvailable = (() => {
+    try {
+      return getRedisClient() !== null
+    } catch {
+      return false
+    }
+  })()
+  
+  if (!redisAvailable) {
+    logger.info(`[BulkAd] Redis unavailable, executing task synchronously`)
+    // 异步执行任务（不阻塞响应）
+    executeTaskSynchronously(task._id.toString()).catch(err => {
+      logger.error(`[BulkAd] Sync execution failed:`, err)
+    })
+  }
+  
   return task
+}
+
+/**
+ * 同步执行任务（当 Redis 不可用时使用）
+ */
+const executeTaskSynchronously = async (taskId: string) => {
+  const task: any = await AdTask.findById(taskId)
+  if (!task) {
+    throw new Error('Task not found')
+  }
+  
+  task.status = 'processing'
+  task.startedAt = new Date()
+  await task.save()
+  
+  logger.info(`[BulkAd] Starting sync execution for task ${taskId}`)
+  
+  let successCount = 0
+  let failCount = 0
+  
+  for (const item of task.items) {
+    if (item.status === 'cancelled') continue
+    
+    try {
+      logger.info(`[BulkAd] Processing account: ${item.accountId}`)
+      
+      item.status = 'processing'
+      await task.save()
+      
+      await executeTaskForAccount(taskId, item.accountId)
+      
+      item.status = 'completed'
+      successCount++
+      logger.info(`[BulkAd] Account ${item.accountId} completed`)
+    } catch (error: any) {
+      item.status = 'failed'
+      item.error = error.message
+      failCount++
+      logger.error(`[BulkAd] Account ${item.accountId} failed:`, error)
+    }
+    
+    // 更新进度
+    const completedCount = task.items.filter((i: any) => 
+      i.status === 'completed' || i.status === 'failed'
+    ).length
+    task.progress.percentage = Math.round((completedCount / task.items.length) * 100)
+    await task.save()
+  }
+  
+  // 任务完成
+  task.status = failCount === 0 ? 'completed' : (successCount === 0 ? 'failed' : 'partial')
+  task.completedAt = new Date()
+  task.results = {
+    totalAccounts: task.items.length,
+    successCount,
+    failCount,
+    createdCampaigns: successCount,
+    createdAdsets: successCount,
+    createdAds: successCount,
+  }
+  await task.save()
+  
+  logger.info(`[BulkAd] Task ${taskId} completed: ${successCount} success, ${failCount} failed`)
 }
 
 // ==================== 任务执行 ====================
