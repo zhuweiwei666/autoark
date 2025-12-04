@@ -80,9 +80,12 @@ const request = async (method: 'GET' | 'POST', endpoint: string, dataOrParams: a
           ...dataOrParams,
         }
       } else {
-        // POST
-        config.params = { access_token: token } // Token 通常放在 URL 参数中
-        config.data = dataOrParams
+        // POST - Facebook Graph API 接受 URL params 方式
+        // 将所有参数放在 params 中（不使用 JSON body）
+        config.params = {
+          access_token: token,
+          ...dataOrParams,
+        }
       }
 
       const res = await axios(config)
