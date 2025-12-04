@@ -109,7 +109,7 @@ creativeGroupSchema.index({ tags: 1 })
 creativeGroupSchema.index({ folderId: 1 })
 
 // 更新素材统计的中间件
-creativeGroupSchema.pre('save', function(next) {
+creativeGroupSchema.pre('save', function() {
   if (this.materials) {
     this.materialStats = {
       totalCount: this.materials.length,
@@ -118,7 +118,6 @@ creativeGroupSchema.pre('save', function(next) {
       uploadedCount: this.materials.filter((m: any) => m.status === 'uploaded').length,
     }
   }
-  next()
 })
 
 // 获取已上传的素材

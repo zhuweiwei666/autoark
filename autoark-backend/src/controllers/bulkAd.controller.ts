@@ -439,7 +439,7 @@ export const addMaterial = async (req: Request, res: Response) => {
  */
 export const removeMaterial = async (req: Request, res: Response) => {
   try {
-    const group = await CreativeGroup.findById(req.params.id)
+    const group: any = await CreativeGroup.findById(req.params.id)
     if (!group) {
       return res.status(404).json({ success: false, error: 'Creative group not found' })
     }
@@ -472,7 +472,7 @@ export const searchInterests = async (req: Request, res: Response) => {
     }
     
     const result = await searchTargetingInterests({
-      token: fbToken.accessToken,
+      token: fbToken.token,
       query: q as string,
       type: type as string,
       limit: Number(limit),
@@ -499,7 +499,7 @@ export const searchLocations = async (req: Request, res: Response) => {
     }
     
     const result = await searchTargetingLocations({
-      token: fbToken.accessToken,
+      token: fbToken.token,
       query: q as string,
       type: type as string,
       limit: Number(limit),
@@ -528,7 +528,7 @@ export const getFacebookPages = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, error: 'No active Facebook token' })
     }
     
-    const result = await getPages(accountId as string, fbToken.accessToken)
+    const result = await getPages(accountId as string, fbToken.token)
     res.json({ success: true, data: result.data })
   } catch (error: any) {
     logger.error('[BulkAd] Get Facebook pages failed:', error)
@@ -552,7 +552,7 @@ export const getFacebookInstagramAccounts = async (req: Request, res: Response) 
       return res.status(400).json({ success: false, error: 'No active Facebook token' })
     }
     
-    const result = await getInstagramAccounts(pageId as string, fbToken.accessToken)
+    const result = await getInstagramAccounts(pageId as string, fbToken.token)
     res.json({ success: true, data: result.data })
   } catch (error: any) {
     logger.error('[BulkAd] Get Instagram accounts failed:', error)
@@ -576,7 +576,7 @@ export const getFacebookPixels = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, error: 'No active Facebook token' })
     }
     
-    const result = await getPixels(accountId as string, fbToken.accessToken)
+    const result = await getPixels(accountId as string, fbToken.token)
     res.json({ success: true, data: result.data })
   } catch (error: any) {
     logger.error('[BulkAd] Get Facebook pixels failed:', error)
@@ -600,7 +600,7 @@ export const getFacebookCustomConversions = async (req: Request, res: Response) 
       return res.status(400).json({ success: false, error: 'No active Facebook token' })
     }
     
-    const result = await getCustomConversions(accountId as string, fbToken.accessToken)
+    const result = await getCustomConversions(accountId as string, fbToken.token)
     res.json({ success: true, data: result.data })
   } catch (error: any) {
     logger.error('[BulkAd] Get custom conversions failed:', error)
