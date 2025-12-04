@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef } from 'react'
 
 const API_BASE = '/api'
 
@@ -36,7 +36,6 @@ export default function MaterialLibraryPage() {
   const [folders, setFolders] = useState<FolderInfo[]>([])
   const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
-  const [uploadProgress, setUploadProgress] = useState(0)
   
   // 筛选条件
   const [filter, setFilter] = useState({
@@ -118,7 +117,6 @@ export default function MaterialLibraryPage() {
     if (!files || files.length === 0) return
     
     setUploading(true)
-    setUploadProgress(0)
     
     const formData = new FormData()
     const fileArray = Array.from(files)
@@ -166,7 +164,6 @@ export default function MaterialLibraryPage() {
     }
     
     setUploading(false)
-    setUploadProgress(0)
     if (fileInputRef.current) {
       fileInputRef.current.value = ''
     }
@@ -216,14 +213,6 @@ export default function MaterialLibraryPage() {
     setSelectedIds(prev => 
       prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
     )
-  }
-  
-  const toggleSelectAll = () => {
-    if (selectedIds.length === materials.length) {
-      setSelectedIds([])
-    } else {
-      setSelectedIds(materials.map(m => m._id))
-    }
   }
   
   const formatSize = (bytes: number) => {
