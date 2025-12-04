@@ -237,7 +237,7 @@ export const publishDraft = async (draftId: string, userId?: string) => {
   
   logger.info(`[BulkAd] Draft published, task created: ${task._id}`)
   
-  // 如果 Redis 不可用，直接同步执行任务
+  // 检查 Redis 是否可用
   const { getRedisClient } = await import('../config/redis')
   const redisAvailable = (() => {
     try {
@@ -247,9 +247,21 @@ export const publishDraft = async (draftId: string, userId?: string) => {
     }
   })()
   
-  if (!redisAvailable) {
+  if (redisAvailable) {
+    // Redis 可用，使用队列异步执行
+    logger.info(`[BulkAd] Redis available, adding task to queue`)
+    const { addBulkAdJobsBatch } = await import('../queue/bulkAd.queue')
+    const accountIds = task.items.map((item: any) => item.accountId)
+    
+    task.status = 'queued'
+    task.queuedAt = new Date()
+    await task.save()
+    
+    await addBulkAdJobsBatch(task._id.toString(), accountIds)
+    logger.info(`[BulkAd] Task ${task._id} queued, ${accountIds.length} accounts`)
+  } else {
+    // Redis 不可用，直接同步执行
     logger.info(`[BulkAd] Redis unavailable, executing task synchronously`)
-    // 异步执行任务（不阻塞响应）
     executeTaskSynchronously(task._id.toString()).catch(err => {
       logger.error(`[BulkAd] Sync execution failed:`, err)
     })
