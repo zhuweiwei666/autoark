@@ -52,10 +52,12 @@ const formatBudget = (v: any) => {
 
 // 默认列定义 - 国家页面
 const ALL_COUNTRY_COLUMNS = [
-  // 国家基础字段
-  { key: 'country', label: '国家', defaultVisible: true, format: (v: any) => v || '-' },
+  // 国家基础字段 - 国家必须是第一列
+  { key: 'country', label: '国家代码', defaultVisible: true, format: (v: any) => v || '-' },
+  { key: 'countryName', label: '国家名称', defaultVisible: true, format: (v: any) => v || '-' },
+  { key: 'spend', label: 'spend', defaultVisible: true, format: formatCurrency },
   { key: 'campaignCount', label: '广告系列数', defaultVisible: true, format: formatNumber },
-  { key: 'status', label: 'status', defaultVisible: true, format: (v: any) => v ? String(v).toUpperCase() : '-' },
+  { key: 'status', label: 'status', defaultVisible: false, format: (v: any) => v ? String(v).toUpperCase() : '-' },
   { key: 'objective', label: 'objective', defaultVisible: false, format: (v: any) => v || '-' },
   { key: 'buying_type', label: 'buying_type', defaultVisible: false, format: (v: any) => v || '-' },
   { key: 'daily_budget', label: 'daily_budget', defaultVisible: false, format: formatBudget },
@@ -73,7 +75,6 @@ const ALL_COUNTRY_COLUMNS = [
   { key: 'impressions', label: 'impressions', defaultVisible: true, format: formatNumber },
   { key: 'clicks', label: 'clicks', defaultVisible: true, format: formatNumber },
   { key: 'unique_clicks', label: 'unique_clicks', defaultVisible: false, format: formatNumber },
-  { key: 'spend', label: 'spend', defaultVisible: true, format: formatCurrency },
   { key: 'reach', label: 'reach', defaultVisible: false, format: formatNumber },
   { key: 'frequency', label: 'frequency', defaultVisible: false, format: (v: any) => {
     if (v === null || v === undefined || v === '') return '-'
