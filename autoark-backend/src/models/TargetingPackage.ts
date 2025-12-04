@@ -245,6 +245,89 @@ targetingPackageSchema.methods.toFacebookTargeting = function() {
     targeting.targeting_optimization = this.targetingOptimization
   }
   
+  // ==================== 版位设置 ====================
+  if (this.placement && this.placement.type === 'manual') {
+    // 投放平台
+    if (this.placement.platforms?.length) {
+      targeting.publisher_platforms = this.placement.platforms
+    }
+    
+    // 设备类型
+    if (this.placement.devicePlatforms?.length) {
+      targeting.device_platforms = this.placement.devicePlatforms
+    }
+  }
+  
+  // ==================== 设备和操作系统设置 ====================
+  if (this.deviceSettings) {
+    // 操作系统
+    if (this.deviceSettings.mobileOS?.length && !this.deviceSettings.mobileOS.includes('all')) {
+      targeting.user_os = this.deviceSettings.mobileOS
+    }
+    
+    // 设备类型
+    const userDevices: string[] = []
+    if (this.deviceSettings.mobileDevices?.length) {
+      // 映射设备类型到 Facebook API 格式
+      const deviceMapping: Record<string, string[]> = {
+        'iphone_all': ['iPhone'],
+        'ipad_all': ['iPad'],
+        'ipod_all': ['iPod'],
+        'android_smartphone': ['Android_Smartphone'],
+        'android_tablet': ['Android_Tablet'],
+        'feature_phone': ['Feature_Phone'],
+      }
+      
+      this.deviceSettings.mobileDevices.forEach((device: string) => {
+        if (deviceMapping[device]) {
+          userDevices.push(...deviceMapping[device])
+        }
+      })
+    }
+    if (userDevices.length) {
+      targeting.user_device = userDevices
+    }
+    
+    // iOS 版本限制
+    if (this.deviceSettings.iosVersionMin || this.deviceSettings.iosVersionMax) {
+      // 如果设置了 iOS 版本，需要用 user_os 格式
+      // 格式: iOS_ver_X.X_and_above 或 iOS_ver_X.X_to_Y.Y
+      if (!targeting.user_os) {
+        targeting.user_os = []
+      }
+      
+      // 移除通用的 iOS，添加具体版本
+      targeting.user_os = targeting.user_os.filter((os: string) => os !== 'iOS')
+      
+      if (this.deviceSettings.iosVersionMin && this.deviceSettings.iosVersionMax && this.deviceSettings.iosVersionMax !== 'unlimited') {
+        targeting.user_os.push(`iOS_ver_${this.deviceSettings.iosVersionMin}_to_${this.deviceSettings.iosVersionMax}`)
+      } else if (this.deviceSettings.iosVersionMin) {
+        targeting.user_os.push(`iOS_ver_${this.deviceSettings.iosVersionMin}_and_above`)
+      }
+    }
+    
+    // Android 版本限制
+    if (this.deviceSettings.androidVersionMin || this.deviceSettings.androidVersionMax) {
+      if (!targeting.user_os) {
+        targeting.user_os = []
+      }
+      
+      // 移除通用的 Android，添加具体版本
+      targeting.user_os = targeting.user_os.filter((os: string) => os !== 'Android')
+      
+      if (this.deviceSettings.androidVersionMin && this.deviceSettings.androidVersionMax && this.deviceSettings.androidVersionMax !== 'unlimited') {
+        targeting.user_os.push(`Android_ver_${this.deviceSettings.androidVersionMin}_to_${this.deviceSettings.androidVersionMax}`)
+      } else if (this.deviceSettings.androidVersionMin) {
+        targeting.user_os.push(`Android_ver_${this.deviceSettings.androidVersionMin}_and_above`)
+      }
+    }
+    
+    // 仅 Wi-Fi
+    if (this.deviceSettings.wifiOnly) {
+      targeting.wireless_carrier = ['Wifi']
+    }
+  }
+  
   return targeting
 }
 
