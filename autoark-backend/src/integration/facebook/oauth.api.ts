@@ -11,17 +11,19 @@ const FB_REDIRECT_URI = process.env.FACEBOOK_REDIRECT_URI || 'http://localhost:3
 
 /**
  * 生成 Facebook 登录 URL
+ * 权限列表参考 TopTou 的实现
  */
 export const getFacebookLoginUrl = (state?: string): string => {
   const scopes = [
-    'ads_read',
+    'public_profile',
     'ads_management',
-    'business_management',
+    'ads_read',
+    'read_insights',
+    'pages_show_list',
     'pages_read_engagement',
+    'business_management',
     'pages_manage_metadata',
-    'pixel_read',
-    'pixel_write',
-    'offline_access', // 重要：获取长期 token
+    'catalog_management',
   ].join(',')
 
   const params = new URLSearchParams({
