@@ -453,7 +453,7 @@ export default function AssetManagementPage() {
       type: m.type,
       url: m.storage.url,
       name: m.name,
-      status: 'ready'
+      status: 'uploaded'  // 从素材库选择的素材已上传完成
     }))
     setFormData({ ...formData, materials })
     setShowMaterialPicker(false)
@@ -873,8 +873,8 @@ export default function AssetManagementPage() {
               </div>
             </div>
             <div className="text-sm text-slate-600 mb-2">
-              <span className="mr-3">📷 {item.materialStats?.imageCount || 0} 图片</span>
-              <span className="mr-3">🎬 {item.materialStats?.videoCount || 0} 视频</span>
+              <span className="mr-3">📷 {item.materials?.filter((m: any) => m.type === 'image').length || 0} 图片</span>
+              <span className="mr-3">🎬 {item.materials?.filter((m: any) => m.type === 'video').length || 0} 视频</span>
               <span className="inline-block px-2 py-0.5 bg-slate-100 rounded text-xs">{item.config?.format || 'single'}</span>
             </div>
             {/* 素材预览 */}

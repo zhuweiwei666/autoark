@@ -371,16 +371,14 @@ export const createCreativeGroup = async (req: Request, res: Response) => {
  */
 export const updateCreativeGroup = async (req: Request, res: Response) => {
   try {
-    // 使用 findById + save 以触发 pre('save') 钩子更新 materialStats
-    const group = await CreativeGroup.findById(req.params.id)
+    const group = await CreativeGroup.findByIdAndUpdate(
+      req.params.id,
+      req.body,
+      { new: true }
+    )
     if (!group) {
       return res.status(404).json({ success: false, error: 'Creative group not found' })
     }
-    
-    // 更新字段
-    Object.assign(group, req.body)
-    await group.save()
-    
     res.json({ success: true, data: group })
   } catch (error: any) {
     logger.error('[BulkAd] Update creative group failed:', error)

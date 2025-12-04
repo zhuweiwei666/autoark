@@ -77,7 +77,7 @@ const request = async (method: 'GET' | 'POST', endpoint: string, dataOrParams: a
       // Facebook Graph API: 所有参数都放在 URL query string 中
       // 手动构建查询字符串，确保 JSON 参数正确编码
       const allParams: any = {
-        access_token: token,
+          access_token: token,
       }
       
       // 处理参数，确保不重复添加 access_token
