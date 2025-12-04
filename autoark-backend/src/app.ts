@@ -10,6 +10,7 @@ import fbTokenRoutes from './routes/fbToken.routes'
 import userSettingsRoutes from './routes/user.settings.routes' // New: User settings routes
 import bulkAdRoutes from './routes/bulkAd.routes' // New: Bulk ad creation routes
 import materialRoutes from './routes/material.routes' // New: Material management routes
+import agentRoutes from './domain/agent/agent.controller' // New: AI Agent routes
 import logger from './utils/logger'
 import initSyncCron from './cron/sync.cron'
 import initCronJobs from './cron'
@@ -73,6 +74,7 @@ app.use('/api/fb-token', fbTokenRoutes) // Facebook token management
 app.use('/api/user-settings', userSettingsRoutes) // New: User settings management
 app.use('/api/bulk-ad', bulkAdRoutes) // New: Bulk ad creation management
 app.use('/api/materials', materialRoutes) // New: Material management
+app.use('/api/agent', agentRoutes) // New: AI Agent
 
 // Dashboard UI 已迁移到 React 前端，不再需要后端路由
 // app.use('/dashboard', dashboardRoutes) // 已禁用，让前端 React Router 处理

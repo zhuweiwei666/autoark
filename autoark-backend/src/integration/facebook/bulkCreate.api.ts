@@ -534,3 +534,104 @@ export const getCustomConversions = async (accountId: string, token: string) => 
     return { success: false, error: error.message, data: [] }
   }
 }
+
+// ==================== 更新 Campaign ====================
+
+export interface UpdateCampaignParams {
+  campaignId: string
+  token: string
+  name?: string
+  status?: string
+  dailyBudget?: number
+  lifetimeBudget?: number
+  bidStrategy?: string
+}
+
+export const updateCampaign = async (params: UpdateCampaignParams) => {
+  const { campaignId, token, ...updates } = params
+
+  const requestParams: any = {
+    access_token: token,
+  }
+
+  if (updates.name) requestParams.name = updates.name
+  if (updates.status) requestParams.status = updates.status
+  if (updates.dailyBudget) requestParams.daily_budget = Math.round(updates.dailyBudget * 100)
+  if (updates.lifetimeBudget) requestParams.lifetime_budget = Math.round(updates.lifetimeBudget * 100)
+  if (updates.bidStrategy) requestParams.bid_strategy = updates.bidStrategy
+
+  try {
+    const res = await facebookClient.post(`/${campaignId}`, requestParams)
+    logger.info(`[BulkCreate] Campaign updated: ${campaignId}`)
+    return { success: true, id: campaignId }
+  } catch (error: any) {
+    logger.error(`[BulkCreate] Failed to update campaign ${campaignId}:`, error.message)
+    return { success: false, error: { message: error.message } }
+  }
+}
+
+// ==================== 更新 AdSet ====================
+
+export interface UpdateAdSetParams {
+  adsetId: string
+  token: string
+  name?: string
+  status?: string
+  dailyBudget?: number
+  lifetimeBudget?: number
+  bidAmount?: number
+  targeting?: any
+}
+
+export const updateAdSet = async (params: UpdateAdSetParams) => {
+  const { adsetId, token, ...updates } = params
+
+  const requestParams: any = {
+    access_token: token,
+  }
+
+  if (updates.name) requestParams.name = updates.name
+  if (updates.status) requestParams.status = updates.status
+  if (updates.dailyBudget) requestParams.daily_budget = Math.round(updates.dailyBudget * 100)
+  if (updates.lifetimeBudget) requestParams.lifetime_budget = Math.round(updates.lifetimeBudget * 100)
+  if (updates.bidAmount) requestParams.bid_amount = Math.round(updates.bidAmount * 100)
+  if (updates.targeting) requestParams.targeting = JSON.stringify(updates.targeting)
+
+  try {
+    const res = await facebookClient.post(`/${adsetId}`, requestParams)
+    logger.info(`[BulkCreate] AdSet updated: ${adsetId}`)
+    return { success: true, id: adsetId }
+  } catch (error: any) {
+    logger.error(`[BulkCreate] Failed to update adset ${adsetId}:`, error.message)
+    return { success: false, error: { message: error.message } }
+  }
+}
+
+// ==================== 更新 Ad ====================
+
+export interface UpdateAdParams {
+  adId: string
+  token: string
+  name?: string
+  status?: string
+}
+
+export const updateAd = async (params: UpdateAdParams) => {
+  const { adId, token, ...updates } = params
+
+  const requestParams: any = {
+    access_token: token,
+  }
+
+  if (updates.name) requestParams.name = updates.name
+  if (updates.status) requestParams.status = updates.status
+
+  try {
+    const res = await facebookClient.post(`/${adId}`, requestParams)
+    logger.info(`[BulkCreate] Ad updated: ${adId}`)
+    return { success: true, id: adId }
+  } catch (error: any) {
+    logger.error(`[BulkCreate] Failed to update ad ${adId}:`, error.message)
+    return { success: false, error: { message: error.message } }
+  }
+}
