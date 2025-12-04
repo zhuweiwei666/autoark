@@ -420,16 +420,16 @@ export default function FacebookAccountsPage() {
                       <td className="px-6 py-4">
                         <div className="text-slate-300 text-xs">
                           {account.periodSpend !== undefined && account.periodSpend > 0 ? (
-                            <span className="text-slate-400 font-mono">{formatCurrency(account.periodSpend * 100, account.currency || 'USD')}</span>
+                            <span className="text-slate-400 font-mono">${account.periodSpend.toFixed(2)}</span>
                           ) : (
-                            <span className="text-slate-500">-</span>
+                            <span className="text-slate-500">$0.00</span>
                           )}
                         </div>
                       </td>
                       <td className="px-6 py-4">
                         <div className="text-slate-300 text-xs">
                           {account.calculatedBalance !== undefined ? (
-                            <span className="text-emerald-400 font-mono">{formatCurrency(account.calculatedBalance * 100, account.currency || 'USD')}</span>
+                            <span className="text-emerald-400 font-mono">${account.calculatedBalance.toFixed(2)}</span>
                           ) : (
                             <span className="text-slate-500">-</span>
                           )}
