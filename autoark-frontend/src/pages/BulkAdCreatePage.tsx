@@ -69,6 +69,7 @@ export default function BulkAdCreatePage() {
     optimizationGoal: 'OFFSITE_CONVERSIONS',
     billingEvent: 'IMPRESSIONS',
     placementType: 'AUTOMATIC',
+    budget: 50, // AdSet 级别预算（非 CBO 模式时使用）
   })
   const [ad, setAd] = useState({
     nameTemplate: '{adsetName}_ad_{index}',
@@ -518,12 +519,6 @@ export default function BulkAdCreatePage() {
                   <select value={campaign.objective} onChange={(e) => setCampaign({...campaign, objective: e.target.value})} className="w-full px-3 py-2 border rounded-lg">
                     <option value="OUTCOME_SALES">销量</option><option value="OUTCOME_LEADS">潜在客户</option><option value="OUTCOME_TRAFFIC">流量</option>
                   </select></div>
-                <div><label className="block text-sm text-slate-600 mb-1">预算类型</label>
-                  <select value={campaign.budgetType} onChange={(e) => setCampaign({...campaign, budgetType: e.target.value})} className="w-full px-3 py-2 border rounded-lg">
-                    <option value="DAILY">日预算</option><option value="LIFETIME">总预算</option>
-                  </select></div>
-                <div><label className="block text-sm text-slate-600 mb-1">预算金额 ($)</label>
-                  <input type="number" value={campaign.budget} onChange={(e) => setCampaign({...campaign, budget: Number(e.target.value)})} min="1" className="w-full px-3 py-2 border rounded-lg" /></div>
                 <div><label className="block text-sm text-slate-600 mb-1">竞价策略</label>
                   <select value={campaign.bidStrategy} onChange={(e) => setCampaign({...campaign, bidStrategy: e.target.value})} className="w-full px-3 py-2 border rounded-lg">
                     <option value="LOWEST_COST_WITHOUT_CAP">最低成本</option><option value="COST_CAP">费用上限</option>
@@ -532,6 +527,51 @@ export default function BulkAdCreatePage() {
                   <select value={campaign.status} onChange={(e) => setCampaign({...campaign, status: e.target.value})} className="w-full px-3 py-2 border rounded-lg">
                     <option value="PAUSED">暂停</option><option value="ACTIVE">启用</option>
                   </select></div>
+              </div>
+              
+              {/* CBO 预算设置 */}
+              <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <h4 className="font-medium text-slate-800">预算优化 (CBO)</h4>
+                    <p className="text-sm text-slate-500">启用后，预算在广告系列级别设置，Facebook 自动分配到各广告组</p>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input 
+                      type="checkbox" 
+                      checked={campaign.budgetOptimization} 
+                      onChange={(e) => setCampaign({...campaign, budgetOptimization: e.target.checked})} 
+                      className="sr-only peer" 
+                    />
+                    <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                    <span className="ml-2 text-sm font-medium text-slate-700">{campaign.budgetOptimization ? '已启用' : '未启用'}</span>
+                  </label>
+                </div>
+                
+                {campaign.budgetOptimization && (
+                  <div className="grid grid-cols-2 gap-4 pt-4 border-t border-blue-200">
+                    <div>
+                      <label className="block text-sm text-slate-600 mb-1">预算类型</label>
+                      <select value={campaign.budgetType} onChange={(e) => setCampaign({...campaign, budgetType: e.target.value})} className="w-full px-3 py-2 border rounded-lg bg-white">
+                        <option value="DAILY">日预算</option><option value="LIFETIME">总预算</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm text-slate-600 mb-1">广告系列预算 ($)</label>
+                      <input type="number" value={campaign.budget} onChange={(e) => setCampaign({...campaign, budget: Number(e.target.value)})} min="1" className="w-full px-3 py-2 border rounded-lg bg-white" />
+                      <p className="text-xs text-blue-600 mt-1">此预算将由 Facebook 自动分配到各广告组</p>
+                    </div>
+                  </div>
+                )}
+                
+                {!campaign.budgetOptimization && (
+                  <div className="pt-4 border-t border-blue-200">
+                    <p className="text-sm text-amber-600 flex items-center gap-2">
+                      <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" /></svg>
+                      未启用 CBO，请在下一步（广告组设置）中为每个广告组设置预算
+                    </p>
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -556,6 +596,37 @@ export default function BulkAdCreatePage() {
                     <option value="AUTOMATIC">自动版位（推荐）</option><option value="MANUAL">手动版位</option>
                   </select></div>
               </div>
+              
+              {/* 广告组预算（非 CBO 模式） */}
+              {!campaign.budgetOptimization && (
+                <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg">
+                  <h4 className="font-medium text-slate-800 mb-3">广告组预算</h4>
+                  <p className="text-sm text-slate-500 mb-4">由于未启用 CBO，每个广告组需要单独设置预算</p>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm text-slate-600 mb-1">预算类型</label>
+                      <select value={campaign.budgetType} onChange={(e) => setCampaign({...campaign, budgetType: e.target.value})} className="w-full px-3 py-2 border rounded-lg bg-white">
+                        <option value="DAILY">日预算</option><option value="LIFETIME">总预算</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm text-slate-600 mb-1">广告组预算 ($)</label>
+                      <input type="number" value={adset.budget} onChange={(e) => setAdset({...adset, budget: Number(e.target.value)})} min="1" className="w-full px-3 py-2 border rounded-lg bg-white" />
+                      <p className="text-xs text-amber-600 mt-1">每个广告组将使用此预算</p>
+                    </div>
+                  </div>
+                </div>
+              )}
+              
+              {campaign.budgetOptimization && (
+                <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
+                  <div className="flex items-center gap-2 text-green-700">
+                    <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" /></svg>
+                    <span className="font-medium">已启用 CBO 预算优化</span>
+                  </div>
+                  <p className="text-sm text-green-600 mt-1">广告系列预算 ${campaign.budget}，Facebook 将自动分配到各广告组</p>
+                </div>
+              )}
             </div>
           )}
           

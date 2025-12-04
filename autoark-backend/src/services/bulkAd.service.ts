@@ -418,13 +418,21 @@ export const executeTaskForAccount = async (
     })
     
     // 计算 AdSet 预算
-    // 如果启用 CBO，预算在 Campaign 级别，AdSet 不设置预算
-    // 否则，AdSet 必须设置预算
-    const adsetBudget = config.campaign.budgetOptimization 
-      ? undefined 
-      : (config.adset.budget || config.campaign.budget || 50) // 默认 50 USD
-    
-    logger.info(`[BulkAd] AdSet budget config: budgetOptimization=${config.campaign.budgetOptimization}, adsetBudget=${adsetBudget}`)
+    // CBO 模式: 预算在 Campaign 级别设置，AdSet 不设置预算
+    // 非 CBO 模式: 每个 AdSet 必须单独设置预算
+    let adsetBudget: number | undefined
+    if (config.campaign.budgetOptimization) {
+      // CBO 模式，AdSet 不设置预算
+      adsetBudget = undefined
+      logger.info(`[BulkAd] CBO enabled, campaign budget: ${config.campaign.budget}`)
+    } else {
+      // 非 CBO 模式，使用 AdSet 预算
+      adsetBudget = config.adset.budget || config.campaign.budget
+      if (!adsetBudget) {
+        throw new Error('非 CBO 模式下必须设置广告组预算')
+      }
+      logger.info(`[BulkAd] Non-CBO mode, adset budget: ${adsetBudget}`)
+    }
     
     const adsetResult = await createAdSet({
       accountId,
