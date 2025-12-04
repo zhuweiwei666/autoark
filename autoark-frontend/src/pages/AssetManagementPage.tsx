@@ -30,7 +30,7 @@ const COUNTRIES = {
     { code: 'AR', name: '阿根廷' },
     { code: 'CO', name: '哥伦比亚' },
     { code: 'PE', name: '秘鲁' },
-    { code: 'VE', name: '委内瑞拉' },
+    // VE 委内瑞拉 - Facebook 受限国家
     { code: 'CL', name: '智利' },
     { code: 'EC', name: '厄瓜多尔' },
     { code: 'BO', name: '玻利维亚' },
@@ -69,13 +69,13 @@ const COUNTRIES = {
     { code: 'LT', name: '立陶宛' },
   ],
   '东欧': [
-    { code: 'RU', name: '俄罗斯' },
+    // RU 俄罗斯 - Facebook 受限国家
     { code: 'PL', name: '波兰' },
     { code: 'UA', name: '乌克兰' },
     { code: 'CZ', name: '捷克' },
     { code: 'RO', name: '罗马尼亚' },
     { code: 'HU', name: '匈牙利' },
-    { code: 'BY', name: '白俄罗斯' },
+    // BY 白俄罗斯 - Facebook 受限国家
     { code: 'BG', name: '保加利亚' },
     { code: 'SK', name: '斯洛伐克' },
     { code: 'MD', name: '摩尔多瓦' },
@@ -109,7 +109,7 @@ const COUNTRIES = {
     { code: 'MY', name: '马来西亚' },
     { code: 'SG', name: '新加坡' },
     { code: 'PH', name: '菲律宾' },
-    { code: 'MM', name: '缅甸' },
+    // MM 缅甸 - Facebook 受限国家
     { code: 'KH', name: '柬埔寨' },
     { code: 'LA', name: '老挝' },
     { code: 'BN', name: '文莱' },
@@ -121,7 +121,7 @@ const COUNTRIES = {
     { code: 'BD', name: '孟加拉国' },
     { code: 'LK', name: '斯里兰卡' },
     { code: 'NP', name: '尼泊尔' },
-    { code: 'AF', name: '阿富汗' },
+    // AF 阿富汗 - Facebook 受限国家
     { code: 'BT', name: '不丹' },
     { code: 'MV', name: '马尔代夫' },
   ],
@@ -143,7 +143,7 @@ const COUNTRIES = {
     { code: 'QA', name: '卡塔尔' },
     { code: 'BH', name: '巴林' },
     { code: 'OM', name: '阿曼' },
-    { code: 'YE', name: '也门' },
+    // YE 也门 - Facebook 受限国家
     { code: 'JO', name: '约旦' },
     { code: 'LB', name: '黎巴嫩' },
     // SY 叙利亚 - Facebook 受限国家，已移除
@@ -176,8 +176,8 @@ const COUNTRIES = {
     { code: 'MA', name: '摩洛哥' },
     { code: 'DZ', name: '阿尔及利亚' },
     { code: 'TN', name: '突尼斯' },
-    { code: 'LY', name: '利比亚' },
-    // SD 苏丹 - Facebook 受限国家，已移除
+    // LY 利比亚 - Facebook 受限国家
+    // SD 苏丹 - Facebook 受限国家
   ],
   '西非': [
     { code: 'NG', name: '尼日利亚' },
@@ -203,10 +203,10 @@ const COUNTRIES = {
     { code: 'TZ', name: '坦桑尼亚' },
     { code: 'UG', name: '乌干达' },
     { code: 'RW', name: '卢旺达' },
-    { code: 'SO', name: '索马里' },
-    { code: 'ER', name: '厄立特里亚' },
+    // SO 索马里 - Facebook 受限国家
+    // ER 厄立特里亚 - Facebook 受限国家
     { code: 'DJ', name: '吉布提' },
-    { code: 'SS', name: '南苏丹' },
+    // SS 南苏丹 - Facebook 受限国家
     { code: 'BI', name: '布隆迪' },
     { code: 'MG', name: '马达加斯加' },
     { code: 'MU', name: '毛里求斯' },
