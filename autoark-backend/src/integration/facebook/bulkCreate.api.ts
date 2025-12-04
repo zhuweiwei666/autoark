@@ -163,11 +163,13 @@ export const createAdSet = async (params: CreateAdSetParams) => {
 
   try {
     logger.info(`[BulkCreate] Creating adset for campaign ${campaignId}: ${name}`)
+    logger.info(`[BulkCreate] AdSet params: ${JSON.stringify(requestParams, null, 2)}`)
     const res = await facebookClient.post(`/act_${accountId}/adsets`, requestParams)
     logger.info(`[BulkCreate] AdSet created: ${res.id}`)
     return { success: true, id: res.id, data: res }
   } catch (error: any) {
     logger.error(`[BulkCreate] Failed to create adset:`, error.response?.data || error.message)
+    logger.error(`[BulkCreate] AdSet failed params: ${JSON.stringify(requestParams, null, 2)}`)
     return {
       success: false,
       error: {
