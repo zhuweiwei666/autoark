@@ -814,46 +814,31 @@ export const rerunTask = async (taskId: string) => {
   await newTask.save()
   logger.info(`[BulkAd] Task rerun created: ${newTask._id} (from ${taskId})`)
   
-  // 将任务加入队列
-  try {
-    const isRedisAvailable = redisClient && redisClient.status === 'ready'
-    
-    if (isRedisAvailable) {
-      const jobs = config.accounts.map((acc: any) => ({
-        name: `bulk-ad-${newTask._id}-${acc.accountId}`,
-        data: {
-          taskId: newTask._id.toString(),
-          accountId: acc.accountId,
-        },
-        opts: {
-          attempts: 3,
-          backoff: { type: 'exponential', delay: 5000 },
-        },
-      }))
-      
-      await bulkAdQueue.addBulk(jobs)
-      newTask.status = 'queued'
-      newTask.queuedAt = new Date()
-      await newTask.save()
-      
-      logger.info(`[BulkAd] Task ${newTask._id} queued, ${jobs.length} accounts`)
-    } else {
-      // 同步执行
-      logger.info(`[BulkAd] Redis not available, executing synchronously`)
-      newTask.status = 'processing'
-      newTask.startedAt = new Date()
-      await newTask.save()
-      
-      for (const acc of config.accounts) {
-        try {
-          await executeTaskForAccount(newTask._id.toString(), acc.accountId)
-        } catch (err: any) {
-          logger.error(`[BulkAd] Failed for account ${acc.accountId}:`, err.message)
-        }
-      }
+  // 检查 Redis 是否可用
+  const { getRedisClient } = await import('../config/redis')
+  const redisAvailable = (() => {
+    try {
+      return getRedisClient() !== null
+    } catch {
+      return false
     }
-  } catch (queueError: any) {
-    logger.error('[BulkAd] Queue error, executing synchronously:', queueError.message)
+  })()
+  
+  if (redisAvailable) {
+    // Redis 可用，使用队列异步执行
+    logger.info(`[BulkAd] Redis available, adding task to queue`)
+    const { addBulkAdJobsBatch } = await import('../queue/bulkAd.queue')
+    const accountIds = config.accounts.map((acc: any) => acc.accountId)
+    
+    newTask.status = 'queued'
+    newTask.queuedAt = new Date()
+    await newTask.save()
+    
+    await addBulkAdJobsBatch(newTask._id.toString(), accountIds)
+    logger.info(`[BulkAd] Task ${newTask._id} queued, ${accountIds.length} accounts`)
+  } else {
+    // Redis 不可用，直接同步执行
+    logger.info(`[BulkAd] Redis unavailable, executing task synchronously`)
     newTask.status = 'processing'
     newTask.startedAt = new Date()
     await newTask.save()
