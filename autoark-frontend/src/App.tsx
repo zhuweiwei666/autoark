@@ -11,6 +11,8 @@ import TaskManagementPage from './pages/TaskManagementPage'
 import AssetManagementPage from './pages/AssetManagementPage'
 import MaterialLibraryPage from './pages/MaterialLibraryPage'
 import OAuthCallbackPage from './pages/OAuthCallbackPage'
+import AIAnalysisPage from './pages/AIAnalysisPage'
+import AgentManagementPage from './pages/AgentManagementPage'
 
 function App() {
   return (
@@ -37,6 +39,9 @@ function App() {
               <Route path="/bulk-ad/copywriting" element={<AssetManagementPage />} />
               <Route path="/bulk-ad/creative" element={<AssetManagementPage />} />
               <Route path="/bulk-ad/materials" element={<MaterialLibraryPage />} />
+              {/* AI Agent Routes */}
+              <Route path="/ai/analysis" element={<AIAnalysisPage />} />
+              <Route path="/ai/agents" element={<AgentManagementPage />} />
               <Route path="/" element={<DashboardPage />} />
             </Routes>
           </Layout>
