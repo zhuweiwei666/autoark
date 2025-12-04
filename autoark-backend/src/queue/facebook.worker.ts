@@ -38,15 +38,20 @@ export const initWorkers = () => {
     return
   }
 
-  // 创建 Worker 配置（使用 duplicate 创建新连接）
-  const createWorkerOptions = (concurrency: number): WorkerOptions => ({
-    connection: client.duplicate(),
-    concurrency,
-    limiter: {
-      max: 80,
-      duration: 60000,
-    },
-  })
+  // 创建 Worker 配置（使用 duplicate 创建新连接，并设置 BullMQ 必需的选项）
+  const createWorkerOptions = (concurrency: number): WorkerOptions => {
+    const connection = client.duplicate()
+    // BullMQ 要求 maxRetriesPerRequest 为 null
+    connection.options.maxRetriesPerRequest = null
+    return {
+      connection,
+      concurrency,
+      limiter: {
+        max: 80,
+        duration: 60000,
+      },
+    }
+  }
 
   // 检查队列是否已初始化
   if (!accountQueue || !campaignQueue || !adQueue) {
