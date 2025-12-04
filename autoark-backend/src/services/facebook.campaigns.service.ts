@@ -407,20 +407,25 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
                 extractedRoas['purchase_roas'] = purchaseRoas
             }
             
+            // 从 raw 中过滤掉会覆盖正确计算值的字段
+            const rawData = metrics.raw || {}
+            const { ctr: _rawCtr, cpc: _rawCpc, cpm: _rawCpm, ...filteredRaw } = rawData
+            
             return {
                 ...campaignObj,
+                ...filteredRaw,  // 先展开过滤后的 raw 数据
+                ...extractedActions,
+                ...extractedActionValues,
+                ...extractedRoas,
+                // 然后用正确的值覆盖
                 id: campaignObj.campaignId,
                 account_id: campaignObj.accountId,
                 impressions: metrics.impressions || 0,
                 clicks: metrics.clicks || 0,
                 spend: metrics.spendUsd || 0,
                 cpc: metrics.cpc,
-                ctr: metrics.ctr,
+                ctr: metrics.ctr,  // 使用正确计算的 CTR
                 cpm: metrics.cpm,
-                ...(metrics.raw || {}),
-                ...extractedActions,
-                ...extractedActionValues,
-                ...extractedRoas,
                 metrics: metrics,
                 raw_insights: metrics.raw,
             }
@@ -753,8 +758,21 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
             logger.debug(`[getCampaigns] Campaign ${campaignObj.campaignId}: purchase_value=${purchase_value}, metricsObj.purchase_value=${metricsObj.purchase_value}, actionValues.length=${actionValues?.length || 0}, extractedActionValues=${JSON.stringify(extractedActionValues)}`)
         }
         
+        // 从 raw 中过滤掉会覆盖正确计算值的字段
+        const rawData = metricsObj.raw || {}
+        const { ctr: _rawCtr, cpc: _rawCpc, cpm: _rawCpm, ...filteredRaw } = rawData
+        
         return {
             ...campaignObj,
+            // 先展开过滤后的 raw 数据
+            ...filteredRaw,
+            // 提取的 actions
+            ...extractedActions,
+            // 提取的 action_values
+            ...extractedActionValues,
+            // 提取的 purchase_roas
+            ...extractedRoas,
+            // 然后用正确的值覆盖
             // Campaign 基础字段（使用 Facebook 原始字段名）
             id: campaignObj.campaignId,
             account_id: campaignObj.accountId,
@@ -766,14 +784,6 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
             ctr: calculatedCtr, // 使用计算出的 CTR
             cpm: metricsObj.cpm,
             purchase_value: purchase_value || 0, // 确保 purchase_value 被包含
-            // 从 raw 中提取其他字段（如果存在）
-            ...(metricsObj.raw || {}),
-            // 提取的 actions
-            ...extractedActions,
-            // 提取的 action_values
-            ...extractedActionValues,
-            // 提取的 purchase_roas
-            ...extractedRoas,
             // 保留原始数据
             metrics: metricsObj,
             raw_insights: metricsObj.raw,
