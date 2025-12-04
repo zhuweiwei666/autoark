@@ -1,4 +1,156 @@
-b neng i
+import { facebookClient } from './facebookClient'
+import logger from '../../utils/logger'
+
+/**
+ * Facebook 批量创建 API 集成
+ * 用于创建 Campaign, AdSet, Ad, Creative
+ */
+
+// ==================== Campaign 创建 ====================
+
+export interface CreateCampaignParams {
+  accountId: string
+  token: string
+  name: string
+  objective: string
+  status: string
+  buyingType?: string
+  specialAdCategories?: string[]
+  dailyBudget?: number
+  lifetimeBudget?: number
+  bidStrategy?: string
+  spendCap?: number
+}
+
+export const createCampaign = async (params: CreateCampaignParams) => {
+  const {
+    accountId,
+    token,
+    name,
+    objective,
+    status,
+    buyingType = 'AUCTION',
+    specialAdCategories = [],
+    dailyBudget,
+    lifetimeBudget,
+    bidStrategy,
+    spendCap,
+  } = params
+
+  const requestParams: any = {
+    access_token: token,
+    name,
+    objective,
+    status,
+    buying_type: buyingType,
+    special_ad_categories: JSON.stringify(specialAdCategories),
+  }
+
+  // 预算设置（只有非 CBO 模式下才设置）
+  if (dailyBudget && !lifetimeBudget) {
+    requestParams.daily_budget = Math.round(dailyBudget * 100) // 转换为分
+  }
+  if (lifetimeBudget) {
+    requestParams.lifetime_budget = Math.round(lifetimeBudget * 100)
+  }
+
+  if (bidStrategy) {
+    requestParams.bid_strategy = bidStrategy
+  }
+
+  if (spendCap) {
+    requestParams.spend_cap = Math.round(spendCap * 100)
+  }
+
+  try {
+    logger.info(`[BulkCreate] Creating campaign for account ${accountId}: ${name}`)
+    logger.info(`[BulkCreate] Campaign params: ${JSON.stringify(requestParams, null, 2)}`)
+    const res = await facebookClient.post(`/act_${accountId}/campaigns`, requestParams)
+    logger.info(`[BulkCreate] Campaign created: ${res.id}`)
+    return { success: true, id: res.id, data: res }
+  } catch (error: any) {
+    const errorData = error.response?.data?.error || error.response?.data || error.message
+    logger.error(`[BulkCreate] Failed to create campaign - Full error:`, JSON.stringify(errorData, null, 2))
+    return {
+      success: false,
+      error: {
+        code: error.response?.data?.error?.code || 'UNKNOWN',
+        message: error.response?.data?.error?.message || error.message,
+        details: error.response?.data,
+      },
+    }
+  }
+}
+
+// ==================== AdSet 创建 ====================
+
+export interface CreateAdSetParams {
+  accountId: string
+  token: string
+  campaignId: string
+  name: string
+  status: string
+  targeting: any
+  optimizationGoal: string
+  billingEvent: string
+  bidStrategy?: string
+  bidAmount?: number
+  dailyBudget?: number
+  lifetimeBudget?: number
+  startTime?: string
+  endTime?: string
+  promotedObject?: any
+  attribution_spec?: any
+  pacing_type?: string[]
+}
+
+export const createAdSet = async (params: CreateAdSetParams) => {
+  const {
+    accountId,
+    token,
+    campaignId,
+    name,
+    status,
+    targeting,
+    optimizationGoal,
+    billingEvent,
+    bidStrategy,
+    bidAmount,
+    dailyBudget,
+    lifetimeBudget,
+    startTime,
+    endTime,
+    promotedObject,
+    attribution_spec,
+    pacing_type,
+  } = params
+
+  const requestParams: any = {
+    access_token: token,
+    campaign_id: campaignId,
+    name,
+    status,
+    targeting: JSON.stringify(targeting),
+    optimization_goal: optimizationGoal,
+    billing_event: billingEvent,
+  }
+
+  if (bidStrategy) {
+    requestParams.bid_strategy = bidStrategy
+  }
+  if (bidAmount) {
+    requestParams.bid_amount = Math.round(bidAmount * 100)
+  }
+  if (dailyBudget) {
+    requestParams.daily_budget = Math.round(dailyBudget * 100)
+  }
+  if (lifetimeBudget) {
+    requestParams.lifetime_budget = Math.round(lifetimeBudget * 100)
+  }
+  if (startTime) {
+    requestParams.start_time = startTime
+  }
+  if (endTime) {
     requestParams.end_time = endTime
   }
   if (promotedObject) {
@@ -333,4 +485,3 @@ export const getCustomConversions = async (accountId: string, token: string) => 
     return { success: false, error: error.message, data: [] }
   }
 }
-
