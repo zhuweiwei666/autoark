@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 
 interface HealthData {
   healthScore: number
@@ -39,6 +39,19 @@ export default function AIAnalysisPage() {
   const [chatInput, setChatInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [chatLoading, setChatLoading] = useState(false)
+  const chatContainerRef = useRef<HTMLDivElement>(null)
+
+  // 自动滚动到底部
+  const scrollToBottom = () => {
+    if (chatContainerRef.current) {
+      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight
+    }
+  }
+
+  // 当消息变化时自动滚动
+  useEffect(() => {
+    scrollToBottom()
+  }, [chatMessages, chatLoading])
 
   useEffect(() => {
     loadHealthData()
@@ -270,7 +283,7 @@ export default function AIAnalysisPage() {
           <div className="max-w-4xl mx-auto">
             <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-lg shadow-black/5">
               {/* 对话区域 */}
-              <div className="h-[500px] overflow-y-auto p-6 space-y-4 bg-slate-50">
+              <div ref={chatContainerRef} className="h-[500px] overflow-y-auto p-6 space-y-4 bg-slate-50">
                 {chatMessages.length === 0 && (
                   <div className="text-center text-slate-400 py-20">
                     <div className="text-6xl mb-4">🤖</div>

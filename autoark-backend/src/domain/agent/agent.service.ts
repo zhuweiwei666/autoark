@@ -550,42 +550,59 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
       { $limit: 10 }
     ])
 
-    // 4. 分国家数据
-    const countryData = await MetricsDaily.aggregate([
-      {
-        $match: {
-          campaignId: { $exists: true, $ne: null },
-          date: today,
-          country: { $exists: true, $ne: null }
+    // 4. 分国家数据 - 从 Facebook API 获取
+    const countryDataMap: Record<string, { country: string, spend: number, revenue: number, impressions: number, clicks: number }> = {}
+    
+    if (token) {
+      for (const account of accounts.slice(0, 5)) { // 限制账户数量
+        try {
+          const insights = await fetchInsights(
+            `act_${account.accountId}`,
+            'campaign',
+            undefined,
+            token,
+            ['country'],
+            { since: today, until: today }
+          )
+          
+          for (const insight of insights) {
+            const country = insight.country
+            if (!country) continue
+            
+            if (!countryDataMap[country]) {
+              countryDataMap[country] = { country, spend: 0, revenue: 0, impressions: 0, clicks: 0 }
+            }
+            
+            countryDataMap[country].spend += parseFloat(insight.spend || '0')
+            countryDataMap[country].impressions += parseInt(insight.impressions || '0', 10)
+            countryDataMap[country].clicks += parseInt(insight.clicks || '0', 10)
+            
+            // 提取 purchase value
+            if (insight.action_values) {
+              for (const av of insight.action_values) {
+                if (av.action_type === 'purchase' || av.action_type === 'omni_purchase') {
+                  countryDataMap[country].revenue += parseFloat(av.value || '0')
+                }
+              }
+            }
+          }
+        } catch (e) {
+          // 继续
         }
-      },
-      {
-        $group: {
-          _id: '$country',
-          spend: { $sum: '$spendUsd' },
-          revenue: { $sum: { $ifNull: ['$purchase_value', 0] } },
-          impressions: { $sum: '$impressions' },
-          clicks: { $sum: '$clicks' },
-        }
-      },
-      {
-        $project: {
-          country: '$_id',
-          spend: { $round: ['$spend', 2] },
-          revenue: { $round: ['$revenue', 2] },
-          roas: {
-            $round: [
-              { $cond: [{ $gt: ['$spend', 0] }, { $divide: ['$revenue', '$spend'] }, 0] },
-              2
-            ]
-          },
-          impressions: 1,
-          clicks: 1,
-        }
-      },
-      { $sort: { spend: -1 } },
-      { $limit: 10 }
-    ])
+      }
+    }
+    
+    const countryData = Object.values(countryDataMap)
+      .map(c => ({
+        country: c.country,
+        spend: Math.round(c.spend * 100) / 100,
+        revenue: Math.round(c.revenue * 100) / 100,
+        roas: c.spend > 0 ? Math.round((c.revenue / c.spend) * 100) / 100 : 0,
+        impressions: c.impressions,
+        clicks: c.clicks,
+      }))
+      .sort((a, b) => b.spend - a.spend)
+      .slice(0, 15)
 
     // 5. 表现最佳的广告系列
     const topCampaigns = await MetricsDaily.aggregate([
