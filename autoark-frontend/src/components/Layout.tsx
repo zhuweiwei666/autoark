@@ -11,62 +11,69 @@ export default function Layout({ children }: LayoutProps) {
     return location.pathname === path
   }
 
-  // 菜单项组件
-  const MenuItem = ({ to, icon, label, activeColor = 'slate' }: { to: string; icon: React.ReactNode; label: string; activeColor?: string }) => {
+  // 菜单项组件 - 液态玻璃风格
+  const MenuItem = ({ to, icon, label }: { to: string; icon: React.ReactNode; label: string }) => {
     const active = isActive(to)
-    const colorClasses: Record<string, string> = {
-      slate: 'bg-slate-200 border border-slate-300 text-slate-900',
-      green: 'bg-green-100 border border-green-300 text-green-700',
-      purple: 'bg-purple-100 border border-purple-300 text-purple-700',
-      blue: 'bg-blue-100 border border-blue-300 text-blue-700',
-    }
     
     return (
       <Link
         to={to}
-        className={`w-full px-4 py-3 rounded-lg text-sm font-medium transition-colors flex items-center gap-3 ${
-          active
-            ? colorClasses[activeColor]
-            : 'text-slate-700 hover:text-slate-900 hover:bg-slate-100'
-        }`}
+        className={`
+          w-full px-4 py-2.5 rounded-xl text-sm font-medium transition-all duration-300 flex items-center gap-3
+          ${active
+            ? 'bg-white/80 backdrop-blur-xl shadow-lg shadow-blue-500/10 text-slate-900 border border-white/50'
+            : 'text-slate-600 hover:text-slate-900 hover:bg-white/40 hover:backdrop-blur-sm'
+          }
+        `}
       >
-        {icon}
+        <span className={`transition-colors ${active ? 'text-blue-500' : ''}`}>{icon}</span>
         <span>{label}</span>
       </Link>
     )
   }
 
-  // 板块标题组件
+  // 板块标题组件 - 液态玻璃风格
   const SectionTitle = ({ title, tag }: { title: string; tag?: string }) => (
-    <div className="flex items-center gap-2 px-4 mb-2 mt-4">
+    <div className="flex items-center gap-2 px-3 mb-3 mt-6 first:mt-0">
       {tag && (
-        <span className="text-xs px-2 py-0.5 rounded border border-sky-300 bg-sky-50 text-sky-600 font-medium">
+        <span className="text-[10px] px-2 py-0.5 rounded-full bg-gradient-to-r from-blue-500/20 to-cyan-500/20 backdrop-blur-sm text-blue-600 font-semibold border border-blue-200/50">
           {tag}
         </span>
       )}
-      <span className="text-sm font-semibold text-sky-500">{title}</span>
+      <span className="text-xs font-bold uppercase tracking-widest bg-gradient-to-r from-blue-600 to-cyan-500 bg-clip-text text-transparent">
+        {title}
+      </span>
     </div>
   )
 
   return (
-    <div className="flex h-screen overflow-hidden bg-white">
-      {/* 左侧边栏菜单 */}
-      <aside className="w-64 bg-white border-r border-slate-200 flex flex-col shadow-sm">
+    <div className="flex h-screen overflow-hidden bg-gradient-to-br from-slate-100 via-blue-50/30 to-indigo-100/50">
+      {/* 左侧边栏 - 液态玻璃效果 */}
+      <aside className="w-72 backdrop-blur-2xl bg-white/40 border-r border-white/60 flex flex-col shadow-2xl shadow-slate-200/50">
         {/* Logo */}
-        <div className="p-4 border-b border-slate-200">
-          <h1 className="text-xl font-bold text-slate-900">AutoArk</h1>
-          <span className="text-xs text-slate-600">V0.1</span>
+        <div className="p-6 border-b border-white/40">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center shadow-lg shadow-blue-500/30">
+              <svg className="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" />
+              </svg>
+            </div>
+            <div>
+              <h1 className="text-lg font-bold bg-gradient-to-r from-slate-900 to-slate-700 bg-clip-text text-transparent">AutoArk</h1>
+              <span className="text-[10px] font-medium text-slate-400 tracking-wider">VERSION 0.1</span>
+            </div>
+          </div>
         </div>
         
         {/* 菜单项 */}
-        <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
+        <nav className="flex-1 p-4 space-y-1 overflow-y-auto scrollbar-thin">
           
           {/* ========== 数据资产板块 ========== */}
           <SectionTitle title="数据资产" />
           
           <MenuItem
             to="/dashboard"
-            icon={<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-5 h-5"><path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75h2.25A2.25 2.25 0 018.25 18v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V15.75zM13.5 6h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H13.5A2.25 2.25 0 0111.25 18V8.25a2.25 2.25 0 012.25-2.25z" /></svg>}
+            icon={<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-5 h-5"><path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z" /></svg>}
             label="仪表盘"
           />
           <MenuItem
@@ -76,7 +83,7 @@ export default function Layout({ children }: LayoutProps) {
           />
           <MenuItem
             to="/fb-accounts"
-            icon={<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-5 h-5"><path strokeLinecap="round" strokeLinejoin="round" d="M19 21v-2a4 4 0 00-4-4H9a4 4 0 00-4 4v2m16-11V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16" /></svg>}
+            icon={<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-5 h-5"><path strokeLinecap="round" strokeLinejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z" /></svg>}
             label="账户管理"
           />
           <MenuItem
@@ -96,15 +103,12 @@ export default function Layout({ children }: LayoutProps) {
           />
 
           {/* ========== 广告发布板块 ========== */}
-          <div className="pt-4 mt-2 border-t border-slate-200">
-            <SectionTitle title="广告发布" tag="批量发布" />
-          </div>
+          <SectionTitle title="广告发布" tag="批量" />
           
           <MenuItem
             to="/bulk-ad/create"
             icon={<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-5 h-5"><path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" /></svg>}
             label="创建广告"
-            activeColor="green"
           />
           <MenuItem
             to="/bulk-ad/tasks"
@@ -120,32 +124,30 @@ export default function Layout({ children }: LayoutProps) {
             to="/bulk-ad/materials"
             icon={<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-5 h-5"><path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z" /></svg>}
             label="素材库"
-            activeColor="purple"
           />
 
           {/* ========== AI Agent板块 ========== */}
-          <div className="pt-4 mt-2 border-t border-slate-200">
-            <SectionTitle title="AI agent" />
-          </div>
+          <SectionTitle title="AI Agent" />
           
           <MenuItem
             to="/ai/analysis"
             icon={<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-5 h-5"><path strokeLinecap="round" strokeLinejoin="round" d="M3.75 3v11.25A2.25 2.25 0 006 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0118 16.5h-2.25m-7.5 0h7.5m-7.5 0l-1 3m8.5-3l1 3m0 0l.5 1.5m-.5-1.5h-9.5m0 0l-.5 1.5M9 11.25v1.5M12 9v3.75m3-6v6" /></svg>}
             label="AI分析"
-            activeColor="blue"
           />
           <MenuItem
             to="/ai/agents"
             icon={<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-5 h-5"><path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5" /></svg>}
             label="Agent管理"
-            activeColor="blue"
           />
 
         </nav>
         
-        {/* Health Badge */}
-        <div className="p-4 border-t border-slate-200">
-          <span className="text-xs px-3 py-1 rounded-full bg-emerald-100 text-emerald-700 block text-center">Healthy</span>
+        {/* Health Badge - 液态玻璃风格 */}
+        <div className="p-4 border-t border-white/40">
+          <div className="flex items-center justify-center gap-2 px-4 py-2 rounded-full bg-gradient-to-r from-emerald-500/10 to-teal-500/10 backdrop-blur-sm border border-emerald-200/50">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shadow-lg shadow-emerald-500/50"></span>
+            <span className="text-xs font-medium text-emerald-700">系统运行正常</span>
+          </div>
         </div>
       </aside>
 
