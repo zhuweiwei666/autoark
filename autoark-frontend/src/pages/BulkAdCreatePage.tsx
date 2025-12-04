@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, Link } from 'react-router-dom'
 
 const API_BASE = '/api'
 
@@ -27,12 +27,14 @@ export default function BulkAdCreatePage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   
+  const [hasToken, setHasToken] = useState<boolean | null>(null) // null = loading
   const [accounts, setAccounts] = useState<any[]>([])
   const [pages, setPages] = useState<any[]>([])
   const [pixels, setPixels] = useState<any[]>([])
   const [targetingPackages, setTargetingPackages] = useState<any[]>([])
   const [copywritingPackages, setCopywritingPackages] = useState<any[]>([])
   const [creativeGroups, setCreativeGroups] = useState<any[]>([])
+  const [accountsLoading, setAccountsLoading] = useState(true)
   
   const [selectedAccounts, setSelectedAccounts] = useState<AccountConfig[]>([])
   const [campaign, setCampaign] = useState({
@@ -67,17 +69,34 @@ export default function BulkAdCreatePage() {
   })
   
   useEffect(() => {
-    loadAccounts()
+    checkTokenAndLoadAccounts()
     loadAssets()
   }, [])
   
-  const loadAccounts = async () => {
+  const checkTokenAndLoadAccounts = async () => {
+    setAccountsLoading(true)
     try {
+      // 1. 检查是否有有效的 Facebook Token
+      const tokenRes = await fetch(`${API_BASE}/fb-token`)
+      const tokenData = await tokenRes.json()
+      const tokens = tokenData.data || []
+      const activeToken = tokens.find((t: any) => t.status === 'active')
+      setHasToken(!!activeToken)
+      
+      if (!activeToken) {
+        setAccountsLoading(false)
+        return
+      }
+      
+      // 2. 加载账户列表
       const res = await fetch(`${API_BASE}/facebook/accounts`)
       const data = await res.json()
       if (data.success) setAccounts(data.data || [])
     } catch (err) {
       console.error('Failed to load accounts:', err)
+      setHasToken(false)
+    } finally {
+      setAccountsLoading(false)
     }
   }
   
@@ -211,36 +230,88 @@ export default function BulkAdCreatePage() {
           {currentStep === 1 && (
             <div className="space-y-6">
               <h3 className="text-lg font-semibold">选择投放账户</h3>
-              <div className="grid grid-cols-2 gap-4">
-                {accounts.map(account => (
-                  <label key={account.account_id} className={`flex items-center p-4 border rounded-lg cursor-pointer ${
-                    selectedAccounts.find(a => a.accountId === account.account_id) ? 'border-blue-500 bg-blue-50' : 'border-slate-200'
-                  }`}>
-                    <input type="checkbox" checked={!!selectedAccounts.find(a => a.accountId === account.account_id)} onChange={() => toggleAccount(account)} className="mr-3" />
-                    <div><div className="font-medium">{account.name || account.account_id}</div><div className="text-sm text-slate-500">{account.account_id}</div></div>
-                  </label>
-                ))}
-              </div>
-              {selectedAccounts.length > 0 && (
-                <div className="space-y-4">
-                  <h4 className="font-semibold">账户配置</h4>
-                  {selectedAccounts.map(acc => (
-                    <div key={acc.accountId} className="p-4 border rounded-lg grid grid-cols-3 gap-4">
-                      <div><label className="block text-sm text-slate-600 mb-1">Facebook 主页</label>
-                        <select value={acc.pageId} onChange={(e) => updateAccountConfig(acc.accountId, 'pageId', e.target.value)} onFocus={() => loadAccountAssets(acc.accountId)} className="w-full px-3 py-2 border rounded-lg">
-                          <option value="">选择主页</option>{pages.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                        </select></div>
-                      <div><label className="block text-sm text-slate-600 mb-1">Pixel</label>
-                        <select value={acc.pixelId} onChange={(e) => updateAccountConfig(acc.accountId, 'pixelId', e.target.value)} onFocus={() => loadAccountAssets(acc.accountId)} className="w-full px-3 py-2 border rounded-lg">
-                          <option value="">选择 Pixel</option>{pixels.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                        </select></div>
-                      <div><label className="block text-sm text-slate-600 mb-1">转化事件</label>
-                        <select value={acc.conversionEvent} onChange={(e) => updateAccountConfig(acc.accountId, 'conversionEvent', e.target.value)} className="w-full px-3 py-2 border rounded-lg">
-                          <option value="PURCHASE">Purchase</option><option value="ADD_TO_CART">Add to Cart</option><option value="LEAD">Lead</option>
-                        </select></div>
-                    </div>
-                  ))}
+              
+              {/* 加载中 */}
+              {accountsLoading && (
+                <div className="text-center py-12 text-slate-500">
+                  <div className="animate-spin w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full mx-auto mb-3"></div>
+                  <p>正在检查 Facebook 授权状态...</p>
                 </div>
+              )}
+              
+              {/* 未绑定 Facebook */}
+              {!accountsLoading && hasToken === false && (
+                <div className="bg-orange-50 border border-orange-200 rounded-xl p-6 text-center">
+                  <div className="w-16 h-16 bg-orange-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-8 h-8 text-orange-500">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+                    </svg>
+                  </div>
+                  <h4 className="text-lg font-semibold text-orange-800 mb-2">请先绑定 Facebook 账号</h4>
+                  <p className="text-orange-600 mb-4">在创建广告之前，您需要先授权 Facebook 账号并同步广告资产</p>
+                  <Link to="/fb-token" className="inline-flex items-center gap-2 px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-5 h-5">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z" />
+                    </svg>
+                    前往 Token 管理绑定 Facebook
+                  </Link>
+                </div>
+              )}
+              
+              {/* 已绑定但没有账户 */}
+              {!accountsLoading && hasToken === true && accounts.length === 0 && (
+                <div className="bg-blue-50 border border-blue-200 rounded-xl p-6 text-center">
+                  <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-8 h-8 text-blue-500">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
+                    </svg>
+                  </div>
+                  <h4 className="text-lg font-semibold text-blue-800 mb-2">请同步 Facebook 广告账户</h4>
+                  <p className="text-blue-600 mb-4">您已绑定 Facebook，但还没有同步广告账户资产</p>
+                  <Link to="/fb-accounts" className="inline-flex items-center gap-2 px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-5 h-5">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
+                    </svg>
+                    前往账户管理同步资产
+                  </Link>
+                </div>
+              )}
+              
+              {/* 有账户可选 */}
+              {!accountsLoading && hasToken === true && accounts.length > 0 && (
+                <>
+                  <div className="grid grid-cols-2 gap-4">
+                    {accounts.map(account => (
+                      <label key={account.account_id} className={`flex items-center p-4 border rounded-lg cursor-pointer transition-colors ${
+                        selectedAccounts.find(a => a.accountId === account.account_id) ? 'border-blue-500 bg-blue-50' : 'border-slate-200 hover:border-slate-300'
+                      }`}>
+                        <input type="checkbox" checked={!!selectedAccounts.find(a => a.accountId === account.account_id)} onChange={() => toggleAccount(account)} className="mr-3" />
+                        <div><div className="font-medium">{account.name || account.account_id}</div><div className="text-sm text-slate-500">{account.account_id}</div></div>
+                      </label>
+                    ))}
+                  </div>
+                  {selectedAccounts.length > 0 && (
+                    <div className="space-y-4">
+                      <h4 className="font-semibold">账户配置</h4>
+                      {selectedAccounts.map(acc => (
+                        <div key={acc.accountId} className="p-4 border rounded-lg grid grid-cols-3 gap-4">
+                          <div><label className="block text-sm text-slate-600 mb-1">Facebook 主页</label>
+                            <select value={acc.pageId} onChange={(e) => updateAccountConfig(acc.accountId, 'pageId', e.target.value)} onFocus={() => loadAccountAssets(acc.accountId)} className="w-full px-3 py-2 border rounded-lg">
+                              <option value="">选择主页</option>{pages.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                            </select></div>
+                          <div><label className="block text-sm text-slate-600 mb-1">Pixel</label>
+                            <select value={acc.pixelId} onChange={(e) => updateAccountConfig(acc.accountId, 'pixelId', e.target.value)} onFocus={() => loadAccountAssets(acc.accountId)} className="w-full px-3 py-2 border rounded-lg">
+                              <option value="">选择 Pixel</option>{pixels.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                            </select></div>
+                          <div><label className="block text-sm text-slate-600 mb-1">转化事件</label>
+                            <select value={acc.conversionEvent} onChange={(e) => updateAccountConfig(acc.accountId, 'conversionEvent', e.target.value)} className="w-full px-3 py-2 border rounded-lg">
+                              <option value="PURCHASE">Purchase</option><option value="ADD_TO_CART">Add to Cart</option><option value="LEAD">Lead</option>
+                            </select></div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
               )}
             </div>
           )}
