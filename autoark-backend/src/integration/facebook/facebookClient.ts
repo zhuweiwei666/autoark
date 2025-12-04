@@ -6,6 +6,24 @@ import { tokenPool } from './tokenPool'
 const FB_API_VERSION = 'v19.0'
 const FB_BASE_URL = 'https://graph.facebook.com'
 
+class FacebookApiError extends Error {
+  response?: any
+  code?: number
+  subcode?: number
+  userMessage?: string
+  
+  constructor(message: string, responseData?: any) {
+    super(message)
+    this.name = 'FacebookApiError'
+    this.response = responseData
+    if (responseData?.error) {
+      this.code = responseData.error.code
+      this.subcode = responseData.error.error_subcode
+      this.userMessage = responseData.error.error_user_msg || responseData.error.error_user_title
+    }
+  }
+}
+
 const handleApiError = (context: string, error: any, token?: string) => {
   const errMsg = error.response?.data?.error?.message || error.message
   const errorCode = error.response?.data?.error?.code
@@ -23,14 +41,16 @@ const handleApiError = (context: string, error: any, token?: string) => {
     }
     
     logger.warn(`Facebook API Rate Limit [${context}]: ${errMsg}`)
-    throw new Error(`RATE_LIMIT: ${errMsg}`)
+    const rateLimitError = new FacebookApiError(`RATE_LIMIT: ${errMsg}`, error.response?.data)
+    throw rateLimitError
   }
   
   logger.error(
     `Facebook API Error [${context}]: ${errMsg}`,
     error.response?.data,
   )
-  throw new Error(`Facebook API [${context}] failed: ${errMsg}`)
+  const apiError = new FacebookApiError(`Facebook API [${context}] failed: ${errMsg}`, error.response?.data)
+  throw apiError
 }
 
 export const facebookClient = {

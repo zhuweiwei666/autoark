@@ -240,21 +240,23 @@ export const createAdCreative = async (params: CreateAdCreativeParams) => {
     logger.info(`[BulkCreate] Ad Creative created: ${res.id}`)
     return { success: true, id: res.id, data: res }
   } catch (error: any) {
-    const fbError = error.response?.data?.error
+    // 从 FacebookApiError 获取详细信息
+    const fbError = error.response?.error || {}
+    const responseData = error.response || {}
     logger.error(`[BulkCreate] Failed to create ad creative - Full error:`)
-    logger.error(`[BulkCreate] Error code: ${fbError?.code}`)
-    logger.error(`[BulkCreate] Error message: ${fbError?.message}`)
-    logger.error(`[BulkCreate] Error type: ${fbError?.type}`)
-    logger.error(`[BulkCreate] Error subcode: ${fbError?.error_subcode}`)
-    logger.error(`[BulkCreate] Error user_msg: ${fbError?.error_user_msg}`)
-    logger.error(`[BulkCreate] Full response: ${JSON.stringify(error.response?.data, null, 2)}`)
+    logger.error(`[BulkCreate] Error code: ${error.code || fbError.code}`)
+    logger.error(`[BulkCreate] Error message: ${fbError.message || error.message}`)
+    logger.error(`[BulkCreate] Error type: ${fbError.type}`)
+    logger.error(`[BulkCreate] Error subcode: ${error.subcode || fbError.error_subcode}`)
+    logger.error(`[BulkCreate] Error user_msg: ${error.userMessage || fbError.error_user_msg || fbError.error_user_title}`)
+    logger.error(`[BulkCreate] Full response: ${JSON.stringify(responseData, null, 2)}`)
     logger.error(`[BulkCreate] Creative failed params: ${JSON.stringify(requestParams, null, 2)}`)
     return {
       success: false,
       error: {
-        code: error.response?.data?.error?.code || 'UNKNOWN',
-        message: error.response?.data?.error?.message || error.message,
-        details: error.response?.data,
+        code: error.code || fbError.code || 'UNKNOWN',
+        message: fbError.message || error.message,
+        details: responseData,
       },
     }
   }
