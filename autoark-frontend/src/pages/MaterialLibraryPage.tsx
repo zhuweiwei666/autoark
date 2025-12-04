@@ -23,30 +23,32 @@ interface Material {
   folder: string
   usageCount: number
   createdAt: string
-  fileSizeFormatted?: string
 }
 
-interface FolderInfo {
+interface Folder {
+  _id: string
   name: string
+  parentId: string | null
+  path: string
+  level: number
   count: number
 }
 
 export default function MaterialLibraryPage() {
   const [materials, setMaterials] = useState<Material[]>([])
-  const [folders, setFolders] = useState<FolderInfo[]>([])
+  const [folders, setFolders] = useState<Folder[]>([])
   const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
   
-  // 当前选中的文件夹
-  const [currentFolder, setCurrentFolder] = useState<string>('全部文件')
+  // 当前选中的文件夹路径
+  const [currentPath, setCurrentPath] = useState<string>('')
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set())
   
-  // 筛选条件
-  const [filter, setFilter] = useState({
-    type: '',
-    search: '',
-  })
+  // 筛选
+  const [filter, setFilter] = useState({ type: '', search: '' })
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
+  const [totalCount, setTotalCount] = useState(0)
   const pageSize = 24
   
   // 选中状态
@@ -57,10 +59,11 @@ export default function MaterialLibraryPage() {
   const [configStatus, setConfigStatus] = useState<{ configured: boolean; missing: string[] } | null>(null)
   
   // 文件夹操作
-  const [editingFolder, setEditingFolder] = useState<string | null>(null)
+  const [editingFolderId, setEditingFolderId] = useState<string | null>(null)
+  const [editingName, setEditingName] = useState('')
+  const [creatingInParent, setCreatingInParent] = useState<string | null>(null) // null = 根目录创建
   const [newFolderName, setNewFolderName] = useState('')
-  const [isCreatingFolder, setIsCreatingFolder] = useState(false)
-  const [folderContextMenu, setFolderContextMenu] = useState<{ x: number; y: number; folder: string } | null>(null)
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; folder: Folder } | null>(null)
   
   const fileInputRef = useRef<HTMLInputElement>(null)
   const newFolderInputRef = useRef<HTMLInputElement>(null)
@@ -72,17 +75,17 @@ export default function MaterialLibraryPage() {
   
   useEffect(() => {
     loadMaterials()
-  }, [currentFolder, filter, page])
+  }, [currentPath, filter, page])
   
   useEffect(() => {
-    if (isCreatingFolder && newFolderInputRef.current) {
+    if ((creatingInParent !== null || creatingInParent === '') && newFolderInputRef.current) {
       newFolderInputRef.current.focus()
     }
-  }, [isCreatingFolder])
+  }, [creatingInParent])
   
   // 点击空白处关闭右键菜单
   useEffect(() => {
-    const handleClick = () => setFolderContextMenu(null)
+    const handleClick = () => setContextMenu(null)
     document.addEventListener('click', handleClick)
     return () => document.removeEventListener('click', handleClick)
   }, [])
@@ -101,10 +104,11 @@ export default function MaterialLibraryPage() {
   
   const loadFolders = async () => {
     try {
-      const res = await fetch(`${API_BASE}/materials/folders`)
+      const res = await fetch(`${API_BASE}/materials/folder-tree`)
       const data = await res.json()
       if (data.success) {
-        setFolders(data.data || [])
+        setFolders(data.data.folders || [])
+        setTotalCount(data.data.totalCount || 0)
       }
     } catch (err) {
       console.error('Failed to load folders:', err)
@@ -119,7 +123,7 @@ export default function MaterialLibraryPage() {
         pageSize: String(pageSize),
       })
       if (filter.type) params.append('type', filter.type)
-      if (currentFolder !== '全部文件') params.append('folder', currentFolder)
+      if (currentPath) params.append('folder', currentPath)
       if (filter.search) params.append('search', filter.search)
       
       const res = await fetch(`${API_BASE}/materials?${params}`)
@@ -142,7 +146,7 @@ export default function MaterialLibraryPage() {
     
     const formData = new FormData()
     const fileArray = Array.from(files)
-    const targetFolder = currentFolder === '全部文件' ? '默认' : currentFolder
+    const targetFolder = currentPath || '默认'
     
     if (fileArray.length === 1) {
       formData.append('file', fileArray[0])
@@ -249,30 +253,42 @@ export default function MaterialLibraryPage() {
     alert('URL 已复制到剪贴板')
   }
   
-  // 创建文件夹
-  const handleCreateFolder = () => {
+  // ==================== 文件夹操作 ====================
+  
+  const handleCreateFolder = async (parentId: string | null) => {
     if (!newFolderName.trim()) {
-      setIsCreatingFolder(false)
+      setCreatingInParent(null)
+      setNewFolderName('')
       return
     }
-    if (folders.some(f => f.name === newFolderName.trim())) {
-      alert('文件夹已存在')
-      return
+    
+    try {
+      const res = await fetch(`${API_BASE}/materials/create-folder`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newFolderName.trim(), parentId }),
+      })
+      const data = await res.json()
+      if (data.success) {
+        loadFolders()
+        // 展开父文件夹
+        if (parentId) {
+          setExpandedFolders(prev => new Set([...prev, parentId]))
+        }
+      } else {
+        alert(data.error)
+      }
+    } catch (err: any) {
+      alert(`创建失败：${err.message}`)
     }
-    setFolders([...folders, { name: newFolderName.trim(), count: 0 }])
-    setCurrentFolder(newFolderName.trim())
+    
+    setCreatingInParent(null)
     setNewFolderName('')
-    setIsCreatingFolder(false)
   }
   
-  // 重命名文件夹
-  const handleRenameFolder = async (oldName: string, newName: string) => {
-    if (!newName.trim() || newName === oldName) {
-      setEditingFolder(null)
-      return
-    }
-    if (folders.some(f => f.name === newName.trim() && f.name !== oldName)) {
-      alert('文件夹名称已存在')
+  const handleRenameFolder = async (folderId: string) => {
+    if (!editingName.trim()) {
+      setEditingFolderId(null)
       return
     }
     
@@ -280,66 +296,70 @@ export default function MaterialLibraryPage() {
       const res = await fetch(`${API_BASE}/materials/rename-folder`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ oldName, newName: newName.trim() }),
+        body: JSON.stringify({ folderId, newName: editingName.trim() }),
       })
       const data = await res.json()
       if (data.success) {
-        if (currentFolder === oldName) {
-          setCurrentFolder(newName.trim())
+        // 如果当前选中的是被重命名的文件夹，更新路径
+        const folder = folders.find(f => f._id === folderId)
+        if (folder && currentPath === folder.path) {
+          setCurrentPath(data.data.path)
         }
         loadFolders()
+        loadMaterials()
       } else {
-        alert(`重命名失败：${data.error}`)
+        alert(data.error)
       }
     } catch (err: any) {
       alert(`重命名失败：${err.message}`)
     }
-    setEditingFolder(null)
+    
+    setEditingFolderId(null)
+    setEditingName('')
   }
   
-  // 删除文件夹
-  const handleDeleteFolder = async (folderName: string) => {
-    const folder = folders.find(f => f.name === folderName)
-    if (folder && folder.count > 0) {
-      if (!confirm(`文件夹 "${folderName}" 中有 ${folder.count} 个素材，删除后素材将移至"默认"文件夹。确定删除？`)) {
-        return
-      }
-    } else {
-      if (!confirm(`确定删除文件夹 "${folderName}" 吗？`)) {
-        return
-      }
-    }
+  const handleDeleteFolder = async (folderId: string) => {
+    const folder = folders.find(f => f._id === folderId)
+    if (!folder) return
+    
+    const hasChildren = folders.some(f => f.parentId === folderId)
+    const message = hasChildren
+      ? `文件夹 "${folder.name}" 包含子文件夹，删除后所有内容将移至"默认"。确定删除？`
+      : folder.count > 0
+        ? `文件夹 "${folder.name}" 中有 ${folder.count} 个素材，删除后素材将移至"默认"。确定删除？`
+        : `确定删除文件夹 "${folder.name}" 吗？`
+    
+    if (!confirm(message)) return
     
     try {
       const res = await fetch(`${API_BASE}/materials/delete-folder`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ folderName }),
+        body: JSON.stringify({ folderId }),
       })
       const data = await res.json()
       if (data.success) {
-        if (currentFolder === folderName) {
-          setCurrentFolder('全部文件')
+        if (currentPath === folder.path || currentPath.startsWith(folder.path + '/')) {
+          setCurrentPath('')
         }
         loadFolders()
         loadMaterials()
       } else {
-        alert(`删除失败：${data.error}`)
+        alert(data.error)
       }
     } catch (err: any) {
       alert(`删除失败：${err.message}`)
     }
   }
   
-  // 移动素材到文件夹
-  const handleMoveToFolder = async (targetFolder: string) => {
+  const handleMoveToFolder = async (targetPath: string) => {
     if (selectedIds.length === 0) return
     
     try {
       const res = await fetch(`${API_BASE}/materials/move-to-folder`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids: selectedIds, folder: targetFolder }),
+        body: JSON.stringify({ ids: selectedIds, folder: targetPath }),
       })
       const data = await res.json()
       if (data.success) {
@@ -354,8 +374,126 @@ export default function MaterialLibraryPage() {
     }
   }
   
-  // 计算总数
-  const totalCount = folders.reduce((sum, f) => sum + f.count, 0)
+  const toggleExpand = (folderId: string) => {
+    setExpandedFolders(prev => {
+      const next = new Set(prev)
+      if (next.has(folderId)) {
+        next.delete(folderId)
+      } else {
+        next.add(folderId)
+      }
+      return next
+    })
+  }
+  
+  // 获取根级文件夹
+  const rootFolders = folders.filter(f => !f.parentId)
+  
+  // 获取子文件夹
+  const getChildren = (parentId: string) => folders.filter(f => f.parentId === parentId)
+  
+  // 渲染文件夹树节点
+  const renderFolderNode = (folder: Folder, depth: number = 0) => {
+    const children = getChildren(folder._id)
+    const hasChildren = children.length > 0
+    const isExpanded = expandedFolders.has(folder._id)
+    const isSelected = currentPath === folder.path
+    const isEditing = editingFolderId === folder._id
+    
+    return (
+      <div key={folder._id}>
+        <div
+          className={`flex items-center gap-1 px-2 py-1.5 rounded cursor-pointer group ${
+            isSelected ? 'bg-blue-100 text-blue-700' : 'hover:bg-slate-100'
+          }`}
+          style={{ paddingLeft: `${8 + depth * 16}px` }}
+          onClick={() => { setCurrentPath(folder.path); setPage(1) }}
+          onContextMenu={(e) => {
+            e.preventDefault()
+            setContextMenu({ x: e.clientX, y: e.clientY, folder })
+          }}
+        >
+          {/* 展开/折叠按钮 */}
+          {hasChildren ? (
+            <button
+              onClick={(e) => { e.stopPropagation(); toggleExpand(folder._id) }}
+              className="w-4 h-4 flex items-center justify-center text-slate-400 hover:text-slate-600"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                fill="none"
+                viewBox="0 0 24 24"
+                strokeWidth="2"
+                stroke="currentColor"
+                className={`w-3 h-3 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+              </svg>
+            </button>
+          ) : (
+            <span className="w-4" />
+          )}
+          
+          {/* 文件夹图标 */}
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-5 h-5 text-amber-500 flex-shrink-0">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
+          </svg>
+          
+          {/* 名称 */}
+          {isEditing ? (
+            <input
+              type="text"
+              value={editingName}
+              onChange={(e) => setEditingName(e.target.value)}
+              onClick={(e) => e.stopPropagation()}
+              onBlur={() => handleRenameFolder(folder._id)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleRenameFolder(folder._id)
+                if (e.key === 'Escape') { setEditingFolderId(null); setEditingName('') }
+              }}
+              className="flex-1 px-1 py-0.5 text-sm border border-blue-400 rounded outline-none min-w-0"
+              autoFocus
+            />
+          ) : (
+            <span className="flex-1 text-sm truncate">{folder.name}</span>
+          )}
+          
+          {/* 数量 */}
+          <span className="text-xs text-slate-400 flex-shrink-0">{folder.count}</span>
+        </div>
+        
+        {/* 子文件夹 */}
+        {hasChildren && isExpanded && (
+          <div>
+            {children.map(child => renderFolderNode(child, depth + 1))}
+          </div>
+        )}
+        
+        {/* 在此文件夹下创建新文件夹 */}
+        {creatingInParent === folder._id && (
+          <div className="flex items-center gap-1 px-2 py-1.5" style={{ paddingLeft: `${24 + depth * 16}px` }}>
+            <span className="w-4" />
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-5 h-5 text-amber-500 flex-shrink-0">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
+            </svg>
+            <input
+              ref={newFolderInputRef}
+              type="text"
+              value={newFolderName}
+              onChange={(e) => setNewFolderName(e.target.value)}
+              placeholder="新文件夹"
+              className="flex-1 px-1 py-0.5 text-sm border border-blue-400 rounded outline-none min-w-0"
+              onBlur={() => handleCreateFolder(folder._id)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleCreateFolder(folder._id)
+                if (e.key === 'Escape') { setCreatingInParent(null); setNewFolderName('') }
+              }}
+            />
+          </div>
+        )}
+      </div>
+    )
+  }
   
   // 配置未完成提示
   if (configStatus && !configStatus.configured) {
@@ -412,7 +550,7 @@ export default function MaterialLibraryPage() {
         <div className="w-px h-6 bg-slate-200" />
         
         <button
-          onClick={() => setIsCreatingFolder(true)}
+          onClick={() => { setCreatingInParent(''); setNewFolderName('') }}
           className="px-3 py-1.5 text-slate-700 hover:bg-slate-100 rounded flex items-center gap-1.5 text-sm"
         >
           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-4 h-4">
@@ -435,12 +573,22 @@ export default function MaterialLibraryPage() {
                   <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
                 </svg>
               </button>
-              <div className="absolute left-0 top-full mt-1 bg-white border border-slate-200 rounded-lg shadow-lg py-1 min-w-[150px] hidden group-hover:block z-20">
+              <div className="absolute left-0 top-full mt-1 bg-white border border-slate-200 rounded-lg shadow-lg py-1 min-w-[150px] max-h-64 overflow-y-auto hidden group-hover:block z-20">
+                <button
+                  onClick={() => handleMoveToFolder('默认')}
+                  className="w-full px-3 py-1.5 text-left text-sm hover:bg-slate-100 flex items-center gap-2"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-4 h-4 text-amber-500">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
+                  </svg>
+                  默认
+                </button>
                 {folders.map(f => (
                   <button
-                    key={f.name}
-                    onClick={() => handleMoveToFolder(f.name)}
+                    key={f._id}
+                    onClick={() => handleMoveToFolder(f.path)}
                     className="w-full px-3 py-1.5 text-left text-sm hover:bg-slate-100 flex items-center gap-2"
+                    style={{ paddingLeft: `${12 + f.level * 12}px` }}
                   >
                     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-4 h-4 text-amber-500">
                       <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
@@ -499,11 +647,12 @@ export default function MaterialLibraryPage() {
           <div className="p-2">
             {/* All Files */}
             <button
-              onClick={() => { setCurrentFolder('全部文件'); setPage(1) }}
-              className={`w-full px-3 py-2 rounded flex items-center gap-2 text-sm ${
-                currentFolder === '全部文件' ? 'bg-blue-100 text-blue-700' : 'hover:bg-slate-100 text-slate-700'
+              onClick={() => { setCurrentPath(''); setPage(1) }}
+              className={`w-full px-2 py-1.5 rounded flex items-center gap-2 text-sm ${
+                currentPath === '' ? 'bg-blue-100 text-blue-700' : 'hover:bg-slate-100 text-slate-700'
               }`}
             >
+              <span className="w-4" />
               <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-5 h-5">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 01-2.247 2.118H6.622a2.25 2.25 0 01-2.247-2.118L3.75 7.5M10 11.25h4M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125z" />
               </svg>
@@ -512,75 +661,39 @@ export default function MaterialLibraryPage() {
             </button>
             
             <div className="mt-2 pt-2 border-t border-slate-200">
-              <div className="px-3 py-1 text-xs text-slate-400 uppercase tracking-wider">文件夹</div>
+              <div className="px-2 py-1 text-xs text-slate-400 uppercase tracking-wider flex items-center justify-between">
+                <span>文件夹</span>
+              </div>
               
-              {/* Folder List */}
-              {folders.map(f => (
-                <div
-                  key={f.name}
-                  onContextMenu={(e) => {
-                    e.preventDefault()
-                    setFolderContextMenu({ x: e.clientX, y: e.clientY, folder: f.name })
-                  }}
-                >
-                  {editingFolder === f.name ? (
-                    <input
-                      type="text"
-                      defaultValue={f.name}
-                      autoFocus
-                      className="w-full px-3 py-2 text-sm border border-blue-400 rounded outline-none"
-                      onBlur={(e) => handleRenameFolder(f.name, e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          handleRenameFolder(f.name, (e.target as HTMLInputElement).value)
-                        } else if (e.key === 'Escape') {
-                          setEditingFolder(null)
-                        }
-                      }}
-                    />
-                  ) : (
-                    <button
-                      onClick={() => { setCurrentFolder(f.name); setPage(1) }}
-                      onDoubleClick={() => setEditingFolder(f.name)}
-                      className={`w-full px-3 py-2 rounded flex items-center gap-2 text-sm ${
-                        currentFolder === f.name ? 'bg-blue-100 text-blue-700' : 'hover:bg-slate-100 text-slate-700'
-                      }`}
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-5 h-5 text-amber-500">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
-                      </svg>
-                      <span className="flex-1 text-left truncate">{f.name}</span>
-                      <span className="text-xs text-slate-400">{f.count}</span>
-                    </button>
-                  )}
+              {/* Root level new folder input */}
+              {creatingInParent === '' && (
+                <div className="flex items-center gap-1 px-2 py-1.5">
+                  <span className="w-4" />
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-5 h-5 text-amber-500 flex-shrink-0">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
+                  </svg>
+                  <input
+                    ref={newFolderInputRef}
+                    type="text"
+                    value={newFolderName}
+                    onChange={(e) => setNewFolderName(e.target.value)}
+                    placeholder="新文件夹"
+                    className="flex-1 px-1 py-0.5 text-sm border border-blue-400 rounded outline-none min-w-0"
+                    onBlur={() => handleCreateFolder(null)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleCreateFolder(null)
+                      if (e.key === 'Escape') { setCreatingInParent(null); setNewFolderName('') }
+                    }}
+                  />
                 </div>
-              ))}
+              )}
               
-              {/* New Folder Input */}
-              {isCreatingFolder && (
-                <div className="px-3 py-1">
-                  <div className="flex items-center gap-2">
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-5 h-5 text-amber-500">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
-                    </svg>
-                    <input
-                      ref={newFolderInputRef}
-                      type="text"
-                      value={newFolderName}
-                      onChange={(e) => setNewFolderName(e.target.value)}
-                      placeholder="文件夹名称"
-                      className="flex-1 px-2 py-1 text-sm border border-blue-400 rounded outline-none"
-                      onBlur={handleCreateFolder}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          handleCreateFolder()
-                        } else if (e.key === 'Escape') {
-                          setIsCreatingFolder(false)
-                          setNewFolderName('')
-                        }
-                      }}
-                    />
-                  </div>
+              {/* Folder Tree */}
+              {rootFolders.map(folder => renderFolderNode(folder))}
+              
+              {folders.length === 0 && creatingInParent !== '' && (
+                <div className="px-2 py-4 text-center text-xs text-slate-400">
+                  暂无文件夹
                 </div>
               )}
             </div>
@@ -591,18 +704,23 @@ export default function MaterialLibraryPage() {
         <div className="flex-1 overflow-y-auto p-4 bg-white">
           {/* Breadcrumb */}
           <div className="flex items-center gap-2 mb-4 text-sm text-slate-500">
-            <button
-              onClick={() => { setCurrentFolder('全部文件'); setPage(1) }}
-              className="hover:text-blue-600"
-            >
+            <button onClick={() => { setCurrentPath(''); setPage(1) }} className="hover:text-blue-600">
               素材库
             </button>
-            {currentFolder !== '全部文件' && (
-              <>
-                <span>/</span>
-                <span className="text-slate-700">{currentFolder}</span>
-              </>
-            )}
+            {currentPath && currentPath.split('/').map((part, i, arr) => {
+              const path = arr.slice(0, i + 1).join('/')
+              return (
+                <span key={i} className="flex items-center gap-2">
+                  <span>/</span>
+                  <button
+                    onClick={() => { setCurrentPath(path); setPage(1) }}
+                    className={i === arr.length - 1 ? 'text-slate-700' : 'hover:text-blue-600'}
+                  >
+                    {part}
+                  </button>
+                </span>
+              )
+            })}
             <span className="ml-auto text-slate-400">{total} 项</span>
           </div>
           
@@ -715,14 +833,31 @@ export default function MaterialLibraryPage() {
       </div>
       
       {/* Folder Context Menu */}
-      {folderContextMenu && (
+      {contextMenu && (
         <div
-          className="fixed bg-white border border-slate-200 rounded-lg shadow-lg py-1 min-w-[120px] z-50"
-          style={{ left: folderContextMenu.x, top: folderContextMenu.y }}
+          className="fixed bg-white border border-slate-200 rounded-lg shadow-lg py-1 min-w-[140px] z-50"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
           onClick={(e) => e.stopPropagation()}
         >
           <button
-            onClick={() => { setEditingFolder(folderContextMenu.folder); setFolderContextMenu(null) }}
+            onClick={() => { 
+              setCreatingInParent(contextMenu.folder._id)
+              setExpandedFolders(prev => new Set([...prev, contextMenu.folder._id]))
+              setContextMenu(null) 
+            }}
+            className="w-full px-3 py-1.5 text-left text-sm hover:bg-slate-100 flex items-center gap-2"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-4 h-4">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 10.5v6m3-3H9m4.06-7.19l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
+            </svg>
+            新建子文件夹
+          </button>
+          <button
+            onClick={() => { 
+              setEditingFolderId(contextMenu.folder._id)
+              setEditingName(contextMenu.folder.name)
+              setContextMenu(null) 
+            }}
             className="w-full px-3 py-1.5 text-left text-sm hover:bg-slate-100 flex items-center gap-2"
           >
             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-4 h-4">
@@ -730,8 +865,9 @@ export default function MaterialLibraryPage() {
             </svg>
             重命名
           </button>
+          <div className="my-1 border-t border-slate-100" />
           <button
-            onClick={() => { handleDeleteFolder(folderContextMenu.folder); setFolderContextMenu(null) }}
+            onClick={() => { handleDeleteFolder(contextMenu.folder._id); setContextMenu(null) }}
             className="w-full px-3 py-1.5 text-left text-sm hover:bg-red-50 text-red-600 flex items-center gap-2"
           >
             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-4 h-4">
@@ -779,7 +915,7 @@ export default function MaterialLibraryPage() {
                 </div>
                 <div>
                   <span className="text-slate-500">文件夹：</span>
-                  <span className="ml-2">{viewMaterial.folder}</span>
+                  <span className="ml-2">{viewMaterial.folder || '默认'}</span>
                 </div>
                 <div>
                   <span className="text-slate-500">上传时间：</span>

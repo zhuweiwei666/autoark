@@ -17,3 +17,4 @@ export { default as AdTask } from './AdTask'
 
 // 素材管理
 export { default as Material } from './Material'
+export { default as Folder } from './Folder'

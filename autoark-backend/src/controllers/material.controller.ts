@@ -1,5 +1,6 @@
 import { Request, Response } from 'express'
 import Material from '../models/Material'
+import Folder from '../models/Folder'
 import { uploadToR2, deleteFromR2, checkR2Config } from '../services/r2Storage.service'
 import logger from '../utils/logger'
 
@@ -473,6 +474,214 @@ export const moveToFolder = async (req: Request, res: Response) => {
     res.json({ success: true, data: { modifiedCount: result.modifiedCount } })
   } catch (error: any) {
     logger.error('[Material] Move to folder failed:', error)
+    res.status(500).json({ success: false, error: error.message })
+  }
+}
+
+// ==================== 文件夹管理 API ====================
+
+/**
+ * 获取文件夹树
+ * GET /api/materials/folder-tree
+ */
+export const getFolderTree = async (req: Request, res: Response) => {
+  try {
+    // 获取所有文件夹
+    const folders = await Folder.find().sort({ path: 1 }).lean()
+    
+    // 获取每个文件夹的素材数量
+    const folderStats = await Material.aggregate([
+      { $match: { status: 'uploaded' } },
+      { $group: { _id: '$folder', count: { $sum: 1 } } },
+    ])
+    
+    const countMap: Record<string, number> = {}
+    folderStats.forEach(f => {
+      countMap[f._id || '默认'] = f.count
+    })
+    
+    // 构建带数量的文件夹列表
+    const foldersWithCount = folders.map(f => ({
+      ...f,
+      count: countMap[f.path] || 0,
+    }))
+    
+    // 计算总数
+    const totalCount = folderStats.reduce((sum, f) => sum + f.count, 0)
+    
+    res.json({
+      success: true,
+      data: {
+        folders: foldersWithCount,
+        totalCount,
+      },
+    })
+  } catch (error: any) {
+    logger.error('[Folder] Get tree failed:', error)
+    res.status(500).json({ success: false, error: error.message })
+  }
+}
+
+/**
+ * 创建文件夹
+ * POST /api/materials/create-folder
+ */
+export const createFolder = async (req: Request, res: Response) => {
+  try {
+    const { name, parentId } = req.body
+    
+    if (!name || !name.trim()) {
+      return res.status(400).json({ success: false, error: '请输入文件夹名称' })
+    }
+    
+    let path = name.trim()
+    let level = 0
+    
+    // 如果有父文件夹
+    if (parentId) {
+      const parent = await Folder.findById(parentId)
+      if (!parent) {
+        return res.status(400).json({ success: false, error: '父文件夹不存在' })
+      }
+      path = `${parent.path}/${name.trim()}`
+      level = parent.level + 1
+    }
+    
+    // 检查是否已存在
+    const existing = await Folder.findOne({ parentId: parentId || null, name: name.trim() })
+    if (existing) {
+      return res.status(400).json({ success: false, error: '同名文件夹已存在' })
+    }
+    
+    const folder = new Folder({
+      name: name.trim(),
+      parentId: parentId || null,
+      path,
+      level,
+    })
+    
+    await folder.save()
+    logger.info(`[Folder] Created: ${path}`)
+    
+    res.json({ success: true, data: folder })
+  } catch (error: any) {
+    logger.error('[Folder] Create failed:', error)
+    res.status(500).json({ success: false, error: error.message })
+  }
+}
+
+/**
+ * 重命名文件夹
+ * POST /api/materials/rename-folder
+ */
+export const renameFolder = async (req: Request, res: Response) => {
+  try {
+    const { folderId, newName } = req.body
+    
+    if (!folderId || !newName || !newName.trim()) {
+      return res.status(400).json({ success: false, error: '参数不完整' })
+    }
+    
+    const folder: any = await Folder.findById(folderId)
+    if (!folder) {
+      return res.status(404).json({ success: false, error: '文件夹不存在' })
+    }
+    
+    const oldPath = folder.path
+    const oldName = folder.name
+    
+    // 计算新路径
+    let newPath: string
+    if (folder.parentId) {
+      const parent = await Folder.findById(folder.parentId)
+      newPath = parent ? `${parent.path}/${newName.trim()}` : newName.trim()
+    } else {
+      newPath = newName.trim()
+    }
+    
+    // 检查同级是否有重名
+    const existing = await Folder.findOne({ 
+      parentId: folder.parentId, 
+      name: newName.trim(),
+      _id: { $ne: folderId }
+    })
+    if (existing) {
+      return res.status(400).json({ success: false, error: '同名文件夹已存在' })
+    }
+    
+    // 更新当前文件夹
+    folder.name = newName.trim()
+    folder.path = newPath
+    await folder.save()
+    
+    // 更新所有子文件夹的路径
+    await Folder.updateMany(
+      { path: { $regex: `^${oldPath}/` } },
+      [{ $set: { path: { $replaceOne: { input: '$path', find: oldPath, replacement: newPath } } } }]
+    )
+    
+    // 更新素材的文件夹路径
+    await Material.updateMany(
+      { folder: oldPath, status: 'uploaded' },
+      { folder: newPath }
+    )
+    
+    // 更新子文件夹下素材的路径
+    await Material.updateMany(
+      { folder: { $regex: `^${oldPath}/` }, status: 'uploaded' },
+      [{ $set: { folder: { $replaceOne: { input: '$folder', find: oldPath, replacement: newPath } } } }]
+    )
+    
+    logger.info(`[Folder] Renamed: ${oldPath} -> ${newPath}`)
+    res.json({ success: true, data: folder })
+  } catch (error: any) {
+    logger.error('[Folder] Rename failed:', error)
+    res.status(500).json({ success: false, error: error.message })
+  }
+}
+
+/**
+ * 删除文件夹
+ * POST /api/materials/delete-folder
+ */
+export const deleteFolder = async (req: Request, res: Response) => {
+  try {
+    const { folderId, moveToPath } = req.body
+    
+    if (!folderId) {
+      return res.status(400).json({ success: false, error: '请指定要删除的文件夹' })
+    }
+    
+    const folder: any = await Folder.findById(folderId)
+    if (!folder) {
+      return res.status(404).json({ success: false, error: '文件夹不存在' })
+    }
+    
+    const folderPath = folder.path
+    const targetPath = moveToPath || '默认'
+    
+    // 移动该文件夹及子文件夹下的素材到目标文件夹
+    await Material.updateMany(
+      { 
+        $or: [
+          { folder: folderPath },
+          { folder: { $regex: `^${folderPath}/` } }
+        ],
+        status: 'uploaded' 
+      },
+      { folder: targetPath }
+    )
+    
+    // 删除所有子文件夹
+    await Folder.deleteMany({ path: { $regex: `^${folderPath}/` } })
+    
+    // 删除当前文件夹
+    await Folder.findByIdAndDelete(folderId)
+    
+    logger.info(`[Folder] Deleted: ${folderPath}, materials moved to: ${targetPath}`)
+    res.json({ success: true })
+  } catch (error: any) {
+    logger.error('[Folder] Delete failed:', error)
     res.status(500).json({ success: false, error: error.message })
   }
 }

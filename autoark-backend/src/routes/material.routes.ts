@@ -32,8 +32,14 @@ router.post('/upload-batch', upload.array('files', 10), materialController.uploa
 // 素材列表
 router.get('/', materialController.getMaterialList)
 
-// 文件夹列表
+// 文件夹列表（旧接口，保留兼容）
 router.get('/folders', materialController.getFolders)
+
+// 文件夹树（新接口，支持层级）
+router.get('/folder-tree', materialController.getFolderTree)
+
+// 创建文件夹
+router.post('/create-folder', materialController.createFolder)
 
 // 重命名文件夹
 router.post('/rename-folder', materialController.renameFolder)
