@@ -35,6 +35,15 @@ router.get('/', materialController.getMaterialList)
 // 文件夹列表
 router.get('/folders', materialController.getFolders)
 
+// 重命名文件夹
+router.post('/rename-folder', materialController.renameFolder)
+
+// 删除文件夹
+router.post('/delete-folder', materialController.deleteFolder)
+
+// 移动素材到文件夹
+router.post('/move-to-folder', materialController.moveToFolder)
+
 // 标签列表
 router.get('/tags', materialController.getTags)
 
