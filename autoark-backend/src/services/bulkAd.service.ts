@@ -553,19 +553,26 @@ export const executeTaskForAccount = async (
         objectStorySpec.link_data.picture = materialRef.image_url
       } else if (materialRef.video_id) {
         // 视频广告：使用 video_data 替代 link_data
-        const cta = objectStorySpec.link_data.call_to_action
         const link = objectStorySpec.link_data.link
         const message = objectStorySpec.link_data.message
         const title = objectStorySpec.link_data.name
+        const description = objectStorySpec.link_data.description
+        
+        // 获取 CTA 类型，确保与 OUTCOME_SALES 兼容
+        let ctaType = copywriting.callToAction || 'SHOP_NOW'
+        // DOWNLOAD 只适用于 APP_INSTALLS 目标，对于 SALES 目标改为 SHOP_NOW
+        if (ctaType === 'DOWNLOAD' || ctaType === 'INSTALL_MOBILE_APP') {
+          ctaType = 'SHOP_NOW'
+        }
         
         // 删除 link_data，改用 video_data
         delete objectStorySpec.link_data
         objectStorySpec.video_data = {
           video_id: materialRef.video_id,
           message: message,
-          title: title,
+          link_description: description || title,
           call_to_action: {
-            type: cta?.type || 'SHOP_NOW',
+            type: ctaType,
             value: { link: link },
           },
         }
