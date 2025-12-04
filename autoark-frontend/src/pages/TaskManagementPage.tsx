@@ -125,6 +125,25 @@ export default function TaskManagementPage() {
     }
   }
   
+  const handleRerun = async (taskId: string) => {
+    if (!confirm('确定要重新执行此任务吗？将基于原任务配置创建新任务。')) return
+    try {
+      const res = await fetch(`${API_BASE}/bulk-ad/tasks/${taskId}/rerun`, { method: 'POST' })
+      const data = await res.json()
+      if (data.success) {
+        alert(`新任务已创建：${data.data._id}`)
+        loadTasks()
+        // 选中新任务
+        setSelectedTask(data.data)
+      } else {
+        alert(`重新执行失败：${data.error}`)
+      }
+    } catch (err) {
+      console.error('Failed to rerun task:', err)
+      alert('重新执行失败')
+    }
+  }
+  
   const formatDuration = (ms?: number) => {
     if (!ms) return '-'
     const seconds = Math.floor(ms / 1000)
@@ -201,6 +220,9 @@ export default function TaskManagementPage() {
                     )}
                     {['failed', 'partial_success'].includes(selectedTask.status) && (
                       <button onClick={() => handleRetry(selectedTask._id)} className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">重试失败项</button>
+                    )}
+                    {['success', 'failed', 'partial_success', 'cancelled'].includes(selectedTask.status) && (
+                      <button onClick={() => handleRerun(selectedTask._id)} className="px-3 py-1 text-sm bg-green-600 text-white rounded hover:bg-green-700">重新执行</button>
                     )}
                     <button onClick={() => loadTaskDetail(selectedTask._id)} disabled={refreshing} className="px-3 py-1 text-sm border border-slate-300 rounded hover:bg-slate-50 disabled:opacity-50">
                       {refreshing ? '刷新中...' : '刷新'}

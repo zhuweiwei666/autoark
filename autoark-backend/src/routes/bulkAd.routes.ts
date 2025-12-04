@@ -25,6 +25,7 @@ router.get('/tasks', bulkAdController.getTaskList)
 router.get('/tasks/:id', bulkAdController.getTask)
 router.post('/tasks/:id/cancel', bulkAdController.cancelTask)
 router.post('/tasks/:id/retry', bulkAdController.retryTask)
+router.post('/tasks/:id/rerun', bulkAdController.rerunTask)
 
 // ==================== 定向包管理 ====================
 router.post('/targeting-packages', bulkAdController.createTargetingPackage)

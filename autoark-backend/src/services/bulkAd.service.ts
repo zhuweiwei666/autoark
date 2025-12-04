@@ -772,6 +772,104 @@ export const retryFailedItems = async (taskId: string) => {
   return task
 }
 
+/**
+ * 重新执行任务（基于原任务配置创建新任务）
+ */
+export const rerunTask = async (taskId: string) => {
+  const originalTask: any = await AdTask.findById(taskId)
+  if (!originalTask) {
+    throw new Error('Task not found')
+  }
+  
+  if (!originalTask.configSnapshot || !originalTask.configSnapshot.accounts) {
+    throw new Error('Task config snapshot not found')
+  }
+  
+  const config = originalTask.configSnapshot
+  
+  // 创建新任务
+  const newTask: any = new AdTask({
+    taskType: originalTask.taskType,
+    status: 'pending',
+    platform: originalTask.platform,
+    draftId: originalTask.draftId,
+    configSnapshot: config,
+    publishSettings: originalTask.publishSettings,
+    notes: `重新执行自任务 ${taskId}`,
+    items: config.accounts.map((acc: any) => ({
+      accountId: acc.accountId,
+      accountName: acc.accountName || acc.accountId,
+      status: 'pending',
+      progress: { current: 0, total: 0, percentage: 0 },
+    })),
+    progress: {
+      totalAccounts: config.accounts.length,
+      completedAccounts: 0,
+      successAccounts: 0,
+      failedAccounts: 0,
+      percentage: 0,
+    },
+  })
+  
+  await newTask.save()
+  logger.info(`[BulkAd] Task rerun created: ${newTask._id} (from ${taskId})`)
+  
+  // 将任务加入队列
+  try {
+    const isRedisAvailable = redisClient && redisClient.status === 'ready'
+    
+    if (isRedisAvailable) {
+      const jobs = config.accounts.map((acc: any) => ({
+        name: `bulk-ad-${newTask._id}-${acc.accountId}`,
+        data: {
+          taskId: newTask._id.toString(),
+          accountId: acc.accountId,
+        },
+        opts: {
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 5000 },
+        },
+      }))
+      
+      await bulkAdQueue.addBulk(jobs)
+      newTask.status = 'queued'
+      newTask.queuedAt = new Date()
+      await newTask.save()
+      
+      logger.info(`[BulkAd] Task ${newTask._id} queued, ${jobs.length} accounts`)
+    } else {
+      // 同步执行
+      logger.info(`[BulkAd] Redis not available, executing synchronously`)
+      newTask.status = 'processing'
+      newTask.startedAt = new Date()
+      await newTask.save()
+      
+      for (const acc of config.accounts) {
+        try {
+          await executeTaskForAccount(newTask._id.toString(), acc.accountId)
+        } catch (err: any) {
+          logger.error(`[BulkAd] Failed for account ${acc.accountId}:`, err.message)
+        }
+      }
+    }
+  } catch (queueError: any) {
+    logger.error('[BulkAd] Queue error, executing synchronously:', queueError.message)
+    newTask.status = 'processing'
+    newTask.startedAt = new Date()
+    await newTask.save()
+    
+    for (const acc of config.accounts) {
+      try {
+        await executeTaskForAccount(newTask._id.toString(), acc.accountId)
+      } catch (err: any) {
+        logger.error(`[BulkAd] Failed for account ${acc.accountId}:`, err.message)
+      }
+    }
+  }
+  
+  return newTask
+}
+
 // ==================== 辅助函数 ====================
 
 /**
@@ -802,4 +900,5 @@ export default {
   getTaskList,
   cancelTask,
   retryFailedItems,
+  rerunTask,
 }

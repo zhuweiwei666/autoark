@@ -174,6 +174,20 @@ export const retryTask = async (req: Request, res: Response) => {
   }
 }
 
+/**
+ * 重新执行任务（基于原任务配置创建新任务）
+ * POST /api/bulk-ad/tasks/:id/rerun
+ */
+export const rerunTask = async (req: Request, res: Response) => {
+  try {
+    const newTask = await bulkAdService.rerunTask(req.params.id)
+    res.json({ success: true, data: newTask })
+  } catch (error: any) {
+    logger.error('[BulkAd] Rerun task failed:', error)
+    res.status(400).json({ success: false, error: error.message })
+  }
+}
+
 // ==================== 定向包管理 ====================
 
 /**
