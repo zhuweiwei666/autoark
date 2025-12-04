@@ -125,12 +125,27 @@ export const createAdSet = async (params: CreateAdSetParams) => {
     pacing_type,
   } = params
 
+  // 处理 targeting：确保国家代码大写，并添加必要的 targeting_automation 字段
+  const processedTargeting = { ...targeting }
+  
+  // 确保国家代码大写
+  if (processedTargeting.geo_locations?.countries) {
+    processedTargeting.geo_locations.countries = processedTargeting.geo_locations.countries.map(
+      (c: string) => c.toUpperCase()
+    )
+  }
+  
+  // Facebook API 要求：必须设置 targeting_automation.advantage_audience
+  if (!processedTargeting.targeting_automation) {
+    processedTargeting.targeting_automation = { advantage_audience: 0 }
+  }
+
   const requestParams: any = {
     access_token: token,
     campaign_id: campaignId,
     name,
     status,
-    targeting: JSON.stringify(targeting),
+    targeting: JSON.stringify(processedTargeting),
     optimization_goal: optimizationGoal,
     billing_event: billingEvent,
   }
