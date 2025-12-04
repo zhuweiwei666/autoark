@@ -14,3 +14,6 @@ export { default as CopywritingPackage } from './CopywritingPackage'
 export { default as CreativeGroup } from './CreativeGroup'
 export { default as AdDraft } from './AdDraft'
 export { default as AdTask } from './AdTask'
+
+// 素材管理
+export { default as Material } from './Material'

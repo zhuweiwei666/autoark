@@ -9,6 +9,7 @@ import FacebookPixelsPage from './pages/FacebookPixelsPage'
 import BulkAdCreatePage from './pages/BulkAdCreatePage'
 import TaskManagementPage from './pages/TaskManagementPage'
 import AssetManagementPage from './pages/AssetManagementPage'
+import MaterialLibraryPage from './pages/MaterialLibraryPage'
 import OAuthCallbackPage from './pages/OAuthCallbackPage'
 
 function App() {
@@ -35,6 +36,7 @@ function App() {
               <Route path="/bulk-ad/targeting" element={<AssetManagementPage />} />
               <Route path="/bulk-ad/copywriting" element={<AssetManagementPage />} />
               <Route path="/bulk-ad/creative" element={<AssetManagementPage />} />
+              <Route path="/bulk-ad/materials" element={<MaterialLibraryPage />} />
               <Route path="/" element={<DashboardPage />} />
             </Routes>
           </Layout>
