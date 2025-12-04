@@ -226,95 +226,103 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
             metricsQuery.date = today
         }
         
-        // 获取所有 campaigns 的 metrics
-        let MetricsDailyRead = MetricsDaily
-        if (readConnection !== mongoose) {
-          if (!readConnection.models.MetricsDaily) {
-            MetricsDailyRead = readConnection.model('MetricsDaily', MetricsDaily.schema)
-          } else {
-            MetricsDailyRead = readConnection.models.MetricsDaily
-          }
+        // 直接从 Facebook Insights API 获取 metrics 数据（更准确）
+        logger.info(`[getCampaigns-MetricsSort] Fetching metrics from Facebook API for ${allCampaignIds.length} campaigns`)
+        
+        // 构建日期参数
+        let datePreset = 'today'
+        let timeRange: { since: string; until: string } | undefined
+        
+        if (filters.startDate && filters.endDate) {
+            timeRange = { since: filters.startDate, until: filters.endDate }
+            datePreset = ''
+        } else if (filters.startDate) {
+            timeRange = { since: filters.startDate, until: dayjs().format('YYYY-MM-DD') }
+            datePreset = ''
+        } else if (filters.endDate) {
+            timeRange = { since: '2020-01-01', until: filters.endDate }
+            datePreset = ''
         }
         
+        logger.info(`[getCampaigns-MetricsSort] Date range: ${timeRange ? `${timeRange.since} - ${timeRange.until}` : datePreset}`)
+        
+        // 获取有效 token
+        const tokenDoc = await FbToken.findOne({ status: 'active' })
+        const token = tokenDoc?.token
+        
         let allMetricsData: any[] = []
-        if (filters.startDate || filters.endDate) {
-            allMetricsData = await MetricsDailyRead.aggregate([
-                { $match: metricsQuery },
-                { $sort: { date: -1 } },
-                {
-                    $group: {
-                        _id: '$campaignId',
-                        spendUsd: { $sum: '$spendUsd' },
-                        impressions: { $sum: '$impressions' },
-                        clicks: { $sum: '$clicks' },
-                        purchase_value: { $sum: { $ifNull: ['$purchase_value', 0] } },
-                        mobile_app_install: { $sum: { $ifNull: ['$mobile_app_install_count', 0] } },
-                        // 计算加权平均值
-                        totalCpc: { $sum: { $multiply: [{ $ifNull: ['$cpc', 0] }, { $ifNull: ['$clicks', 0] }] } },
-                        totalCpm: { $sum: { $multiply: [{ $ifNull: ['$cpm', 0] }, { $ifNull: ['$impressions', 0] }] } },
-                        purchase_roas: { $first: '$purchase_roas' },
-                    }
-                },
-                {
-                    $project: {
-                        _id: 1,
-                        spendUsd: 1,
-                        impressions: 1,
-                        clicks: 1,
-                        purchase_value: 1,
-                        mobile_app_install: 1,
-                        purchase_roas: 1,
-                        // 计算正确的 CTR（clicks / impressions）
-                        ctr: {
-                            $cond: [
-                                { $gt: ['$impressions', 0] },
-                                { $divide: ['$clicks', '$impressions'] },
-                                0
-                            ]
-                        },
-                        // 计算加权平均 CPC
-                        cpc: {
-                            $cond: [
-                                { $gt: ['$clicks', 0] },
-                                { $divide: ['$totalCpc', '$clicks'] },
-                                0
-                            ]
-                        },
-                        // 计算加权平均 CPM
-                        cpm: {
-                            $cond: [
-                                { $gt: ['$impressions', 0] },
-                                { $divide: ['$totalCpm', '$impressions'] },
-                                0
-                            ]
-                        }
-                    }
+        
+        if (token && allCampaignIds.length > 0) {
+            // 按账户分组 campaigns
+            const campaignsByAccount = new Map<string, string[]>()
+            for (const campaign of allCampaigns) {
+                const accountId = (campaign as any).accountId
+                if (!campaignsByAccount.has(accountId)) {
+                    campaignsByAccount.set(accountId, [])
                 }
-            ]).allowDiskUse(true)
-        } else {
-            const todayMetrics = await MetricsDailyRead.find(metricsQuery)
-                .hint({ campaignId: 1, date: 1 })
-                .lean()
+                campaignsByAccount.get(accountId)?.push((campaign as any).campaignId)
+            }
             
-            allMetricsData = todayMetrics.map((metric: any) => {
-                // 计算正确的 CTR（clicks / impressions），而不是直接使用存储的 CTR
-                const impressions = metric.impressions || 0
-                const clicks = metric.clicks || 0
-                const ctr = impressions > 0 ? clicks / impressions : 0
-                
-                return {
-                    _id: metric.campaignId,
-                    spendUsd: metric.spendUsd || 0,
-                    impressions: impressions,
-                    clicks: clicks,
-                    cpc: metric.cpc,
-                    ctr: ctr, // 使用计算出的 CTR
-                    cpm: metric.cpm,
-                    purchase_roas: metric.purchase_roas,
-                    purchase_value: metric.purchase_value || 0,
-                    mobile_app_install: metric.mobile_app_install_count || 0,
+            logger.info(`[getCampaigns-MetricsSort] Found ${campaignsByAccount.size} accounts`)
+            
+            // 对每个账户调用 Insights API
+            const accountPromises = Array.from(campaignsByAccount.entries()).map(async ([accountId, _campaignIds]) => {
+                try {
+                    const accountIdForApi = normalizeForApi(accountId)
+                    const insights = await fetchInsights(
+                        accountIdForApi,
+                        'campaign',
+                        datePreset || undefined,
+                        token,
+                        undefined,
+                        timeRange
+                    )
+                    return insights || []
+                } catch (error) {
+                    logger.warn(`[getCampaigns-MetricsSort] Failed to fetch insights for account ${accountId}`)
+                    return []
                 }
             })
+            
+            const allInsights = (await Promise.all(accountPromises)).flat()
+            logger.info(`[getCampaigns-MetricsSort] Fetched ${allInsights.length} insights from Facebook API`)
+            
+            // 转换 insights 为 metricsData 格式
+            allMetricsData = allInsights.map((insight: any) => {
+                const spend = parseFloat(insight.spend || '0')
+                const impressions = parseInt(insight.impressions || '0', 10)
+                const clicks = parseInt(insight.clicks || '0', 10)
+                const ctr = impressions > 0 ? clicks / impressions : 0
+                
+                // 从 action_values 中提取 purchase_value
+                let purchase_value = 0
+                if (insight.action_values && Array.isArray(insight.action_values)) {
+                    const purchaseAction = insight.action_values.find((a: any) => 
+                        a.action_type === 'purchase' || a.action_type === 'mobile_app_purchase' || a.action_type === 'omni_purchase'
+                    )
+                    if (purchaseAction) {
+                        purchase_value = parseFloat(purchaseAction.value) || 0
+                    }
+                }
+                
+                return {
+                    _id: insight.campaign_id,
+                    spendUsd: spend,
+                    impressions: impressions,
+                    clicks: clicks,
+                    cpc: insight.cpc ? parseFloat(insight.cpc) : 0,
+                    ctr: ctr,
+                    cpm: insight.cpm ? parseFloat(insight.cpm) : 0,
+                    actions: insight.actions,
+                    action_values: insight.action_values,
+                    purchase_roas: insight.purchase_roas ? parseFloat(insight.purchase_roas?.[0]?.value || '0') : 0,
+                    purchase_value: purchase_value,
+                    mobile_app_install: 0,
+                    raw: insight
+                }
+            })
+        } else {
+            logger.warn(`[getCampaigns-MetricsSort] No active token found`)
         }
         
         // 创建 metrics Map
