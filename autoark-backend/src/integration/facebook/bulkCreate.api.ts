@@ -235,11 +235,13 @@ export const createAdCreative = async (params: CreateAdCreativeParams) => {
 
   try {
     logger.info(`[BulkCreate] Creating ad creative for account ${accountId}: ${name}`)
+    logger.info(`[BulkCreate] Creative params: ${JSON.stringify(requestParams, null, 2)}`)
     const res = await facebookClient.post(`/act_${accountId}/adcreatives`, requestParams)
     logger.info(`[BulkCreate] Ad Creative created: ${res.id}`)
     return { success: true, id: res.id, data: res }
   } catch (error: any) {
-    logger.error(`[BulkCreate] Failed to create ad creative:`, error.response?.data || error.message)
+    logger.error(`[BulkCreate] Failed to create ad creative - Full error:`, JSON.stringify(error.response?.data, null, 2))
+    logger.error(`[BulkCreate] Creative failed params: ${JSON.stringify(requestParams, null, 2)}`)
     return {
       success: false,
       error: {
