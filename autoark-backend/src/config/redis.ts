@@ -33,7 +33,8 @@ export const initRedis = (): Redis | null => {
         const delay = Math.min(times * 50, 2000)
         return delay
       },
-      maxRetriesPerRequest: 3,
+      maxRetriesPerRequest: null, // BullMQ 需要设置为 null
+      enableReadyCheck: false,
     })
 
     redisClient.on('connect', () => {
