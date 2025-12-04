@@ -545,94 +545,24 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
               }
             }
             
-            if (filters.startDate || filters.endDate) {
-                // 有日期范围：使用优化的聚合查询
-                const dateQuery: any = {
-                    campaignId: { $in: campaignIds }
-                }
-                if (filters.startDate) {
-                    dateQuery.date = { $gte: filters.startDate }
-                }
-                if (filters.endDate) {
-                    if (dateQuery.date) {
-                        dateQuery.date.$lte = filters.endDate
-                    } else {
-                        dateQuery.date = { $lte: filters.endDate }
-                    }
+            // 直接从 Facebook Insights API 获取数据（更准确）
+            {
+                // 构建日期参数
+                let datePreset = 'today'
+                let timeRange: { since: string; until: string } | undefined
+                
+                if (filters.startDate && filters.endDate) {
+                    timeRange = { since: filters.startDate, until: filters.endDate }
+                    datePreset = ''
+                } else if (filters.startDate) {
+                    timeRange = { since: filters.startDate, until: dayjs().format('YYYY-MM-DD') }
+                    datePreset = ''
+                } else if (filters.endDate) {
+                    timeRange = { since: '2020-01-01', until: filters.endDate }
+                    datePreset = ''
                 }
                 
-                // 优化：直接按 campaignId 聚合，不需要先按日期分组
-                // 因为每个 campaignId + date 组合在 MetricsDaily 中已经是唯一的（有唯一索引）
-                metricsData = await MetricsDailyRead.aggregate([
-                    { 
-                        $match: dateQuery,
-                        // 使用索引提示：优先使用 { campaignId: 1, date: 1 } 复合索引
-                    },
-                    {
-                        $sort: { date: -1 } // 按日期降序排序，确保 $last 获取最新的数据
-                    },
-                    {
-                        $group: {
-                            _id: '$campaignId',
-                            spendUsd: { $sum: '$spendUsd' },
-                            impressions: { $sum: '$impressions' },
-                            clicks: { $sum: '$clicks' },
-                            purchase_value: { $sum: { $ifNull: ['$purchase_value', 0] } },
-                            mobile_app_install: { $sum: { $ifNull: ['$mobile_app_install_count', 0] } },
-                            // 计算加权平均值
-                            totalCpc: { $sum: { $multiply: [{ $ifNull: ['$cpc', 0] }, { $ifNull: ['$clicks', 0] }] } },
-                            totalCpm: { $sum: { $multiply: [{ $ifNull: ['$cpm', 0] }, { $ifNull: ['$impressions', 0] }] } },
-                            // 取最新的 actions 和 action_values（按日期排序后）
-                            actions: { $first: '$actions' }, // 因为已经按日期降序排序，$first 就是最新的
-                            action_values: { $first: '$action_values' },
-                            purchase_roas: { $first: '$purchase_roas' },
-                            raw: { $first: '$raw' }
-                        }
-                    },
-                    {
-                        $project: {
-                            _id: 1,
-                            spendUsd: 1,
-                            impressions: 1,
-                            clicks: 1,
-                            purchase_value: 1,
-                            mobile_app_install: 1,
-                            actions: 1,
-                            action_values: 1,
-                            purchase_roas: 1,
-                            raw: 1,
-                            // 计算正确的 CTR（clicks / impressions）
-                            ctr: {
-                                $cond: [
-                                    { $gt: ['$impressions', 0] },
-                                    { $divide: ['$clicks', '$impressions'] },
-                                    0
-                                ]
-                            },
-                            // 计算加权平均 CPC
-                            cpc: {
-                                $cond: [
-                                    { $gt: ['$clicks', 0] },
-                                    { $divide: ['$totalCpc', '$clicks'] },
-                                    0
-                                ]
-                            },
-                            // 计算加权平均 CPM
-                            cpm: {
-                                $cond: [
-                                    { $gt: ['$impressions', 0] },
-                                    { $divide: ['$totalCpm', '$impressions'] },
-                                    0
-                                ]
-                            }
-                        }
-                    }
-                ])
-                .hint({ campaignId: 1, date: 1 }) // 强制使用复合索引
-                .allowDiskUse(true)
-            } else {
-                // 没有日期范围（使用今天）：直接从 Facebook Insights API 获取数据（更准确）
-                logger.info(`[getCampaigns] Fetching today's metrics from Facebook Insights API for ${campaignIds.length} campaigns`)
+                logger.info(`[getCampaigns] Fetching metrics from Facebook Insights API for ${campaignIds.length} campaigns, dateRange: ${timeRange ? `${timeRange.since} - ${timeRange.until}` : datePreset}`)
                 
                 // 获取有效 token
                 const tokenDoc = await FbToken.findOne({ status: 'active' })
@@ -656,10 +586,10 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
                             const insights = await fetchInsights(
                                 accountIdForApi,
                                 'campaign',  // 使用 campaign 级别
-                                'today',
+                                datePreset || undefined,
                                 token,
                                 undefined,
-                                undefined
+                                timeRange
                             )
                             return insights || []
                         } catch (error) {
