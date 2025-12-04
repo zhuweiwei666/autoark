@@ -125,22 +125,79 @@ export default function BulkAdCreatePage() {
     }
   }
   
-  // Facebook 登录
+  // Facebook 登录（弹窗方式）
   const handleFacebookLogin = async () => {
     setLoginLoading(true)
+    setError(null)
+    
     try {
-      // 使用原有 OAuth 服务，通过 state 参数标记来源
+      // 获取登录 URL
       const res = await fetch(`${API_BASE}/facebook/oauth/login-url?state=bulk-ad`)
       const data = await res.json()
-      if (data.success && data.data.loginUrl) {
-        // 跳转到 Facebook 授权页面
-        window.location.href = data.data.loginUrl
-      } else {
-        setError(data.error || '获取登录链接失败')
+      
+      if (!data.success || !data.data.loginUrl) {
+        throw new Error(data.error || '获取登录链接失败')
       }
+      
+      const loginUrl = data.data.loginUrl
+      
+      // 打开弹窗进行授权
+      const width = 600
+      const height = 700
+      const left = window.screenX + (window.outerWidth - width) / 2
+      const top = window.screenY + (window.outerHeight - height) / 2
+      
+      const popup = window.open(
+        loginUrl,
+        'facebook-auth',
+        `width=${width},height=${height},left=${left},top=${top},scrollbars=yes,resizable=yes`
+      )
+      
+      if (!popup) {
+        // 弹窗被阻止，回退到页面跳转
+        window.location.href = loginUrl
+        return
+      }
+      
+      // 监听弹窗关闭和消息
+      const checkPopup = setInterval(() => {
+        if (popup.closed) {
+          clearInterval(checkPopup)
+          setLoginLoading(false)
+          // 弹窗关闭后检查授权状态
+          checkAuthStatus()
+        }
+      }, 500)
+      
+      // 监听来自弹窗的消息
+      const handleMessage = (event: MessageEvent) => {
+        if (event.data?.type === 'oauth-success') {
+          clearInterval(checkPopup)
+          window.removeEventListener('message', handleMessage)
+          popup.close()
+          setLoginLoading(false)
+          checkAuthStatus()
+        } else if (event.data?.type === 'oauth-error') {
+          clearInterval(checkPopup)
+          window.removeEventListener('message', handleMessage)
+          popup.close()
+          setLoginLoading(false)
+          setError(event.data.error || '授权失败')
+        }
+      }
+      window.addEventListener('message', handleMessage)
+      
+      // 超时处理（5分钟）
+      setTimeout(() => {
+        clearInterval(checkPopup)
+        window.removeEventListener('message', handleMessage)
+        if (!popup.closed) {
+          setLoginLoading(false)
+        }
+      }, 300000)
+      
     } catch (err: any) {
       setError(err.message || '登录失败')
-    } finally {
       setLoginLoading(false)
     }
   }

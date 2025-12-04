@@ -39,8 +39,9 @@ export const handleCallback = async (req: Request, res: Response, next: NextFunc
     const { code, error, error_reason, error_description, state } = req.query
     
     // 根据 state 参数决定重定向目标
+    // bulk-ad 来源使用专门的弹窗回调页面
     const isBulkAd = state === 'bulk-ad'
-    const redirectBase = isBulkAd ? '/bulk-ad/create' : '/fb-token'
+    const redirectBase = isBulkAd ? '/oauth/callback' : '/fb-token'
 
     // 检查是否有错误
     if (error) {
@@ -76,7 +77,7 @@ export const handleCallback = async (req: Request, res: Response, next: NextFunc
   } catch (error: any) {
     logger.error('[OAuth] Callback handler failed:', error)
     const isBulkAd = req.query.state === 'bulk-ad'
-    const redirectBase = isBulkAd ? '/bulk-ad/create' : '/fb-token'
+    const redirectBase = isBulkAd ? '/oauth/callback' : '/fb-token'
     res.redirect(`${redirectBase}?oauth_error=${encodeURIComponent(error.message || 'OAuth callback failed')}`)
   }
 }
