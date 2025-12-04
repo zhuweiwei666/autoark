@@ -684,7 +684,7 @@ export default function BulkAdCreatePage() {
                     {creativeGroups.map(group => (
                       <label key={group._id} className={`flex items-center p-3 border rounded-lg cursor-pointer ${ad.creativeGroupIds.includes(group._id) ? 'border-blue-500 bg-blue-50' : 'border-slate-200'}`}>
                         <input type="checkbox" checked={ad.creativeGroupIds.includes(group._id)} onChange={(e) => setAd({...ad, creativeGroupIds: e.target.checked ? [...ad.creativeGroupIds, group._id] : ad.creativeGroupIds.filter(id => id !== group._id)})} className="mr-2" />
-                        <div><div className="font-medium text-sm">{group.name}</div><div className="text-xs text-slate-500">{group.materialStats?.totalCount || 0} 个素材</div></div>
+                        <div><div className="font-medium text-sm">{group.name}</div><div className="text-xs text-slate-500">{group.materials?.length || 0} 个素材</div></div>
                       </label>
                     ))}
                   </div>
