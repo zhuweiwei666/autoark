@@ -36,7 +36,7 @@ const taskItemSchema = new mongoose.Schema({
   
   // 错误信息
   errors: [{
-    entityType: { type: String, enum: ['campaign', 'adset', 'ad', 'creative'] },
+    entityType: { type: String, enum: ['campaign', 'adset', 'ad', 'creative', 'general'] },
     entityName: { type: String },
     errorCode: { type: String },
     errorMessage: { type: String },
