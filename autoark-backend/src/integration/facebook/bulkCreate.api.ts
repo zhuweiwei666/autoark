@@ -386,7 +386,30 @@ export const uploadVideoFromUrl = async (params: UploadVideoParams) => {
     logger.info(`[BulkCreate] Uploading video for account ${accountId}`)
     const res = await facebookClient.post(`/act_${accountId}/advideos`, requestParams)
     logger.info(`[BulkCreate] Video uploaded, id: ${res.id}`)
-    return { success: true, id: res.id, data: res }
+    
+    // 获取视频缩略图
+    let thumbnailUrl: string | undefined
+    try {
+      // 等待一小段时间让 Facebook 处理视频
+      await new Promise(resolve => setTimeout(resolve, 2000))
+      
+      const videoDetails = await facebookClient.get(`/${res.id}`, {
+        access_token: token,
+        fields: 'thumbnails,picture',
+      })
+      
+      // 优先使用 picture，其次使用 thumbnails 中的第一个
+      if (videoDetails.picture) {
+        thumbnailUrl = videoDetails.picture
+      } else if (videoDetails.thumbnails?.data?.[0]?.uri) {
+        thumbnailUrl = videoDetails.thumbnails.data[0].uri
+      }
+      logger.info(`[BulkCreate] Video thumbnail: ${thumbnailUrl}`)
+    } catch (thumbError: any) {
+      logger.warn(`[BulkCreate] Failed to get video thumbnail: ${thumbError.message}`)
+    }
+    
+    return { success: true, id: res.id, thumbnailUrl, data: res }
   } catch (error: any) {
     logger.error(`[BulkCreate] Failed to upload video:`, error.response?.data || error.message)
     return {

@@ -507,6 +507,10 @@ export const executeTaskForAccount = async (
       } else if (material.type === 'video') {
         if (material.facebookVideoId) {
           materialRef.video_id = material.facebookVideoId
+          // 使用素材中的缩略图
+          if (material.thumbnailUrl) {
+            materialRef.thumbnail_url = material.thumbnailUrl
+          }
         } else if (material.url) {
           // 视频必须先上传到 Facebook
           const uploadResult = await uploadVideoFromUrl({
@@ -517,6 +521,8 @@ export const executeTaskForAccount = async (
           })
           if (uploadResult.success) {
             materialRef.video_id = uploadResult.id
+            // 使用 Facebook 返回的缩略图，或素材中的缩略图，或原始视频 URL
+            materialRef.thumbnail_url = uploadResult.thumbnailUrl || material.thumbnailUrl || material.url
           } else {
             logger.error(`[BulkAd] Video upload failed, skipping ad: ${uploadResult.error}`)
             continue
@@ -569,6 +575,7 @@ export const executeTaskForAccount = async (
         delete objectStorySpec.link_data
         objectStorySpec.video_data = {
           video_id: materialRef.video_id,
+          image_url: materialRef.thumbnail_url, // 视频封面图（必需）
           message: message,
           link_description: description || title,
           call_to_action: {
@@ -576,6 +583,7 @@ export const executeTaskForAccount = async (
             value: { link: link },
           },
         }
+        logger.info(`[BulkAd] Video creative with thumbnail: ${materialRef.thumbnail_url}`)
       }
       
       if (accountConfig.instagramAccountId) {
