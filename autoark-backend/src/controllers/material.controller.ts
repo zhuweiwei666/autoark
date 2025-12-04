@@ -399,58 +399,6 @@ export const getTags = async (req: Request, res: Response) => {
 }
 
 /**
- * 重命名文件夹
- * POST /api/materials/rename-folder
- */
-export const renameFolder = async (req: Request, res: Response) => {
-  try {
-    const { oldName, newName } = req.body
-    
-    if (!oldName || !newName) {
-      return res.status(400).json({ success: false, error: '请提供文件夹名称' })
-    }
-    
-    // 更新所有该文件夹下的素材
-    const result = await Material.updateMany(
-      { folder: oldName, status: 'uploaded' },
-      { folder: newName }
-    )
-    
-    logger.info(`[Material] Renamed folder: ${oldName} -> ${newName}, ${result.modifiedCount} items updated`)
-    res.json({ success: true, data: { modifiedCount: result.modifiedCount } })
-  } catch (error: any) {
-    logger.error('[Material] Rename folder failed:', error)
-    res.status(500).json({ success: false, error: error.message })
-  }
-}
-
-/**
- * 删除文件夹（素材移至默认文件夹）
- * POST /api/materials/delete-folder
- */
-export const deleteFolder = async (req: Request, res: Response) => {
-  try {
-    const { folderName } = req.body
-    
-    if (!folderName) {
-      return res.status(400).json({ success: false, error: '请提供文件夹名称' })
-    }
-    
-    // 将该文件夹下的素材移至默认文件夹
-    const result = await Material.updateMany(
-      { folder: folderName, status: 'uploaded' },
-      { folder: '默认' }
-    )
-    
-    logger.info(`[Material] Deleted folder: ${folderName}, ${result.modifiedCount} items moved to default`)
-    res.json({ success: true, data: { modifiedCount: result.modifiedCount } })
-  } catch (error: any) {
-    logger.error('[Material] Delete folder failed:', error)
-    res.status(500).json({ success: false, error: error.message })
-  }
-}
-
-/**
  * 移动素材到指定文件夹
  * POST /api/materials/move-to-folder
  */
