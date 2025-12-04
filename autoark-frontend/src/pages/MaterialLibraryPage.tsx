@@ -54,6 +54,10 @@ export default function MaterialLibraryPage() {
   // 配置状态
   const [configStatus, setConfigStatus] = useState<{ configured: boolean; missing: string[] } | null>(null)
   
+  // 新建文件夹
+  const [showNewFolderModal, setShowNewFolderModal] = useState(false)
+  const [newFolderName, setNewFolderName] = useState('')
+  
   const fileInputRef = useRef<HTMLInputElement>(null)
   
   useEffect(() => {
@@ -226,6 +230,23 @@ export default function MaterialLibraryPage() {
     alert('URL 已复制到剪贴板')
   }
   
+  const handleCreateFolder = () => {
+    if (!newFolderName.trim()) {
+      alert('请输入文件夹名称')
+      return
+    }
+    // 检查是否已存在
+    if (folders.some(f => f.name === newFolderName.trim())) {
+      alert('文件夹已存在')
+      return
+    }
+    // 直接添加到列表（实际文件夹会在上传时创建）
+    setFolders([...folders, { name: newFolderName.trim(), count: 0 }])
+    setFilter(f => ({ ...f, folder: newFolderName.trim() }))
+    setNewFolderName('')
+    setShowNewFolderModal(false)
+  }
+  
   // 配置未完成提示
   if (configStatus && !configStatus.configured) {
     return (
@@ -326,6 +347,16 @@ R2_PUBLIC_URL=https://pub-xxx.r2.dev`}
                   <option key={f.name} value={f.name}>{f.name} ({f.count})</option>
                 ))}
               </select>
+              <button
+                onClick={() => setShowNewFolderModal(true)}
+                className="px-2 py-1.5 text-blue-600 hover:bg-blue-50 rounded-lg text-sm flex items-center gap-1"
+                title="新建文件夹"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-4 h-4">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+                </svg>
+                新建
+              </button>
             </div>
             
             {/* Search */}
@@ -538,6 +569,54 @@ R2_PUBLIC_URL=https://pub-xxx.r2.dev`}
                       复制
                     </button>
                   </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+        
+        {/* New Folder Modal */}
+        {showNewFolderModal && (
+          <div 
+            className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+            onClick={() => setShowNewFolderModal(false)}
+          >
+            <div 
+              className="bg-white rounded-xl w-full max-w-md"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between p-4 border-b border-slate-200">
+                <h3 className="font-semibold">新建文件夹</h3>
+                <button onClick={() => setShowNewFolderModal(false)} className="text-slate-400 hover:text-slate-600">
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-6 h-6">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+              <div className="p-4">
+                <label className="block text-sm font-medium text-slate-700 mb-2">文件夹名称</label>
+                <input
+                  type="text"
+                  value={newFolderName}
+                  onChange={e => setNewFolderName(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleCreateFolder()}
+                  placeholder="输入文件夹名称"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  autoFocus
+                />
+                <div className="flex justify-end gap-3 mt-4">
+                  <button
+                    onClick={() => setShowNewFolderModal(false)}
+                    className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg"
+                  >
+                    取消
+                  </button>
+                  <button
+                    onClick={handleCreateFolder}
+                    className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                  >
+                    创建
+                  </button>
                 </div>
               </div>
             </div>
