@@ -288,7 +288,7 @@ export default function AssetManagementPage() {
                         ))}
                       </div>
                     </div>
-                    <div><label className="block text-sm text-slate-600 mb-1">设备</label>
+                    <div><label className="block text-sm text-slate-600 mb-1">设备类型</label>
                       <div className="flex gap-4">
                         {['mobile', 'desktop'].map(d => (
                           <label key={d} className="flex items-center gap-2 cursor-pointer">
@@ -308,6 +308,129 @@ export default function AssetManagementPage() {
                       </div>
                     </div>
                   </>
+                )}
+                
+                {/* 设备和操作系统详细设置 */}
+                {(formData.placement?.type === 'manual' && formData.placement?.devicePlatforms?.includes('mobile')) && (
+                  <div className="border-t pt-3 mt-3">
+                    <h5 className="text-sm font-medium text-slate-600 mb-2">移动设备详细设置</h5>
+                    
+                    <div className="space-y-3">
+                      {/* 操作系统 */}
+                      <div><label className="block text-sm text-slate-500 mb-1">操作系统</label>
+                        <div className="flex gap-3">
+                          {[{v: 'all', l: '全部'}, {v: 'iOS', l: 'iOS'}, {v: 'Android', l: 'Android'}].map(os => (
+                            <label key={os.v} className="flex items-center gap-1.5 cursor-pointer">
+                              <input type="radio" name="mobileOS" 
+                                checked={(formData.deviceSettings?.mobileOS?.[0] || 'all') === os.v}
+                                onChange={() => setFormData({...formData, deviceSettings: {...formData.deviceSettings, mobileOS: [os.v]}})}
+                                className="text-blue-600" />
+                              <span className="text-sm">{os.l}</span>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                      
+                      {/* iOS 设备 */}
+                      {(formData.deviceSettings?.mobileOS?.[0] === 'iOS' || formData.deviceSettings?.mobileOS?.[0] === 'all' || !formData.deviceSettings?.mobileOS) && (
+                        <div><label className="block text-sm text-slate-500 mb-1">iOS 设备</label>
+                          <div className="flex flex-wrap gap-2">
+                            {[{v: 'iphone_all', l: 'iPhones'}, {v: 'ipad_all', l: 'iPads'}, {v: 'ipod_all', l: 'iPods'}].map(d => (
+                              <label key={d.v} className="flex items-center gap-1.5 px-2 py-1 border rounded cursor-pointer hover:bg-slate-50">
+                                <input type="checkbox" 
+                                  checked={formData.deviceSettings?.mobileDevices?.includes(d.v) || false}
+                                  onChange={(e) => {
+                                    const devices = formData.deviceSettings?.mobileDevices || []
+                                    if (e.target.checked) {
+                                      setFormData({...formData, deviceSettings: {...formData.deviceSettings, mobileDevices: [...devices, d.v]}})
+                                    } else {
+                                      setFormData({...formData, deviceSettings: {...formData.deviceSettings, mobileDevices: devices.filter((x: string) => x !== d.v)}})
+                                    }
+                                  }}
+                                  className="rounded text-blue-600" />
+                                <span className="text-sm">{d.l}</span>
+                              </label>
+                            ))}
+                          </div>
+                          <div className="grid grid-cols-2 gap-2 mt-2">
+                            <div>
+                              <label className="block text-xs text-slate-400">最低 iOS 版本</label>
+                              <select value={formData.deviceSettings?.iosVersionMin || ''} 
+                                onChange={(e) => setFormData({...formData, deviceSettings: {...formData.deviceSettings, iosVersionMin: e.target.value}})}
+                                className="w-full px-2 py-1 border rounded text-sm">
+                                <option value="">无限制</option>
+                                {['14.0', '15.0', '16.0', '17.0', '18.0'].map(v => <option key={v} value={v}>{v}</option>)}
+                              </select>
+                            </div>
+                            <div>
+                              <label className="block text-xs text-slate-400">最高 iOS 版本</label>
+                              <select value={formData.deviceSettings?.iosVersionMax || ''} 
+                                onChange={(e) => setFormData({...formData, deviceSettings: {...formData.deviceSettings, iosVersionMax: e.target.value}})}
+                                className="w-full px-2 py-1 border rounded text-sm">
+                                <option value="">无限制</option>
+                                {['14.0', '15.0', '16.0', '17.0', '18.0'].map(v => <option key={v} value={v}>{v}</option>)}
+                              </select>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                      
+                      {/* Android 设备 */}
+                      {(formData.deviceSettings?.mobileOS?.[0] === 'Android' || formData.deviceSettings?.mobileOS?.[0] === 'all' || !formData.deviceSettings?.mobileOS) && (
+                        <div><label className="block text-sm text-slate-500 mb-1">Android 设备</label>
+                          <div className="flex flex-wrap gap-2">
+                            {[{v: 'android_smartphone', l: 'Android 手机'}, {v: 'android_tablet', l: 'Android 平板'}].map(d => (
+                              <label key={d.v} className="flex items-center gap-1.5 px-2 py-1 border rounded cursor-pointer hover:bg-slate-50">
+                                <input type="checkbox" 
+                                  checked={formData.deviceSettings?.mobileDevices?.includes(d.v) || false}
+                                  onChange={(e) => {
+                                    const devices = formData.deviceSettings?.mobileDevices || []
+                                    if (e.target.checked) {
+                                      setFormData({...formData, deviceSettings: {...formData.deviceSettings, mobileDevices: [...devices, d.v]}})
+                                    } else {
+                                      setFormData({...formData, deviceSettings: {...formData.deviceSettings, mobileDevices: devices.filter((x: string) => x !== d.v)}})
+                                    }
+                                  }}
+                                  className="rounded text-blue-600" />
+                                <span className="text-sm">{d.l}</span>
+                              </label>
+                            ))}
+                          </div>
+                          <div className="grid grid-cols-2 gap-2 mt-2">
+                            <div>
+                              <label className="block text-xs text-slate-400">最低 Android 版本</label>
+                              <select value={formData.deviceSettings?.androidVersionMin || ''} 
+                                onChange={(e) => setFormData({...formData, deviceSettings: {...formData.deviceSettings, androidVersionMin: e.target.value}})}
+                                className="w-full px-2 py-1 border rounded text-sm">
+                                <option value="">无限制</option>
+                                {['8.0', '9.0', '10.0', '11.0', '12.0', '13.0', '14.0'].map(v => <option key={v} value={v}>{v}</option>)}
+                              </select>
+                            </div>
+                            <div>
+                              <label className="block text-xs text-slate-400">最高 Android 版本</label>
+                              <select value={formData.deviceSettings?.androidVersionMax || ''} 
+                                onChange={(e) => setFormData({...formData, deviceSettings: {...formData.deviceSettings, androidVersionMax: e.target.value}})}
+                                className="w-full px-2 py-1 border rounded text-sm">
+                                <option value="">无限制</option>
+                                {['8.0', '9.0', '10.0', '11.0', '12.0', '13.0', '14.0'].map(v => <option key={v} value={v}>{v}</option>)}
+                              </select>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                      
+                      {/* Wi-Fi 限制 */}
+                      <div>
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input type="checkbox" 
+                            checked={formData.deviceSettings?.wifiOnly || false}
+                            onChange={(e) => setFormData({...formData, deviceSettings: {...formData.deviceSettings, wifiOnly: e.target.checked}})}
+                            className="rounded text-blue-600" />
+                          <span className="text-sm">仅在连接 Wi-Fi 时投放</span>
+                        </label>
+                      </div>
+                    </div>
+                  </div>
                 )}
               </div>
             </div>

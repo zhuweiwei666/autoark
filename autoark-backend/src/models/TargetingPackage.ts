@@ -107,6 +107,36 @@ const targetingPackageSchema = new mongoose.Schema(
       }],
     },
     
+    // 设备和操作系统设置
+    deviceSettings: {
+      // 移动操作系统
+      mobileOS: [{
+        type: String,
+        enum: ['iOS', 'Android', 'all'],
+      }],
+      // 具体设备类型
+      mobileDevices: [{
+        type: String,
+        enum: [
+          'iphone_all', 'ipad_all', 'ipod_all',  // iOS 设备
+          'android_smartphone', 'android_tablet',  // Android 设备
+          'feature_phone',  // 功能机
+        ],
+      }],
+      // iOS 最低版本
+      iosVersionMin: { type: String },
+      // iOS 最高版本
+      iosVersionMax: { type: String },
+      // Android 最低版本
+      androidVersionMin: { type: String },
+      // Android 最高版本
+      androidVersionMax: { type: String },
+      // 仅限 Wi-Fi
+      wifiOnly: { type: Boolean, default: false },
+      // 排除的设备
+      excludedDevices: [{ type: String }],
+    },
+    
     // 优化目标
     optimizationGoal: {
       type: String,
