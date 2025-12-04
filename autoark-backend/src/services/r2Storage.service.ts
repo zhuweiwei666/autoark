@@ -63,9 +63,15 @@ export const uploadToR2 = async (params: {
 }> => {
   const { buffer, originalName, mimeType, folder } = params
   
+  logger.info(`[R2] Starting upload: ${originalName}, size: ${buffer.length}, type: ${mimeType}, folder: ${folder}`)
+  
   try {
+    logger.info(`[R2] Getting S3 client...`)
     const client = getS3Client()
     const key = generateStorageKey(originalName, folder)
+    
+    logger.info(`[R2] Generated key: ${key}, bucket: ${R2_BUCKET_NAME}`)
+    logger.info(`[R2] Endpoint: https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`)
     
     const command = new PutObjectCommand({
       Bucket: R2_BUCKET_NAME,
@@ -74,14 +80,18 @@ export const uploadToR2 = async (params: {
       ContentType: mimeType,
     })
     
+    logger.info(`[R2] Sending to R2...`)
+    const startTime = Date.now()
     await client.send(command)
+    const duration = Date.now() - startTime
+    logger.info(`[R2] Upload completed in ${duration}ms`)
     
     // 生成公开访问 URL
     const url = R2_PUBLIC_URL 
       ? `${R2_PUBLIC_URL}/${key}`
       : `https://${R2_BUCKET_NAME}.${R2_ACCOUNT_ID}.r2.dev/${key}`
     
-    logger.info(`[R2] File uploaded: ${key}`)
+    logger.info(`[R2] File uploaded: ${key}, URL: ${url}`)
     
     return {
       success: true,
@@ -89,7 +99,8 @@ export const uploadToR2 = async (params: {
       url,
     }
   } catch (error: any) {
-    logger.error('[R2] Upload failed:', error)
+    logger.error('[R2] Upload failed:', error.message)
+    logger.error('[R2] Error details:', error.name, error.code, error.$metadata)
     return {
       success: false,
       error: error.message,

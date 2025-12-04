@@ -25,22 +25,29 @@ export const getConfigStatus = async (req: Request, res: Response) => {
  * POST /api/materials/upload
  */
 export const uploadMaterial = async (req: Request, res: Response) => {
+  logger.info(`[Material] Upload request received`)
   try {
     const file = (req as any).file
     if (!file) {
+      logger.warn('[Material] No file in request')
       return res.status(400).json({ success: false, error: '请选择要上传的文件' })
     }
     
+    logger.info(`[Material] File received: ${file.originalname}, size: ${file.size}, type: ${file.mimetype}`)
+    
     const { folder, tags, notes } = req.body
+    logger.info(`[Material] Folder: ${folder}, tags: ${tags}`)
     
     // 判断文件类型
     const isImage = file.mimetype.startsWith('image/')
     const isVideo = file.mimetype.startsWith('video/')
     
     if (!isImage && !isVideo) {
+      logger.warn(`[Material] Unsupported file type: ${file.mimetype}`)
       return res.status(400).json({ success: false, error: '只支持图片和视频文件' })
     }
     
+    logger.info(`[Material] Starting R2 upload...`)
     // 上传到 R2
     const uploadResult = await uploadToR2({
       buffer: file.buffer,
@@ -48,6 +55,7 @@ export const uploadMaterial = async (req: Request, res: Response) => {
       mimeType: file.mimetype,
       folder: folder || 'materials',
     })
+    logger.info(`[Material] R2 upload result:`, uploadResult.success ? 'success' : uploadResult.error)
     
     if (!uploadResult.success) {
       return res.status(500).json({ success: false, error: uploadResult.error || '上传失败' })
