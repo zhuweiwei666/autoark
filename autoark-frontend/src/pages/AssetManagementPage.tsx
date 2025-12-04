@@ -10,7 +10,7 @@ const COUNTRIES = {
     { code: 'CA', name: '加拿大' },
     { code: 'MX', name: '墨西哥' },
     { code: 'GT', name: '危地马拉' },
-    { code: 'CU', name: '古巴' },
+    // CU 古巴 - Facebook 受限国家，已移除
     { code: 'HT', name: '海地' },
     { code: 'DO', name: '多米尼加' },
     { code: 'HN', name: '洪都拉斯' },
@@ -100,7 +100,7 @@ const COUNTRIES = {
     { code: 'HK', name: '中国香港' },
     { code: 'MO', name: '中国澳门' },
     { code: 'MN', name: '蒙古' },
-    { code: 'KP', name: '朝鲜' },
+    // KP 朝鲜 - Facebook 受限国家，已移除
   ],
   '东南亚': [
     { code: 'ID', name: '印度尼西亚' },
@@ -137,7 +137,7 @@ const COUNTRIES = {
     { code: 'SA', name: '沙特阿拉伯' },
     { code: 'AE', name: '阿联酋' },
     { code: 'IL', name: '以色列' },
-    { code: 'IR', name: '伊朗' },
+    // IR 伊朗 - Facebook 受限国家，已移除
     { code: 'IQ', name: '伊拉克' },
     { code: 'KW', name: '科威特' },
     { code: 'QA', name: '卡塔尔' },
@@ -146,7 +146,7 @@ const COUNTRIES = {
     { code: 'YE', name: '也门' },
     { code: 'JO', name: '约旦' },
     { code: 'LB', name: '黎巴嫩' },
-    { code: 'SY', name: '叙利亚' },
+    // SY 叙利亚 - Facebook 受限国家，已移除
     { code: 'PS', name: '巴勒斯坦' },
     { code: 'GE', name: '格鲁吉亚' },
     { code: 'AM', name: '亚美尼亚' },
@@ -177,7 +177,7 @@ const COUNTRIES = {
     { code: 'DZ', name: '阿尔及利亚' },
     { code: 'TN', name: '突尼斯' },
     { code: 'LY', name: '利比亚' },
-    { code: 'SD', name: '苏丹' },
+    // SD 苏丹 - Facebook 受限国家，已移除
   ],
   '西非': [
     { code: 'NG', name: '尼日利亚' },
