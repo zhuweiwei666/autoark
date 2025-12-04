@@ -105,29 +105,6 @@ export default function FacebookAccountsPage() {
     }
   }
 
-  // 格式化金额
-  // Facebook API 返回的 balance 和 amount_spent 都是以账户货币的最小单位（sub-units）返回的
-  // 例如：美元账户以"分"为单位，需要除以 100
-  const formatCurrency = (amount: number | string | null | undefined, currency: string) => {
-    if (amount === null || amount === undefined || amount === '' || amount === 0) return '-'
-    
-    // 转换为数字
-    const numAmount = typeof amount === 'string' ? parseFloat(amount) : Number(amount)
-    
-    // 如果转换失败或为 NaN，返回 '-'
-    if (isNaN(numAmount)) return '-'
-    
-    // Facebook API 返回的是最小单位（分），需要除以 100
-    const val = numAmount / 100
-    
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: currency || 'USD',
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    }).format(val)
-  }
-
   return (
     <div className="min-h-screen bg-white text-slate-900 p-6 relative overflow-hidden">
 
