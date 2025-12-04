@@ -226,9 +226,9 @@ export default function AgentManagementPage() {
 
   const getStatusColor = (status: string) => {
     switch (status) {
-      case 'active': return 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
-      case 'paused': return 'bg-amber-500/20 text-amber-400 border-amber-500/30'
-      case 'disabled': return 'bg-slate-500/20 text-slate-400 border-slate-500/30'
+      case 'active': return 'bg-emerald-100 text-emerald-700'
+      case 'paused': return 'bg-amber-100 text-amber-700'
+      case 'disabled': return 'bg-slate-100 text-slate-600'
       default: return ''
     }
   }
@@ -245,471 +245,477 @@ export default function AgentManagementPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 p-6">
-      {/* 页面标题 */}
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold bg-gradient-to-r from-cyan-400 via-blue-400 to-purple-400 bg-clip-text text-transparent">
-          Agent 管理
-        </h1>
-        <p className="text-slate-400 mt-2">配置和管理自动化投放代理</p>
-      </div>
+    <div className="min-h-screen bg-white text-slate-900 p-6">
+      <div className="max-w-7xl mx-auto space-y-6">
+        {/* 头部 */}
+        <header className="bg-white rounded-3xl p-6 shadow-lg shadow-black/5 border border-slate-200">
+          <h1 className="text-3xl font-bold text-slate-900">Agent 管理</h1>
+          <p className="text-slate-500 mt-1">配置和管理自动化投放代理</p>
+        </header>
 
-      {/* Tab 切换 */}
-      <div className="flex gap-2 mb-6">
-        {[
-          { key: 'agents', label: 'Agent 列表', icon: '🤖', badge: agents.length },
-          { key: 'pending', label: '待审批', icon: '⏳', badge: pendingOps.length },
-          { key: 'history', label: '操作历史', icon: '📜', badge: 0 },
-        ].map(tab => (
-          <button
-            key={tab.key}
-            onClick={() => setActiveTab(tab.key as any)}
-            className={`px-6 py-3 rounded-2xl font-medium transition-all flex items-center gap-2 ${
-              activeTab === tab.key
-                ? 'bg-gradient-to-r from-blue-500/20 to-purple-500/20 text-white border border-white/20'
-                : 'bg-white/5 text-slate-400 hover:bg-white/10 border border-transparent'
-            }`}
-          >
-            <span>{tab.icon}</span>
-            {tab.label}
-            {tab.badge > 0 && (
-              <span className="px-2 py-0.5 text-xs bg-white/20 rounded-full">{tab.badge}</span>
-            )}
-          </button>
-        ))}
-      </div>
-
-      {/* Agent 列表 */}
-      {activeTab === 'agents' && (
-        <div className="space-y-4">
-          <div className="flex justify-end">
+        {/* Tab 切换 */}
+        <div className="flex gap-2">
+          {[
+            { key: 'agents', label: 'Agent 列表', icon: '🤖', badge: agents.length },
+            { key: 'pending', label: '待审批', icon: '⏳', badge: pendingOps.length },
+            { key: 'history', label: '操作历史', icon: '📜', badge: 0 },
+          ].map(tab => (
             <button
-              onClick={() => { resetForm(); setShowModal(true); }}
-              className="px-4 py-2 bg-gradient-to-r from-blue-500 to-purple-500 text-white rounded-xl font-medium hover:opacity-90 transition-opacity"
+              key={tab.key}
+              onClick={() => setActiveTab(tab.key as any)}
+              className={`px-6 py-3 rounded-xl font-medium transition-all flex items-center gap-2 ${
+                activeTab === tab.key
+                  ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-200'
+                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+              }`}
             >
-              + 创建 Agent
+              <span>{tab.icon}</span>
+              {tab.label}
+              {tab.badge > 0 && (
+                <span className={`px-2 py-0.5 text-xs rounded-full ${
+                  activeTab === tab.key ? 'bg-white/20' : 'bg-slate-200'
+                }`}>{tab.badge}</span>
+              )}
             </button>
-          </div>
+          ))}
+        </div>
 
-          {agents.length === 0 ? (
-            <div className="backdrop-blur-2xl bg-white/[0.03] rounded-3xl border border-white/10 p-12 text-center text-slate-500">
-              <div className="text-4xl mb-4">🤖</div>
-              <p>还没有创建任何 Agent</p>
-              <p className="text-sm mt-2">点击上方按钮创建你的第一个自动化投放代理</p>
+        {/* Agent 列表 */}
+        {activeTab === 'agents' && (
+          <div className="space-y-4">
+            <div className="flex justify-end">
+              <button
+                onClick={() => { resetForm(); setShowModal(true); }}
+                className="px-4 py-2 bg-indigo-600 text-white rounded-xl font-medium hover:bg-indigo-700 transition-colors shadow-lg shadow-indigo-200"
+              >
+                + 创建 Agent
+              </button>
             </div>
-          ) : (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              {agents.map(agent => (
-                <div key={agent._id} className="backdrop-blur-2xl bg-white/[0.03] rounded-3xl border border-white/10 p-6">
-                  <div className="flex justify-between items-start mb-4">
-                    <div>
-                      <h3 className="text-lg font-semibold text-white">{agent.name}</h3>
-                      <p className="text-sm text-slate-400 mt-1">{agent.description || '无描述'}</p>
-                    </div>
-                    <div className="flex gap-2">
-                      <span className={`px-3 py-1 rounded-lg text-xs border ${getStatusColor(agent.status)}`}>
+
+            {agents.length === 0 ? (
+              <div className="bg-white rounded-3xl border border-slate-200 p-12 text-center text-slate-400 shadow-lg shadow-black/5">
+                <div className="text-4xl mb-4">🤖</div>
+                <p className="text-slate-600">还没有创建任何 Agent</p>
+                <p className="text-sm mt-2 text-slate-400">点击上方按钮创建你的第一个自动化投放代理</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                {agents.map(agent => (
+                  <div key={agent._id} className="bg-white rounded-3xl border border-slate-200 p-6 shadow-lg shadow-black/5">
+                    <div className="flex justify-between items-start mb-4">
+                      <div>
+                        <h3 className="text-lg font-semibold text-slate-900">{agent.name}</h3>
+                        <p className="text-sm text-slate-500 mt-1">{agent.description || '无描述'}</p>
+                      </div>
+                      <span className={`px-3 py-1 rounded-lg text-xs font-medium ${getStatusColor(agent.status)}`}>
                         {agent.status === 'active' ? '运行中' : agent.status === 'paused' ? '已暂停' : '已禁用'}
                       </span>
                     </div>
-                  </div>
 
-                  <div className="grid grid-cols-3 gap-4 mb-4 text-sm">
-                    <div className="bg-white/5 rounded-xl p-3">
-                      <div className="text-slate-400 text-xs mb-1">运行模式</div>
-                      <div className="text-white">{getModeLabel(agent.mode)}</div>
-                    </div>
-                    <div className="bg-white/5 rounded-xl p-3">
-                      <div className="text-slate-400 text-xs mb-1">目标 ROAS</div>
-                      <div className="text-cyan-400">{agent.objectives?.targetRoas || '-'}</div>
-                    </div>
-                    <div className="bg-white/5 rounded-xl p-3">
-                      <div className="text-slate-400 text-xs mb-1">启用规则</div>
-                      <div className="text-white">
-                        {[
-                          agent.rules?.autoStop?.enabled && '关停',
-                          agent.rules?.autoScale?.enabled && '扩量',
-                          agent.rules?.budgetAdjust?.enabled && '调预算',
-                        ].filter(Boolean).join('/') || '无'}
+                    <div className="grid grid-cols-3 gap-4 mb-4 text-sm">
+                      <div className="bg-slate-50 rounded-xl p-3 border border-slate-100">
+                        <div className="text-slate-400 text-xs mb-1">运行模式</div>
+                        <div className="text-slate-900 font-medium">{getModeLabel(agent.mode)}</div>
+                      </div>
+                      <div className="bg-slate-50 rounded-xl p-3 border border-slate-100">
+                        <div className="text-slate-400 text-xs mb-1">目标 ROAS</div>
+                        <div className="text-indigo-600 font-medium">{agent.objectives?.targetRoas || '-'}</div>
+                      </div>
+                      <div className="bg-slate-50 rounded-xl p-3 border border-slate-100">
+                        <div className="text-slate-400 text-xs mb-1">启用规则</div>
+                        <div className="text-slate-900 font-medium">
+                          {[
+                            agent.rules?.autoStop?.enabled && '关停',
+                            agent.rules?.autoScale?.enabled && '扩量',
+                            agent.rules?.budgetAdjust?.enabled && '调预算',
+                          ].filter(Boolean).join('/') || '无'}
+                        </div>
                       </div>
                     </div>
-                  </div>
 
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => runAgent(agent._id)}
-                      disabled={loading}
-                      className="flex-1 px-4 py-2 bg-gradient-to-r from-emerald-500/20 to-cyan-500/20 text-emerald-400 rounded-xl text-sm font-medium hover:from-emerald-500/30 hover:to-cyan-500/30 transition-colors border border-emerald-500/20"
-                    >
-                      ▶ 立即运行
-                    </button>
-                    <button
-                      onClick={() => editAgent(agent)}
-                      className="px-4 py-2 bg-white/5 text-slate-300 rounded-xl text-sm hover:bg-white/10 transition-colors"
-                    >
-                      编辑
-                    </button>
-                    <button
-                      onClick={() => deleteAgent(agent._id)}
-                      className="px-4 py-2 bg-red-500/10 text-red-400 rounded-xl text-sm hover:bg-red-500/20 transition-colors"
-                    >
-                      删除
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* 待审批 */}
-      {activeTab === 'pending' && (
-        <div className="space-y-4">
-          {pendingOps.length === 0 ? (
-            <div className="backdrop-blur-2xl bg-white/[0.03] rounded-3xl border border-white/10 p-12 text-center text-slate-500">
-              <div className="text-4xl mb-4">✅</div>
-              <p>没有待审批的操作</p>
-            </div>
-          ) : (
-            pendingOps.map(op => (
-              <div key={op._id} className="backdrop-blur-2xl bg-white/[0.03] rounded-3xl border border-white/10 p-6">
-                <div className="flex justify-between items-start">
-                  <div>
-                    <div className="flex items-center gap-2 mb-2">
-                      <span className="px-2 py-1 bg-amber-500/20 text-amber-400 rounded text-xs">待审批</span>
-                      <span className="text-white font-medium">{getActionLabel(op.action)}</span>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => runAgent(agent._id)}
+                        disabled={loading}
+                        className="flex-1 px-4 py-2 bg-emerald-100 text-emerald-700 rounded-xl text-sm font-medium hover:bg-emerald-200 transition-colors"
+                      >
+                        ▶ 立即运行
+                      </button>
+                      <button
+                        onClick={() => editAgent(agent)}
+                        className="px-4 py-2 bg-slate-100 text-slate-600 rounded-xl text-sm hover:bg-slate-200 transition-colors"
+                      >
+                        编辑
+                      </button>
+                      <button
+                        onClick={() => deleteAgent(agent._id)}
+                        className="px-4 py-2 bg-red-100 text-red-600 rounded-xl text-sm hover:bg-red-200 transition-colors"
+                      >
+                        删除
+                      </button>
                     </div>
-                    <div className="text-slate-300">{op.entityName || op.entityId}</div>
-                    <div className="text-sm text-slate-400 mt-2">{op.reason}</div>
-                    {op.beforeValue && op.afterValue && (
-                      <div className="text-sm text-slate-500 mt-1">
-                        变更: {JSON.stringify(op.beforeValue)} → {JSON.stringify(op.afterValue)}
-                      </div>
-                    )}
                   </div>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => approveOperation(op._id)}
-                      className="px-4 py-2 bg-emerald-500 text-white rounded-xl text-sm font-medium hover:bg-emerald-600 transition-colors"
-                    >
-                      批准
-                    </button>
-                    <button
-                      onClick={() => rejectOperation(op._id)}
-                      className="px-4 py-2 bg-red-500/20 text-red-400 rounded-xl text-sm hover:bg-red-500/30 transition-colors"
-                    >
-                      拒绝
-                    </button>
-                  </div>
-                </div>
+                ))}
               </div>
-            ))
-          )}
-        </div>
-      )}
+            )}
+          </div>
+        )}
 
-      {/* 操作历史 */}
-      {activeTab === 'history' && (
-        <div className="backdrop-blur-2xl bg-white/[0.03] rounded-3xl border border-white/10 overflow-hidden">
-          <table className="w-full">
-            <thead>
-              <tr className="border-b border-white/10">
-                <th className="px-6 py-4 text-left text-sm font-medium text-slate-400">时间</th>
-                <th className="px-6 py-4 text-left text-sm font-medium text-slate-400">操作</th>
-                <th className="px-6 py-4 text-left text-sm font-medium text-slate-400">对象</th>
-                <th className="px-6 py-4 text-left text-sm font-medium text-slate-400">原因</th>
-                <th className="px-6 py-4 text-left text-sm font-medium text-slate-400">状态</th>
-              </tr>
-            </thead>
-            <tbody>
-              {operations.map(op => (
-                <tr key={op._id} className="border-b border-white/5 hover:bg-white/5">
-                  <td className="px-6 py-4 text-sm text-slate-400">
-                    {new Date(op.createdAt).toLocaleString()}
-                  </td>
-                  <td className="px-6 py-4 text-sm text-white">{getActionLabel(op.action)}</td>
-                  <td className="px-6 py-4 text-sm text-slate-300">{op.entityName || op.entityId}</td>
-                  <td className="px-6 py-4 text-sm text-slate-400 max-w-xs truncate">{op.reason}</td>
-                  <td className="px-6 py-4">
-                    <span className={`px-2 py-1 rounded text-xs ${
-                      op.status === 'executed' ? 'bg-emerald-500/20 text-emerald-400' :
-                      op.status === 'pending' ? 'bg-amber-500/20 text-amber-400' :
-                      op.status === 'rejected' ? 'bg-red-500/20 text-red-400' :
-                      'bg-slate-500/20 text-slate-400'
-                    }`}>
-                      {op.status}
-                    </span>
-                  </td>
+        {/* 待审批 */}
+        {activeTab === 'pending' && (
+          <div className="space-y-4">
+            {pendingOps.length === 0 ? (
+              <div className="bg-white rounded-3xl border border-slate-200 p-12 text-center text-slate-400 shadow-lg shadow-black/5">
+                <div className="text-4xl mb-4">✅</div>
+                <p className="text-slate-600">没有待审批的操作</p>
+              </div>
+            ) : (
+              pendingOps.map(op => (
+                <div key={op._id} className="bg-white rounded-3xl border border-slate-200 p-6 shadow-lg shadow-black/5">
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className="px-2 py-1 bg-amber-100 text-amber-700 rounded text-xs font-medium">待审批</span>
+                        <span className="text-slate-900 font-medium">{getActionLabel(op.action)}</span>
+                      </div>
+                      <div className="text-slate-700">{op.entityName || op.entityId}</div>
+                      <div className="text-sm text-slate-500 mt-2">{op.reason}</div>
+                      {op.beforeValue && op.afterValue && (
+                        <div className="text-sm text-slate-400 mt-1">
+                          变更: {JSON.stringify(op.beforeValue)} → {JSON.stringify(op.afterValue)}
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => approveOperation(op._id)}
+                        className="px-4 py-2 bg-emerald-600 text-white rounded-xl text-sm font-medium hover:bg-emerald-700 transition-colors"
+                      >
+                        批准
+                      </button>
+                      <button
+                        onClick={() => rejectOperation(op._id)}
+                        className="px-4 py-2 bg-red-100 text-red-600 rounded-xl text-sm hover:bg-red-200 transition-colors"
+                      >
+                        拒绝
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        )}
+
+        {/* 操作历史 */}
+        {activeTab === 'history' && (
+          <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-lg shadow-black/5">
+            <table className="w-full">
+              <thead className="bg-slate-50">
+                <tr className="border-b border-slate-200">
+                  <th className="px-6 py-4 text-left text-sm font-medium text-slate-600">时间</th>
+                  <th className="px-6 py-4 text-left text-sm font-medium text-slate-600">操作</th>
+                  <th className="px-6 py-4 text-left text-sm font-medium text-slate-600">对象</th>
+                  <th className="px-6 py-4 text-left text-sm font-medium text-slate-600">原因</th>
+                  <th className="px-6 py-4 text-left text-sm font-medium text-slate-600">状态</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+              </thead>
+              <tbody>
+                {operations.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="px-6 py-12 text-center text-slate-400">暂无操作记录</td>
+                  </tr>
+                ) : (
+                  operations.map(op => (
+                    <tr key={op._id} className="border-b border-slate-100 hover:bg-slate-50">
+                      <td className="px-6 py-4 text-sm text-slate-500">
+                        {new Date(op.createdAt).toLocaleString()}
+                      </td>
+                      <td className="px-6 py-4 text-sm text-slate-900">{getActionLabel(op.action)}</td>
+                      <td className="px-6 py-4 text-sm text-slate-700">{op.entityName || op.entityId}</td>
+                      <td className="px-6 py-4 text-sm text-slate-500 max-w-xs truncate">{op.reason}</td>
+                      <td className="px-6 py-4">
+                        <span className={`px-2 py-1 rounded text-xs font-medium ${
+                          op.status === 'executed' ? 'bg-emerald-100 text-emerald-700' :
+                          op.status === 'pending' ? 'bg-amber-100 text-amber-700' :
+                          op.status === 'rejected' ? 'bg-red-100 text-red-700' :
+                          'bg-slate-100 text-slate-600'
+                        }`}>
+                          {op.status}
+                        </span>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
 
-      {/* 创建/编辑 Modal */}
-      {showModal && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-slate-800 rounded-3xl border border-white/10 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-            <div className="p-6 border-b border-white/10">
-              <h2 className="text-xl font-semibold text-white">
-                {editingAgent ? '编辑 Agent' : '创建 Agent'}
-              </h2>
-            </div>
+        {/* 创建/编辑 Modal */}
+        {showModal && (
+          <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-3xl border border-slate-200 w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl">
+              <div className="p-6 border-b border-slate-200">
+                <h2 className="text-xl font-semibold text-slate-900">
+                  {editingAgent ? '编辑 Agent' : '创建 Agent'}
+                </h2>
+              </div>
 
-            <div className="p-6 space-y-6">
-              {/* 基本信息 */}
-              <div className="grid grid-cols-2 gap-4">
+              <div className="p-6 space-y-6">
+                {/* 基本信息 */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm text-slate-600 mb-2">名称</label>
+                    <input
+                      type="text"
+                      value={formData.name}
+                      onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      placeholder="我的投放 Agent"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm text-slate-600 mb-2">状态</label>
+                    <select
+                      value={formData.status}
+                      onChange={(e) => setFormData({ ...formData, status: e.target.value })}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    >
+                      <option value="paused">暂停</option>
+                      <option value="active">运行</option>
+                      <option value="disabled">禁用</option>
+                    </select>
+                  </div>
+                </div>
+
                 <div>
-                  <label className="block text-sm text-slate-400 mb-2">名称</label>
-                  <input
-                    type="text"
-                    value={formData.name}
-                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                    className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2 text-white"
-                    placeholder="我的投放 Agent"
+                  <label className="block text-sm text-slate-600 mb-2">描述</label>
+                  <textarea
+                    value={formData.description}
+                    onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-slate-900 h-20 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    placeholder="描述这个 Agent 的用途..."
                   />
                 </div>
+
+                {/* 运行模式 */}
                 <div>
-                  <label className="block text-sm text-slate-400 mb-2">状态</label>
-                  <select
-                    value={formData.status}
-                    onChange={(e) => setFormData({ ...formData, status: e.target.value })}
-                    className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2 text-white"
-                  >
-                    <option value="paused">暂停</option>
-                    <option value="active">运行</option>
-                    <option value="disabled">禁用</option>
-                  </select>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-sm text-slate-400 mb-2">描述</label>
-                <textarea
-                  value={formData.description}
-                  onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                  className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2 text-white h-20"
-                  placeholder="描述这个 Agent 的用途..."
-                />
-              </div>
-
-              {/* 运行模式 */}
-              <div>
-                <label className="block text-sm text-slate-400 mb-2">运行模式</label>
-                <div className="grid grid-cols-3 gap-2">
-                  {[
-                    { value: 'observe', label: '观察', desc: '仅分析，不操作' },
-                    { value: 'suggest', label: '建议', desc: '分析并推送建议' },
-                    { value: 'auto', label: '自动', desc: '自动执行优化' },
-                  ].map(mode => (
-                    <button
-                      key={mode.value}
-                      onClick={() => setFormData({ ...formData, mode: mode.value })}
-                      className={`p-3 rounded-xl border text-left ${
-                        formData.mode === mode.value
-                          ? 'bg-blue-500/20 border-blue-500/50 text-white'
-                          : 'bg-white/5 border-white/10 text-slate-400 hover:bg-white/10'
-                      }`}
-                    >
-                      <div className="font-medium">{mode.label}</div>
-                      <div className="text-xs opacity-70">{mode.desc}</div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* 目标设置 */}
-              <div>
-                <label className="block text-sm text-slate-400 mb-2">目标设置</label>
-                <div className="grid grid-cols-3 gap-4">
-                  <div>
-                    <label className="block text-xs text-slate-500 mb-1">目标 ROAS</label>
-                    <input
-                      type="number"
-                      step="0.1"
-                      value={formData.objectives.targetRoas}
-                      onChange={(e) => setFormData({
-                        ...formData,
-                        objectives: { ...formData.objectives, targetRoas: parseFloat(e.target.value) || 0 }
-                      })}
-                      className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-white"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-slate-500 mb-1">最高 CPA</label>
-                    <input
-                      type="number"
-                      value={formData.objectives.maxCpa}
-                      onChange={(e) => setFormData({
-                        ...formData,
-                        objectives: { ...formData.objectives, maxCpa: parseFloat(e.target.value) || 0 }
-                      })}
-                      className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-white"
-                      placeholder="$"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-slate-500 mb-1">日预算上限</label>
-                    <input
-                      type="number"
-                      value={formData.objectives.dailyBudgetLimit}
-                      onChange={(e) => setFormData({
-                        ...formData,
-                        objectives: { ...formData.objectives, dailyBudgetLimit: parseFloat(e.target.value) || 0 }
-                      })}
-                      className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-white"
-                      placeholder="$"
-                    />
+                  <label className="block text-sm text-slate-600 mb-2">运行模式</label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {[
+                      { value: 'observe', label: '观察', desc: '仅分析，不操作' },
+                      { value: 'suggest', label: '建议', desc: '分析并推送建议' },
+                      { value: 'auto', label: '自动', desc: '自动执行优化' },
+                    ].map(mode => (
+                      <button
+                        key={mode.value}
+                        onClick={() => setFormData({ ...formData, mode: mode.value })}
+                        className={`p-3 rounded-xl border text-left transition-colors ${
+                          formData.mode === mode.value
+                            ? 'bg-indigo-100 border-indigo-300 text-indigo-900'
+                            : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                        }`}
+                      >
+                        <div className="font-medium">{mode.label}</div>
+                        <div className="text-xs opacity-70">{mode.desc}</div>
+                      </button>
+                    ))}
                   </div>
                 </div>
-              </div>
 
-              {/* 自动化规则 */}
-              <div>
-                <label className="block text-sm text-slate-400 mb-2">自动化规则</label>
-                <div className="space-y-3">
-                  {/* 自动关停 */}
-                  <div className="bg-white/5 rounded-xl p-4">
-                    <label className="flex items-center justify-between">
-                      <div>
-                        <div className="text-white">自动关停</div>
-                        <div className="text-xs text-slate-500">ROAS 过低时自动暂停广告</div>
-                      </div>
+                {/* 目标设置 */}
+                <div>
+                  <label className="block text-sm text-slate-600 mb-2">目标设置</label>
+                  <div className="grid grid-cols-3 gap-4">
+                    <div>
+                      <label className="block text-xs text-slate-400 mb-1">目标 ROAS</label>
                       <input
-                        type="checkbox"
-                        checked={formData.rules.autoStop.enabled}
+                        type="number"
+                        step="0.1"
+                        value={formData.objectives.targetRoas}
                         onChange={(e) => setFormData({
                           ...formData,
-                          rules: { ...formData.rules, autoStop: { ...formData.rules.autoStop, enabled: e.target.checked } }
+                          objectives: { ...formData.objectives, targetRoas: parseFloat(e.target.value) || 0 }
                         })}
-                        className="w-5 h-5 rounded"
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                       />
-                    </label>
-                    {formData.rules.autoStop.enabled && (
-                      <div className="grid grid-cols-3 gap-2 mt-3">
-                        <div>
-                          <label className="text-xs text-slate-500">ROAS 阈值</label>
-                          <input
-                            type="number"
-                            step="0.1"
-                            value={formData.rules.autoStop.roasThreshold}
-                            onChange={(e) => setFormData({
-                              ...formData,
-                              rules: { ...formData.rules, autoStop: { ...formData.rules.autoStop, roasThreshold: parseFloat(e.target.value) } }
-                            })}
-                            className="w-full bg-white/5 border border-white/10 rounded px-2 py-1 text-white text-sm"
-                          />
-                        </div>
-                        <div>
-                          <label className="text-xs text-slate-500">连续天数</label>
-                          <input
-                            type="number"
-                            value={formData.rules.autoStop.minDays}
-                            onChange={(e) => setFormData({
-                              ...formData,
-                              rules: { ...formData.rules, autoStop: { ...formData.rules.autoStop, minDays: parseInt(e.target.value) } }
-                            })}
-                            className="w-full bg-white/5 border border-white/10 rounded px-2 py-1 text-white text-sm"
-                          />
-                        </div>
-                        <div>
-                          <label className="text-xs text-slate-500">最小消耗 $</label>
-                          <input
-                            type="number"
-                            value={formData.rules.autoStop.minSpend}
-                            onChange={(e) => setFormData({
-                              ...formData,
-                              rules: { ...formData.rules, autoStop: { ...formData.rules.autoStop, minSpend: parseFloat(e.target.value) } }
-                            })}
-                            className="w-full bg-white/5 border border-white/10 rounded px-2 py-1 text-white text-sm"
-                          />
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* 自动扩量 */}
-                  <div className="bg-white/5 rounded-xl p-4">
-                    <label className="flex items-center justify-between">
-                      <div>
-                        <div className="text-white">自动扩量</div>
-                        <div className="text-xs text-slate-500">ROAS 优秀时自动提升预算</div>
-                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-xs text-slate-400 mb-1">最高 CPA</label>
                       <input
-                        type="checkbox"
-                        checked={formData.rules.autoScale.enabled}
+                        type="number"
+                        value={formData.objectives.maxCpa}
                         onChange={(e) => setFormData({
                           ...formData,
-                          rules: { ...formData.rules, autoScale: { ...formData.rules.autoScale, enabled: e.target.checked } }
+                          objectives: { ...formData.objectives, maxCpa: parseFloat(e.target.value) || 0 }
                         })}
-                        className="w-5 h-5 rounded"
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        placeholder="$"
                       />
-                    </label>
-                    {formData.rules.autoScale.enabled && (
-                      <div className="grid grid-cols-3 gap-2 mt-3">
+                    </div>
+                    <div>
+                      <label className="block text-xs text-slate-400 mb-1">日预算上限</label>
+                      <input
+                        type="number"
+                        value={formData.objectives.dailyBudgetLimit}
+                        onChange={(e) => setFormData({
+                          ...formData,
+                          objectives: { ...formData.objectives, dailyBudgetLimit: parseFloat(e.target.value) || 0 }
+                        })}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        placeholder="$"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* 自动化规则 */}
+                <div>
+                  <label className="block text-sm text-slate-600 mb-2">自动化规则</label>
+                  <div className="space-y-3">
+                    {/* 自动关停 */}
+                    <div className="bg-slate-50 rounded-xl p-4 border border-slate-200">
+                      <label className="flex items-center justify-between">
                         <div>
-                          <label className="text-xs text-slate-500">ROAS 阈值</label>
-                          <input
-                            type="number"
-                            step="0.1"
-                            value={formData.rules.autoScale.roasThreshold}
-                            onChange={(e) => setFormData({
-                              ...formData,
-                              rules: { ...formData.rules, autoScale: { ...formData.rules.autoScale, roasThreshold: parseFloat(e.target.value) } }
-                            })}
-                            className="w-full bg-white/5 border border-white/10 rounded px-2 py-1 text-white text-sm"
-                          />
+                          <div className="text-slate-900 font-medium">自动关停</div>
+                          <div className="text-xs text-slate-400">ROAS 过低时自动暂停广告</div>
                         </div>
+                        <input
+                          type="checkbox"
+                          checked={formData.rules.autoStop.enabled}
+                          onChange={(e) => setFormData({
+                            ...formData,
+                            rules: { ...formData.rules, autoStop: { ...formData.rules.autoStop, enabled: e.target.checked } }
+                          })}
+                          className="w-5 h-5 rounded text-indigo-600"
+                        />
+                      </label>
+                      {formData.rules.autoStop.enabled && (
+                        <div className="grid grid-cols-3 gap-2 mt-3">
+                          <div>
+                            <label className="text-xs text-slate-400">ROAS 阈值</label>
+                            <input
+                              type="number"
+                              step="0.1"
+                              value={formData.rules.autoStop.roasThreshold}
+                              onChange={(e) => setFormData({
+                                ...formData,
+                                rules: { ...formData.rules, autoStop: { ...formData.rules.autoStop, roasThreshold: parseFloat(e.target.value) } }
+                              })}
+                              className="w-full bg-white border border-slate-200 rounded px-2 py-1 text-slate-900 text-sm"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-xs text-slate-400">连续天数</label>
+                            <input
+                              type="number"
+                              value={formData.rules.autoStop.minDays}
+                              onChange={(e) => setFormData({
+                                ...formData,
+                                rules: { ...formData.rules, autoStop: { ...formData.rules.autoStop, minDays: parseInt(e.target.value) } }
+                              })}
+                              className="w-full bg-white border border-slate-200 rounded px-2 py-1 text-slate-900 text-sm"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-xs text-slate-400">最小消耗 $</label>
+                            <input
+                              type="number"
+                              value={formData.rules.autoStop.minSpend}
+                              onChange={(e) => setFormData({
+                                ...formData,
+                                rules: { ...formData.rules, autoStop: { ...formData.rules.autoStop, minSpend: parseFloat(e.target.value) } }
+                              })}
+                              className="w-full bg-white border border-slate-200 rounded px-2 py-1 text-slate-900 text-sm"
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* 自动扩量 */}
+                    <div className="bg-slate-50 rounded-xl p-4 border border-slate-200">
+                      <label className="flex items-center justify-between">
                         <div>
-                          <label className="text-xs text-slate-500">连续天数</label>
-                          <input
-                            type="number"
-                            value={formData.rules.autoScale.minDays}
-                            onChange={(e) => setFormData({
-                              ...formData,
-                              rules: { ...formData.rules, autoScale: { ...formData.rules.autoScale, minDays: parseInt(e.target.value) } }
-                            })}
-                            className="w-full bg-white/5 border border-white/10 rounded px-2 py-1 text-white text-sm"
-                          />
+                          <div className="text-slate-900 font-medium">自动扩量</div>
+                          <div className="text-xs text-slate-400">ROAS 优秀时自动提升预算</div>
                         </div>
-                        <div>
-                          <label className="text-xs text-slate-500">提升比例 %</label>
-                          <input
-                            type="number"
-                            value={formData.rules.autoScale.budgetIncrease * 100}
-                            onChange={(e) => setFormData({
-                              ...formData,
-                              rules: { ...formData.rules, autoScale: { ...formData.rules.autoScale, budgetIncrease: parseFloat(e.target.value) / 100 } }
-                            })}
-                            className="w-full bg-white/5 border border-white/10 rounded px-2 py-1 text-white text-sm"
-                          />
+                        <input
+                          type="checkbox"
+                          checked={formData.rules.autoScale.enabled}
+                          onChange={(e) => setFormData({
+                            ...formData,
+                            rules: { ...formData.rules, autoScale: { ...formData.rules.autoScale, enabled: e.target.checked } }
+                          })}
+                          className="w-5 h-5 rounded text-indigo-600"
+                        />
+                      </label>
+                      {formData.rules.autoScale.enabled && (
+                        <div className="grid grid-cols-3 gap-2 mt-3">
+                          <div>
+                            <label className="text-xs text-slate-400">ROAS 阈值</label>
+                            <input
+                              type="number"
+                              step="0.1"
+                              value={formData.rules.autoScale.roasThreshold}
+                              onChange={(e) => setFormData({
+                                ...formData,
+                                rules: { ...formData.rules, autoScale: { ...formData.rules.autoScale, roasThreshold: parseFloat(e.target.value) } }
+                              })}
+                              className="w-full bg-white border border-slate-200 rounded px-2 py-1 text-slate-900 text-sm"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-xs text-slate-400">连续天数</label>
+                            <input
+                              type="number"
+                              value={formData.rules.autoScale.minDays}
+                              onChange={(e) => setFormData({
+                                ...formData,
+                                rules: { ...formData.rules, autoScale: { ...formData.rules.autoScale, minDays: parseInt(e.target.value) } }
+                              })}
+                              className="w-full bg-white border border-slate-200 rounded px-2 py-1 text-slate-900 text-sm"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-xs text-slate-400">提升比例 %</label>
+                            <input
+                              type="number"
+                              value={formData.rules.autoScale.budgetIncrease * 100}
+                              onChange={(e) => setFormData({
+                                ...formData,
+                                rules: { ...formData.rules, autoScale: { ...formData.rules.autoScale, budgetIncrease: parseFloat(e.target.value) / 100 } }
+                              })}
+                              className="w-full bg-white border border-slate-200 rounded px-2 py-1 text-slate-900 text-sm"
+                            />
+                          </div>
                         </div>
-                      </div>
-                    )}
+                      )}
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
 
-            <div className="p-6 border-t border-white/10 flex justify-end gap-3">
-              <button
-                onClick={() => { setShowModal(false); resetForm(); }}
-                className="px-6 py-2 bg-white/5 text-slate-300 rounded-xl hover:bg-white/10 transition-colors"
-              >
-                取消
-              </button>
-              <button
-                onClick={saveAgent}
-                disabled={loading || !formData.name}
-                className="px-6 py-2 bg-gradient-to-r from-blue-500 to-purple-500 text-white rounded-xl font-medium hover:opacity-90 disabled:opacity-50"
-              >
-                {loading ? '保存中...' : '保存'}
-              </button>
+              <div className="p-6 border-t border-slate-200 flex justify-end gap-3 bg-slate-50 rounded-b-3xl">
+                <button
+                  onClick={() => { setShowModal(false); resetForm(); }}
+                  className="px-6 py-2 bg-slate-100 text-slate-600 rounded-xl hover:bg-slate-200 transition-colors"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={saveAgent}
+                  disabled={loading || !formData.name}
+                  className="px-6 py-2 bg-indigo-600 text-white rounded-xl font-medium hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+                >
+                  {loading ? '保存中...' : '保存'}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   )
 }
