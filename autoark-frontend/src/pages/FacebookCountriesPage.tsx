@@ -464,7 +464,7 @@ export default function FacebookCountriesPage() {
               <svg className={`w-5 h-5 ${syncing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
               </svg>
-              {syncing ? '同步中...' : '同步广告系列'}
+              {syncing ? '同步中...' : '同步大盘数据'}
             </button>
 
             {/* 纯白底自定义列设置按钮 */}
@@ -703,45 +703,6 @@ export default function FacebookCountriesPage() {
                 placeholder="选择结束日期"
                 className="w-full"
               />
-            </div>
-            <div className="group">
-              <label className="block text-xs font-semibold text-slate-600 mb-2 group-focus-within:text-blue-600 transition-colors">广告系列名称</label>
-              <input
-                type="text"
-                value={filters.name}
-                onChange={e => setFilters({...filters, name: e.target.value})}
-                placeholder="输入名称"
-                className="w-full px-4 py-3 bg-white/80 backdrop-blur-sm border border-slate-200 rounded-2xl text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition-all shadow-sm"
-              />
-            </div>
-            <div className="group">
-              <label className="block text-xs font-semibold text-slate-600 mb-2 group-focus-within:text-blue-600 transition-colors">账户ID</label>
-              <input
-                type="text"
-                value={filters.accountId}
-                onChange={e => setFilters({...filters, accountId: e.target.value})}
-                placeholder="输入账户ID"
-                className="w-full px-4 py-3 bg-white/80 backdrop-blur-sm border border-slate-200 rounded-2xl text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition-all shadow-sm"
-              />
-            </div>
-            <div className="group">
-              <label className="block text-xs font-semibold text-slate-600 mb-2 group-focus-within:text-blue-600 transition-colors">状态</label>
-              <div className="relative">
-                <select
-                  value={filters.status}
-                  onChange={e => setFilters({...filters, status: e.target.value})}
-                  className="w-full px-4 py-3 bg-white/80 backdrop-blur-sm border border-slate-200 rounded-2xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition-all appearance-none cursor-pointer shadow-sm"
-                >
-                  <option value="">全部状态</option>
-                  <option value="ACTIVE">ACTIVE</option>
-                  <option value="PAUSED">PAUSED</option>
-                  <option value="ARCHIVED">ARCHIVED</option>
-                  <option value="DELETED">DELETED</option>
-                </select>
-                <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" /></svg>
-                </div>
-              </div>
             </div>
             <div className="group">
               <label className="block text-xs font-semibold text-slate-600 mb-2 group-focus-within:text-blue-600 transition-colors">目标</label>

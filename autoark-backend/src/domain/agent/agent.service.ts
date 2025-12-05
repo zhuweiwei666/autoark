@@ -320,56 +320,78 @@ ${data.needsAttention.map((c: any) => `- ${c.entityName || c.entityId}: ${c.issu
     // 获取完整的投放数据
     const allData = await this.getAllAdvertisingData()
 
-    // 构建专业的广告优化师 prompt
+    // 构建专业的广告优化师 prompt - 增强版，包含完整数据
     const systemPrompt = `你是 AutoArk 的 AI 广告投放优化顾问，专门服务于 Facebook/Meta 广告投放团队。
 
 ## 你的身份和能力
 - 你是一位经验丰富的广告优化师，精通 Facebook 广告投放、数据分析和优化策略
-- 你可以访问团队所有的投放数据，包括实时数据、历史数据、分投手数据、分国家数据
+- 你可以访问团队所有的投放数据，包括：实时数据、历史数据（30天）、分投手数据、分国家数据、分广告组数据
+- 你可以进行跨时间区域分析，对比不同时期的表现
 - 你可以分析广告表现，识别问题，给出优化建议
 
 ## 数据说明
 - 投手识别规则：广告系列名称的第一个下划线前的字符串是投手名称（如 "yux_fb_xxx" 中的 "yux" 是投手）
 - ROAS > 1 表示盈利，ROAS < 1 表示亏损
-- CTR（点击率）、CPC（单次点击成本）、CPM（千次曝光成本）是重要的效率指标
+- CTR（点击率）、CPC（单次点击成本）、CPM（千次曝光成本）、CPI（单次安装成本）是重要的效率指标
+- 数据更新时间：${allData.dataTime}
 
-## 当前数据快照
+## 完整数据快照
 
-### 📊 今日实时数据（${dayjs().format('YYYY-MM-DD')}）
+### 📊 今日实时数据（${allData.dateRange?.today || dayjs().format('YYYY-MM-DD')}）
 ${JSON.stringify(allData.todaySummary, null, 2)}
 
-### 📈 最近7天趋势
+### 📊 昨日数据对比
+${JSON.stringify(allData.yesterdaySummary, null, 2)}
+
+### 📅 本周 vs 上周对比
+${JSON.stringify(allData.periodComparison, null, 2)}
+
+### 📈 最近7天每日趋势
 ${JSON.stringify(allData.last7DaysTrend, null, 2)}
+
+### 📈 最近30天每日趋势
+${JSON.stringify(allData.last30DaysTrend, null, 2)}
 
 ### 👥 分投手数据（今日）
 ${JSON.stringify(allData.optimizerData, null, 2)}
 
-### 🌍 分国家数据（今日 Top 10）
+### 👥 分投手历史趋势（最近7天每日数据）
+${JSON.stringify(allData.optimizerHistoricalTrend, null, 2)}
+
+### 🌍 分国家数据（今日 Top 15）
 ${JSON.stringify(allData.countryData, null, 2)}
 
-### 🏆 表现最佳的广告系列（今日 Top 10）
+### 🌍 分国家历史趋势（最近7天每日数据）
+${JSON.stringify(allData.countryHistoricalTrend, null, 2)}
+
+### 🏆 表现最佳的广告系列（今日 Top 10，按 ROAS 排序）
 ${JSON.stringify(allData.topCampaigns, null, 2)}
 
 ### ⚠️ 需要关注的广告系列（ROAS < 0.5 且消耗 > $20）
 ${JSON.stringify(allData.losingCampaigns, null, 2)}
 
+### 📋 所有广告系列详细数据（今日消耗 > $1，共 ${allData.totalCampaigns || 0} 个）
+${JSON.stringify(allData.allCampaignsToday?.slice(0, 50), null, 2)}
+
+### 📦 广告组(AdSet)级别数据（今日 Top 20）
+${JSON.stringify(allData.adsetDataToday, null, 2)}
+
+### 📈 广告系列7天趋势（消耗 > $50，含每日数据）
+${JSON.stringify(allData.campaignTrends?.slice(0, 15), null, 2)}
+
 ### 📱 所有账户概况
 ${JSON.stringify(allData.accountsSummary, null, 2)}
-
-### 📋 所有广告系列详细数据（今日消耗 > $1，共 ${allData.totalCampaigns || 0} 个）
-${JSON.stringify(allData.allCampaignsToday?.slice(0, 30), null, 2)}
-
-### 📈 广告系列7天趋势（消耗 > $50）
-${JSON.stringify(allData.campaignTrends?.slice(0, 10), null, 2)}
 
 ## 历史对话
 ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户' : 'AI'}: ${m.content}`).join('\n')}
 
 ## 回答要求
 1. 用中文回答，简洁专业
-2. 如果涉及数据分析，引用具体数字
-3. 给出可操作的建议
-4. 如果数据不足以回答问题，说明需要什么数据`
+2. 如果涉及数据分析，必须引用具体数字
+3. 可以对比不同时期（今日vs昨日、本周vs上周、近7天趋势等）
+4. 可以分析不同维度（投手、国家、广告系列、广告组）
+5. 给出可操作的优化建议
+6. 如果需要更详细的数据，说明需要什么`
 
     const prompt = `${systemPrompt}\n\n用户问题: ${message}`
 
@@ -392,11 +414,13 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
   }
 
   /**
-   * 获取所有广告投放数据
+   * 获取所有广告投放数据 - 增强版，支持跨时间区域和更细粒度
    */
   private async getAllAdvertisingData(): Promise<any> {
     const today = dayjs().format('YYYY-MM-DD')
+    const yesterday = dayjs().subtract(1, 'day').format('YYYY-MM-DD')
     const sevenDaysAgo = dayjs().subtract(7, 'day').format('YYYY-MM-DD')
+    const fourteenDaysAgo = dayjs().subtract(14, 'day').format('YYYY-MM-DD')
     const thirtyDaysAgo = dayjs().subtract(30, 'day').format('YYYY-MM-DD')
 
     // 获取所有账户
@@ -405,7 +429,7 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
     const token = tokens[0]?.token
 
     // 1. 今日实时数据 - 从 Facebook API 获取
-    let todaySummary: any = { spend: 0, impressions: 0, clicks: 0, ctr: 0, cpc: 0, cpm: 0, purchase_value: 0, roas: 0 }
+    let todaySummary: any = { spend: 0, impressions: 0, clicks: 0, ctr: 0, cpc: 0, cpm: 0, purchase_value: 0, roas: 0, installs: 0 }
     
     if (token) {
       for (const account of accounts.slice(0, 10)) { // 限制账户数量避免超时
@@ -424,11 +448,18 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
             todaySummary.impressions += parseInt(data.impressions || '0', 10)
             todaySummary.clicks += parseInt(data.clicks || '0', 10)
             
-            // 提取 purchase value
+            // 提取 purchase value 和 installs
             if (data.action_values) {
               for (const av of data.action_values) {
                 if (av.action_type === 'purchase' || av.action_type === 'omni_purchase') {
                   todaySummary.purchase_value += parseFloat(av.value || '0')
+                }
+              }
+            }
+            if (data.actions) {
+              for (const action of data.actions) {
+                if (action.action_type === 'mobile_app_install') {
+                  todaySummary.installs += parseInt(action.value || '0', 10)
                 }
               }
             }
@@ -449,16 +480,19 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
       if (todaySummary.spend > 0) {
         todaySummary.roas = (todaySummary.purchase_value / todaySummary.spend).toFixed(2)
       }
+      if (todaySummary.installs > 0) {
+        todaySummary.cpi = '$' + (todaySummary.spend / todaySummary.installs).toFixed(2)
+      }
       todaySummary.spend = '$' + todaySummary.spend.toFixed(2)
       todaySummary.purchase_value = '$' + todaySummary.purchase_value.toFixed(2)
     }
 
-    // 2. 最近7天趋势
-    const last7DaysTrend = await MetricsDaily.aggregate([
+    // 2. 最近30天趋势（更长时间范围）
+    const last30DaysTrend = await MetricsDaily.aggregate([
       {
         $match: {
           campaignId: { $exists: true, $ne: null },
-          date: { $gte: sevenDaysAgo, $lte: today }
+          date: { $gte: thirtyDaysAgo, $lte: today }
         }
       },
       {
@@ -468,6 +502,7 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
           revenue: { $sum: { $ifNull: ['$purchase_value', 0] } },
           impressions: { $sum: '$impressions' },
           clicks: { $sum: '$clicks' },
+          installs: { $sum: { $ifNull: ['$mobile_app_install_count', 0] } },
         }
       },
       { $sort: { _id: 1 } },
@@ -484,9 +519,19 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
           },
           impressions: 1,
           clicks: 1,
+          installs: 1,
+          ctr: {
+            $concat: [
+              { $toString: { $round: [{ $cond: [{ $gt: ['$impressions', 0] }, { $multiply: [{ $divide: ['$clicks', '$impressions'] }, 100] }, 0] }, 2] } },
+              '%'
+            ]
+          }
         }
       }
     ])
+
+    // 2.1 最近7天趋势（用于对比）
+    const last7DaysTrend = last30DaysTrend.filter((d: any) => d.date >= sevenDaysAgo)
 
     // 3. 分投手数据（从 campaign name 提取）
     const campaignsWithMetrics = await Campaign.aggregate([
@@ -787,18 +832,305 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
       }
     ])
 
+    // 10. 分国家历史趋势（最近7天每个国家的数据）
+    const countryHistoricalTrend = await MetricsDaily.aggregate([
+      {
+        $match: {
+          campaignId: { $exists: true, $ne: null },
+          country: { $exists: true, $ne: null },
+          date: { $gte: sevenDaysAgo, $lte: today }
+        }
+      },
+      {
+        $group: {
+          _id: { country: '$country', date: '$date' },
+          spend: { $sum: '$spendUsd' },
+          revenue: { $sum: { $ifNull: ['$purchase_value', 0] } },
+          impressions: { $sum: '$impressions' },
+          clicks: { $sum: '$clicks' },
+          installs: { $sum: { $ifNull: ['$mobile_app_install_count', 0] } },
+        }
+      },
+      {
+        $group: {
+          _id: '$_id.country',
+          dailyData: {
+            $push: {
+              date: '$_id.date',
+              spend: { $round: ['$spend', 2] },
+              revenue: { $round: ['$revenue', 2] },
+              roas: { $cond: [{ $gt: ['$spend', 0] }, { $round: [{ $divide: ['$revenue', '$spend'] }, 2] }, 0] },
+              installs: '$installs'
+            }
+          },
+          totalSpend: { $sum: '$spend' },
+          totalRevenue: { $sum: '$revenue' },
+        }
+      },
+      { $match: { totalSpend: { $gt: 10 } } },
+      { $sort: { totalSpend: -1 } },
+      { $limit: 15 },
+      {
+        $project: {
+          country: '$_id',
+          totalSpend: { $round: ['$totalSpend', 2] },
+          totalRevenue: { $round: ['$totalRevenue', 2] },
+          avgRoas: { $round: [{ $cond: [{ $gt: ['$totalSpend', 0] }, { $divide: ['$totalRevenue', '$totalSpend'] }, 0] }, 2] },
+          dailyData: 1
+        }
+      }
+    ])
+
+    // 11. 分投手历史趋势（最近7天每个投手的数据）
+    const optimizerHistoricalTrend = await MetricsDaily.aggregate([
+      {
+        $match: {
+          campaignId: { $exists: true, $ne: null },
+          campaignName: { $exists: true, $ne: null },
+          date: { $gte: sevenDaysAgo, $lte: today }
+        }
+      },
+      {
+        $addFields: {
+          optimizer: { $arrayElemAt: [{ $split: ['$campaignName', '_'] }, 0] }
+        }
+      },
+      {
+        $group: {
+          _id: { optimizer: '$optimizer', date: '$date' },
+          spend: { $sum: '$spendUsd' },
+          revenue: { $sum: { $ifNull: ['$purchase_value', 0] } },
+          impressions: { $sum: '$impressions' },
+          clicks: { $sum: '$clicks' },
+          installs: { $sum: { $ifNull: ['$mobile_app_install_count', 0] } },
+          campaignCount: { $addToSet: '$campaignId' }
+        }
+      },
+      {
+        $group: {
+          _id: '$_id.optimizer',
+          dailyData: {
+            $push: {
+              date: '$_id.date',
+              spend: { $round: ['$spend', 2] },
+              revenue: { $round: ['$revenue', 2] },
+              roas: { $cond: [{ $gt: ['$spend', 0] }, { $round: [{ $divide: ['$revenue', '$spend'] }, 2] }, 0] },
+              installs: '$installs',
+              campaigns: { $size: '$campaignCount' }
+            }
+          },
+          totalSpend: { $sum: '$spend' },
+          totalRevenue: { $sum: '$revenue' },
+        }
+      },
+      { $match: { totalSpend: { $gt: 10 } } },
+      { $sort: { totalSpend: -1 } },
+      { $limit: 10 },
+      {
+        $project: {
+          optimizer: '$_id',
+          totalSpend: { $round: ['$totalSpend', 2] },
+          totalRevenue: { $round: ['$totalRevenue', 2] },
+          avgRoas: { $round: [{ $cond: [{ $gt: ['$totalSpend', 0] }, { $divide: ['$totalRevenue', '$totalSpend'] }, 0] }, 2] },
+          dailyData: 1
+        }
+      }
+    ])
+
+    // 12. 本周 vs 上周对比
+    const thisWeekStart = dayjs().startOf('week').format('YYYY-MM-DD')
+    const thisWeekEnd = today
+    const lastWeekStart = dayjs().subtract(1, 'week').startOf('week').format('YYYY-MM-DD')
+    const lastWeekEnd = dayjs().subtract(1, 'week').endOf('week').format('YYYY-MM-DD')
+
+    const weeklyComparison = await Promise.all([
+      // 本周数据
+      MetricsDaily.aggregate([
+        {
+          $match: {
+            campaignId: { $exists: true, $ne: null },
+            date: { $gte: thisWeekStart, $lte: thisWeekEnd }
+          }
+        },
+        {
+          $group: {
+            _id: null,
+            spend: { $sum: '$spendUsd' },
+            revenue: { $sum: { $ifNull: ['$purchase_value', 0] } },
+            impressions: { $sum: '$impressions' },
+            clicks: { $sum: '$clicks' },
+            installs: { $sum: { $ifNull: ['$mobile_app_install_count', 0] } },
+          }
+        }
+      ]),
+      // 上周数据
+      MetricsDaily.aggregate([
+        {
+          $match: {
+            campaignId: { $exists: true, $ne: null },
+            date: { $gte: lastWeekStart, $lte: lastWeekEnd }
+          }
+        },
+        {
+          $group: {
+            _id: null,
+            spend: { $sum: '$spendUsd' },
+            revenue: { $sum: { $ifNull: ['$purchase_value', 0] } },
+            impressions: { $sum: '$impressions' },
+            clicks: { $sum: '$clicks' },
+            installs: { $sum: { $ifNull: ['$mobile_app_install_count', 0] } },
+          }
+        }
+      ])
+    ])
+
+    const thisWeekData = weeklyComparison[0][0] || { spend: 0, revenue: 0, impressions: 0, clicks: 0, installs: 0 }
+    const lastWeekData = weeklyComparison[1][0] || { spend: 0, revenue: 0, impressions: 0, clicks: 0, installs: 0 }
+
+    const periodComparison = {
+      thisWeek: {
+        period: `${thisWeekStart} ~ ${thisWeekEnd}`,
+        spend: Math.round(thisWeekData.spend * 100) / 100,
+        revenue: Math.round(thisWeekData.revenue * 100) / 100,
+        roas: thisWeekData.spend > 0 ? Math.round((thisWeekData.revenue / thisWeekData.spend) * 100) / 100 : 0,
+        impressions: thisWeekData.impressions,
+        clicks: thisWeekData.clicks,
+        installs: thisWeekData.installs,
+      },
+      lastWeek: {
+        period: `${lastWeekStart} ~ ${lastWeekEnd}`,
+        spend: Math.round(lastWeekData.spend * 100) / 100,
+        revenue: Math.round(lastWeekData.revenue * 100) / 100,
+        roas: lastWeekData.spend > 0 ? Math.round((lastWeekData.revenue / lastWeekData.spend) * 100) / 100 : 0,
+        impressions: lastWeekData.impressions,
+        clicks: lastWeekData.clicks,
+        installs: lastWeekData.installs,
+      },
+      changes: {
+        spendChange: lastWeekData.spend > 0 ? Math.round(((thisWeekData.spend - lastWeekData.spend) / lastWeekData.spend) * 10000) / 100 + '%' : 'N/A',
+        revenueChange: lastWeekData.revenue > 0 ? Math.round(((thisWeekData.revenue - lastWeekData.revenue) / lastWeekData.revenue) * 10000) / 100 + '%' : 'N/A',
+        roasChange: lastWeekData.spend > 0 && thisWeekData.spend > 0 ? 
+          Math.round(((thisWeekData.revenue / thisWeekData.spend) - (lastWeekData.revenue / lastWeekData.spend)) * 100) / 100 : 0,
+      }
+    }
+
+    // 13. 今日 vs 昨日对比
+    const yesterdayData = await MetricsDaily.aggregate([
+      {
+        $match: {
+          campaignId: { $exists: true, $ne: null },
+          date: yesterday
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          spend: { $sum: '$spendUsd' },
+          revenue: { $sum: { $ifNull: ['$purchase_value', 0] } },
+          impressions: { $sum: '$impressions' },
+          clicks: { $sum: '$clicks' },
+          installs: { $sum: { $ifNull: ['$mobile_app_install_count', 0] } },
+        }
+      }
+    ])
+    
+    const yesterdaySummary = yesterdayData[0] || { spend: 0, revenue: 0, impressions: 0, clicks: 0, installs: 0 }
+
+    // 14. AdSet 级别数据（今日 Top 20）
+    const adsetDataToday = await MetricsDaily.aggregate([
+      {
+        $match: {
+          adsetId: { $exists: true, $ne: null },
+          date: today
+        }
+      },
+      {
+        $group: {
+          _id: '$adsetId',
+          campaignId: { $first: '$campaignId' },
+          campaignName: { $first: '$campaignName' },
+          spend: { $sum: '$spendUsd' },
+          revenue: { $sum: { $ifNull: ['$purchase_value', 0] } },
+          impressions: { $sum: '$impressions' },
+          clicks: { $sum: '$clicks' },
+          installs: { $sum: { $ifNull: ['$mobile_app_install_count', 0] } },
+        }
+      },
+      {
+        $addFields: {
+          roas: { $cond: [{ $gt: ['$spend', 0] }, { $divide: ['$revenue', '$spend'] }, 0] },
+          cpi: { $cond: [{ $gt: ['$installs', 0] }, { $divide: ['$spend', '$installs'] }, 0] },
+          optimizer: { $arrayElemAt: [{ $split: ['$campaignName', '_'] }, 0] }
+        }
+      },
+      { $match: { spend: { $gt: 1 } } },
+      { $sort: { spend: -1 } },
+      { $limit: 20 },
+      {
+        $project: {
+          adsetId: '$_id',
+          campaignId: 1,
+          campaignName: 1,
+          optimizer: 1,
+          spend: { $round: ['$spend', 2] },
+          revenue: { $round: ['$revenue', 2] },
+          roas: { $round: ['$roas', 2] },
+          impressions: 1,
+          clicks: 1,
+          installs: 1,
+          cpi: { $round: ['$cpi', 2] },
+        }
+      }
+    ])
+
     return {
+      // 时间信息
+      dataTime: dayjs().format('YYYY-MM-DD HH:mm:ss'),
+      dateRange: {
+        today,
+        yesterday,
+        last7Days: { from: sevenDaysAgo, to: today },
+        last30Days: { from: thirtyDaysAgo, to: today },
+      },
+      
+      // 今日实时概览
       todaySummary,
+      yesterdaySummary: {
+        spend: '$' + yesterdaySummary.spend.toFixed(2),
+        revenue: '$' + yesterdaySummary.revenue.toFixed(2),
+        roas: yesterdaySummary.spend > 0 ? (yesterdaySummary.revenue / yesterdaySummary.spend).toFixed(2) : '0',
+        impressions: yesterdaySummary.impressions,
+        clicks: yesterdaySummary.clicks,
+        installs: yesterdaySummary.installs,
+      },
+      
+      // 时间趋势
       last7DaysTrend,
+      last30DaysTrend,
+      
+      // 周期对比
+      periodComparison,
+      
+      // 分维度数据（今日）
       optimizerData: campaignsWithMetrics,
       countryData,
+      
+      // 分维度历史趋势
+      countryHistoricalTrend,
+      optimizerHistoricalTrend,
+      
+      // 广告系列数据
       topCampaigns,
       losingCampaigns,
-      accountsSummary,
       allCampaignsToday,
       campaignTrends,
       totalCampaigns: allCampaignsToday.length,
-      dataTime: dayjs().format('YYYY-MM-DD HH:mm:ss'),
+      
+      // AdSet 级别数据
+      adsetDataToday,
+      
+      // 账户数据
+      accountsSummary,
     }
   }
 

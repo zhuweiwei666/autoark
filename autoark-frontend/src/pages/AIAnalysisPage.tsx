@@ -32,7 +32,7 @@ interface ChatMessage {
 }
 
 export default function AIAnalysisPage() {
-  const [activeTab, setActiveTab] = useState<'health' | 'chat' | 'reports'>('health')
+  const [activeTab, setActiveTab] = useState<'health' | 'chat' | 'reports'>('chat')
   const [healthData, setHealthData] = useState<HealthData | null>(null)
   const [reports, setReports] = useState<Report[]>([])
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
@@ -73,6 +73,8 @@ export default function AIAnalysisPage() {
             content: m.content
           }))
           setChatMessages(messages)
+          // 确保滚动到最新消息
+          setTimeout(() => scrollToBottom(), 100)
         }
       }
     } catch (error) {
@@ -172,8 +174,8 @@ export default function AIAnalysisPage() {
         {/* Tab 切换 */}
         <div className="flex gap-2">
           {[
-            { key: 'health', label: '健康度分析', icon: '💊' },
             { key: 'chat', label: 'AI 对话', icon: '💬' },
+            { key: 'health', label: '健康度分析', icon: '💊' },
             { key: 'reports', label: '智能报告', icon: '📊' },
           ].map(tab => (
             <button
