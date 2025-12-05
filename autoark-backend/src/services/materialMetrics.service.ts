@@ -10,12 +10,14 @@ import Material from '../models/Material'
  * 将广告级别的数据聚合到素材级别
  */
 
-// 从广告的 raw 数据中提取素材信息
-const extractCreativeInfo = (ad: any): { imageHash?: string; videoId?: string; thumbnailUrl?: string } => {
+// 从广告数据中提取素材信息
+// 使用 creativeId 作为主要标识符（因为 image_hash/video_id 可能不在同步数据中）
+const extractCreativeInfo = (ad: any): { creativeId?: string; imageHash?: string; videoId?: string; thumbnailUrl?: string } => {
   const raw = ad.raw || {}
   const creative = raw.creative || {}
+  const creativeId = ad.creativeId || creative.id
   
-  // 尝试从不同位置提取
+  // 尝试从不同位置提取 hash/video_id
   let imageHash = creative.image_hash || creative.object_story_spec?.link_data?.image_hash
   let videoId = creative.video_id || creative.object_story_spec?.video_data?.video_id
   let thumbnailUrl = creative.thumbnail_url || creative.image_url
@@ -31,7 +33,7 @@ const extractCreativeInfo = (ad: any): { imageHash?: string; videoId?: string; t
     }
   }
   
-  return { imageHash, videoId, thumbnailUrl }
+  return { creativeId, imageHash, videoId, thumbnailUrl }
 }
 
 // 从 action_values 提取购买值
@@ -77,11 +79,12 @@ export const aggregateMaterialMetrics = async (date: string): Promise<{
     const ads = await Ad.find({}).lean()
     logger.info(`[MaterialMetrics] Found ${ads.length} ads to process`)
     
-    // 2. 构建 adId -> 素材信息 的映射
-    const adCreativeMap = new Map<string, { imageHash?: string; videoId?: string; thumbnailUrl?: string }>()
+    // 2. 构建 adId -> 素材信息 的映射（使用 creativeId 作为主要标识）
+    const adCreativeMap = new Map<string, { creativeId?: string; imageHash?: string; videoId?: string; thumbnailUrl?: string }>()
     for (const ad of ads) {
       const creativeInfo = extractCreativeInfo(ad)
-      if (creativeInfo.imageHash || creativeInfo.videoId) {
+      // 只要有 creativeId 就可以追踪
+      if (creativeInfo.creativeId) {
         adCreativeMap.set(ad.adId, creativeInfo)
       }
     }
@@ -95,16 +98,15 @@ export const aggregateMaterialMetrics = async (date: string): Promise<{
     }).lean()
     logger.info(`[MaterialMetrics] Found ${adMetrics.length} ad metrics for ${date}`)
     
-    // 4. 按素材聚合指标
+    // 4. 按素材聚合指标（使用 creativeId 作为 key）
     const materialAggregation = new Map<string, any>()
     
     for (const metric of adMetrics) {
       const creativeInfo = adCreativeMap.get(metric.adId)
-      if (!creativeInfo) continue
+      if (!creativeInfo || !creativeInfo.creativeId) continue
       
-      // 使用 imageHash 或 videoId 作为 key
-      const materialKey = creativeInfo.imageHash || creativeInfo.videoId
-      if (!materialKey) continue
+      // 使用 creativeId 作为 key（优先），或者 imageHash/videoId
+      const materialKey = creativeInfo.creativeId
       
       stats.processed++
       
@@ -115,6 +117,7 @@ export const aggregateMaterialMetrics = async (date: string): Promise<{
       if (!materialAggregation.has(materialKey)) {
         materialAggregation.set(materialKey, {
           date,
+          creativeId: creativeInfo.creativeId,
           imageHash: creativeInfo.imageHash,
           videoId: creativeInfo.videoId,
           thumbnailUrl: creativeInfo.thumbnailUrl,
@@ -203,7 +206,9 @@ export const aggregateMaterialMetrics = async (date: string): Promise<{
         qualityScore = Math.max(0, Math.min(100, qualityScore))
         
         const filter: any = { date }
-        if (agg.imageHash) filter.imageHash = agg.imageHash
+        // 优先使用 creativeId，其次使用 imageHash/videoId
+        if (agg.creativeId) filter.creativeId = agg.creativeId
+        else if (agg.imageHash) filter.imageHash = agg.imageHash
         else if (agg.videoId) filter.videoId = agg.videoId
         
         const result = await MaterialMetrics.findOneAndUpdate(
@@ -211,6 +216,7 @@ export const aggregateMaterialMetrics = async (date: string): Promise<{
           {
             date,
             materialId: materialDoc?._id,
+            creativeId: agg.creativeId,
             imageHash: agg.imageHash,
             videoId: agg.videoId,
             thumbnailUrl: agg.thumbnailUrl,
