@@ -11,25 +11,30 @@ import Material from '../models/Material'
  */
 
 // 从广告数据中提取素材信息
-// 使用 creativeId 作为主要标识符（因为 image_hash/video_id 可能不在同步数据中）
+// 优先使用 Ad 模型中存储的字段（同步时已提取），其次从 raw 数据中提取
 const extractCreativeInfo = (ad: any): { creativeId?: string; imageHash?: string; videoId?: string; thumbnailUrl?: string } => {
-  const raw = ad.raw || {}
-  const creative = raw.creative || {}
-  const creativeId = ad.creativeId || creative.id
+  // 优先使用 Ad 模型中直接存储的字段
+  let creativeId = ad.creativeId
+  let imageHash = ad.imageHash
+  let videoId = ad.videoId
+  let thumbnailUrl = ad.thumbnailUrl
   
-  // 尝试从不同位置提取 hash/video_id
-  let imageHash = creative.image_hash || creative.object_story_spec?.link_data?.image_hash
-  let videoId = creative.video_id || creative.object_story_spec?.video_data?.video_id
-  let thumbnailUrl = creative.thumbnail_url || creative.image_url
-  
-  // 也检查 object_story_spec
+  // 如果没有，尝试从 raw 数据中提取
   if (!imageHash && !videoId) {
-    const linkData = creative.object_story_spec?.link_data
-    if (linkData) {
-      imageHash = linkData.image_hash
-      if (linkData.video_data) {
-        videoId = linkData.video_data.video_id
-      }
+    const raw = ad.raw || {}
+    const creative = raw.creative || {}
+    
+    if (!creativeId) creativeId = creative.id
+    
+    imageHash = creative.image_hash
+    videoId = creative.video_id
+    thumbnailUrl = thumbnailUrl || creative.thumbnail_url || creative.image_url
+    
+    // 从 object_story_spec 提取
+    if (!imageHash && !videoId && creative.object_story_spec) {
+      const spec = creative.object_story_spec
+      imageHash = spec.link_data?.image_hash || spec.photo_data?.image_hash
+      videoId = spec.video_data?.video_id || spec.link_data?.video_id
     }
   }
   
@@ -400,9 +405,395 @@ export const getMaterialTrend = async (
     .lean()
 }
 
+// ==================== 素材去重 ====================
+
+/**
+ * 识别重复素材
+ * 基于 imageHash 或 thumbnailUrl 识别使用相同素材的创意
+ */
+export const findDuplicateMaterials = async () => {
+  const Creative = require('../models/Creative').default
+  
+  // 按 imageHash 分组找重复
+  const duplicatesByHash = await Creative.aggregate([
+    {
+      $match: {
+        imageHash: { $exists: true, $ne: null }
+      }
+    },
+    {
+      $group: {
+        _id: '$imageHash',
+        count: { $sum: 1 },
+        creativeIds: { $push: '$creativeId' },
+        accounts: { $addToSet: '$accountId' },
+        thumbnails: { $addToSet: '$thumbnailUrl' },
+      }
+    },
+    { $match: { count: { $gt: 1 } } },
+    { $sort: { count: -1 } },
+    { $limit: 50 }
+  ])
+  
+  // 按 videoId 分组找重复
+  const duplicatesByVideo = await Creative.aggregate([
+    {
+      $match: {
+        videoId: { $exists: true, $ne: null }
+      }
+    },
+    {
+      $group: {
+        _id: '$videoId',
+        count: { $sum: 1 },
+        creativeIds: { $push: '$creativeId' },
+        accounts: { $addToSet: '$accountId' },
+        thumbnails: { $addToSet: '$thumbnailUrl' },
+      }
+    },
+    { $match: { count: { $gt: 1 } } },
+    { $sort: { count: -1 } },
+    { $limit: 50 }
+  ])
+  
+  return {
+    byImageHash: duplicatesByHash.map((d: any) => ({
+      imageHash: d._id,
+      usageCount: d.count,
+      creativeIds: d.creativeIds,
+      accountsCount: d.accounts.length,
+      thumbnail: d.thumbnails[0],
+    })),
+    byVideoId: duplicatesByVideo.map((d: any) => ({
+      videoId: d._id,
+      usageCount: d.count,
+      creativeIds: d.creativeIds,
+      accountsCount: d.accounts.length,
+      thumbnail: d.thumbnails[0],
+    })),
+  }
+}
+
+/**
+ * 获取某个素材的所有使用情况
+ */
+export const getMaterialUsage = async (params: { imageHash?: string; videoId?: string; creativeId?: string }) => {
+  const Creative = require('../models/Creative').default
+  const Ad = require('../models/Ad').default
+  
+  const match: any = {}
+  if (params.imageHash) match.imageHash = params.imageHash
+  if (params.videoId) match.videoId = params.videoId
+  if (params.creativeId) match.creativeId = params.creativeId
+  
+  // 找到所有使用该素材的 Creative
+  const creatives = await Creative.find(match).lean()
+  const creativeIds = creatives.map((c: any) => c.creativeId)
+  
+  // 找到所有使用这些 Creative 的 Ad
+  const ads = await Ad.find({ creativeId: { $in: creativeIds } })
+    .select('adId name status campaignId adsetId accountId')
+    .lean()
+  
+  // 获取这些广告的历史表现
+  const adIds = ads.map((a: any) => a.adId)
+  const metrics = await MaterialMetrics.aggregate([
+    {
+      $match: {
+        adIds: { $elemMatch: { $in: adIds } }
+      }
+    },
+    {
+      $group: {
+        _id: null,
+        totalSpend: { $sum: '$spend' },
+        totalRevenue: { $sum: '$purchaseValue' },
+        totalImpressions: { $sum: '$impressions' },
+        totalClicks: { $sum: '$clicks' },
+        daysActive: { $sum: 1 },
+      }
+    }
+  ])
+  
+  const performance = metrics[0] || { totalSpend: 0, totalRevenue: 0, totalImpressions: 0, totalClicks: 0, daysActive: 0 }
+  
+  return {
+    material: {
+      imageHash: params.imageHash,
+      videoId: params.videoId,
+      thumbnail: creatives[0]?.thumbnailUrl,
+      type: creatives[0]?.type,
+    },
+    usage: {
+      creativeCount: creatives.length,
+      adCount: ads.length,
+      accountCount: new Set(ads.map((a: any) => a.accountId)).size,
+      campaignCount: new Set(ads.map((a: any) => a.campaignId)).size,
+    },
+    performance: {
+      spend: Math.round(performance.totalSpend * 100) / 100,
+      revenue: Math.round(performance.totalRevenue * 100) / 100,
+      roas: performance.totalSpend > 0 ? Math.round((performance.totalRevenue / performance.totalSpend) * 100) / 100 : 0,
+      impressions: performance.totalImpressions,
+      clicks: performance.totalClicks,
+      daysActive: performance.daysActive,
+    },
+    ads: ads.slice(0, 20), // 限制返回数量
+  }
+}
+
+// ==================== 素材推荐 ====================
+
+/**
+ * 获取推荐素材
+ * 基于历史表现数据，推荐高质量素材用于新广告
+ */
+export const getRecommendedMaterials = async (options: {
+  type?: 'image' | 'video'
+  minSpend?: number       // 最低消耗门槛（确保有足够数据）
+  minRoas?: number        // 最低 ROAS 门槛
+  minDays?: number        // 最少活跃天数
+  excludeCreativeIds?: string[]  // 排除已使用的 creative
+  limit?: number
+} = {}) => {
+  const {
+    type,
+    minSpend = 50,
+    minRoas = 1.0,
+    minDays = 3,
+    excludeCreativeIds = [],
+    limit = 20
+  } = options
+  
+  const sevenDaysAgo = dayjs().subtract(7, 'day').format('YYYY-MM-DD')
+  const today = dayjs().format('YYYY-MM-DD')
+  
+  const matchStage: any = {
+    date: { $gte: sevenDaysAgo, $lte: today },
+    spend: { $gt: 0 }
+  }
+  if (type) matchStage.materialType = type
+  
+  const recommendations = await MaterialMetrics.aggregate([
+    { $match: matchStage },
+    {
+      $group: {
+        _id: '$creativeId',
+        imageHash: { $first: '$imageHash' },
+        videoId: { $first: '$videoId' },
+        thumbnailUrl: { $first: '$thumbnailUrl' },
+        materialType: { $first: '$materialType' },
+        
+        totalSpend: { $sum: '$spend' },
+        totalRevenue: { $sum: '$purchaseValue' },
+        totalImpressions: { $sum: '$impressions' },
+        totalClicks: { $sum: '$clicks' },
+        totalInstalls: { $sum: '$installs' },
+        avgQualityScore: { $avg: '$qualityScore' },
+        daysActive: { $sum: 1 },
+        
+        optimizers: { $push: '$optimizers' },
+        campaigns: { $push: '$campaignIds' },
+      }
+    },
+    {
+      $addFields: {
+        roas: { $cond: [{ $gt: ['$totalSpend', 0] }, { $divide: ['$totalRevenue', '$totalSpend'] }, 0] },
+        ctr: { $cond: [{ $gt: ['$totalImpressions', 0] }, { $multiply: [{ $divide: ['$totalClicks', '$totalImpressions'] }, 100] }, 0] },
+      }
+    },
+    {
+      $match: {
+        totalSpend: { $gte: minSpend },
+        roas: { $gte: minRoas },
+        daysActive: { $gte: minDays },
+        _id: { $nin: excludeCreativeIds }
+      }
+    },
+    {
+      $addFields: {
+        // 综合推荐分：ROAS权重50% + 质量分权重30% + 活跃天数权重20%
+        recommendScore: {
+          $add: [
+            { $multiply: [{ $min: ['$roas', 5] }, 10] }, // ROAS 最高贡献 50 分
+            { $multiply: ['$avgQualityScore', 0.3] },    // 质量分贡献 30 分
+            { $multiply: ['$daysActive', 2.86] }         // 7天活跃贡献 20 分
+          ]
+        }
+      }
+    },
+    { $sort: { recommendScore: -1 } },
+    { $limit: limit },
+    {
+      $project: {
+        creativeId: '$_id',
+        imageHash: 1,
+        videoId: 1,
+        thumbnailUrl: 1,
+        materialType: 1,
+        
+        spend: { $round: ['$totalSpend', 2] },
+        revenue: { $round: ['$totalRevenue', 2] },
+        roas: { $round: ['$roas', 2] },
+        ctr: { $round: ['$ctr', 2] },
+        impressions: '$totalImpressions',
+        clicks: '$totalClicks',
+        installs: '$totalInstalls',
+        
+        qualityScore: { $round: ['$avgQualityScore', 0] },
+        daysActive: 1,
+        recommendScore: { $round: ['$recommendScore', 0] },
+        
+        // 使用该素材的投手（展开嵌套数组）
+        usedByOptimizers: {
+          $reduce: {
+            input: '$optimizers',
+            initialValue: [],
+            in: { $setUnion: ['$$value', '$$this'] }
+          }
+        },
+        // 使用的广告系列数
+        campaignCount: {
+          $size: {
+            $reduce: {
+              input: '$campaigns',
+              initialValue: [],
+              in: { $setUnion: ['$$value', '$$this'] }
+            }
+          }
+        },
+        
+        // 推荐理由
+        reason: {
+          $concat: [
+            'ROAS ', { $toString: { $round: ['$roas', 2] } },
+            ', 消耗 $', { $toString: { $round: ['$totalSpend', 0] } },
+            ', 活跃 ', { $toString: '$daysActive' }, ' 天'
+          ]
+        }
+      }
+    }
+  ])
+  
+  return {
+    recommendations,
+    criteria: {
+      minSpend,
+      minRoas,
+      minDays,
+      dateRange: { from: sevenDaysAgo, to: today },
+    },
+    totalFound: recommendations.length,
+  }
+}
+
+/**
+ * 获取表现下滑的素材（预警）
+ * 用于识别需要替换的素材
+ */
+export const getDecliningMaterials = async (options: {
+  minSpend?: number
+  declineThreshold?: number  // ROAS 下降百分比阈值
+  limit?: number
+} = {}) => {
+  const { minSpend = 30, declineThreshold = 30, limit = 20 } = options
+  
+  const today = dayjs().format('YYYY-MM-DD')
+  const threeDaysAgo = dayjs().subtract(3, 'day').format('YYYY-MM-DD')
+  const sevenDaysAgo = dayjs().subtract(7, 'day').format('YYYY-MM-DD')
+  
+  // 获取最近3天和前4天的数据对比
+  const recentData = await MaterialMetrics.aggregate([
+    {
+      $match: {
+        date: { $gte: threeDaysAgo, $lte: today },
+        spend: { $gt: 0 }
+      }
+    },
+    {
+      $group: {
+        _id: '$creativeId',
+        recentSpend: { $sum: '$spend' },
+        recentRevenue: { $sum: '$purchaseValue' },
+        thumbnailUrl: { $first: '$thumbnailUrl' },
+        materialType: { $first: '$materialType' },
+      }
+    },
+    {
+      $addFields: {
+        recentRoas: { $cond: [{ $gt: ['$recentSpend', 0] }, { $divide: ['$recentRevenue', '$recentSpend'] }, 0] }
+      }
+    }
+  ])
+  
+  const olderData = await MaterialMetrics.aggregate([
+    {
+      $match: {
+        date: { $gte: sevenDaysAgo, $lt: threeDaysAgo },
+        spend: { $gt: 0 }
+      }
+    },
+    {
+      $group: {
+        _id: '$creativeId',
+        olderSpend: { $sum: '$spend' },
+        olderRevenue: { $sum: '$purchaseValue' },
+      }
+    },
+    {
+      $addFields: {
+        olderRoas: { $cond: [{ $gt: ['$olderSpend', 0] }, { $divide: ['$olderRevenue', '$olderSpend'] }, 0] }
+      }
+    }
+  ])
+  
+  // 创建 olderData 的 map
+  const olderMap = new Map(olderData.map((d: any) => [d._id, d]))
+  
+  // 计算下滑的素材
+  const declining = recentData
+    .map((recent: any) => {
+      const older = olderMap.get(recent._id) as any
+      if (!older || older.olderRoas === 0) return null
+      
+      const roasChange = ((recent.recentRoas - older.olderRoas) / older.olderRoas) * 100
+      
+      if (roasChange < -declineThreshold && recent.recentSpend >= minSpend) {
+        return {
+          creativeId: recent._id,
+          thumbnailUrl: recent.thumbnailUrl,
+          materialType: recent.materialType,
+          recentRoas: Math.round(recent.recentRoas * 100) / 100,
+          olderRoas: Math.round(older.olderRoas * 100) / 100,
+          roasChange: Math.round(roasChange * 10) / 10,
+          recentSpend: Math.round(recent.recentSpend * 100) / 100,
+          warning: `ROAS 下降 ${Math.abs(Math.round(roasChange))}%`,
+          suggestion: recent.recentRoas < 0.5 ? '建议暂停' : '建议观察',
+        }
+      }
+      return null
+    })
+    .filter(Boolean)
+    .sort((a: any, b: any) => a.roasChange - b.roasChange)
+    .slice(0, limit)
+  
+  return {
+    decliningMaterials: declining,
+    threshold: {
+      minSpend,
+      declineThreshold: `${declineThreshold}%`,
+      comparisonPeriod: '最近3天 vs 前4天',
+    },
+  }
+}
+
 export default {
   aggregateMaterialMetrics,
   getMaterialRankings,
   getMaterialTrend,
+  findDuplicateMaterials,
+  getMaterialUsage,
+  getRecommendedMaterials,
+  getDecliningMaterials,
 }
 
