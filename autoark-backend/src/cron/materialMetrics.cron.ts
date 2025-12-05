@@ -1,4 +1,4 @@
-import cron from 'node-cron'
+import cron, { ScheduledTask } from 'node-cron'
 import dayjs from 'dayjs'
 import logger from '../utils/logger'
 import { aggregateMaterialMetrics } from '../services/materialMetrics.service'
@@ -9,7 +9,7 @@ import { aggregateMaterialMetrics } from '../services/materialMetrics.service'
  * 也可以手动触发聚合
  */
 
-let cronJob: cron.ScheduledTask | null = null
+let cronJob: ScheduledTask | null = null
 
 export const initMaterialMetricsCron = () => {
   // 每天凌晨 4:00 执行

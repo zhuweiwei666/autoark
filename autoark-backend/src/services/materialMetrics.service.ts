@@ -146,7 +146,9 @@ export const aggregateMaterialMetrics = async (date: string): Promise<{
       if (metric.campaignId) agg.campaignIds.add(metric.campaignId)
       if (metric.adsetId) agg.adsetIds.add(metric.adsetId)
       if (metric.adId) agg.adIds.add(metric.adId)
-      if (metric.campaignName) agg.optimizers.add(extractOptimizer(metric.campaignName))
+      // 从 raw 数据获取 campaign name，或者从 campaignId 推断投手
+      const campaignName = (metric as any).campaignName || metric.raw?.campaign_name || ''
+      if (campaignName) agg.optimizers.add(extractOptimizer(campaignName))
       
       // 聚合指标
       agg.spend += metric.spendUsd || 0
