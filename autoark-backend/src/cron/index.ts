@@ -3,6 +3,7 @@ import { SCHEDULES } from './schedule'
 import fetchFacebookMetrics from './fetchFacebookMetrics'
 import { runRulesDaily } from '../rules'
 import { runAiOptimizerDaily } from '../ai'
+import { initMaterialMetricsCron } from './materialMetrics.cron'
 import logger from '../utils/logger'
 
 const initCronJobs = () => {
@@ -26,6 +27,9 @@ const initCronJobs = () => {
       logger.error('Unhandled error in AI Optimizer cron', err),
     )
   })
+
+  // Material Metrics Aggregation (Daily at 4 AM)
+  initMaterialMetricsCron()
 
   logger.info('Cron jobs initialized')
 }

@@ -4,10 +4,12 @@ import { AgentConfig, AgentOperation, DailyReport, AiConversation, CreativeScore
 import Account from '../../models/Account'
 import MetricsDaily from '../../models/MetricsDaily'
 import Campaign from '../../models/Campaign'
+import MaterialMetrics from '../../models/MaterialMetrics'
 import { updateCampaign, updateAdSet } from '../../integration/facebook/bulkCreate.api'
 import FbToken from '../../models/FbToken'
 import dayjs from 'dayjs'
 import { fetchInsights } from '../../integration/facebook/insights.api'
+import { getMaterialRankings } from '../../services/materialMetrics.service'
 
 const LLM_API_KEY = process.env.LLM_API_KEY
 const LLM_MODEL = process.env.LLM_MODEL || 'gemini-2.0-flash'
@@ -326,6 +328,7 @@ ${data.needsAttention.map((c: any) => `- ${c.entityName || c.entityId}: ${c.issu
 ## 你的身份和能力
 - 你是一位经验丰富的广告优化师，精通 Facebook 广告投放、数据分析和优化策略
 - 你可以访问团队所有的投放数据，包括：实时数据、历史数据（30天）、分投手数据、分国家数据、分广告组数据
+- 🎨 **素材级别分析**: 你可以分析每个素材（图片/视频）的表现，识别爆款素材和亏损素材
 - 你可以进行跨时间区域分析，对比不同时期的表现
 - 你可以分析广告表现，识别问题，给出优化建议
 
@@ -382,6 +385,17 @@ ${JSON.stringify(allData.campaignTrends?.slice(0, 15), null, 2)}
 ### 📱 所有账户概况
 ${JSON.stringify(allData.accountsSummary, null, 2)}
 
+### 🎨 素材级别数据（最近7天）
+
+#### 表现最佳的素材（按ROAS排序）
+${JSON.stringify(allData.materialMetrics?.topMaterials || [], null, 2)}
+
+#### 需要关注的素材（高消耗低ROAS）
+${JSON.stringify(allData.materialMetrics?.losingMaterials || [], null, 2)}
+
+#### 素材类型统计（图片 vs 视频）
+${JSON.stringify(allData.materialMetrics?.materialTypeStats || [], null, 2)}
+
 ## 历史对话
 ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户' : 'AI'}: ${m.content}`).join('\n')}
 
@@ -389,9 +403,10 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
 1. 用中文回答，简洁专业
 2. 如果涉及数据分析，必须引用具体数字
 3. 可以对比不同时期（今日vs昨日、本周vs上周、近7天趋势等）
-4. 可以分析不同维度（投手、国家、广告系列、广告组）
-5. 给出可操作的优化建议
-6. 如果需要更详细的数据，说明需要什么`
+4. 可以分析不同维度（投手、国家、广告系列、广告组、素材）
+5. 对于素材分析，可以识别爆款素材特征、推荐复用或淘汰
+6. 给出可操作的优化建议
+7. 如果需要更详细的数据，说明需要什么`
 
     const prompt = `${systemPrompt}\n\n用户问题: ${message}`
 
@@ -1265,6 +1280,169 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
       
       // 账户数据
       accountsSummary,
+      
+      // 素材级别数据
+      materialMetrics: await this.getMaterialMetricsForAI(sevenDaysAgo, today),
+    }
+  }
+
+  /**
+   * 获取素材级别数据供 AI 使用
+   */
+  private async getMaterialMetricsForAI(startDate: string, endDate: string): Promise<any> {
+    try {
+      // 获取最近7天表现最好的素材
+      const topMaterials = await MaterialMetrics.aggregate([
+        {
+          $match: {
+            date: { $gte: startDate, $lte: endDate },
+            spend: { $gt: 5 }
+          }
+        },
+        {
+          $group: {
+            _id: { $ifNull: ['$imageHash', '$videoId'] },
+            materialType: { $first: '$materialType' },
+            materialName: { $first: '$materialName' },
+            thumbnailUrl: { $first: '$thumbnailUrl' },
+            totalSpend: { $sum: '$spend' },
+            totalRevenue: { $sum: '$purchaseValue' },
+            totalImpressions: { $sum: '$impressions' },
+            totalClicks: { $sum: '$clicks' },
+            totalInstalls: { $sum: '$installs' },
+            avgQualityScore: { $avg: '$qualityScore' },
+            daysActive: { $sum: 1 },
+            allOptimizers: { $push: '$optimizers' },
+            allCampaigns: { $push: '$campaignIds' },
+          }
+        },
+        {
+          $addFields: {
+            roas: { $cond: [{ $gt: ['$totalSpend', 0] }, { $divide: ['$totalRevenue', '$totalSpend'] }, 0] },
+            ctr: { $cond: [{ $gt: ['$totalImpressions', 0] }, { $multiply: [{ $divide: ['$totalClicks', '$totalImpressions'] }, 100] }, 0] },
+          }
+        },
+        { $sort: { roas: -1 } },
+        { $limit: 15 },
+        {
+          $project: {
+            materialKey: '$_id',
+            materialType: 1,
+            materialName: 1,
+            spend: { $round: ['$totalSpend', 2] },
+            revenue: { $round: ['$totalRevenue', 2] },
+            roas: { $round: ['$roas', 2] },
+            ctr: { $round: ['$ctr', 2] },
+            impressions: '$totalImpressions',
+            clicks: '$totalClicks',
+            installs: '$totalInstalls',
+            qualityScore: { $round: ['$avgQualityScore', 0] },
+            daysActive: 1,
+            optimizers: { 
+              $reduce: { 
+                input: '$allOptimizers', 
+                initialValue: [], 
+                in: { $setUnion: ['$$value', '$$this'] } 
+              } 
+            },
+          }
+        }
+      ])
+
+      // 获取表现最差的素材（高消耗低ROAS）
+      const losingMaterials = await MaterialMetrics.aggregate([
+        {
+          $match: {
+            date: { $gte: startDate, $lte: endDate },
+            spend: { $gt: 20 }
+          }
+        },
+        {
+          $group: {
+            _id: { $ifNull: ['$imageHash', '$videoId'] },
+            materialType: { $first: '$materialType' },
+            materialName: { $first: '$materialName' },
+            totalSpend: { $sum: '$spend' },
+            totalRevenue: { $sum: '$purchaseValue' },
+            allOptimizers: { $push: '$optimizers' },
+          }
+        },
+        {
+          $addFields: {
+            roas: { $cond: [{ $gt: ['$totalSpend', 0] }, { $divide: ['$totalRevenue', '$totalSpend'] }, 0] },
+            loss: { $subtract: ['$totalSpend', '$totalRevenue'] }
+          }
+        },
+        { $match: { roas: { $lt: 0.5 } } },
+        { $sort: { loss: -1 } },
+        { $limit: 10 },
+        {
+          $project: {
+            materialKey: '$_id',
+            materialType: 1,
+            materialName: 1,
+            spend: { $round: ['$totalSpend', 2] },
+            revenue: { $round: ['$totalRevenue', 2] },
+            roas: { $round: ['$roas', 2] },
+            loss: { $round: ['$loss', 2] },
+            optimizers: { 
+              $reduce: { 
+                input: '$allOptimizers', 
+                initialValue: [], 
+                in: { $setUnion: ['$$value', '$$this'] } 
+              } 
+            },
+          }
+        }
+      ])
+
+      // 素材类型统计
+      const materialTypeStats = await MaterialMetrics.aggregate([
+        {
+          $match: {
+            date: { $gte: startDate, $lte: endDate },
+            spend: { $gt: 0 }
+          }
+        },
+        {
+          $group: {
+            _id: '$materialType',
+            totalSpend: { $sum: '$spend' },
+            totalRevenue: { $sum: '$purchaseValue' },
+            uniqueMaterials: { $addToSet: { $ifNull: ['$imageHash', '$videoId'] } },
+          }
+        },
+        {
+          $project: {
+            type: '$_id',
+            spend: { $round: ['$totalSpend', 2] },
+            revenue: { $round: ['$totalRevenue', 2] },
+            roas: { 
+              $round: [
+                { $cond: [{ $gt: ['$totalSpend', 0] }, { $divide: ['$totalRevenue', '$totalSpend'] }, 0] },
+                2
+              ]
+            },
+            count: { $size: '$uniqueMaterials' }
+          }
+        }
+      ])
+
+      return {
+        topMaterials,
+        losingMaterials,
+        materialTypeStats,
+        totalMaterialsTracked: topMaterials.length + losingMaterials.length,
+      }
+    } catch (error) {
+      logger.error('[AgentService] Failed to get material metrics:', error)
+      return {
+        topMaterials: [],
+        losingMaterials: [],
+        materialTypeStats: [],
+        totalMaterialsTracked: 0,
+        error: '素材数据暂不可用'
+      }
     }
   }
 
