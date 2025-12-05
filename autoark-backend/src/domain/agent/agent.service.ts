@@ -487,19 +487,50 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
       todaySummary.purchase_value = '$' + todaySummary.purchase_value.toFixed(2)
     }
 
-    // 2. 最近30天趋势（更长时间范围）
+    // 辅助函数：从 raw.action_values 中提取 purchase 值
+    const extractPurchaseValue = (doc: any): number => {
+      if (doc.purchase_value && doc.purchase_value > 0) return doc.purchase_value
+      if (doc.raw?.action_values) {
+        for (const av of doc.raw.action_values) {
+          if (av.action_type === 'purchase' || av.action_type === 'omni_purchase') {
+            return parseFloat(av.value) || 0
+          }
+        }
+      }
+      return 0
+    }
+
+    // 2. 最近30天趋势（更长时间范围）- 移除 campaignId 限制，使用所有数据
     const last30DaysTrend = await MetricsDaily.aggregate([
       {
         $match: {
-          campaignId: { $exists: true, $ne: null },
-          date: { $gte: thirtyDaysAgo, $lte: today }
+          date: { $gte: thirtyDaysAgo, $lte: today },
+          spendUsd: { $gt: 0 } // 只要有消耗的数据
+        }
+      },
+      {
+        // 尝试从 raw.action_values 提取 purchase value
+        $addFields: {
+          extractedPurchaseValue: {
+            $reduce: {
+              input: { $ifNull: ['$raw.action_values', []] },
+              initialValue: 0,
+              in: {
+                $cond: [
+                  { $in: ['$$this.action_type', ['purchase', 'omni_purchase']] },
+                  { $add: ['$$value', { $toDouble: { $ifNull: ['$$this.value', '0'] } }] },
+                  '$$value'
+                ]
+              }
+            }
+          }
         }
       },
       {
         $group: {
           _id: '$date',
           spend: { $sum: '$spendUsd' },
-          revenue: { $sum: { $ifNull: ['$purchase_value', 0] } },
+          revenue: { $sum: { $max: [{ $ifNull: ['$purchase_value', 0] }, '$extractedPurchaseValue'] } },
           impressions: { $sum: '$impressions' },
           clicks: { $sum: '$clicks' },
           installs: { $sum: { $ifNull: ['$mobile_app_install_count', 0] } },
@@ -649,7 +680,7 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
       .sort((a, b) => b.spend - a.spend)
       .slice(0, 15)
 
-    // 5. 表现最佳的广告系列
+    // 5. 表现最佳的广告系列 - 从 raw.action_values 提取 purchase_value
     const topCampaigns = await MetricsDaily.aggregate([
       {
         $match: {
@@ -658,11 +689,29 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
         }
       },
       {
+        // 从 raw.action_values 提取 purchase value
+        $addFields: {
+          extractedPurchaseValue: {
+            $reduce: {
+              input: { $ifNull: ['$raw.action_values', []] },
+              initialValue: 0,
+              in: {
+                $cond: [
+                  { $in: ['$$this.action_type', ['purchase', 'omni_purchase']] },
+                  { $add: ['$$value', { $toDouble: { $ifNull: ['$$this.value', '0'] } }] },
+                  '$$value'
+                ]
+              }
+            }
+          }
+        }
+      },
+      {
         $group: {
           _id: '$campaignId',
           name: { $first: '$campaignName' },
           spend: { $sum: '$spendUsd' },
-          revenue: { $sum: { $ifNull: ['$purchase_value', 0] } },
+          revenue: { $sum: { $max: [{ $ifNull: ['$purchase_value', 0] }, '$extractedPurchaseValue'] } },
           impressions: { $sum: '$impressions' },
           clicks: { $sum: '$clicks' },
         }
@@ -687,7 +736,7 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
       }
     ])
 
-    // 6. 亏损广告系列
+    // 6. 亏损广告系列 - 从 raw.action_values 提取 purchase_value
     const losingCampaigns = await MetricsDaily.aggregate([
       {
         $match: {
@@ -696,11 +745,28 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
         }
       },
       {
+        $addFields: {
+          extractedPurchaseValue: {
+            $reduce: {
+              input: { $ifNull: ['$raw.action_values', []] },
+              initialValue: 0,
+              in: {
+                $cond: [
+                  { $in: ['$$this.action_type', ['purchase', 'omni_purchase']] },
+                  { $add: ['$$value', { $toDouble: { $ifNull: ['$$this.value', '0'] } }] },
+                  '$$value'
+                ]
+              }
+            }
+          }
+        }
+      },
+      {
         $group: {
           _id: '$campaignId',
           name: { $first: '$campaignName' },
           spend: { $sum: '$spendUsd' },
-          revenue: { $sum: { $ifNull: ['$purchase_value', 0] } },
+          revenue: { $sum: { $max: [{ $ifNull: ['$purchase_value', 0] }, '$extractedPurchaseValue'] } },
         }
       },
       {
@@ -733,7 +799,7 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
       amountSpent: a.amountSpent,
     }))
 
-    // 8. 所有广告系列详细数据（今日）
+    // 8. 所有广告系列详细数据（今日）- 从 raw.action_values 提取 purchase_value
     const allCampaignsToday = await MetricsDaily.aggregate([
       {
         $match: {
@@ -742,12 +808,29 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
         }
       },
       {
+        $addFields: {
+          extractedPurchaseValue: {
+            $reduce: {
+              input: { $ifNull: ['$raw.action_values', []] },
+              initialValue: 0,
+              in: {
+                $cond: [
+                  { $in: ['$$this.action_type', ['purchase', 'omni_purchase']] },
+                  { $add: ['$$value', { $toDouble: { $ifNull: ['$$this.value', '0'] } }] },
+                  '$$value'
+                ]
+              }
+            }
+          }
+        }
+      },
+      {
         $group: {
           _id: '$campaignId',
           name: { $first: '$campaignName' },
           accountId: { $first: '$accountId' },
           spend: { $sum: '$spendUsd' },
-          revenue: { $sum: { $ifNull: ['$purchase_value', 0] } },
+          revenue: { $sum: { $max: [{ $ifNull: ['$purchase_value', 0] }, '$extractedPurchaseValue'] } },
           impressions: { $sum: '$impressions' },
           clicks: { $sum: '$clicks' },
           installs: { $sum: { $ifNull: ['$mobile_app_install_count', 0] } },
@@ -937,7 +1020,7 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
       }
     ])
 
-    // 12. 本周 vs 上周对比
+    // 12. 本周 vs 上周对比 - 使用所有数据，提取 purchase_value
     const thisWeekStart = dayjs().startOf('week').format('YYYY-MM-DD')
     const thisWeekEnd = today
     const lastWeekStart = dayjs().subtract(1, 'week').startOf('week').format('YYYY-MM-DD')
@@ -948,15 +1031,32 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
       MetricsDaily.aggregate([
         {
           $match: {
-            campaignId: { $exists: true, $ne: null },
-            date: { $gte: thisWeekStart, $lte: thisWeekEnd }
+            date: { $gte: thisWeekStart, $lte: thisWeekEnd },
+            spendUsd: { $gt: 0 }
+          }
+        },
+        {
+          $addFields: {
+            extractedPurchaseValue: {
+              $reduce: {
+                input: { $ifNull: ['$raw.action_values', []] },
+                initialValue: 0,
+                in: {
+                  $cond: [
+                    { $in: ['$$this.action_type', ['purchase', 'omni_purchase']] },
+                    { $add: ['$$value', { $toDouble: { $ifNull: ['$$this.value', '0'] } }] },
+                    '$$value'
+                  ]
+                }
+              }
+            }
           }
         },
         {
           $group: {
             _id: null,
             spend: { $sum: '$spendUsd' },
-            revenue: { $sum: { $ifNull: ['$purchase_value', 0] } },
+            revenue: { $sum: { $max: [{ $ifNull: ['$purchase_value', 0] }, '$extractedPurchaseValue'] } },
             impressions: { $sum: '$impressions' },
             clicks: { $sum: '$clicks' },
             installs: { $sum: { $ifNull: ['$mobile_app_install_count', 0] } },
@@ -967,15 +1067,32 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
       MetricsDaily.aggregate([
         {
           $match: {
-            campaignId: { $exists: true, $ne: null },
-            date: { $gte: lastWeekStart, $lte: lastWeekEnd }
+            date: { $gte: lastWeekStart, $lte: lastWeekEnd },
+            spendUsd: { $gt: 0 }
+          }
+        },
+        {
+          $addFields: {
+            extractedPurchaseValue: {
+              $reduce: {
+                input: { $ifNull: ['$raw.action_values', []] },
+                initialValue: 0,
+                in: {
+                  $cond: [
+                    { $in: ['$$this.action_type', ['purchase', 'omni_purchase']] },
+                    { $add: ['$$value', { $toDouble: { $ifNull: ['$$this.value', '0'] } }] },
+                    '$$value'
+                  ]
+                }
+              }
+            }
           }
         },
         {
           $group: {
             _id: null,
             spend: { $sum: '$spendUsd' },
-            revenue: { $sum: { $ifNull: ['$purchase_value', 0] } },
+            revenue: { $sum: { $max: [{ $ifNull: ['$purchase_value', 0] }, '$extractedPurchaseValue'] } },
             impressions: { $sum: '$impressions' },
             clicks: { $sum: '$clicks' },
             installs: { $sum: { $ifNull: ['$mobile_app_install_count', 0] } },
@@ -1014,19 +1131,36 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
       }
     }
 
-    // 13. 今日 vs 昨日对比
+    // 13. 今日 vs 昨日对比 - 提取 purchase_value
     const yesterdayData = await MetricsDaily.aggregate([
       {
         $match: {
-          campaignId: { $exists: true, $ne: null },
-          date: yesterday
+          date: yesterday,
+          spendUsd: { $gt: 0 }
+        }
+      },
+      {
+        $addFields: {
+          extractedPurchaseValue: {
+            $reduce: {
+              input: { $ifNull: ['$raw.action_values', []] },
+              initialValue: 0,
+              in: {
+                $cond: [
+                  { $in: ['$$this.action_type', ['purchase', 'omni_purchase']] },
+                  { $add: ['$$value', { $toDouble: { $ifNull: ['$$this.value', '0'] } }] },
+                  '$$value'
+                ]
+              }
+            }
+          }
         }
       },
       {
         $group: {
           _id: null,
           spend: { $sum: '$spendUsd' },
-          revenue: { $sum: { $ifNull: ['$purchase_value', 0] } },
+          revenue: { $sum: { $max: [{ $ifNull: ['$purchase_value', 0] }, '$extractedPurchaseValue'] } },
           impressions: { $sum: '$impressions' },
           clicks: { $sum: '$clicks' },
           installs: { $sum: { $ifNull: ['$mobile_app_install_count', 0] } },
