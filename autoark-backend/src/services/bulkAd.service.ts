@@ -338,6 +338,44 @@ const executeTaskSynchronously = async (taskId: string) => {
 /**
  * 执行单个账户的广告创建任务
  */
+
+// 原子更新任务项状态（避免并发冲突）
+async function updateTaskItemAtomic(taskId: string, accountId: string, update: any) {
+  return AdTask.findOneAndUpdate(
+    { _id: taskId, 'items.accountId': accountId },
+    { $set: update },
+    { new: true }
+  )
+}
+
+// 原子更新任务进度
+async function updateTaskProgressAtomic(taskId: string) {
+  const task: any = await AdTask.findById(taskId)
+  if (!task) return
+  
+  const items: any[] = task.items || []
+  // 兼容 'success' 和 'completed' 状态（修复状态不一致问题）
+  const successCount = items.filter((i: any) => i.status === 'success' || i.status === 'completed').length
+  const failedCount = items.filter((i: any) => i.status === 'failed').length
+  const totalAds = items.reduce((sum: number, i: any) => sum + (i.result?.createdCount || 0), 0)
+  const percentage = items.length > 0 ? Math.round(((successCount + failedCount) / items.length) * 100) : 0
+  
+  const allDone = successCount + failedCount === items.length
+  // 使用 'completed' 作为成功状态，与前端 STATUS_MAP 保持一致
+  const status = allDone ? (failedCount === items.length ? 'failed' : successCount === items.length ? 'completed' : 'partial') : 'running'
+  
+  await AdTask.findByIdAndUpdate(taskId, {
+    $set: {
+      'progress.successAccounts': successCount,
+      'progress.failedAccounts': failedCount,
+      'progress.createdAds': totalAds,
+      'progress.percentage': percentage,
+      status,
+      ...(allDone ? { completedAt: new Date() } : {}),
+    }
+  })
+}
+
 export const executeTaskForAccount = async (
   taskId: string,
   accountId: string,
@@ -365,10 +403,16 @@ export const executeTaskForAccount = async (
     throw new Error('Account config not found')
   }
   
-  // 更新状态为处理中
-  item.status = 'processing'
-  item.startedAt = new Date()
-  await task.save()
+  // 验证必要配置
+  if (!accountConfig.pageId) {
+    throw new Error(`账户 ${accountConfig.accountName || accountId} 没有配置 Facebook 主页，无法创建广告`)
+  }
+  
+  // 原子更新状态为处理中
+  await updateTaskItemAtomic(taskId, accountId, {
+    'items.$.status': 'processing',
+    'items.$.startedAt': new Date(),
+  })
   
   try {
     // ==================== 1. 创建 Campaign ====================
@@ -396,8 +440,11 @@ export const executeTaskForAccount = async (
     }
     
     const campaignId = campaignResult.id
-    item.result = { campaignId, campaignName }
-    await task.save()
+    // 原子更新 campaign 结果
+    await updateTaskItemAtomic(taskId, accountId, {
+      'items.$.result.campaignId': campaignId,
+      'items.$.result.campaignName': campaignName,
+    })
     
     // ==================== 2. 获取定向配置 ====================
     let targeting: any = {}
@@ -459,8 +506,10 @@ export const executeTaskForAccount = async (
     }
     
     const adsetId = adsetResult.id
-    item.result.adsetIds = [adsetId]
-    await task.save()
+    // 原子更新 adset 结果
+    await updateTaskItemAtomic(taskId, accountId, {
+      'items.$.result.adsetIds': [adsetId],
+    })
     
     // ==================== 4. 获取创意组和文案包 ====================
     const creativeGroups: any[] = await CreativeGroup.find({
@@ -640,17 +689,31 @@ export const executeTaskForAccount = async (
     }
     
     // ==================== 6. 完成任务 ====================
-    item.status = 'success'
-    item.result.adIds = adIds
-    item.result.createdCount = adIds.length
-    item.completedAt = new Date()
-    await task.save()
+    // 如果没有创建任何广告，标记为失败
+    const finalStatus = adIds.length > 0 ? 'success' : 'failed'
+    const errorInfo = adIds.length === 0 ? [{
+      entityType: 'ad',
+      errorCode: 'NO_ADS_CREATED',
+      errorMessage: '素材创建失败，未能创建任何广告',
+      timestamp: new Date(),
+    }] : undefined
     
-    // 更新总体进度
-    updateTaskProgress(task)
-    await task.save()
+    // 原子更新状态
+    const updateData: any = {
+      'items.$.status': finalStatus,
+      'items.$.result.adIds': adIds,
+      'items.$.result.createdCount': adIds.length,
+      'items.$.completedAt': new Date(),
+    }
+    if (errorInfo) {
+      updateData['items.$.errors'] = errorInfo
+    }
+    await updateTaskItemAtomic(taskId, accountId, updateData)
     
-    logger.info(`[BulkAd] Task completed for account ${accountId}: ${adIds.length} ads created`)
+    // 更新总体进度（原子操作）
+    await updateTaskProgressAtomic(taskId)
+    
+    logger.info(`[BulkAd] Task ${finalStatus} for account ${accountId}: ${adIds.length} ads created`)
     
     return {
       success: true,
@@ -661,19 +724,21 @@ export const executeTaskForAccount = async (
     
   } catch (error: any) {
     logger.error(`[BulkAd] Task failed for account ${accountId}:`, error)
-    item.status = 'failed'
-    item.errors = item.errors || []
-    item.errors.push({
-      entityType: 'general',
-      errorCode: 'EXECUTION_ERROR',
-      errorMessage: error.message,
-      timestamp: new Date(),
-    })
-    item.completedAt = new Date()
-    await task.save()
     
-    updateTaskProgress(task)
-    await task.save()
+    // 原子更新失败状态
+    await updateTaskItemAtomic(taskId, accountId, {
+      'items.$.status': 'failed',
+      'items.$.completedAt': new Date(),
+      'items.$.errors': [{
+        entityType: 'general',
+        errorCode: 'EXECUTION_ERROR',
+        errorMessage: error.message,
+        timestamp: new Date(),
+      }],
+    })
+    
+    // 更新总体进度（原子操作）
+    await updateTaskProgressAtomic(taskId)
     
     throw error
   }
@@ -682,8 +747,9 @@ export const executeTaskForAccount = async (
 // 更新任务总体进度
 function updateTaskProgress(task: any) {
   const items = task.items || []
-  const completed = items.filter((i: any) => ['success', 'failed', 'skipped'].includes(i.status))
-  const successful = items.filter((i: any) => i.status === 'success')
+  // 兼容 'success' 和 'completed' 状态
+  const completed = items.filter((i: any) => ['success', 'completed', 'failed', 'skipped'].includes(i.status))
+  const successful = items.filter((i: any) => i.status === 'success' || i.status === 'completed')
   const failed = items.filter((i: any) => i.status === 'failed')
   
   let totalAdsCreated = 0

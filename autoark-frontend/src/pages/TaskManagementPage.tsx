@@ -39,7 +39,10 @@ const STATUS_MAP: Record<string, { label: string; color: string }> = {
   pending: { label: '等待中', color: 'bg-slate-100 text-slate-600' },
   queued: { label: '排队中', color: 'bg-yellow-100 text-yellow-600' },
   processing: { label: '执行中', color: 'bg-blue-100 text-blue-600' },
+  running: { label: '执行中', color: 'bg-blue-100 text-blue-600' },
   success: { label: '成功', color: 'bg-green-100 text-green-600' },
+  completed: { label: '成功', color: 'bg-green-100 text-green-600' },
+  partial: { label: '部分成功', color: 'bg-orange-100 text-orange-600' },
   partial_success: { label: '部分成功', color: 'bg-orange-100 text-orange-600' },
   failed: { label: '失败', color: 'bg-red-100 text-red-600' },
   cancelled: { label: '已取消', color: 'bg-slate-100 text-slate-600' },
@@ -257,7 +260,7 @@ export default function TaskManagementPage() {
                     {selectedTask.items.map((item, idx) => (
                       <div key={idx} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
                         <div className="flex items-center gap-3">
-                          <span className={`w-2 h-2 rounded-full ${item.status === 'success' ? 'bg-green-500' : item.status === 'failed' ? 'bg-red-500' : item.status === 'processing' ? 'bg-blue-500 animate-pulse' : 'bg-slate-300'}`} />
+                          <span className={`w-2 h-2 rounded-full ${(item.status === 'success' || item.status === 'completed') ? 'bg-green-500' : item.status === 'failed' ? 'bg-red-500' : item.status === 'processing' ? 'bg-blue-500 animate-pulse' : 'bg-slate-300'}`} />
                           <div>
                             <div className="font-medium text-sm">{item.accountName || item.accountId}</div>
                             <div className="text-xs text-slate-500">{item.accountId}</div>
