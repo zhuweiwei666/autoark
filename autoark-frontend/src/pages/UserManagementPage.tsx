@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react'
 import { useAuth } from '../contexts/AuthContext'
-import Layout from '../components/Layout'
 
 interface User {
   _id: string
@@ -150,17 +149,14 @@ const UserManagementPage: React.FC = () => {
 
   if (isLoading) {
     return (
-      <Layout>
-        <div className="flex items-center justify-center h-64">
-          <div className="text-gray-600">加载中...</div>
-        </div>
-      </Layout>
+      <div className="flex items-center justify-center h-64">
+        <div className="text-gray-600">加载中...</div>
+      </div>
     )
   }
 
   return (
-    <Layout>
-      <div className="p-6">
+    <div className="p-6">
         <div className="flex justify-between items-center mb-6">
           <h1 className="text-2xl font-bold text-gray-800">用户管理</h1>
           {(isSuperAdmin || isOrgAdmin) && (
@@ -358,7 +354,6 @@ const UserManagementPage: React.FC = () => {
           </div>
         )}
       </div>
-    </Layout>
   )
 }
 

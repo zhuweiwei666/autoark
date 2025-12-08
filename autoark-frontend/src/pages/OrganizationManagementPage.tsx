@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react'
 import { useAuth } from '../contexts/AuthContext'
-import Layout from '../components/Layout'
 
 interface Organization {
   _id: string
@@ -118,29 +117,24 @@ const OrganizationManagementPage: React.FC = () => {
 
   if (!isSuperAdmin) {
     return (
-      <Layout>
-        <div className="p-6">
-          <div className="text-center text-gray-600">
-            <p>只有超级管理员可以访问此页面</p>
-          </div>
+      <div className="p-6">
+        <div className="text-center text-gray-600">
+          <p>只有超级管理员可以访问此页面</p>
         </div>
-      </Layout>
+      </div>
     )
   }
 
   if (isLoading) {
     return (
-      <Layout>
-        <div className="flex items-center justify-center h-64">
-          <div className="text-gray-600">加载中...</div>
-        </div>
-      </Layout>
+      <div className="flex items-center justify-center h-64">
+        <div className="text-gray-600">加载中...</div>
+      </div>
     )
   }
 
   return (
-    <Layout>
-      <div className="p-6">
+    <div className="p-6">
         <div className="flex justify-between items-center mb-6">
           <h1 className="text-2xl font-bold text-gray-800">组织管理</h1>
           <button
@@ -323,7 +317,6 @@ const OrganizationManagementPage: React.FC = () => {
           </div>
         )}
       </div>
-    </Layout>
   )
 }
 
