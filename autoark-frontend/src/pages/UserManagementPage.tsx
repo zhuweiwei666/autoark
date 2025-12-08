@@ -26,6 +26,11 @@ const UserManagementPage: React.FC = () => {
   })
 
   const fetchUsers = async () => {
+    if (!token) {
+      setIsLoading(false)
+      return
+    }
+    
     try {
       const response = await fetch('/api/users', {
         headers: {
@@ -35,6 +40,8 @@ const UserManagementPage: React.FC = () => {
       const data = await response.json()
       if (data.success) {
         setUsers(data.data)
+      } else {
+        console.error('获取用户列表失败:', data.message)
       }
     } catch (error) {
       console.error('获取用户列表失败:', error)
@@ -44,7 +51,9 @@ const UserManagementPage: React.FC = () => {
   }
 
   useEffect(() => {
-    fetchUsers()
+    if (token) {
+      fetchUsers()
+    }
   }, [token])
 
   const handleCreateUser = async (e: React.FormEvent) => {

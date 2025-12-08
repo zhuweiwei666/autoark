@@ -1,0 +1,134 @@
+═══════════════════════════════════════════════════════════════
+   AutoArk 服务器部署命令 - 复制粘贴直接执行
+═══════════════════════════════════════════════════════════════
+
+【第一步】SSH 登录服务器
+─────────────────────────────────────────────────────────────
+ssh root@你的服务器IP
+
+
+【第二步】拉取最新代码
+─────────────────────────────────────────────────────────────
+# 如果是首次部署
+cd /root
+git clone https://github.com/zhuweiwei666/autoark.git
+cd autoark
+
+# 如果已有项目（更新）
+cd /root/autoark
+git pull origin main
+
+
+【第三步】配置环境变量（重要！）
+─────────────────────────────────────────────────────────────
+cd /root/autoark/autoark-backend
+
+# 生成 JWT 密钥（复制输出结果）
+node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"
+
+# 编辑配置文件
+nano .env
+
+# 修改以下内容：
+#   MONGO_URI=mongodb://localhost:27017/autoark
+#   JWT_SECRET=上面生成的密钥
+#   SUPER_ADMIN_USERNAME=admin
+#   SUPER_ADMIN_PASSWORD=设置强密码
+#   SUPER_ADMIN_EMAIL=your@email.com
+
+# 保存：Ctrl+X，然后 Y，再按 Enter
+
+
+【第四步】执行部署脚本
+─────────────────────────────────────────────────────────────
+cd /root/autoark
+chmod +x deploy-with-auth.sh
+./deploy-with-auth.sh
+
+# 等待 3-5 分钟，脚本会自动完成所有配置
+
+
+【第五步】配置 Nginx
+─────────────────────────────────────────────────────────────
+sudo nano /etc/nginx/sites-available/autoark
+
+# 复制以下内容（修改 your-domain.com 为你的域名）：
+
+server {
+    listen 80;
+    server_name your-domain.com;
+    root /root/autoark/autoark-frontend/dist;
+    index index.html;
+    
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+    
+    location /api/ {
+        proxy_pass http://localhost:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+
+# 保存后执行：
+sudo ln -s /etc/nginx/sites-available/autoark /etc/nginx/sites-enabled/
+sudo nginx -t
+sudo systemctl reload nginx
+
+
+【第六步】配置 SSL（推荐）
+─────────────────────────────────────────────────────────────
+sudo apt-get update
+sudo apt-get install -y certbot python3-certbot-nginx
+sudo certbot --nginx -d your-domain.com
+
+
+【验证部署】
+─────────────────────────────────────────────────────────────
+# 检查服务
+pm2 status
+
+# 查看日志
+pm2 logs autoark --lines 20
+
+# 访问网站
+在浏览器打开: http://your-domain.com/login
+用户名: admin
+密码: 在 .env 中设置的密码
+
+
+═══════════════════════════════════════════════════════════════
+   常用管理命令
+═══════════════════════════════════════════════════════════════
+
+查看服务状态:     pm2 status
+查看日志:         pm2 logs autoark
+重启服务:         pm2 restart autoark
+停止服务:         pm2 stop autoark
+实时监控:         pm2 monit
+
+查看超级管理员信息:
+cd /root/autoark/autoark-backend
+grep SUPER_ADMIN .env
+
+重新初始化管理员:
+cd /root/autoark/autoark-backend
+npm run init:super-admin
+
+更新系统:
+cd /root/autoark
+git pull origin main
+./deploy-with-auth.sh
+
+
+═══════════════════════════════════════════════════════════════
+   完成！
+═══════════════════════════════════════════════════════════════
+
+详细文档请查看：
+• 快速开始: DEPLOY_NOW.md
+• 完整指南: SERVER_DEPLOYMENT.md
+• 使用说明: AUTH_SYSTEM_README.md

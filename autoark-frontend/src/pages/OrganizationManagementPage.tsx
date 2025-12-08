@@ -29,6 +29,11 @@ const OrganizationManagementPage: React.FC = () => {
   })
 
   const fetchOrganizations = async () => {
+    if (!token) {
+      setIsLoading(false)
+      return
+    }
+    
     try {
       const response = await fetch('/api/organizations', {
         headers: {
@@ -38,6 +43,8 @@ const OrganizationManagementPage: React.FC = () => {
       const data = await response.json()
       if (data.success) {
         setOrganizations(data.data)
+      } else {
+        console.error('获取组织列表失败:', data.message)
       }
     } catch (error) {
       console.error('获取组织列表失败:', error)
@@ -47,7 +54,7 @@ const OrganizationManagementPage: React.FC = () => {
   }
 
   useEffect(() => {
-    if (isSuperAdmin) {
+    if (token && isSuperAdmin) {
       fetchOrganizations()
     } else {
       setIsLoading(false)
