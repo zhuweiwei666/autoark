@@ -206,73 +206,119 @@ export default function MaterialLibraryPage() {
     }
   }
   
+  // 直传 R2 上传（更快，跳过服务器）
   const handleUpload = async (files: FileList | null) => {
     if (!files || files.length === 0) return
     
     setUploading(true)
     setUploadProgress(0)
     
-    const formData = new FormData()
     const fileArray = Array.from(files)
     const targetFolder = currentPath || '默认'
+    const totalFiles = fileArray.length
+    let uploadedCount = 0
+    let failedCount = 0
+    const uploadedFiles: Array<{ fileName: string; key: string; publicUrl: string; mimeType: string; size: number }> = []
     
-    const isSingle = fileArray.length === 1
-    const url = isSingle ? `${API_BASE}/materials/upload` : `${API_BASE}/materials/upload-batch`
-    
-    if (isSingle) {
-      formData.append('file', fileArray[0])
-    } else {
-      fileArray.forEach(f => formData.append('files', f))
-    }
-    formData.append('folder', targetFolder)
-    
-    // 使用 XMLHttpRequest 支持上传进度
-    const xhr = new XMLHttpRequest()
-    
-    xhr.upload.addEventListener('progress', (e) => {
-      if (e.lengthComputable) {
-        const percent = Math.round((e.loaded / e.total) * 100)
-        setUploadProgress(percent)
+    try {
+      // 1. 批量获取预签名 URL
+      const presignedRes = await fetch(`${API_BASE}/materials/presigned-urls`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          files: fileArray.map(f => ({
+            fileName: f.name,
+            mimeType: f.type,
+            size: f.size,
+          })),
+        }),
+      })
+      const presignedData = await presignedRes.json()
+      
+      if (!presignedData.success) {
+        throw new Error(presignedData.error || '获取上传地址失败')
       }
-    })
-    
-    xhr.addEventListener('load', () => {
-      try {
-        const data = JSON.parse(xhr.responseText)
-        if (xhr.status === 200 && data.success) {
-          if (!isSingle && data.data) {
-            alert(`上传完成：成功 ${data.data.successCount} 个`)
+      
+      const urlMap = new Map<string, { uploadUrl: string; key: string; publicUrl: string }>(
+        presignedData.data.map((u: any) => [u.fileName, u])
+      )
+      
+      // 2. 并行直传到 R2
+      const uploadPromises = fileArray.map(async (file) => {
+        const urlInfo = urlMap.get(file.name)
+        if (!urlInfo) {
+          failedCount++
+          return
+        }
+        
+        try {
+          // 直接 PUT 到 R2
+          const uploadRes = await fetch(urlInfo.uploadUrl, {
+            method: 'PUT',
+            headers: {
+              'Content-Type': file.type,
+            },
+            body: file,
+          })
+          
+          if (uploadRes.ok) {
+            uploadedCount++
+            uploadedFiles.push({
+              fileName: file.name,
+              key: urlInfo.key,
+              publicUrl: urlInfo.publicUrl,
+              mimeType: file.type,
+              size: file.size,
+            })
+          } else {
+            failedCount++
+            console.error(`Upload failed for ${file.name}:`, uploadRes.status)
           }
+        } catch (err) {
+          failedCount++
+          console.error(`Upload error for ${file.name}:`, err)
+        }
+        
+        // 更新进度
+        setUploadProgress(Math.round(((uploadedCount + failedCount) / totalFiles) * 100))
+      })
+      
+      await Promise.all(uploadPromises)
+      
+      // 3. 确认上传完成（在数据库创建记录）
+      if (uploadedFiles.length > 0) {
+        const confirmRes = await fetch(`${API_BASE}/materials/confirm-uploads`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            files: uploadedFiles,
+            folder: targetFolder,
+          }),
+        })
+        const confirmData = await confirmRes.json()
+        
+        if (confirmData.success) {
+          const msg = totalFiles === 1 
+            ? '上传成功！' 
+            : `上传完成：成功 ${uploadedCount} 个${failedCount > 0 ? `，失败 ${failedCount} 个` : ''}`
+          alert(msg)
           loadMaterials()
           loadFolders()
         } else {
-          alert(`上传失败：${data.error || '未知错误'}`)
+          alert(`保存记录失败：${confirmData.error}`)
         }
-      } catch {
-        alert(`上传失败：服务器响应异常`)
+      } else if (failedCount > 0) {
+        alert(`上传失败：${failedCount} 个文件上传失败`)
       }
+      
+    } catch (err: any) {
+      console.error('Upload error:', err)
+      alert(`上传失败：${err.message}`)
+    } finally {
       setUploading(false)
       setUploadProgress(0)
       if (fileInputRef.current) fileInputRef.current.value = ''
-    })
-    
-    xhr.addEventListener('error', () => {
-      alert('上传失败：网络错误，请检查文件大小或网络连接')
-      setUploading(false)
-      setUploadProgress(0)
-      if (fileInputRef.current) fileInputRef.current.value = ''
-    })
-    
-    xhr.addEventListener('timeout', () => {
-      alert('上传超时，请尝试上传更小的文件')
-      setUploading(false)
-      setUploadProgress(0)
-      if (fileInputRef.current) fileInputRef.current.value = ''
-    })
-    
-    xhr.open('POST', url)
-    xhr.timeout = 300000 // 5分钟超时
-    xhr.send(formData)
+    }
   }
   
   const handleDelete = async (id: string) => {

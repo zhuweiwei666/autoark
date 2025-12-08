@@ -6,7 +6,6 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.getAccounts = exports.syncAccountsFromTokens = void 0;
 const Account_1 = __importDefault(require("../models/Account"));
 const FbToken_1 = __importDefault(require("../models/FbToken"));
-const MetricsDaily_1 = __importDefault(require("../models/MetricsDaily"));
 const facebook_api_1 = require("./facebook.api");
 const logger_1 = __importDefault(require("../utils/logger"));
 const accountId_1 = require("../utils/accountId");
@@ -98,95 +97,73 @@ const getAccounts = async (filters = {}, pagination) => {
     // 先获取所有符合条件的账户（用于排序）
     const allAccounts = await Account_1.default.find(query).lean();
     const total = allAccounts.length;
-    // 获取所有账户ID，用于批量查询消耗数据
-    // 使用统一工具函数处理格式，兼容历史数据可能存在的格式不一致
+    // 获取所有账户ID
     const accountIds = allAccounts.map(acc => acc.accountId);
-    const allAccountIds = (0, accountId_1.getAccountIdsForQuery)(accountIds);
-    // 计算消耗：如果提供了日期范围，使用日期范围；否则使用今天
+    // 直接从 Facebook Insights API 获取消耗数据（更准确）
     let periodSpendMap = {};
-    if (accountIds.length > 0) {
-        const dateQuery = { accountId: { $in: allAccountIds } };
-        // 如果提供了日期范围，使用日期范围；否则使用今天
-        if (filters.startDate || filters.endDate) {
-            dateQuery.date = {};
-            if (filters.startDate) {
-                dateQuery.date.$gte = filters.startDate;
-            }
-            if (filters.endDate) {
-                dateQuery.date.$lte = filters.endDate;
-            }
-        }
-        else {
-            // 没有日期范围，使用今天
-            const today = new Date().toISOString().split('T')[0];
-            dateQuery.date = today;
-        }
-        // 重要：只统计 campaign 级别的数据（campaignId 存在），确保与广告系列页面数据一致
-        // 这样可以避免重复计算 ad 级别和 adset 级别的数据
-        const periodSpendData = await MetricsDaily_1.default.aggregate([
-            {
-                $match: {
-                    ...dateQuery,
-                    campaignId: { $exists: true, $ne: null } // 只统计 campaign 级别的数据
-                }
-            },
-            {
-                $group: {
-                    _id: '$accountId',
-                    spend: { $sum: '$spendUsd' }
-                }
-            }
-        ]);
-        periodSpendData.forEach((item) => {
-            // 统一处理 accountId，转换为数据库存储格式以便匹配
-            const normalizedId = (0, accountId_1.normalizeFromQuery)(item._id);
-            periodSpendMap[normalizedId] = (periodSpendMap[normalizedId] || 0) + (item.spend || 0);
-        });
+    // 构建日期参数
+    let datePreset = 'today';
+    let timeRange;
+    if (filters.startDate && filters.endDate) {
+        timeRange = { since: filters.startDate, until: filters.endDate };
+        datePreset = '';
     }
-    // 计算所有账户的历史总消耗
-    // 重要：只统计 campaign 级别的数据（campaignId 存在），确保与广告系列页面数据一致
-    const totalSpendMap = {};
-    if (accountIds.length > 0) {
-        const totalSpendData = await MetricsDaily_1.default.aggregate([
-            {
-                $match: {
-                    accountId: { $in: allAccountIds },
-                    campaignId: { $exists: true, $ne: null } // 只统计 campaign 级别的数据
+    else if (filters.startDate) {
+        timeRange = { since: filters.startDate, until: new Date().toISOString().split('T')[0] };
+        datePreset = '';
+    }
+    else if (filters.endDate) {
+        timeRange = { since: '2020-01-01', until: filters.endDate };
+        datePreset = '';
+    }
+    // 获取有效 token
+    const tokenDoc = await FbToken_1.default.findOne({ status: 'active' });
+    const token = tokenDoc?.token;
+    if (token && accountIds.length > 0) {
+        // 并发获取所有账户的 insights（限制并发数）
+        const batchSize = 10;
+        for (let i = 0; i < accountIds.length; i += batchSize) {
+            const batch = accountIds.slice(i, i + batchSize);
+            const promises = batch.map(async (accountId) => {
+                try {
+                    const accountIdForApi = (0, accountId_1.normalizeForApi)(accountId);
+                    const insights = await (0, facebook_api_1.fetchInsights)(accountIdForApi, 'account', datePreset || undefined, token, undefined, timeRange);
+                    if (insights && insights.length > 0) {
+                        const spend = parseFloat(insights[0].spend || '0');
+                        return { accountId, spend };
+                    }
+                    return { accountId, spend: 0 };
                 }
-            },
-            {
-                $group: {
-                    _id: '$accountId',
-                    totalSpend: { $sum: '$spendUsd' }
+                catch (error) {
+                    logger_1.default.warn(`Failed to fetch insights for account ${accountId}`);
+                    return { accountId, spend: 0 };
                 }
-            }
-        ]);
-        totalSpendData.forEach((item) => {
-            // 统一处理 accountId，转换为数据库存储格式以便匹配
-            const normalizedId = (0, accountId_1.normalizeFromQuery)(item._id);
-            totalSpendMap[normalizedId] = (totalSpendMap[normalizedId] || 0) + (item.totalSpend || 0);
-        });
+            });
+            const results = await Promise.all(promises);
+            results.forEach(({ accountId, spend }) => {
+                periodSpendMap[accountId] = spend;
+            });
+        }
     }
     // 为每个账户添加消耗和计算后的余额
     const accountsWithMetrics = allAccounts.map((account) => {
         const accountId = account.accountId;
-        // periodSpend 始终显示（日期范围内的消耗或今天的消耗）
+        // periodSpend: 来自 Facebook Insights API 的消耗（日期范围内或今天）
         const periodSpend = periodSpendMap[accountId] || 0;
-        const totalSpend = totalSpendMap[accountId] || 0;
-        // Facebook API 返回的 balance 是以账户货币的最小单位（分）返回的，需要除以 100
-        // 但这里假设 balance 已经是正确的单位，如果后端存储时已经转换过，就不需要再除以 100
-        // 需要根据实际情况调整
-        const accountBalance = account.balance ? (typeof account.balance === 'number' ? account.balance : parseFloat(account.balance)) / 100 : 0;
-        // 余额 = 账户总余额 - 历史总消耗金额
-        // 注意：这里假设 spendUsd 是美元，如果账户货币不是美元，需要转换
-        // 简化处理：假设都是美元，实际项目中需要根据 currency 进行转换
-        const calculatedBalance = accountBalance - totalSpend;
+        // Facebook API 返回的 amount_spent 是以账户货币的最小单位（分）返回的
+        const amountSpentRaw = account.amountSpent ?
+            (typeof account.amountSpent === 'string' ? parseFloat(account.amountSpent) : account.amountSpent) : 0;
+        const amountSpentUsd = amountSpentRaw / 100; // Facebook API 返回的是美分
+        // Facebook API 返回的 balance 也是以账户货币的最小单位（分）返回的
+        const balanceRaw = account.balance ?
+            (typeof account.balance === 'string' ? parseFloat(account.balance) : account.balance) : 0;
+        const balanceUsd = balanceRaw / 100; // 转换为美元
         const accountObj = account.toObject ? account.toObject() : account;
         return {
             ...accountObj,
-            periodSpend: periodSpend, // 日期范围内的消耗（美元）
-            calculatedBalance: calculatedBalance, // 计算后的余额（美元）
-            totalSpend: totalSpend // 历史总消耗（美元，用于调试）
+            periodSpend: periodSpend, // 日期范围/当日消耗（来自 Facebook Insights API）
+            calculatedBalance: balanceUsd, // 账户余额（美元）
+            totalSpend: amountSpentUsd, // 账户历史总消耗（来自 Facebook API amount_spent）
         };
     });
     // 排序逻辑：如果指定了排序字段，对所有数据进行排序

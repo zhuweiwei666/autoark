@@ -2,11 +2,13 @@ import cron, { ScheduledTask } from 'node-cron'
 import dayjs from 'dayjs'
 import logger from '../utils/logger'
 import { aggregateMaterialMetrics } from '../services/materialMetrics.service'
+import { aggregateMetricsToMaterials } from '../services/materialTracking.service'
 
 /**
  * 素材指标聚合定时任务
- * 每天凌晨 4:00 运行，聚合前一天的数据
- * 也可以手动触发聚合
+ * 每天凌晨 4:00 运行：
+ * 1. 聚合 Facebook 指标到 MaterialMetrics（按素材维度）
+ * 2. 将 MaterialMetrics 数据归因到 Material 素材库（全链路追踪）
  */
 
 let cronJob: ScheduledTask | null = null
@@ -17,11 +19,16 @@ export const initMaterialMetricsCron = () => {
     logger.info('[MaterialMetricsCron] Starting daily material metrics aggregation')
     
     try {
-      // 聚合昨天的数据
       const yesterday = dayjs().subtract(1, 'day').format('YYYY-MM-DD')
-      const result = await aggregateMaterialMetrics(yesterday)
       
-      logger.info(`[MaterialMetricsCron] Aggregation complete for ${yesterday}:`, result)
+      // 1. 聚合 Facebook 指标到 MaterialMetrics
+      const metricsResult = await aggregateMaterialMetrics(yesterday)
+      logger.info(`[MaterialMetricsCron] MaterialMetrics aggregation for ${yesterday}:`, metricsResult)
+      
+      // 2. 将指标归因到素材库（Material 表）
+      const attributionResult = await aggregateMetricsToMaterials(yesterday)
+      logger.info(`[MaterialMetricsCron] Material attribution for ${yesterday}:`, attributionResult)
+      
     } catch (error) {
       logger.error('[MaterialMetricsCron] Daily aggregation failed:', error)
     }

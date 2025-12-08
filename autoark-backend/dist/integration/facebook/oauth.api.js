@@ -3,50 +3,163 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.validateOAuthConfig = exports.getUserInfo = exports.exchangeForLongLivedToken = exports.exchangeCodeForToken = exports.getFacebookLoginUrl = void 0;
+exports.validateOAuthConfigSync = exports.validateOAuthConfig = exports.getUserInfo = exports.exchangeForLongLivedToken = exports.exchangeCodeForToken = exports.parseStateParam = exports.getFacebookLoginUrlSync = exports.getFacebookLoginUrl = exports.getAvailableApps = exports.getActiveAppConfig = void 0;
 const axios_1 = __importDefault(require("axios"));
 const logger_1 = __importDefault(require("../../utils/logger"));
+const FacebookApp_1 = __importDefault(require("../../models/FacebookApp"));
 const FB_API_VERSION = 'v19.0';
 const FB_GRAPH_BASE_URL = 'https://graph.facebook.com';
 const FB_OAUTH_BASE_URL = 'https://www.facebook.com';
-const FB_APP_ID = process.env.FACEBOOK_APP_ID || '';
-const FB_APP_SECRET = process.env.FACEBOOK_APP_SECRET || '';
+// 从环境变量读取作为后备
+const ENV_FB_APP_ID = process.env.FACEBOOK_APP_ID || '';
+const ENV_FB_APP_SECRET = process.env.FACEBOOK_APP_SECRET || '';
 const FB_REDIRECT_URI = process.env.FACEBOOK_REDIRECT_URI || 'http://localhost:3001/api/facebook/oauth/callback';
 /**
- * 生成 Facebook 登录 URL
+ * 获取可用的 App 配置（优先从数据库，后备环境变量）
  */
-const getFacebookLoginUrl = (state) => {
+const getActiveAppConfig = async (appId) => {
+    try {
+        // 如果指定了 appId，直接查找
+        if (appId) {
+            const app = await FacebookApp_1.default.findOne({ appId, status: 'active' });
+            if (app) {
+                return {
+                    appId: app.appId,
+                    appSecret: app.appSecret,
+                    source: 'database',
+                };
+            }
+        }
+        // 否则查找负载最低的活跃 App
+        const app = await FacebookApp_1.default.findOne({
+            status: 'active',
+            'validation.isValid': true,
+        }).sort({
+            'currentLoad.activeTasks': 1,
+            'config.priority': -1,
+        });
+        if (app) {
+            return {
+                appId: app.appId,
+                appSecret: app.appSecret,
+                source: 'database',
+            };
+        }
+        // 后备：使用环境变量
+        if (ENV_FB_APP_ID && ENV_FB_APP_SECRET) {
+            logger_1.default.warn('[OAuth] Using fallback env variables for app credentials');
+            return {
+                appId: ENV_FB_APP_ID,
+                appSecret: ENV_FB_APP_SECRET,
+                source: 'env',
+            };
+        }
+        throw new Error('No active Facebook App found. Please configure an App in the App Management page.');
+    }
+    catch (error) {
+        logger_1.default.error('[OAuth] Failed to get app config:', error.message);
+        throw error;
+    }
+};
+exports.getActiveAppConfig = getActiveAppConfig;
+/**
+ * 获取所有可用的 Apps（供前端选择）
+ */
+const getAvailableApps = async () => {
+    const apps = await FacebookApp_1.default.find({ status: 'active' }).lean();
+    return apps.map(app => ({
+        appId: String(app.appId),
+        appName: String(app.appName),
+        healthScore: app.stats?.totalRequests
+            ? Math.round((Number(app.stats.successRequests || 0) / Number(app.stats.totalRequests)) * 100)
+            : 100,
+        isAvailable: app.status === 'active' &&
+            (!app.currentLoad?.activeTasks || Number(app.currentLoad.activeTasks) < Number(app.config?.maxConcurrentTasks || 5)),
+    }));
+};
+exports.getAvailableApps = getAvailableApps;
+/**
+ * 生成 Facebook 登录 URL
+ * @param state - 状态参数
+ * @param appId - 可选，指定使用哪个 App
+ */
+const getFacebookLoginUrl = async (state, appId) => {
+    const config = await (0, exports.getActiveAppConfig)(appId);
     const scopes = [
-        'ads_read',
         'ads_management',
+        'ads_read',
         'business_management',
+        'pages_show_list',
         'pages_read_engagement',
-        'pages_manage_metadata',
-        'pixel_read',
-        'pixel_write',
-        'offline_access', // 重要：获取长期 token
     ].join(',');
+    // 在 state 中编码 appId，以便回调时知道用哪个 app
+    const stateData = {
+        originalState: state || '',
+        appId: config.appId,
+    };
     const params = new URLSearchParams({
-        client_id: FB_APP_ID,
+        client_id: config.appId,
         redirect_uri: FB_REDIRECT_URI,
         scope: scopes,
         response_type: 'code',
-        state: state || '',
-        auth_type: 'rerequest', // 重新请求权限（如果之前拒绝过）
+        state: Buffer.from(JSON.stringify(stateData)).toString('base64'),
+        auth_type: 'rerequest',
     });
     return `${FB_OAUTH_BASE_URL}/${FB_API_VERSION}/dialog/oauth?${params.toString()}`;
 };
 exports.getFacebookLoginUrl = getFacebookLoginUrl;
 /**
- * 将授权码（code）交换为 Access Token
+ * 同步版本（用于兼容现有代码）
  */
-const exchangeCodeForToken = async (code) => {
+const getFacebookLoginUrlSync = (state) => {
+    if (!ENV_FB_APP_ID) {
+        throw new Error('FACEBOOK_APP_ID not configured. Please add an App in App Management.');
+    }
+    const scopes = [
+        'ads_management',
+        'ads_read',
+        'business_management',
+        'pages_show_list',
+        'pages_read_engagement',
+    ].join(',');
+    const params = new URLSearchParams({
+        client_id: ENV_FB_APP_ID,
+        redirect_uri: FB_REDIRECT_URI,
+        scope: scopes,
+        response_type: 'code',
+        state: state || '',
+        auth_type: 'rerequest',
+    });
+    return `${FB_OAUTH_BASE_URL}/${FB_API_VERSION}/dialog/oauth?${params.toString()}`;
+};
+exports.getFacebookLoginUrlSync = getFacebookLoginUrlSync;
+/**
+ * 解析 state 参数
+ */
+const parseStateParam = (state) => {
     try {
-        logger_1.default.info('[OAuth] Exchanging code for access token');
+        const decoded = Buffer.from(state, 'base64').toString('utf-8');
+        return JSON.parse(decoded);
+    }
+    catch {
+        // 旧格式，直接返回
+        return { originalState: state };
+    }
+};
+exports.parseStateParam = parseStateParam;
+/**
+ * 将授权码（code）交换为 Access Token
+ * @param code - 授权码
+ * @param appId - 可选，指定使用哪个 App（通常从 state 中解析）
+ */
+const exchangeCodeForToken = async (code, appId) => {
+    try {
+        const config = await (0, exports.getActiveAppConfig)(appId);
+        logger_1.default.info(`[OAuth] Exchanging code for access token using App ${config.appId} (${config.source})`);
         const response = await axios_1.default.get(`${FB_GRAPH_BASE_URL}/${FB_API_VERSION}/oauth/access_token`, {
             params: {
-                client_id: FB_APP_ID,
-                client_secret: FB_APP_SECRET,
+                client_id: config.appId,
+                client_secret: config.appSecret,
                 redirect_uri: FB_REDIRECT_URI,
                 code,
             },
@@ -54,11 +167,28 @@ const exchangeCodeForToken = async (code) => {
         if (!response.data.access_token) {
             throw new Error('Failed to get access token from Facebook');
         }
+        // 记录请求成功
+        if (config.source === 'database') {
+            await FacebookApp_1.default.updateOne({ appId: config.appId }, {
+                $inc: { 'stats.totalRequests': 1, 'stats.successRequests': 1 },
+                $set: { 'stats.lastUsedAt': new Date() }
+            });
+        }
         logger_1.default.info('[OAuth] Successfully exchanged code for access token');
         return response.data;
     }
     catch (error) {
         logger_1.default.error('[OAuth] Failed to exchange code for token:', error.response?.data || error.message);
+        // 记录请求失败
+        if (appId) {
+            await FacebookApp_1.default.updateOne({ appId }, {
+                $inc: { 'stats.totalRequests': 1, 'stats.failedRequests': 1 },
+                $set: {
+                    'stats.lastErrorAt': new Date(),
+                    'stats.lastError': error.response?.data?.error?.message || error.message
+                }
+            });
+        }
         throw new Error(`Failed to exchange code: ${error.response?.data?.error?.message || error.message}`);
     }
 };
@@ -66,19 +196,27 @@ exports.exchangeCodeForToken = exchangeCodeForToken;
 /**
  * 将 Short-Lived Token 交换为 Long-Lived Token
  */
-const exchangeForLongLivedToken = async (shortLivedToken) => {
+const exchangeForLongLivedToken = async (shortLivedToken, appId) => {
     try {
-        logger_1.default.info('[OAuth] Exchanging short-lived token for long-lived token');
+        const config = await (0, exports.getActiveAppConfig)(appId);
+        logger_1.default.info(`[OAuth] Exchanging short-lived token for long-lived token using App ${config.appId}`);
         const response = await axios_1.default.get(`${FB_GRAPH_BASE_URL}/${FB_API_VERSION}/oauth/access_token`, {
             params: {
                 grant_type: 'fb_exchange_token',
-                client_id: FB_APP_ID,
-                client_secret: FB_APP_SECRET,
+                client_id: config.appId,
+                client_secret: config.appSecret,
                 fb_exchange_token: shortLivedToken,
             },
         });
         if (!response.data.access_token) {
             throw new Error('Failed to get long-lived token from Facebook');
+        }
+        // 记录请求成功
+        if (config.source === 'database') {
+            await FacebookApp_1.default.updateOne({ appId: config.appId }, {
+                $inc: { 'stats.totalRequests': 1, 'stats.successRequests': 1 },
+                $set: { 'stats.lastUsedAt': new Date() }
+            });
         }
         logger_1.default.info(`[OAuth] Successfully exchanged for long-lived token, expires in ${response.data.expires_in} seconds`);
         return response.data;
@@ -113,14 +251,41 @@ const getUserInfo = async (accessToken) => {
 };
 exports.getUserInfo = getUserInfo;
 /**
- * 验证 OAuth 配置
+ * 验证 OAuth 配置（检查是否有可用的 App）
  */
-const validateOAuthConfig = () => {
+const validateOAuthConfig = async () => {
     const missing = [];
-    if (!FB_APP_ID) {
+    // 检查数据库中是否有活跃的 App
+    const dbAppsCount = await FacebookApp_1.default.countDocuments({ status: 'active' });
+    const hasDbApps = dbAppsCount > 0;
+    // 如果没有数据库 App，检查环境变量
+    if (!hasDbApps) {
+        if (!ENV_FB_APP_ID) {
+            missing.push('FACEBOOK_APP_ID');
+        }
+        if (!ENV_FB_APP_SECRET) {
+            missing.push('FACEBOOK_APP_SECRET');
+        }
+    }
+    if (!FB_REDIRECT_URI) {
+        missing.push('FACEBOOK_REDIRECT_URI');
+    }
+    return {
+        valid: (hasDbApps || (ENV_FB_APP_ID && ENV_FB_APP_SECRET)) && FB_REDIRECT_URI !== '',
+        missing,
+        hasDbApps,
+    };
+};
+exports.validateOAuthConfig = validateOAuthConfig;
+/**
+ * 同步版本的配置验证（兼容现有代码）
+ */
+const validateOAuthConfigSync = () => {
+    const missing = [];
+    if (!ENV_FB_APP_ID) {
         missing.push('FACEBOOK_APP_ID');
     }
-    if (!FB_APP_SECRET) {
+    if (!ENV_FB_APP_SECRET) {
         missing.push('FACEBOOK_APP_SECRET');
     }
     if (!FB_REDIRECT_URI) {
@@ -131,4 +296,4 @@ const validateOAuthConfig = () => {
         missing,
     };
 };
-exports.validateOAuthConfig = validateOAuthConfig;
+exports.validateOAuthConfigSync = validateOAuthConfigSync;

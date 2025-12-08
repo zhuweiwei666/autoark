@@ -12,6 +12,9 @@ import bulkAdRoutes from './routes/bulkAd.routes' // New: Bulk ad creation route
 import materialRoutes from './routes/material.routes' // New: Material management routes
 import materialMetricsRoutes from './routes/materialMetrics.routes' // New: Material metrics & recommendations
 import agentRoutes from './domain/agent/agent.controller' // New: AI Agent routes
+import summaryRoutes from './controllers/summary.controller' // New: 预聚合数据快速读取
+import productMappingRoutes from './routes/productMapping.routes' // New: 产品关系映射
+import facebookAppRoutes from './routes/facebookApp.routes' // New: Facebook App 管理
 import logger from './utils/logger'
 import initSyncCron from './cron/sync.cron'
 import initCronJobs from './cron'
@@ -77,6 +80,9 @@ app.use('/api/bulk-ad', bulkAdRoutes) // New: Bulk ad creation management
 app.use('/api/materials', materialRoutes) // New: Material management
 app.use('/api/material-metrics', materialMetricsRoutes) // New: Material metrics & recommendations
 app.use('/api/agent', agentRoutes) // New: AI Agent
+app.use('/api/summary', summaryRoutes) // New: 预聚合数据快速读取（加速前端页面）
+app.use('/api/product-mapping', productMappingRoutes) // New: 产品关系映射（自动投放核心）
+app.use('/api/facebook-apps', facebookAppRoutes) // New: Facebook App 管理（多App负载均衡）
 
 // Dashboard UI 已迁移到 React 前端，不再需要后端路由
 // app.use('/dashboard', dashboardRoutes) // 已禁用，让前端 React Router 处理

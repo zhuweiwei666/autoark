@@ -29,6 +29,27 @@ const creativeSchema = new mongoose.Schema(
     hash: String,           // 等同于 imageHash
     storageUrl: String,     // 等同于 thumbnailUrl 或 imageUrl
     
+    // ========== 素材指纹系统 ==========
+    // 本地存储（从 Facebook 下载后存到 R2）
+    localStorageUrl: String,    // 存储到 R2 的 URL
+    localStorageKey: String,    // R2 存储的 key
+    downloaded: { type: Boolean, default: false },
+    downloadedAt: Date,
+    
+    // 原素材标识（用于判断是否可再次上传）
+    isOriginal: { type: Boolean, default: false },  // 是否为原素材（非缩略图）
+    reusable: { type: Boolean, default: false },    // 是否可再次上传到 Facebook
+    
+    // 素材指纹（用于跨系统唯一识别）
+    fingerprint: {
+      pHash: String,            // 感知哈希（图片主用）- 抗压缩、抗缩放
+      md5: String,              // 文件 MD5
+      fileSize: Number,         // 文件大小
+      width: Number,            // 实际宽度
+      height: Number,           // 实际高度
+      isOriginal: Boolean,      // 是否为原素材
+    },
+    
     // 素材尺寸
     width: Number,
     height: Number,
@@ -56,5 +77,9 @@ creativeSchema.index({ imageHash: 1 })
 creativeSchema.index({ videoId: 1 })
 creativeSchema.index({ accountId: 1 })
 creativeSchema.index({ materialId: 1 })
+creativeSchema.index({ 'fingerprint.pHash': 1 })
+creativeSchema.index({ 'fingerprint.md5': 1 })
+creativeSchema.index({ downloaded: 1 })
+creativeSchema.index({ reusable: 1 })  // 可复用素材查询
 
 export default mongoose.model('Creative', creativeSchema)

@@ -78,6 +78,7 @@ const logger = {
   info: (message: string, ...meta: any[]) => winstonLogger.info(message, ...meta),
   warn: (message: string, ...meta: any[]) => winstonLogger.warn(message, ...meta),
   error: (message: string, ...meta: any[]) => winstonLogger.error(message, ...meta),
+  debug: (message: string, ...meta: any[]) => winstonLogger.debug(message, ...meta),
   
   // Custom timer log helper
   timerLog: (label: string, startTime: number) => {

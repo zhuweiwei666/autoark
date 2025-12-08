@@ -1,23 +1,19 @@
-import { useState, useEffect } from 'react'
-import { getAccounts, syncAccounts, type FbAccount } from '../services/api'
+import { useState } from 'react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { getAccounts } from '../services/api'
 import DatePicker from '../components/DatePicker'
+import Loading from '../components/Loading'
 
 export default function FacebookAccountsPage() {
-  const [loading, setLoading] = useState(false)
-  const [syncing, setSyncing] = useState(false)
+  const queryClient = useQueryClient()
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string; errors?: Array<{ accountId?: string; tokenId?: string; optimizer?: string; error: string }> } | null>(null)
 
-  // 列表数据
-  const [accounts, setAccounts] = useState<FbAccount[]>([])
-  const [pagination, setPagination] = useState({
-    page: 1,
-    limit: 20,
-    total: 0,
-    pages: 1
-  })
+  // 分页状态
+  const [page, setPage] = useState(1)
+  const limit = 20
   
   // 排序状态 - 默认按消耗降序
-  const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' } | null>({ key: 'periodSpend', direction: 'desc' })
+  const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' }>({ key: 'periodSpend', direction: 'desc' })
 
   // 筛选条件
   const [filters, setFilters] = useState({
@@ -29,98 +25,44 @@ export default function FacebookAccountsPage() {
     endDate: ''
   })
 
-  // 缓存 key
-  const getCacheKey = () => `fb-accounts-${JSON.stringify(filters)}-${sortConfig?.key}-${sortConfig?.direction}`
-  
-  // 加载列表（支持缓存优先）
-  const loadAccounts = async (page = 1, forceRefresh = false) => {
-    // 如果不是强制刷新，先尝试从缓存加载
-    if (!forceRefresh) {
-      const cachedData = localStorage.getItem(getCacheKey())
-      if (cachedData) {
-        try {
-          const { data, pagination: cachedPagination, timestamp } = JSON.parse(cachedData)
-          // 缓存 5 分钟内有效
-          if (Date.now() - timestamp < 5 * 60 * 1000) {
-            setAccounts(data)
-            setPagination(cachedPagination)
-            return // 使用缓存数据，不请求 API
-          }
-        } catch (e) {
-          // 缓存解析失败，继续请求 API
-        }
-      }
+  // 使用 React Query 获取账户数据
+  // 策略：有缓存直接显示，5分钟内不重复请求；超过5分钟后台静默刷新
+  const { data, isLoading: loading, isFetching } = useQuery({
+    queryKey: ['accounts', { page, limit, ...filters, sortBy: sortConfig.key, sortOrder: sortConfig.direction }],
+    queryFn: () => getAccounts({
+      page,
+      limit,
+      ...filters,
+      sortBy: sortConfig.key,
+      sortOrder: sortConfig.direction,
+    }),
+    // 使用全局默认配置：staleTime=5分钟, refetchOnMount=true, placeholderData
+  })
+
+  const accounts = data?.data || []
+  const pagination = data?.pagination || { page: 1, limit: 20, total: 0, pages: 1 }
+
+  // 刷新数据 mutation（只从服务器获取，不调用 Facebook API）
+  const syncMutation = useMutation({
+    mutationFn: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['accounts'] })
+      return { success: true }
+    },
+    onSuccess: () => {
+      setMessage({ type: 'success', text: '数据已刷新' })
+    },
+    onError: (error: any) => {
+      setMessage({ type: 'error', text: error.message || '刷新失败' })
     }
-    
-    setLoading(true)
-    try {
-      const response = await getAccounts({
-        page,
-        limit: pagination.limit,
-        ...filters,
-        sortBy: sortConfig?.key || 'periodSpend',
-        sortOrder: sortConfig?.direction || 'desc',
-      })
-      setAccounts(response.data)
-      setPagination(response.pagination)
-      
-      // 保存到缓存
-      localStorage.setItem(getCacheKey(), JSON.stringify({
-        data: response.data,
-        pagination: response.pagination,
-        timestamp: Date.now()
-      }))
-    } catch (error: any) {
-      setMessage({ type: 'error', text: error.message || '加载失败' })
-    } finally {
-      setLoading(false)
-    }
+  })
+
+  const handleSync = () => {
+    setMessage(null)
+    syncMutation.mutate()
   }
 
-  // 初始加载（使用缓存）
-  useEffect(() => {
-    loadAccounts(1, false)
-  }, [])
-
-  // 优化：使用防抖，避免筛选时频繁请求
-  useEffect(() => {
-    // 跳过初始加载（初始加载由上面的 useEffect 处理）
-    const hasFilters = filters.optimizer || filters.status || filters.accountId || filters.name || filters.startDate || filters.endDate
-    if (!hasFilters) return
-
-    const timeoutId = setTimeout(() => {
-      loadAccounts(1, false) // 筛选时重置到第一页，使用缓存优先
-    }, 500) // 500ms 防抖
-
-    return () => clearTimeout(timeoutId)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filters.optimizer, filters.status, filters.accountId, filters.name, filters.startDate, filters.endDate])
-
-  // 当排序配置改变时，重新加载数据
-  useEffect(() => {
-    loadAccounts(1, false) // 排序时重置到第一页，使用缓存优先
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sortConfig?.key, sortConfig?.direction])
-
-  // 执行同步（强制刷新）
-  const handleSync = async () => {
-    setSyncing(true)
-    setMessage(null)
-    try {
-      const result = await syncAccounts()
-      setMessage({ 
-        type: 'success', 
-        text: `同步完成！成功: ${result.data.syncedCount}, 失败: ${result.data.errorCount}`,
-        errors: result.data.errors || []
-      })
-      // 清除缓存并强制刷新
-      localStorage.removeItem(getCacheKey())
-      loadAccounts(1, true)
-    } catch (error: any) {
-      setMessage({ type: 'error', text: error.message || '同步失败' })
-    } finally {
-      setSyncing(false)
-    }
+  const loadAccounts = (newPage: number) => {
+    setPage(newPage)
   }
 
   // iOS 风格状态颜色映射（已直接在 JSX 中使用，此函数保留用于兼容）
@@ -145,17 +87,26 @@ export default function FacebookAccountsPage() {
             <span className="bg-slate-100 border border-slate-200 px-4 py-1.5 rounded-full text-xs font-semibold text-slate-700">
               Total: {pagination.total}
             </span>
+            {isFetching && !loading && (
+              <span className="flex items-center gap-1.5 text-xs text-blue-600 animate-pulse">
+                <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+                </svg>
+                更新中...
+              </span>
+            )}
           </div>
           <div className="flex gap-3">
             <button
               onClick={handleSync}
-              disabled={syncing}
-              className={`group px-6 py-3 bg-slate-900 hover:bg-slate-800 rounded-2xl text-sm font-semibold text-white shadow-md hover:shadow-lg transition-all duration-200 flex items-center gap-2 active:scale-95 ${syncing ? 'opacity-70 cursor-not-allowed' : ''}`}
+              disabled={syncMutation.isPending}
+              className={`group px-6 py-3 bg-slate-900 hover:bg-slate-800 rounded-2xl text-sm font-semibold text-white shadow-md hover:shadow-lg transition-all duration-200 flex items-center gap-2 active:scale-95 ${syncMutation.isPending ? 'opacity-70 cursor-not-allowed' : ''}`}
             >
-              <svg className={`w-5 h-5 ${syncing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className={`w-5 h-5 ${syncMutation.isPending ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
               </svg>
-              {syncing ? '同步中...' : '同步账户'}
+              {syncMutation.isPending ? '刷新中...' : '刷新数据'}
             </button>
           </div>
         </header>
@@ -405,7 +356,9 @@ export default function FacebookAccountsPage() {
               </thead>
               <tbody>
                 {loading ? (
-                  <tr><td colSpan={7} className="px-6 py-12 text-center text-slate-500 animate-pulse">加载中...</td></tr>
+                  <tr><td colSpan={7} className="px-6 py-12">
+                    <Loading.Inline message="加载账户数据..." size="md" />
+                  </td></tr>
                 ) : accounts.length === 0 ? (
                   <tr><td colSpan={7} className="px-6 py-12 text-center text-slate-500">暂无数据</td></tr>
                 ) : (

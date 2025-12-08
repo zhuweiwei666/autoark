@@ -34,6 +34,17 @@ const taskItemSchema = new mongoose.Schema({
     failedCount: { type: Number, default: 0 },
   },
   
+  // 广告详情（含审核状态）
+  ads: [{
+    adId: { type: String },
+    adName: { type: String },
+    adsetId: { type: String },
+    creativeId: { type: String },
+    effectiveStatus: { type: String },  // 审核状态
+    reviewFeedback: { type: Object },   // 拒绝原因
+    materialId: { type: mongoose.Schema.Types.ObjectId },
+  }],
+  
   // 错误信息
   errors: [{
     entityType: { type: String, enum: ['campaign', 'adset', 'ad', 'creative', 'general'] },
@@ -117,6 +128,15 @@ const adTaskSchema = new mongoose.Schema(
       retryCount: { type: Number, default: 0 },
       lastRetryAt: { type: Date },
       nextRetryAt: { type: Date },
+    },
+    
+    // ========== 广告审核状态追踪 ==========
+    reviewStatus: {
+      total: { type: Number, default: 0 },       // 总广告数
+      pending: { type: Number, default: 0 },     // 审核中
+      approved: { type: Number, default: 0 },    // 审核通过
+      rejected: { type: Number, default: 0 },    // 审核被拒
+      lastCheckedAt: { type: Date },             // 上次检查时间
     },
     
     // 时间戳

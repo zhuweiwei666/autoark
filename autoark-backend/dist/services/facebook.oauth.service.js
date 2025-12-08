@@ -36,7 +36,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.handleOAuthCallback = exports.validateOAuthConfig = exports.getFacebookLoginUrl = void 0;
+exports.handleOAuthCallback = exports.validateOAuthConfigSync = exports.validateOAuthConfig = exports.getAvailableApps = exports.getFacebookLoginUrlSync = exports.getFacebookLoginUrl = void 0;
 const logger_1 = __importDefault(require("../utils/logger"));
 const FbToken_1 = __importDefault(require("../models/FbToken"));
 const facebook_token_pool_1 = require("./facebook.token.pool");
@@ -46,39 +46,71 @@ const oauthApi = __importStar(require("../integration/facebook/oauth.api"));
 /**
  * Facebook OAuth 服务
  * 处理 Facebook 登录、授权码交换、Token 存储
+ * 支持多 App 负载均衡
  */
 /**
- * 生成 Facebook 登录 URL
+ * 生成 Facebook 登录 URL（异步，支持多 App）
  */
-const getFacebookLoginUrl = (state) => {
-    return oauthApi.getFacebookLoginUrl(state);
+const getFacebookLoginUrl = async (state, appId) => {
+    return oauthApi.getFacebookLoginUrl(state, appId);
 };
 exports.getFacebookLoginUrl = getFacebookLoginUrl;
 /**
- * 验证 OAuth 配置
+ * 生成 Facebook 登录 URL（同步版本，兼容旧代码）
  */
-const validateOAuthConfig = () => {
+const getFacebookLoginUrlSync = (state) => {
+    return oauthApi.getFacebookLoginUrlSync(state);
+};
+exports.getFacebookLoginUrlSync = getFacebookLoginUrlSync;
+/**
+ * 获取可用的 Apps 列表
+ */
+const getAvailableApps = async () => {
+    return oauthApi.getAvailableApps();
+};
+exports.getAvailableApps = getAvailableApps;
+/**
+ * 验证 OAuth 配置（异步）
+ */
+const validateOAuthConfig = async () => {
     return oauthApi.validateOAuthConfig();
 };
 exports.validateOAuthConfig = validateOAuthConfig;
 /**
- * 处理 OAuth 回调：获取 code → 交换 token → 存储 → 检查权限
+ * 验证 OAuth 配置（同步，兼容旧代码）
  */
-const handleOAuthCallback = async (code) => {
+const validateOAuthConfigSync = () => {
+    return oauthApi.validateOAuthConfigSync();
+};
+exports.validateOAuthConfigSync = validateOAuthConfigSync;
+/**
+ * 处理 OAuth 回调：获取 code → 交换 token → 存储 → 检查权限
+ * 支持从 state 中解析使用的 App
+ */
+const handleOAuthCallback = async (code, state) => {
     try {
         logger_1.default.info('[OAuth] Handling OAuth callback');
+        // 解析 state 获取 appId
+        let appId;
+        let originalState = '';
+        if (state) {
+            const stateData = oauthApi.parseStateParam(state);
+            appId = stateData.appId;
+            originalState = stateData.originalState;
+            logger_1.default.info(`[OAuth] Using App ${appId || 'default'} from state`);
+        }
         // 1. 将 code 交换为 Short-Lived Token
-        const shortLivedTokenData = await oauthApi.exchangeCodeForToken(code);
+        const shortLivedTokenData = await oauthApi.exchangeCodeForToken(code, appId);
         const shortLivedToken = shortLivedTokenData.access_token;
         // 2. 获取用户信息
         const userInfo = await oauthApi.getUserInfo(shortLivedToken);
         // 3. 将 Short-Lived Token 交换为 Long-Lived Token
-        const longLivedTokenData = await oauthApi.exchangeForLongLivedToken(shortLivedToken);
+        const longLivedTokenData = await oauthApi.exchangeForLongLivedToken(shortLivedToken, appId);
         const longLivedToken = longLivedTokenData.access_token;
         // 计算过期时间
         const expiresIn = longLivedTokenData.expires_in || 5184000; // 默认 60 天
         const expiresAt = new Date(Date.now() + expiresIn * 1000);
-        // 4. 存储或更新 Token
+        // 4. 存储或更新 Token（记录使用的 App）
         const tokenDoc = await FbToken_1.default.findOneAndUpdate({ fbUserId: userInfo.id }, {
             token: longLivedToken,
             fbUserId: userInfo.id,
@@ -86,11 +118,13 @@ const handleOAuthCallback = async (code) => {
             status: 'active',
             expiresAt,
             lastCheckedAt: new Date(),
+            // 记录使用的 App
+            ...(appId && { lastAuthAppId: appId }),
         }, {
             upsert: true,
             new: true,
         });
-        logger_1.default.info(`[OAuth] Token saved/updated for user ${userInfo.id} (${userInfo.name})`);
+        logger_1.default.info(`[OAuth] Token saved/updated for user ${userInfo.id} (${userInfo.name}) via App ${appId || 'env'}`);
         // 5. 重新初始化 Token Pool（包含新 token）
         await facebook_token_pool_1.tokenPool.initialize();
         // 6. 获取用户详细信息（包括邮箱等）
@@ -128,8 +162,10 @@ const handleOAuthCallback = async (code) => {
             tokenId: tokenDoc._id.toString(),
             fbUserId: userInfo.id,
             fbUserName: userInfo.name,
+            accessToken: longLivedToken,
             userDetails,
             permissions,
+            appId,
         };
     }
     catch (error) {

@@ -1,10 +1,9 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { getPixels, getPixelDetails, getPixelEvents } from '../services/api'
 import type { FbPixel, PixelDetails, PixelEvent } from '../services/api'
 
 export default function FacebookPixelsPage() {
-  const [pixels, setPixels] = useState<FbPixel[]>([])
-  const [loading, setLoading] = useState(false)
   const [selectedPixel, setSelectedPixel] = useState<FbPixel | null>(null)
   const [pixelDetails, setPixelDetails] = useState<PixelDetails | null>(null)
   const [pixelEvents, setPixelEvents] = useState<PixelEvent[]>([])
@@ -13,18 +12,14 @@ export default function FacebookPixelsPage() {
   const [allTokens, setAllTokens] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
-  const loadPixels = async () => {
-    setLoading(true)
-    try {
-      const response = await getPixels({ allTokens })
-      setPixels(response.data || [])
-      setMessage({ type: 'success', text: `成功加载 ${response.count || 0} 个 Pixel` })
-    } catch (error: any) {
-      setMessage({ type: 'error', text: error.message || '加载失败' })
-    } finally {
-      setLoading(false)
-    }
-  }
+  // 使用 React Query 获取 Pixels（使用全局缓存策略）
+  const { data, isLoading: loading, isFetching, refetch } = useQuery({
+    queryKey: ['pixels', { allTokens }],
+    queryFn: () => getPixels({ allTokens }),
+    placeholderData: (previousData) => previousData,
+  })
+
+  const pixels = data?.data || []
 
   const loadPixelDetails = async (pixel: FbPixel) => {
     try {
@@ -48,9 +43,7 @@ export default function FacebookPixelsPage() {
     }
   }
 
-  useEffect(() => {
-    loadPixels()
-  }, [allTokens])
+  const loadPixels = () => refetch()
 
   const formatDate = (dateString?: string) => {
     if (!dateString) return '-'
@@ -71,6 +64,15 @@ export default function FacebookPixelsPage() {
             <span className="bg-slate-100 border border-slate-200 px-4 py-1.5 rounded-full text-xs font-semibold text-slate-700">
               Total: {pixels.length}
             </span>
+            {isFetching && !loading && (
+              <span className="flex items-center gap-1.5 text-xs text-blue-600 animate-pulse">
+                <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+                </svg>
+                更新中...
+              </span>
+            )}
           </div>
           <div className="flex gap-3">
             <label className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-300 rounded-2xl text-sm font-semibold text-slate-700 cursor-pointer hover:bg-slate-50 transition-all">

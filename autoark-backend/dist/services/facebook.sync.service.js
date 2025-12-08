@@ -41,6 +41,34 @@ const fbApi = __importStar(require("./facebook.api"));
 const models_1 = require("../models");
 const logger_1 = __importDefault(require("../utils/logger"));
 const accountId_1 = require("../utils/accountId");
+const facebookPurchase_1 = require("../utils/facebookPurchase");
+// 从 object_story_spec 中提取 image_hash
+const extractImageHashFromSpec = (spec) => {
+    if (!spec)
+        return undefined;
+    // link_data 中的 image_hash
+    if (spec.link_data?.image_hash)
+        return spec.link_data.image_hash;
+    // photo_data 中的 image_hash
+    if (spec.photo_data?.image_hash)
+        return spec.photo_data.image_hash;
+    // video_data 中可能有 image_hash（封面图）
+    if (spec.video_data?.image_hash)
+        return spec.video_data.image_hash;
+    return undefined;
+};
+// 从 object_story_spec 中提取 video_id
+const extractVideoIdFromSpec = (spec) => {
+    if (!spec)
+        return undefined;
+    // video_data 中的 video_id
+    if (spec.video_data?.video_id)
+        return spec.video_data.video_id;
+    // link_data 中可能有 video_id
+    if (spec.link_data?.video_id)
+        return spec.link_data.video_id;
+    return undefined;
+};
 // 1. Get Effective Accounts
 const getEffectiveAdAccounts = async () => {
     // Priority: Env Array > Env Single > Auto-discover
@@ -123,19 +151,27 @@ const syncAccount = async (accountId) => {
     catch (err) {
         logger_1.default.error(`Failed to sync adsets for ${accountId}`, err);
     }
-    // 3. Ads
+    // 3. Ads（增强：提取 creative 的 image_hash/video_id）
     try {
         const ads = await fbApi.fetchAds(accountIdForApi);
         logger_1.default.info(`Syncing ${ads.length} ads for ${accountId}`);
         for (const a of ads) {
+            // 从 creative 中提取素材标识
+            const creative = a.creative || {};
+            const imageHash = creative.image_hash || extractImageHashFromSpec(creative.object_story_spec);
+            const videoId = creative.video_id || extractVideoIdFromSpec(creative.object_story_spec);
             await writeToMongo(models_1.Ad, { adId: a.id }, {
                 adId: a.id,
-                accountId: accountIdForStorage, // 统一格式：数据库存储时去掉前缀
+                accountId: accountIdForStorage,
                 adsetId: a.adset_id,
                 campaignId: a.campaign_id,
                 name: a.name,
                 status: a.status,
-                creativeId: a.creative?.id,
+                creativeId: creative.id,
+                // 新增：素材标识字段
+                imageHash,
+                videoId,
+                thumbnailUrl: creative.thumbnail_url,
                 created_time: a.created_time,
                 updated_time: a.updated_time,
                 raw: a,
@@ -145,27 +181,50 @@ const syncAccount = async (accountId) => {
     catch (err) {
         logger_1.default.error(`Failed to sync ads for ${accountId}`, err);
     }
-    // 4. Creatives (Optional but good to have)
+    // 4. Creatives（增强：存储完整的素材标识信息）
     try {
         const creatives = await fbApi.fetchCreatives(accountIdForApi);
         logger_1.default.info(`Syncing ${creatives.length} creatives for ${accountId}`);
         for (const c of creatives) {
+            // 提取素材标识
+            const imageHash = c.image_hash || extractImageHashFromSpec(c.object_story_spec);
+            const videoId = c.video_id || extractVideoIdFromSpec(c.object_story_spec);
+            // 判断素材类型
+            let type = 'unknown';
+            if (videoId)
+                type = 'video';
+            else if (imageHash)
+                type = 'image';
+            else if (c.object_story_spec?.link_data?.child_attachments)
+                type = 'carousel';
             await writeToMongo(models_1.Creative, { creativeId: c.id }, {
                 creativeId: c.id,
                 channel: 'facebook',
+                accountId: accountIdForStorage,
                 name: c.name,
-                storageUrl: c.image_url || c.thumbnail_url, // Simplification
-                // type, hash etc can be extracted if needed
+                status: c.status,
+                type,
+                // 素材标识
+                imageHash,
+                videoId,
+                hash: imageHash, // 兼容旧字段
+                // URLs
+                imageUrl: c.image_url,
+                thumbnailUrl: c.thumbnail_url,
+                storageUrl: c.image_url || c.thumbnail_url,
+                // 原始数据
+                raw: c,
             });
         }
     }
     catch (err) {
         logger_1.default.error(`Failed to sync creatives for ${accountId}`, err);
     }
-    // 5. Insights (Daily)
+    // 5. Insights (Daily) - 使用 campaign 级别以获取完整的维度数据
     try {
-        const insights = await fbApi.fetchInsights(accountIdForApi, 'account', 'today'); // or 'yesterday'
-        logger_1.default.info(`Syncing ${insights.length} insight records for ${accountId}`);
+        // 改用 campaign 级别 + country breakdown 以支持多维度聚合
+        const insights = await fbApi.fetchInsights(accountIdForApi, 'campaign', 'today', undefined, ['country']);
+        logger_1.default.info(`Syncing ${insights.length} campaign-level insight records for ${accountId}`);
         for (const i of insights) {
             const spendUsd = parseFloat(i.spend || '0');
             const impressions = parseInt(i.impressions || '0');
@@ -174,13 +233,42 @@ const syncAccount = async (accountId) => {
             const actions = i.actions || [];
             const installAction = actions.find((a) => a.action_type === 'mobile_app_install');
             const installs = installAction ? parseFloat(installAction.value) : 0;
-            await writeToMongo(models_1.MetricsDaily, { adId: i.ad_id, date: i.date_start }, {
+            // 确定数据级别和实体ID
+            let dataLevel;
+            let entityId;
+            if (i.ad_id) {
+                dataLevel = 'ad';
+                entityId = i.ad_id;
+            }
+            else if (i.adset_id) {
+                dataLevel = 'adset';
+                entityId = i.adset_id;
+            }
+            else if (i.campaign_id) {
+                dataLevel = 'campaign';
+                entityId = i.campaign_id;
+            }
+            else {
+                dataLevel = 'account';
+                entityId = accountIdForStorage;
+            }
+            // 从 action_values 提取 purchase_value
+            const purchaseValue = (0, facebookPurchase_1.extractPurchaseValue)(i.action_values || []);
+            await writeToMongo(models_1.MetricsDaily, {
+                date: i.date_start,
+                level: dataLevel,
+                entityId: entityId,
+                country: i.country || null,
+            }, {
                 date: i.date_start,
                 channel: 'facebook',
                 accountId: accountIdForStorage, // 统一格式：数据库存储时去掉前缀
                 campaignId: i.campaign_id,
                 adsetId: i.adset_id,
                 adId: i.ad_id,
+                level: dataLevel,
+                entityId: entityId,
+                country: i.country || null,
                 impressions,
                 clicks,
                 spendUsd,
@@ -188,6 +276,10 @@ const syncAccount = async (accountId) => {
                 ctr: i.ctr ? parseFloat(i.ctr) : 0,
                 cpm: i.cpm ? parseFloat(i.cpm) : 0,
                 installs,
+                conversions: installs, // 保持 conversions 字段兼容
+                purchase_value: purchaseValue,
+                actions: i.actions,
+                action_values: i.action_values,
                 raw: i,
             });
         }

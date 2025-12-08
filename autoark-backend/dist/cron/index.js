@@ -8,6 +8,8 @@ const schedule_1 = require("./schedule");
 const fetchFacebookMetrics_1 = __importDefault(require("./fetchFacebookMetrics"));
 const rules_1 = require("../rules");
 const ai_1 = require("../ai");
+const materialMetrics_cron_1 = require("./materialMetrics.cron");
+const summaryAggregation_cron_1 = require("./summaryAggregation.cron");
 const logger_1 = __importDefault(require("../utils/logger"));
 const initCronJobs = () => {
     // Facebook Data Sync (Hourly)
@@ -22,6 +24,10 @@ const initCronJobs = () => {
     node_cron_1.default.schedule('0 3 * * *', () => {
         (0, ai_1.runAiOptimizerDaily)().catch((err) => logger_1.default.error('Unhandled error in AI Optimizer cron', err));
     });
+    // Material Metrics Aggregation (Daily at 4 AM)
+    (0, materialMetrics_cron_1.initMaterialMetricsCron)();
+    // Summary Aggregation (Every 10 minutes) - 加速前端页面加载
+    (0, summaryAggregation_cron_1.initSummaryAggregationCron)();
     logger_1.default.info('Cron jobs initialized');
 };
 exports.default = initCronJobs;

@@ -44,17 +44,20 @@ const logger_1 = __importDefault(require("../utils/logger"));
  */
 const getLoginUrl = async (req, res, next) => {
     try {
-        // 验证配置
-        const config = oauthService.validateOAuthConfig();
+        // 验证配置（异步版本，支持从数据库读取 App 配置）
+        const config = await oauthService.validateOAuthConfig();
         if (!config.valid) {
             return res.status(500).json({
                 success: false,
-                message: `OAuth 配置不完整，缺少: ${config.missing.join(', ')}`,
+                message: config.hasDbApps
+                    ? `OAuth 配置不完整，缺少: ${config.missing.join(', ')}`
+                    : `未配置 Facebook App，请在 App 管理页面添加 App，或设置环境变量: ${config.missing.join(', ')}`,
                 missing: config.missing,
+                hasDbApps: config.hasDbApps,
             });
         }
-        const { state } = req.query;
-        const loginUrl = oauthService.getFacebookLoginUrl(state);
+        const { state, appId } = req.query;
+        const loginUrl = await oauthService.getFacebookLoginUrl(state, appId);
         res.json({
             success: true,
             data: {
@@ -72,18 +75,22 @@ exports.getLoginUrl = getLoginUrl;
  */
 const handleCallback = async (req, res, next) => {
     try {
-        const { code, error, error_reason, error_description } = req.query;
+        const { code, error, error_reason, error_description, state } = req.query;
+        // 根据 state 参数决定重定向目标
+        // bulk-ad 来源使用专门的弹窗回调页面
+        const isBulkAd = state === 'bulk-ad';
+        const redirectBase = isBulkAd ? '/oauth/callback' : '/fb-token';
         // 检查是否有错误
         if (error) {
             logger_1.default.error('[OAuth] Facebook returned error:', { error, error_reason, error_description });
-            return res.redirect(`/fb-token?oauth_error=${encodeURIComponent(error_description || error)}`);
+            return res.redirect(`${redirectBase}?oauth_error=${encodeURIComponent(error_description || error)}`);
         }
         if (!code) {
-            return res.redirect('/fb-token?oauth_error=No authorization code received');
+            return res.redirect(`${redirectBase}?oauth_error=No authorization code received`);
         }
         // 处理 OAuth 回调
         const result = await oauthService.handleOAuthCallback(code);
-        // 重定向到 Token 管理页面，显示成功消息和用户信息
+        // 重定向到目标页面，显示成功消息和用户信息
         const params = new URLSearchParams({
             oauth_success: 'true',
             token_id: result.tokenId,
@@ -96,11 +103,13 @@ const handleCallback = async (req, res, next) => {
                 params.append('fb_user_email', result.userDetails.email);
             }
         }
-        res.redirect(`/fb-token?${params.toString()}`);
+        res.redirect(`${redirectBase}?${params.toString()}`);
     }
     catch (error) {
         logger_1.default.error('[OAuth] Callback handler failed:', error);
-        res.redirect(`/fb-token?oauth_error=${encodeURIComponent(error.message || 'OAuth callback failed')}`);
+        const isBulkAd = req.query.state === 'bulk-ad';
+        const redirectBase = isBulkAd ? '/oauth/callback' : '/fb-token';
+        res.redirect(`${redirectBase}?oauth_error=${encodeURIComponent(error.message || 'OAuth callback failed')}`);
     }
 };
 exports.handleCallback = handleCallback;
@@ -109,7 +118,7 @@ exports.handleCallback = handleCallback;
  */
 const getOAuthConfig = async (req, res, next) => {
     try {
-        const config = oauthService.validateOAuthConfig();
+        const config = oauthService.validateOAuthConfigSync();
         res.json({
             success: true,
             data: {

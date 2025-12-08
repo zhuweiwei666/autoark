@@ -36,3 +36,59 @@ export const fetchCreatives = async (accountId: string, token?: string) => {
   return res.data || []
 }
 
+/**
+ * 获取视频源文件 URL（用于下载原视频）
+ * Facebook 视频 URL 是临时的，需要及时下载
+ */
+export const fetchVideoSource = async (videoId: string, token?: string) => {
+  const params: any = {
+    fields: 'source,picture,thumbnails,length,created_time',
+  }
+  if (token) {
+    params.access_token = token
+  }
+  try {
+    const res = await facebookClient.get(`/${videoId}`, params)
+    return {
+      success: true,
+      source: res.source,        // 视频源文件 URL
+      picture: res.picture,      // 封面图
+      thumbnails: res.thumbnails?.data || [],
+      length: res.length,        // 时长（秒）
+    }
+  } catch (error: any) {
+    return { success: false, error: error.message }
+  }
+}
+
+/**
+ * 获取图片原图 URL（通过 image_hash）
+ */
+export const fetchImageByHash = async (accountId: string, imageHash: string, token?: string) => {
+  const params: any = {
+    hashes: [imageHash],
+  }
+  if (token) {
+    params.access_token = token
+  }
+  try {
+    const res = await facebookClient.get(`/${accountId}/adimages`, params)
+    const images = res.data?.data || res.data || {}
+    // 返回第一个匹配的图片
+    const imageData = images[imageHash] || Object.values(images)[0]
+    if (imageData) {
+      return {
+        success: true,
+        url: imageData.url || imageData.url_128,  // url 是原图
+        url_128: imageData.url_128,
+        permalink_url: imageData.permalink_url,
+        width: imageData.width,
+        height: imageData.height,
+      }
+    }
+    return { success: false, error: 'Image not found' }
+  } catch (error: any) {
+    return { success: false, error: error.message }
+  }
+}
+

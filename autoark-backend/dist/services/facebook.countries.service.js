@@ -26,130 +26,122 @@ const COUNTRY_NAMES = {
     'AL': '阿尔巴尼亚', 'BO': '玻利维亚'
 };
 /**
- * 获取国家数据 - 优先使用预聚合数据（快速），无数据时才调用 Facebook API（慢）
- * 支持日期区间查询：从 CountrySummary 表聚合多日数据
+ * 获取国家数据 - 直接从 Facebook API 获取实时数据（与广告系列页面一致）
+ * 数据会缓存到 CountrySummary，API 失败时回退到缓存
  */
 const getCountries = async (filters = {}, pagination) => {
     const startTime = Date.now();
     const today = (0, dayjs_1.default)().format('YYYY-MM-DD');
     const startDate = filters.startDate || today;
-    const endDate = filters.endDate || startDate; // 默认与 startDate 相同（单日查询）
+    const endDate = filters.endDate || startDate;
     try {
-        // ========== 优先使用预聚合数据（快速：单日~10ms，多日~50ms）==========
-        // 判断是单日查询还是日期区间查询
-        const isSingleDay = startDate === endDate;
-        let countriesWithMetrics = [];
-        if (isSingleDay) {
-            // 单日查询：直接查询
-            const preAggregatedData = await Summary_1.CountrySummary.find({ date: startDate }).lean();
-            // 检查预聚合数据是否有效
-            const totalSpend = preAggregatedData?.reduce((sum, d) => sum + (d.spend || 0), 0) || 0;
-            const hasValidData = preAggregatedData && preAggregatedData.length > 0 && totalSpend > 10;
-            if (hasValidData) {
-                logger_1.default.info(`[getCountries] Using pre-aggregated data (single day): ${preAggregatedData.length} countries in ${Date.now() - startTime}ms`);
-                countriesWithMetrics = preAggregatedData.map((data) => ({
-                    id: data.country,
-                    country: data.country,
-                    countryName: data.countryName || COUNTRY_NAMES[data.country] || data.country,
-                    campaignCount: data.campaignCount || 0,
-                    spend: data.spend || 0,
-                    impressions: data.impressions || 0,
-                    clicks: data.clicks || 0,
-                    cpc: data.cpc || 0,
-                    ctr: (data.ctr || 0) / 100, // 转换：百分比 -> 小数
-                    cpm: data.cpm || 0,
-                    purchase_value: data.revenue || data.purchase_value || 0,
-                    purchase_roas: data.roas || data.purchase_roas || 0,
-                    mobile_app_install: data.installs || data.mobileAppInstall || data.mobile_app_install || 0,
-                }));
-            }
+        // ========== 优先从 Facebook API 获取实时数据 ==========
+        logger_1.default.info(`[getCountries] Fetching from Facebook API for ${startDate} to ${endDate}...`);
+        const result = await getCountriesFromFacebookAPI(filters, pagination);
+        if (result.data.length > 0) {
+            logger_1.default.info(`[getCountries] Got ${result.pagination.total} countries from Facebook API in ${Date.now() - startTime}ms`);
+            return result;
         }
-        else {
-            // 日期区间查询：使用 MongoDB 聚合管道跨日期聚合
-            const aggregatedData = await Summary_1.CountrySummary.aggregate([
-                {
-                    $match: {
-                        date: { $gte: startDate, $lte: endDate }
-                    }
-                },
-                {
-                    $group: {
-                        _id: '$country',
-                        countryName: { $first: '$countryName' },
-                        spend: { $sum: '$spend' },
-                        revenue: { $sum: '$revenue' },
-                        impressions: { $sum: '$impressions' },
-                        clicks: { $sum: '$clicks' },
-                        installs: { $sum: '$installs' },
-                        purchases: { $sum: '$purchases' },
-                        // campaignCount 取最大值（避免重复计数）
-                        campaignCount: { $max: '$campaignCount' },
-                        daysWithData: { $sum: 1 } // 统计有数据的天数
-                    }
-                }
-            ]);
-            // 检查聚合数据是否有效
-            const totalSpend = aggregatedData?.reduce((sum, d) => sum + (d.spend || 0), 0) || 0;
-            const hasValidData = aggregatedData && aggregatedData.length > 0 && totalSpend > 10;
-            if (hasValidData) {
-                logger_1.default.info(`[getCountries] Using pre-aggregated data (date range ${startDate} to ${endDate}): ${aggregatedData.length} countries in ${Date.now() - startTime}ms`);
-                // 计算派生指标（需要重新计算，因为是多日累加）
-                countriesWithMetrics = aggregatedData.map((data) => {
-                    const spend = data.spend || 0;
-                    const clicks = data.clicks || 0;
-                    const impressions = data.impressions || 0;
-                    const revenue = data.revenue || 0;
-                    return {
-                        id: data._id,
-                        country: data._id,
-                        countryName: data.countryName || COUNTRY_NAMES[data._id] || data._id,
-                        campaignCount: data.campaignCount || 0,
-                        spend,
-                        impressions,
-                        clicks,
-                        cpc: clicks > 0 ? spend / clicks : 0,
-                        ctr: impressions > 0 ? clicks / impressions : 0,
-                        cpm: impressions > 0 ? (spend / impressions) * 1000 : 0,
-                        purchase_value: revenue,
-                        purchase_roas: spend > 0 ? revenue / spend : 0,
-                        mobile_app_install: data.installs || 0,
-                    };
-                });
-            }
-        }
-        // 如果有有效的预聚合数据，直接返回
-        if (countriesWithMetrics.length > 0) {
-            // 排序
-            const sortField = pagination.sortBy || 'spend';
-            countriesWithMetrics.sort((a, b) => {
-                const aValue = a[sortField] ?? 0;
-                const bValue = b[sortField] ?? 0;
-                return pagination.sortOrder === 'desc' ? bValue - aValue : aValue - bValue;
-            });
-            // 分页
-            const total = countriesWithMetrics.length;
-            const startIndex = (pagination.page - 1) * pagination.limit;
-            const paginatedCountries = countriesWithMetrics.slice(startIndex, startIndex + pagination.limit);
-            return {
-                data: paginatedCountries,
-                pagination: {
-                    total,
-                    page: pagination.page,
-                    limit: pagination.limit,
-                    pages: Math.ceil(total / pagination.limit)
-                }
-            };
-        }
-        // ========== 回退：从 Facebook API 获取数据（慢：~30s）==========
-        logger_1.default.info(`[getCountries] No pre-aggregated data for ${startDate} to ${endDate}, falling back to Facebook API...`);
-        return await getCountriesFromFacebookAPI(filters, pagination);
+        // ========== API 无数据时，回退到预聚合缓存 ==========
+        logger_1.default.info(`[getCountries] No data from Facebook API, falling back to cache...`);
+        return await getCountriesFromCache(startDate, endDate, pagination);
     }
     catch (error) {
-        logger_1.default.error('Error in getCountries:', error);
-        throw error;
+        logger_1.default.error(`[getCountries] Facebook API error: ${error.message}, falling back to cache...`);
+        // API 出错时回退到缓存
+        try {
+            return await getCountriesFromCache(startDate, endDate, pagination);
+        }
+        catch (cacheError) {
+            logger_1.default.error('Error in getCountries cache fallback:', cacheError);
+            throw error; // 抛出原始错误
+        }
     }
 };
 exports.getCountries = getCountries;
+/**
+ * 从缓存（CountrySummary）获取国家数据
+ */
+async function getCountriesFromCache(startDate, endDate, pagination) {
+    const isSingleDay = startDate === endDate;
+    let countriesWithMetrics = [];
+    if (isSingleDay) {
+        const preAggregatedData = await Summary_1.CountrySummary.find({ date: startDate }).lean();
+        countriesWithMetrics = preAggregatedData.map((data) => ({
+            id: data.country,
+            country: data.country,
+            countryName: data.countryName || COUNTRY_NAMES[data.country] || data.country,
+            campaignCount: data.campaignCount || 0,
+            spend: data.spend || 0,
+            impressions: data.impressions || 0,
+            clicks: data.clicks || 0,
+            cpc: data.cpc || 0,
+            ctr: (data.ctr || 0) / 100,
+            cpm: data.cpm || 0,
+            purchase_value: data.revenue || data.purchase_value || 0,
+            purchase_roas: data.roas || data.purchase_roas || 0,
+            mobile_app_install: data.installs || data.mobileAppInstall || data.mobile_app_install || 0,
+        }));
+    }
+    else {
+        const aggregatedData = await Summary_1.CountrySummary.aggregate([
+            { $match: { date: { $gte: startDate, $lte: endDate } } },
+            {
+                $group: {
+                    _id: '$country',
+                    countryName: { $first: '$countryName' },
+                    spend: { $sum: '$spend' },
+                    revenue: { $sum: '$revenue' },
+                    impressions: { $sum: '$impressions' },
+                    clicks: { $sum: '$clicks' },
+                    installs: { $sum: '$installs' },
+                    campaignCount: { $max: '$campaignCount' },
+                }
+            }
+        ]);
+        countriesWithMetrics = aggregatedData.map((data) => {
+            const spend = data.spend || 0;
+            const clicks = data.clicks || 0;
+            const impressions = data.impressions || 0;
+            const revenue = data.revenue || 0;
+            return {
+                id: data._id,
+                country: data._id,
+                countryName: data.countryName || COUNTRY_NAMES[data._id] || data._id,
+                campaignCount: data.campaignCount || 0,
+                spend,
+                impressions,
+                clicks,
+                cpc: clicks > 0 ? spend / clicks : 0,
+                ctr: impressions > 0 ? clicks / impressions : 0,
+                cpm: impressions > 0 ? (spend / impressions) * 1000 : 0,
+                purchase_value: revenue,
+                purchase_roas: spend > 0 ? revenue / spend : 0,
+                mobile_app_install: data.installs || 0,
+            };
+        });
+    }
+    // 排序
+    const sortField = pagination.sortBy || 'spend';
+    countriesWithMetrics.sort((a, b) => {
+        const aValue = a[sortField] ?? 0;
+        const bValue = b[sortField] ?? 0;
+        return pagination.sortOrder === 'desc' ? bValue - aValue : aValue - bValue;
+    });
+    // 分页
+    const total = countriesWithMetrics.length;
+    const startIndex = (pagination.page - 1) * pagination.limit;
+    const paginatedCountries = countriesWithMetrics.slice(startIndex, startIndex + pagination.limit);
+    return {
+        data: paginatedCountries,
+        pagination: {
+            total,
+            page: pagination.page,
+            limit: pagination.limit,
+            pages: Math.ceil(total / pagination.limit)
+        }
+    };
+}
 /**
  * 从 Facebook API 获取国家数据（慢速后备方案）
  */

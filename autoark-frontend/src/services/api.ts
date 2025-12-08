@@ -203,7 +203,8 @@ export async function getAccounts(params?: {
   if (params?.accountId) queryParams.append('accountId', params.accountId)
   if (params?.name) queryParams.append('name', params.name)
 
-  const url = `${API_BASE_URL}/api/facebook/accounts-list${
+  // 使用 Summary API (智能路由：预聚合+实时回退)
+  const url = `${API_BASE_URL}/api/summary/accounts${
     queryParams.toString() ? `?${queryParams.toString()}` : ''
   }`
 
@@ -336,7 +337,8 @@ export async function getCampaigns(params?: {
   if (params?.status) queryParams.append('status', params.status)
   if (params?.objective) queryParams.append('objective', params.objective)
 
-  const url = `${API_BASE_URL}/api/facebook/campaigns-list${
+  // 使用 Summary API (智能路由：预聚合+实时回退)
+  const url = `${API_BASE_URL}/api/summary/campaigns${
     queryParams.toString() ? `?${queryParams.toString()}` : ''
   }`
 
@@ -394,7 +396,8 @@ export async function getCountries(params?: {
   if (params?.status) queryParams.append('status', params.status)
   if (params?.objective) queryParams.append('objective', params.objective)
 
-  const url = `${API_BASE_URL}/api/facebook/countries-list${
+  // 使用 Summary API (智能路由：预聚合+实时回退)
+  const url = `${API_BASE_URL}/api/summary/countries${
     queryParams.toString() ? `?${queryParams.toString()}` : ''
   }`
 
@@ -518,31 +521,74 @@ export interface AccountRankingData {
   purchase_value: number
 }
 
-// 获取核心指标
-export async function getCoreMetrics(startDate?: string, endDate?: string): Promise<{ success: boolean; data: CoreMetrics }> {
-  const queryParams = new URLSearchParams()
-  if (startDate) queryParams.append('startDate', startDate)
-  if (endDate) queryParams.append('endDate', endDate)
+// 获取核心指标 (使用 Summary API)
+export async function getCoreMetrics(_startDate?: string, endDate?: string): Promise<{ success: boolean; data: CoreMetrics }> {
+  // 获取今天、昨天、最近7天的汇总数据
+  const today = endDate || new Date().toISOString().split('T')[0]
+  const yesterday = new Date(new Date(today).getTime() - 86400000).toISOString().split('T')[0]
+  
+  const [todayRes, yesterdayRes, trendRes] = await Promise.all([
+    fetch(`${API_BASE_URL}/api/summary/dashboard?date=${today}`),
+    fetch(`${API_BASE_URL}/api/summary/dashboard?date=${yesterday}`),
+    fetch(`${API_BASE_URL}/api/summary/dashboard/trend?days=7`)
+  ])
 
-  const url = `${API_BASE_URL}/api/dashboard/api/core-metrics${
-    queryParams.toString() ? `?${queryParams.toString()}` : ''
-  }`
-
-  const response = await fetch(url)
-  if (!response.ok) {
-    throw new Error('Failed to fetch core metrics')
+  if (!todayRes.ok) {
+    throw new Error('Failed to fetch today metrics')
   }
 
-  return response.json()
+  const todayData = await todayRes.json()
+  const yesterdayData = yesterdayRes.ok ? await yesterdayRes.json() : { data: {} }
+  const trendData = trendRes.ok ? await trendRes.json() : { data: [] }
+  
+  // 转换为前端期望的格式
+  const mapData = (summary: any) => ({
+    spend: summary?.totalSpend || 0,
+    impressions: summary?.totalImpressions || 0,
+    clicks: summary?.totalClicks || 0,
+    installs: summary?.totalInstalls || 0,
+    ctr: (summary?.ctr || 0) / 100,
+    cpm: summary?.cpm || 0,
+    cpc: summary?.cpc || 0,
+    cpi: summary?.cpi || 0,
+    roas: summary?.roas || 0,
+  })
+  
+  // 计算7天总计
+  const trendDataArray = trendData.data || []
+  const sevenDaysSummary = trendDataArray.reduce((acc: any, day: any) => ({
+    spend: acc.spend + (day.totalSpend || 0),
+    impressions: acc.impressions + (day.totalImpressions || 0),
+    clicks: acc.clicks + (day.totalClicks || 0),
+    installs: acc.installs + (day.totalInstalls || 0),
+  }), { spend: 0, impressions: 0, clicks: 0, installs: 0 })
+  
+  // 计算日均
+  const dayCount = trendDataArray.length || 1
+  sevenDaysSummary.avgDailySpend = sevenDaysSummary.spend / dayCount
+
+  return {
+    success: true,
+    data: {
+      today: mapData(todayData.data),
+      yesterday: mapData(yesterdayData.data),
+      sevenDays: sevenDaysSummary,
+    }
+  }
 }
 
-// 获取消耗趋势
+// 获取消耗趋势 (使用 Summary API)
 export async function getSpendTrend(startDate?: string, endDate?: string): Promise<{ success: boolean; data: SpendTrendData[] }> {
   const queryParams = new URLSearchParams()
-  if (startDate) queryParams.append('startDate', startDate)
-  if (endDate) queryParams.append('endDate', endDate)
+  
+  // 计算天数
+  const start = startDate ? new Date(startDate) : new Date()
+  const end = endDate ? new Date(endDate) : new Date()
+  const days = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1
+  
+  queryParams.append('days', days.toString())
 
-  const url = `${API_BASE_URL}/api/dashboard/api/today-spend-trend${
+  const url = `${API_BASE_URL}/api/summary/dashboard/trend${
     queryParams.toString() ? `?${queryParams.toString()}` : ''
   }`
 
@@ -551,41 +597,90 @@ export async function getSpendTrend(startDate?: string, endDate?: string): Promi
     throw new Error('Failed to fetch spend trend')
   }
 
-  return response.json()
+  const result = await response.json()
+  
+  // 转换数据格式
+  const trendData = (result.data || []).map((day: any) => ({
+    date: day.date,
+    spend: day.totalSpend || 0,
+    impressions: day.totalImpressions || 0,
+    clicks: day.totalClicks || 0,
+  }))
+  
+  return {
+    success: true,
+    data: trendData
+  }
 }
 
-// 获取 Campaign 消耗排行
+// 获取 Campaign 消耗排行 (使用 Summary API)
 export async function getCampaignRanking(limit = 10, startDate?: string, endDate?: string): Promise<{ success: boolean; data: CampaignRankingData[] }> {
   const queryParams = new URLSearchParams()
   queryParams.append('limit', limit.toString())
+  queryParams.append('sortBy', 'spend')
+  queryParams.append('order', 'desc')
   if (startDate) queryParams.append('startDate', startDate)
   if (endDate) queryParams.append('endDate', endDate)
 
-  const url = `${API_BASE_URL}/api/dashboard/api/campaign-spend-ranking?${queryParams.toString()}`
+  const url = `${API_BASE_URL}/api/summary/campaigns?${queryParams.toString()}`
 
   const response = await fetch(url)
   if (!response.ok) {
     throw new Error('Failed to fetch campaign ranking')
   }
-
-  return response.json()
+  
+  const result = await response.json()
+  
+  // 转换数据格式
+  const campaigns = (result.data || []).map((c: any) => ({
+    campaignId: c.campaignId || c.id,
+    campaignName: c.campaignName || c.name,
+    spend: c.spend || 0,
+    impressions: c.impressions || 0,
+    clicks: c.clicks || 0,
+    installs: c.installs || c.mobile_app_install || 0,
+    purchase_value: c.revenue || c.purchase_value || 0,
+  }))
+  
+  return {
+    success: true,
+    data: campaigns
+  }
 }
 
-// 获取账户消耗排行
+// 获取账户消耗排行 (使用 Summary API)
 export async function getAccountRanking(limit = 10, startDate?: string, endDate?: string): Promise<{ success: boolean; data: AccountRankingData[] }> {
   const queryParams = new URLSearchParams()
   queryParams.append('limit', limit.toString())
+  queryParams.append('sortBy', 'periodSpend')
+  queryParams.append('order', 'desc')
   if (startDate) queryParams.append('startDate', startDate)
   if (endDate) queryParams.append('endDate', endDate)
 
-  const url = `${API_BASE_URL}/api/dashboard/api/country-spend-ranking?${queryParams.toString()}`
+  const url = `${API_BASE_URL}/api/summary/accounts?${queryParams.toString()}`
 
   const response = await fetch(url)
   if (!response.ok) {
     throw new Error('Failed to fetch account ranking')
   }
-
-  return response.json()
+  
+  const result = await response.json()
+  
+  // 转换数据格式
+  const accounts = (result.data || []).map((a: any) => ({
+    accountId: a.accountId,
+    accountName: a.name || a.accountName,
+    spend: a.periodSpend || a.spend || 0,
+    impressions: a.periodImpressions || a.impressions || 0,
+    clicks: a.periodClicks || a.clicks || 0,
+    installs: a.periodInstalls || a.installs || 0,
+    purchase_value: a.periodRevenue || a.purchase_value || 0,
+  }))
+  
+  return {
+    success: true,
+    data: accounts
+  }
 }
 
 // === 用户设置 (自定义列) ===
@@ -728,6 +823,147 @@ export async function getFacebookLoginUrl(state?: string): Promise<{ success: bo
   return response.json()
 }
 
+// === 素材数据分析 ===
+
+export interface MaterialMetric {
+  materialKey: string
+  materialId?: string
+  materialType: 'image' | 'video'
+  materialName?: string
+  thumbnailUrl?: string
+  localStorageUrl?: string  // R2 存储的 URL（优先使用）
+  originalUrl?: string      // Facebook 原始 URL
+  imageHash?: string
+  videoId?: string
+  fingerprint?: string
+  hasLocalMaterial?: boolean
+  localMaterialId?: string
+  creativeId?: string
+  
+  spend: number
+  impressions: number
+  clicks: number
+  purchaseValue: number
+  installs: number
+  purchases: number
+  
+  roas: number
+  ctr: number
+  cpi: number
+  qualityScore: number
+  
+  daysActive: number
+  uniqueAdsCount: number
+  uniqueCampaignsCount: number
+  optimizers: string[]
+}
+
+export interface MaterialRankingsResponse {
+  success: boolean
+  data: MaterialMetric[]
+  query: {
+    startDate: string
+    endDate: string
+    sortBy: string
+    limit: string
+    type?: string
+  }
+}
+
+// 获取素材排行榜
+export async function getMaterialRankings(params?: {
+  startDate?: string
+  endDate?: string
+  sortBy?: 'roas' | 'spend' | 'qualityScore' | 'impressions'
+  limit?: number
+  type?: 'image' | 'video'
+}): Promise<MaterialRankingsResponse> {
+  const queryParams = new URLSearchParams()
+  if (params?.startDate) queryParams.append('startDate', params.startDate)
+  if (params?.endDate) queryParams.append('endDate', params.endDate)
+  if (params?.sortBy) queryParams.append('sortBy', params.sortBy)
+  if (params?.limit) queryParams.append('limit', params.limit.toString())
+  if (params?.type) queryParams.append('type', params.type)
+
+  const url = `${API_BASE_URL}/api/material-metrics/rankings${
+    queryParams.toString() ? `?${queryParams.toString()}` : ''
+  }`
+
+  const response = await fetch(url)
+
+  if (!response.ok) {
+    const errorText = await response.text()
+    let errorMessage = 'Failed to fetch material rankings'
+    try {
+      const errorJson = JSON.parse(errorText)
+      errorMessage = errorJson.message || errorMessage
+    } catch {
+      if (errorText.includes('<!DOCTYPE')) {
+        errorMessage = `服务器返回了 HTML 响应，请检查 API 路由配置。状态码: ${response.status}`
+      }
+    }
+    throw new Error(errorMessage)
+  }
+
+  return response.json()
+}
+
+// 获取素材推荐
+export async function getMaterialRecommendations(params?: {
+  type?: 'image' | 'video'
+  minSpend?: number
+  minRoas?: number
+  limit?: number
+}): Promise<{ success: boolean; data: { recommendations: MaterialMetric[]; criteria: any; totalFound: number } }> {
+  const queryParams = new URLSearchParams()
+  if (params?.type) queryParams.append('type', params.type)
+  if (params?.minSpend) queryParams.append('minSpend', params.minSpend.toString())
+  if (params?.minRoas) queryParams.append('minRoas', params.minRoas.toString())
+  if (params?.limit) queryParams.append('limit', params.limit.toString())
+
+  const url = `${API_BASE_URL}/api/material-metrics/recommendations${
+    queryParams.toString() ? `?${queryParams.toString()}` : ''
+  }`
+
+  const response = await fetch(url)
+  if (!response.ok) throw new Error('Failed to fetch material recommendations')
+  return response.json()
+}
+
+// 获取表现下滑的素材
+export async function getDecliningMaterials(params?: {
+  minSpend?: number
+  declineThreshold?: number
+  limit?: number
+}): Promise<{ success: boolean; data: { decliningMaterials: any[]; threshold: any } }> {
+  const queryParams = new URLSearchParams()
+  if (params?.minSpend) queryParams.append('minSpend', params.minSpend.toString())
+  if (params?.declineThreshold) queryParams.append('declineThreshold', params.declineThreshold.toString())
+  if (params?.limit) queryParams.append('limit', params.limit.toString())
+
+  const url = `${API_BASE_URL}/api/material-metrics/declining${
+    queryParams.toString() ? `?${queryParams.toString()}` : ''
+  }`
+
+  const response = await fetch(url)
+  if (!response.ok) throw new Error('Failed to fetch declining materials')
+  return response.json()
+}
+
+// 触发素材数据聚合
+export async function aggregateMaterialMetrics(date?: string): Promise<{ success: boolean; data: any; message: string }> {
+  const response = await fetch(`${API_BASE_URL}/api/material-metrics/aggregate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ date }),
+  })
+
+  if (!response.ok) throw new Error('Failed to aggregate material metrics')
+  return response.json()
+}
+
+// 素材下载功能已移除 - 所有素材从素材库管理，通过 Ad.materialId 精准归因
+
 // === Pixel 管理 ===
 
 export interface FbPixel {
@@ -822,5 +1058,228 @@ export async function getPixelEvents(
     throw new Error('Failed to fetch pixel events')
   }
 
+  return response.json()
+}
+
+// ==================== 预聚合汇总 API（极速加载） ====================
+
+// 汇总数据通用接口
+export interface SummaryData {
+  _id: string
+  date: string
+  spend: number
+  revenue: number
+  impressions: number
+  clicks: number
+  installs: number
+  purchases: number
+  roas: number
+  ctr: number
+  cpc: number
+  cpm: number
+  cpi: number
+  lastUpdated: string
+}
+
+// 仪表盘汇总
+export interface DashboardSummary extends SummaryData {
+  totalSpend: number
+  totalRevenue: number
+  totalImpressions: number
+  totalClicks: number
+  totalInstalls: number
+  totalPurchases: number
+  activeAccounts: number
+  activeCampaigns: number
+  activeCountries: number
+}
+
+// 国家汇总
+export interface CountrySummary extends SummaryData {
+  country: string
+  countryName: string
+  campaignCount: number
+  accountCount: number
+}
+
+// 广告系列汇总
+export interface CampaignSummary extends SummaryData {
+  campaignId: string
+  campaignName: string
+  accountId: string
+  accountName: string
+  status: string
+  objective: string
+}
+
+// 素材汇总
+export interface MaterialSummary extends SummaryData {
+  materialKey: string
+  materialType: 'image' | 'video'
+  materialName?: string
+  thumbnailUrl?: string
+  localStorageUrl?: string
+  qualityScore: number
+  adCount: number
+  campaignCount: number
+  daysActive: number
+}
+
+// 获取仪表盘汇总（极速）
+export async function getDashboardSummary(date?: string): Promise<{
+  success: boolean
+  data: DashboardSummary | null
+  cached: boolean
+  lastUpdated?: string
+}> {
+  const url = date
+    ? `${API_BASE_URL}/api/summary/dashboard?date=${date}`
+    : `${API_BASE_URL}/api/summary/dashboard`
+  const response = await fetch(url)
+  if (!response.ok) throw new Error('Failed to fetch dashboard summary')
+  return response.json()
+}
+
+// 获取仪表盘趋势
+export async function getDashboardTrend(days?: number): Promise<{
+  success: boolean
+  data: DashboardSummary[]
+  cached: boolean
+}> {
+  const url = days
+    ? `${API_BASE_URL}/api/summary/dashboard/trend?days=${days}`
+    : `${API_BASE_URL}/api/summary/dashboard/trend`
+  const response = await fetch(url)
+  if (!response.ok) throw new Error('Failed to fetch dashboard trend')
+  return response.json()
+}
+
+// 获取国家汇总（极速）
+export async function getCountriesSummary(params?: {
+  startDate?: string
+  endDate?: string
+  sortBy?: string
+  order?: 'asc' | 'desc'
+  limit?: number
+  page?: number
+}): Promise<{
+  success: boolean
+  data: CountrySummary[]
+  pagination: { page: number; limit: number; total: number; pages: number }
+  cached: boolean
+}> {
+  const queryParams = new URLSearchParams()
+  if (params?.startDate) queryParams.append('startDate', params.startDate)
+  if (params?.endDate) queryParams.append('endDate', params.endDate)
+  if (params?.sortBy) queryParams.append('sortBy', params.sortBy)
+  if (params?.order) queryParams.append('order', params.order)
+  if (params?.limit) queryParams.append('limit', params.limit.toString())
+  if (params?.page) queryParams.append('page', params.page.toString())
+
+  const url = `${API_BASE_URL}/api/summary/countries${
+    queryParams.toString() ? `?${queryParams.toString()}` : ''
+  }`
+  const response = await fetch(url)
+  if (!response.ok) throw new Error('Failed to fetch countries summary')
+  return response.json()
+}
+
+// 获取广告系列汇总（极速）
+export async function getCampaignsSummary(params?: {
+  startDate?: string
+  endDate?: string
+  accountId?: string
+  status?: string
+  sortBy?: string
+  order?: 'asc' | 'desc'
+  limit?: number
+  page?: number
+}): Promise<{
+  success: boolean
+  data: CampaignSummary[]
+  pagination: { page: number; limit: number; total: number; pages: number }
+  cached: boolean
+}> {
+  const queryParams = new URLSearchParams()
+  if (params?.startDate) queryParams.append('startDate', params.startDate)
+  if (params?.endDate) queryParams.append('endDate', params.endDate)
+  if (params?.accountId) queryParams.append('accountId', params.accountId)
+  if (params?.status) queryParams.append('status', params.status)
+  if (params?.sortBy) queryParams.append('sortBy', params.sortBy)
+  if (params?.order) queryParams.append('order', params.order)
+  if (params?.limit) queryParams.append('limit', params.limit.toString())
+  if (params?.page) queryParams.append('page', params.page.toString())
+
+  const url = `${API_BASE_URL}/api/summary/campaigns${
+    queryParams.toString() ? `?${queryParams.toString()}` : ''
+  }`
+  const response = await fetch(url)
+  if (!response.ok) throw new Error('Failed to fetch campaigns summary')
+  return response.json()
+}
+
+// 获取素材汇总（极速）
+export async function getMaterialsSummary(params?: {
+  startDate?: string
+  endDate?: string
+  type?: 'image' | 'video'
+  sortBy?: string
+  order?: 'asc' | 'desc'
+  limit?: number
+  page?: number
+}): Promise<{
+  success: boolean
+  data: MaterialSummary[]
+  pagination: { page: number; limit: number; total: number; pages: number }
+  cached: boolean
+}> {
+  const queryParams = new URLSearchParams()
+  if (params?.startDate) queryParams.append('startDate', params.startDate)
+  if (params?.endDate) queryParams.append('endDate', params.endDate)
+  if (params?.type) queryParams.append('type', params.type)
+  if (params?.sortBy) queryParams.append('sortBy', params.sortBy)
+  if (params?.order) queryParams.append('order', params.order)
+  if (params?.limit) queryParams.append('limit', params.limit.toString())
+  if (params?.page) queryParams.append('page', params.page.toString())
+
+  const url = `${API_BASE_URL}/api/summary/materials${
+    queryParams.toString() ? `?${queryParams.toString()}` : ''
+  }`
+  const response = await fetch(url)
+  if (!response.ok) throw new Error('Failed to fetch materials summary')
+  return response.json()
+}
+
+// 获取汇总状态
+export async function getSummaryStatus(): Promise<{
+  success: boolean
+  data: Record<string, {
+    status: 'idle' | 'refreshing' | 'error'
+    lastRefresh: string
+    recordCount: number
+    durationMs: number
+    error?: string
+  }>
+}> {
+  const response = await fetch(`${API_BASE_URL}/api/summary/status`)
+  if (!response.ok) throw new Error('Failed to fetch summary status')
+  return response.json()
+}
+
+// 手动刷新汇总数据
+export async function refreshSummary(params?: {
+  date?: string
+  type?: 'all' | 'dashboard' | 'country' | 'campaign' | 'material'
+}): Promise<{
+  success: boolean
+  data?: any
+  message: string
+}> {
+  const response = await fetch(`${API_BASE_URL}/api/summary/refresh`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params || {}),
+  })
+  if (!response.ok) throw new Error('Failed to refresh summary')
   return response.json()
 }

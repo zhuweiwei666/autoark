@@ -19,3 +19,13 @@ export { default as AdTask } from './AdTask'
 export { default as Material } from './Material'
 export { default as Folder } from './Folder'
 export { default as MaterialMetrics } from './MaterialMetrics'
+export { default as AdMaterialMapping } from './AdMaterialMapping'
+
+// 产品关系映射（自动投放核心）
+export { default as Product } from './Product'
+
+// Facebook 授权用户（缓存 Pixels、账户等）
+export { default as FacebookUser } from './FacebookUser'
+
+// Facebook App 管理（支持多App负载均衡）
+export { default as FacebookApp } from './FacebookApp'

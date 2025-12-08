@@ -1,7 +1,15 @@
 import { useState, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
+import Loading from '../components/Loading'
 
 const API_BASE = '/api'
+
+interface AdDetail {
+  adId: string
+  adName: string
+  effectiveStatus?: string
+  reviewFeedback?: any
+}
 
 interface TaskItem {
   accountId: string
@@ -9,9 +17,18 @@ interface TaskItem {
   status: string
   progress: { current: number; total: number; percentage: number }
   result?: { campaignId?: string; adsetIds?: string[]; adIds?: string[]; createdCount?: number }
+  ads?: AdDetail[]  // 广告详情（含审核状态）
   errors?: Array<{ entityType: string; errorMessage: string }>
   startedAt?: string
   completedAt?: string
+}
+
+interface ReviewStatus {
+  total: number
+  pending: number
+  approved: number
+  rejected: number
+  lastCheckedAt?: string
 }
 
 interface Task {
@@ -29,6 +46,7 @@ interface Task {
     createdAds: number
     percentage: number
   }
+  reviewStatus?: ReviewStatus  // 审核状态统计
   createdAt: string
   startedAt?: string
   completedAt?: string
@@ -48,6 +66,21 @@ const STATUS_MAP: Record<string, { label: string; color: string }> = {
   cancelled: { label: '已取消', color: 'bg-slate-100 text-slate-600' },
 }
 
+// 广告审核状态映射
+const REVIEW_STATUS_MAP: Record<string, { label: string; color: string; icon: string }> = {
+  PENDING_REVIEW: { label: '审核中', color: 'bg-yellow-100 text-yellow-700', icon: '⏳' },
+  ACTIVE: { label: '通过', color: 'bg-green-100 text-green-700', icon: '✅' },
+  DISAPPROVED: { label: '被拒', color: 'bg-red-100 text-red-700', icon: '❌' },
+  PAUSED: { label: '暂停', color: 'bg-slate-100 text-slate-600', icon: '⏸️' },
+  PREAPPROVED: { label: '预通过', color: 'bg-blue-100 text-blue-700', icon: '🔵' },
+  WITH_ISSUES: { label: '有问题', color: 'bg-orange-100 text-orange-700', icon: '⚠️' },
+}
+
+// 获取审核状态信息
+const getReviewStatusInfo = (status: string) => {
+  return REVIEW_STATUS_MAP[status] || { label: status || '未知', color: 'bg-slate-100 text-slate-600', icon: '❓' }
+}
+
 export default function TaskManagementPage() {
   const [searchParams] = useSearchParams()
   const taskIdFromUrl = searchParams.get('taskId')
@@ -56,6 +89,8 @@ export default function TaskManagementPage() {
   const [selectedTask, setSelectedTask] = useState<Task | null>(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
+  const [checkingReview, setCheckingReview] = useState(false)
+  const [reviewDetails, setReviewDetails] = useState<any>(null)
   
   useEffect(() => {
     loadTasks()
@@ -93,6 +128,8 @@ export default function TaskManagementPage() {
         setSelectedTask(data.data)
         // Update in list too
         setTasks(tasks.map(t => t._id === taskId ? data.data : t))
+        // 加载审核详情
+        loadReviewDetails(taskId)
       }
     } catch (err) {
       console.error('Failed to load task detail:', err)
@@ -147,6 +184,41 @@ export default function TaskManagementPage() {
     }
   }
   
+  // 检查广告审核状态
+  const checkReviewStatus = async (taskId: string) => {
+    setCheckingReview(true)
+    try {
+      const res = await fetch(`${API_BASE}/bulk-ad/tasks/${taskId}/check-review`, { method: 'POST' })
+      const data = await res.json()
+      if (data.success) {
+        // 重新加载任务详情
+        loadTaskDetail(taskId)
+        // 加载审核详情
+        loadReviewDetails(taskId)
+      } else {
+        alert(`检查审核状态失败：${data.error || data.data?.errors?.join(', ')}`)
+      }
+    } catch (err) {
+      console.error('Failed to check review status:', err)
+      alert('检查审核状态失败')
+    } finally {
+      setCheckingReview(false)
+    }
+  }
+  
+  // 加载审核详情
+  const loadReviewDetails = async (taskId: string) => {
+    try {
+      const res = await fetch(`${API_BASE}/bulk-ad/tasks/${taskId}/review-status`)
+      const data = await res.json()
+      if (data.success) {
+        setReviewDetails(data.data)
+      }
+    } catch (err) {
+      console.error('Failed to load review details:', err)
+    }
+  }
+  
   const formatDuration = (ms?: number) => {
     if (!ms) return '-'
     const seconds = Math.floor(ms / 1000)
@@ -161,7 +233,7 @@ export default function TaskManagementPage() {
   }
   
   if (loading) {
-    return <div className="p-6 flex justify-center items-center h-64"><div className="text-slate-500">加载中...</div></div>
+    return <Loading.Page message="加载任务列表..." />
   }
   
   return (
@@ -247,6 +319,80 @@ export default function TaskManagementPage() {
                     </div>
                   </div>
                 </div>
+                
+                {/* 广告审核状态 */}
+                {['success', 'partial_success'].includes(selectedTask.status) && (
+                  <div className="p-4 border-b border-slate-200 bg-slate-50">
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="font-semibold text-sm">📋 广告审核状态</h3>
+                      <button
+                        onClick={() => checkReviewStatus(selectedTask._id)}
+                        disabled={checkingReview}
+                        className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+                      >
+                        {checkingReview ? '检查中...' : '🔄 刷新审核状态'}
+                      </button>
+                    </div>
+                    
+                    {reviewDetails?.summary ? (
+                      <div className="grid grid-cols-4 gap-3 text-center">
+                        <div className="bg-white p-2 rounded-lg border">
+                          <div className="text-lg font-bold text-slate-700">{reviewDetails.summary.total}</div>
+                          <div className="text-xs text-slate-500">总广告</div>
+                        </div>
+                        <div className="bg-white p-2 rounded-lg border">
+                          <div className="text-lg font-bold text-yellow-600">⏳ {reviewDetails.summary.pending}</div>
+                          <div className="text-xs text-slate-500">审核中</div>
+                        </div>
+                        <div className="bg-white p-2 rounded-lg border">
+                          <div className="text-lg font-bold text-green-600">✅ {reviewDetails.summary.approved}</div>
+                          <div className="text-xs text-slate-500">已通过</div>
+                        </div>
+                        <div className="bg-white p-2 rounded-lg border">
+                          <div className="text-lg font-bold text-red-600">❌ {reviewDetails.summary.rejected}</div>
+                          <div className="text-xs text-slate-500">被拒绝</div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="text-center text-sm text-slate-500 py-2">
+                        点击"刷新审核状态"查看广告审核情况
+                      </div>
+                    )}
+                    
+                    {reviewDetails?.summary?.lastCheckedAt && (
+                      <div className="text-xs text-slate-400 mt-2 text-right">
+                        上次检查: {formatTime(reviewDetails.summary.lastCheckedAt)}
+                      </div>
+                    )}
+                    
+                    {/* 被拒广告详情 */}
+                    {reviewDetails?.ads?.filter((ad: any) => ad.effectiveStatus === 'DISAPPROVED').length > 0 && (
+                      <div className="mt-3 p-3 bg-red-50 rounded-lg border border-red-200">
+                        <h4 className="text-sm font-medium text-red-700 mb-2">❌ 被拒绝的广告</h4>
+                        <div className="space-y-2 max-h-32 overflow-y-auto">
+                          {reviewDetails.ads
+                            .filter((ad: any) => ad.effectiveStatus === 'DISAPPROVED')
+                            .map((ad: any) => {
+                              const statusInfo = getReviewStatusInfo(ad.effectiveStatus)
+                              return (
+                                <div key={ad.adId} className="text-xs">
+                                  <div className="flex items-center gap-2">
+                                    <span className={`px-1.5 py-0.5 rounded ${statusInfo.color}`}>{statusInfo.icon} {statusInfo.label}</span>
+                                    <span className="font-medium text-red-800">{ad.name || ad.adId}</span>
+                                  </div>
+                                  {ad.rejectionReasons?.length > 0 && (
+                                    <div className="text-red-600 mt-0.5 ml-4">
+                                      {ad.rejectionReasons.join(' | ')}
+                                    </div>
+                                  )}
+                                </div>
+                              )
+                            })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
                 
                 <div className="p-4 border-b border-slate-200 grid grid-cols-3 gap-4 text-sm">
                   <div><span className="text-slate-500">状态：</span><span className={`px-2 py-0.5 rounded ${STATUS_MAP[selectedTask.status]?.color}`}>{STATUS_MAP[selectedTask.status]?.label}</span></div>

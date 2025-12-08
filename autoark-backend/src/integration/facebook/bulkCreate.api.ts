@@ -43,7 +43,9 @@ export const createCampaign = async (params: CreateCampaignParams) => {
     objective,
     status,
     buying_type: buyingType,
-    special_ad_categories: JSON.stringify(specialAdCategories),
+    // Facebook API 要求参数为 JSON 字符串格式
+    // 无特殊类别时传空数组 "[]"
+    special_ad_categories: JSON.stringify(specialAdCategories.length > 0 ? specialAdCategories : []),
   }
 
   // 预算设置（只有非 CBO 模式下才设置）
@@ -69,14 +71,28 @@ export const createCampaign = async (params: CreateCampaignParams) => {
     logger.info(`[BulkCreate] Campaign created: ${res.id}`)
     return { success: true, id: res.id, data: res }
   } catch (error: any) {
-    const errorData = error.response?.data?.error || error.response?.data || error.message
-    logger.error(`[BulkCreate] Failed to create campaign - Full error:`, JSON.stringify(errorData, null, 2))
+    // FacebookApiError 有特殊结构: { response, code, subcode, userMessage }
+    const fbResponse = error.response || {}
+    const fbError = fbResponse.error || {}
+    
+    logger.error(`[BulkCreate] Failed to create campaign - Full error:`, JSON.stringify({
+      message: error.message,
+      code: error.code || fbError.code,
+      subcode: error.subcode || fbError.error_subcode,
+      userMessage: error.userMessage || fbError.error_user_msg || fbError.error_user_title,
+      fbResponse: fbResponse,
+      rawError: String(error),
+    }, null, 2))
+    
     return {
       success: false,
       error: {
-        code: error.response?.data?.error?.code || 'UNKNOWN',
-        message: error.response?.data?.error?.message || error.message,
-        details: error.response?.data,
+        code: error.code || fbError.code || 'UNKNOWN',
+        subcode: error.subcode || fbError.error_subcode,
+        message: fbError.message || error.message,
+        userTitle: fbError.error_user_title,
+        userMsg: error.userMessage || fbError.error_user_msg,
+        details: fbResponse,
       },
     }
   }
@@ -102,6 +118,8 @@ export interface CreateAdSetParams {
   promotedObject?: any
   attribution_spec?: any
   pacing_type?: string[]
+  dsa_beneficiary?: string  // DSA 受益方（欧盟合规）
+  dsa_payor?: string        // DSA 付款方（欧盟合规）
 }
 
 export const createAdSet = async (params: CreateAdSetParams) => {
@@ -123,6 +141,8 @@ export const createAdSet = async (params: CreateAdSetParams) => {
     promotedObject,
     attribution_spec,
     pacing_type,
+    dsa_beneficiary,
+    dsa_payor,
   } = params
 
   // 处理 targeting：确保国家代码大写，并添加必要的 targeting_automation 字段
@@ -176,6 +196,13 @@ export const createAdSet = async (params: CreateAdSetParams) => {
   }
   if (pacing_type) {
     requestParams.pacing_type = JSON.stringify(pacing_type)
+  }
+  // DSA 合规字段（欧盟数字服务法案）
+  if (dsa_beneficiary) {
+    requestParams.dsa_beneficiary = dsa_beneficiary
+  }
+  if (dsa_payor) {
+    requestParams.dsa_payor = dsa_payor
   }
 
   try {
@@ -478,12 +505,35 @@ export const searchTargetingLocations = async (params: SearchLocationsParams) =>
 
 export const getPages = async (accountId: string, token: string) => {
   try {
-    const res = await facebookClient.get(`/act_${accountId}/promote_pages`, {
-      access_token: token,
-      fields: 'id,name,picture',
-      limit: 100,
-    })
-    return { success: true, data: res.data || [] }
+    // 1. 先尝试从广告账户获取 promote_pages
+    let pages: any[] = []
+    try {
+      const promoteRes = await facebookClient.get(`/act_${accountId}/promote_pages`, {
+        access_token: token,
+        fields: 'id,name,picture',
+        limit: 100,
+      })
+      pages = promoteRes.data || []
+    } catch (e: any) {
+      logger.warn(`[BulkCreate] Failed to get promote_pages for ${accountId}: ${e.message}`)
+    }
+    
+    // 2. 如果没有 promote_pages，获取用户有广告权限的所有主页
+    if (pages.length === 0) {
+      logger.info(`[BulkCreate] No promote_pages for ${accountId}, falling back to user pages`)
+      const userPagesRes = await facebookClient.get('/me/accounts', {
+        access_token: token,
+        fields: 'id,name,picture,tasks',
+        limit: 100,
+      })
+      // 只返回有 ADVERTISE 权限的主页
+      pages = (userPagesRes.data || []).filter((page: any) => 
+        page.tasks && page.tasks.includes('ADVERTISE')
+      )
+      logger.info(`[BulkCreate] Found ${pages.length} user pages with ADVERTISE permission`)
+    }
+    
+    return { success: true, data: pages }
   } catch (error: any) {
     logger.error(`[BulkCreate] Failed to get pages:`, error.message)
     return { success: false, error: error.message, data: [] }

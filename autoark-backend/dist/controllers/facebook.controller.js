@@ -151,7 +151,7 @@ const getCampaignsList = async (req, res, next) => {
         res.setHeader('Content-Type', 'application/json; charset=utf-8');
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 20;
-        const sortBy = req.query.sortBy || 'createdAt';
+        const sortBy = req.query.sortBy || 'spend'; // 默认按消耗排序
         const sortOrder = req.query.sortOrder || 'desc';
         const filters = {
             name: req.query.name,

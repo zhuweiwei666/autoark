@@ -13,7 +13,11 @@ exports.getTodaySpendTrend = getTodaySpendTrend;
 exports.getCampaignSpendRanking = getCampaignSpendRanking;
 exports.getCountrySpendRanking = getCountrySpendRanking;
 const models_1 = require("../models");
+const FbToken_1 = __importDefault(require("../models/FbToken"));
 const mongoose_1 = __importDefault(require("mongoose"));
+const facebook_api_1 = require("./facebook.api");
+const accountId_1 = require("../utils/accountId");
+const logger_1 = __importDefault(require("../utils/logger"));
 const buildMatchStage = (filters) => {
     const match = {
         date: { $gte: filters.startDate, $lte: filters.endDate },
@@ -189,73 +193,81 @@ async function getOpsLogs(limit = 50) {
 // ========== 数据看板 V1 API ==========
 /**
  * 获取核心指标概览（今日消耗、昨日消耗、7日趋势等）
+ * 直接从 Facebook Insights API 获取数据以确保准确性
+ * 使用 campaign 级别数据确保与广告系列页面一致
  */
 async function getCoreMetrics(startDate, endDate) {
     const today = endDate || new Date().toISOString().split('T')[0];
-    const yesterday = startDate ? new Date(new Date(startDate).getTime() - 24 * 60 * 60 * 1000).toISOString().split('T')[0] : new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().split('T')[0];
     const sevenDaysAgo = startDate || new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-    // 优化：合并查询，一次性获取所有需要的数据
-    // 重要：只统计 campaign 级别的数据（campaignId 存在），确保与广告系列页面数据一致
-    // 这样可以避免重复计算 ad 级别和 adset 级别的数据
-    const [todayData, yesterdayData, sevenDaysData] = await Promise.all([
-        models_1.MetricsDaily.aggregate([
-            {
-                $match: {
-                    date: today,
-                    campaignId: { $exists: true, $ne: null } // 只统计 campaign 级别的数据
+    // 获取有效 token
+    const tokenDoc = await FbToken_1.default.findOne({ status: 'active' });
+    const token = tokenDoc?.token;
+    let todayMetrics = { spend: 0, impressions: 0, clicks: 0, installs: 0, purchase_value: 0 };
+    let yesterdayMetrics = { spend: 0, impressions: 0, clicks: 0, installs: 0, purchase_value: 0 };
+    let sevenDaysMetrics = { spend: 0, impressions: 0, clicks: 0, installs: 0, purchase_value: 0 };
+    if (token) {
+        // 获取所有活跃账户
+        const accounts = await models_1.Account.find({ status: 'active' }).lean();
+        logger_1.default.info(`[Dashboard] Fetching campaign-level insights for ${accounts.length} accounts`);
+        // 并发获取所有账户的 campaign 级别 insights（与广告系列页面一致）
+        const fetchCampaignInsights = async (datePreset, timeRange) => {
+            const promises = accounts.map(async (account) => {
+                try {
+                    const accountIdForApi = (0, accountId_1.normalizeForApi)(account.accountId);
+                    const insights = await (0, facebook_api_1.fetchInsights)(accountIdForApi, 'campaign', // 使用 campaign 级别，与广告系列页面一致
+                    datePreset || undefined, token, undefined, timeRange);
+                    if (insights && Array.isArray(insights)) {
+                        // 聚合该账户下所有 campaign 的数据
+                        let totalSpend = 0;
+                        let totalImpressions = 0;
+                        let totalClicks = 0;
+                        let totalPurchaseValue = 0;
+                        insights.forEach((insight) => {
+                            totalSpend += parseFloat(insight.spend || '0');
+                            totalImpressions += parseInt(insight.impressions || '0', 10);
+                            totalClicks += parseInt(insight.clicks || '0', 10);
+                            if (insight.action_values && Array.isArray(insight.action_values)) {
+                                const purchaseAction = insight.action_values.find((a) => a.action_type === 'purchase' || a.action_type === 'mobile_app_purchase' || a.action_type === 'omni_purchase');
+                                if (purchaseAction) {
+                                    totalPurchaseValue += parseFloat(purchaseAction.value) || 0;
+                                }
+                            }
+                        });
+                        return {
+                            spend: totalSpend,
+                            impressions: totalImpressions,
+                            clicks: totalClicks,
+                            installs: 0,
+                            purchase_value: totalPurchaseValue
+                        };
+                    }
+                    return { spend: 0, impressions: 0, clicks: 0, installs: 0, purchase_value: 0 };
                 }
-            },
-            {
-                $group: {
-                    _id: null,
-                    spend: { $sum: '$spendUsd' },
-                    impressions: { $sum: '$impressions' },
-                    clicks: { $sum: '$clicks' },
-                    installs: { $sum: '$installs' },
-                    purchase_value: { $sum: '$purchase_value' },
-                },
-            },
-        ]),
-        models_1.MetricsDaily.aggregate([
-            {
-                $match: {
-                    date: yesterday,
-                    campaignId: { $exists: true, $ne: null } // 只统计 campaign 级别的数据
+                catch (error) {
+                    return { spend: 0, impressions: 0, clicks: 0, installs: 0, purchase_value: 0 };
                 }
-            },
-            {
-                $group: {
-                    _id: null,
-                    spend: { $sum: '$spendUsd' },
-                    impressions: { $sum: '$impressions' },
-                    clicks: { $sum: '$clicks' },
-                    installs: { $sum: '$installs' },
-                    purchase_value: { $sum: '$purchase_value' },
-                },
-            },
-        ]),
-        models_1.MetricsDaily.aggregate([
-            {
-                $match: {
-                    date: { $gte: sevenDaysAgo, $lte: today },
-                    campaignId: { $exists: true, $ne: null } // 只统计 campaign 级别的数据
-                }
-            },
-            {
-                $group: {
-                    _id: null,
-                    spend: { $sum: '$spendUsd' },
-                    impressions: { $sum: '$impressions' },
-                    clicks: { $sum: '$clicks' },
-                    installs: { $sum: '$installs' },
-                    purchase_value: { $sum: '$purchase_value' },
-                },
-            },
-        ]),
-    ]);
-    const todayMetrics = todayData[0] || { spend: 0, impressions: 0, clicks: 0, installs: 0, purchase_value: 0 };
-    const yesterdayMetrics = yesterdayData[0] || { spend: 0, impressions: 0, clicks: 0, installs: 0, purchase_value: 0 };
-    const sevenDaysMetrics = sevenDaysData[0] || { spend: 0, impressions: 0, clicks: 0, installs: 0, purchase_value: 0 };
+            });
+            const results = await Promise.all(promises);
+            return results.reduce((acc, curr) => ({
+                spend: acc.spend + curr.spend,
+                impressions: acc.impressions + curr.impressions,
+                clicks: acc.clicks + curr.clicks,
+                installs: acc.installs + curr.installs,
+                purchase_value: acc.purchase_value + curr.purchase_value
+            }), { spend: 0, impressions: 0, clicks: 0, installs: 0, purchase_value: 0 });
+        };
+        // 并发获取今日、昨日、7日数据
+        const [todayData, yesterdayData, sevenDaysData] = await Promise.all([
+            fetchCampaignInsights('today'),
+            fetchCampaignInsights('yesterday'),
+            fetchCampaignInsights(undefined, { since: sevenDaysAgo, until: today })
+        ]);
+        todayMetrics = todayData;
+        yesterdayMetrics = yesterdayData;
+        sevenDaysMetrics = sevenDaysData;
+        logger_1.default.info(`[Dashboard] Today spend: $${todayMetrics.spend.toFixed(2)}, Yesterday: $${yesterdayMetrics.spend.toFixed(2)}, 7days: $${sevenDaysMetrics.spend.toFixed(2)}`);
+    }
     // 计算指标
     const todayCtr = todayMetrics.impressions > 0 ? (todayMetrics.clicks / todayMetrics.impressions) * 100 : 0;
     const todayCpm = todayMetrics.impressions > 0 ? (todayMetrics.spend / todayMetrics.impressions) * 1000 : 0;
@@ -326,78 +338,91 @@ async function getTodaySpendTrend(startDate, endDate) {
 }
 /**
  * 获取分 Campaign 消耗排行
+ * 直接从 Facebook Insights API 获取数据以确保准确性
  */
 async function getCampaignSpendRanking(limit = 10, startDate, endDate) {
     const today = endDate || new Date().toISOString().split('T')[0];
     const sevenDaysAgo = startDate || new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-    // 优化：先聚合和排序，再 lookup，减少 lookup 的数据量
-    const data = await models_1.MetricsDaily.aggregate([
-        {
-            $match: {
-                date: { $gte: sevenDaysAgo, $lte: today },
-                campaignId: { $exists: true, $ne: null }
+    // 获取有效 token
+    const tokenDoc = await FbToken_1.default.findOne({ status: 'active' });
+    const token = tokenDoc?.token;
+    if (!token) {
+        logger_1.default.warn('[Dashboard] No active token found for campaign ranking');
+        return [];
+    }
+    // 获取所有活跃账户
+    const accounts = await models_1.Account.find({ status: 'active' }).lean();
+    // 构建日期参数
+    const timeRange = { since: sevenDaysAgo, until: today };
+    // 并发获取所有账户的 campaign 级别 insights
+    const accountPromises = accounts.map(async (account) => {
+        try {
+            const accountIdForApi = (0, accountId_1.normalizeForApi)(account.accountId);
+            const insights = await (0, facebook_api_1.fetchInsights)(accountIdForApi, 'campaign', undefined, token, undefined, timeRange);
+            return insights || [];
+        }
+        catch (error) {
+            return [];
+        }
+    });
+    const allInsights = (await Promise.all(accountPromises)).flat();
+    // 聚合并排序
+    const campaignMap = new Map();
+    allInsights.forEach((insight) => {
+        const campaignId = insight.campaign_id;
+        if (!campaignId)
+            return;
+        let purchase_value = 0;
+        if (insight.action_values && Array.isArray(insight.action_values)) {
+            const purchaseAction = insight.action_values.find((a) => a.action_type === 'purchase' || a.action_type === 'mobile_app_purchase' || a.action_type === 'omni_purchase');
+            if (purchaseAction) {
+                purchase_value = parseFloat(purchaseAction.value) || 0;
             }
-        },
-        {
-            $group: {
-                _id: '$campaignId',
-                spend: { $sum: '$spendUsd' },
-                impressions: { $sum: '$impressions' },
-                clicks: { $sum: '$clicks' },
-                installs: { $sum: '$installs' },
-                purchase_value: { $sum: '$purchase_value' },
-            },
-        },
-        { $sort: { spend: -1 } },
-        { $limit: limit },
-        {
-            $lookup: {
-                from: 'campaigns',
-                localField: '_id',
-                foreignField: 'campaignId',
-                as: 'campaign',
-            },
-        },
-        {
-            $project: {
-                _id: 0,
-                campaignId: '$_id',
-                campaignName: { $arrayElemAt: ['$campaign.name', 0] },
-                spend: 1,
-                impressions: 1,
-                clicks: 1,
-                installs: 1,
-                purchase_value: 1,
-                ctr: {
-                    $cond: [
-                        { $gt: ['$impressions', 0] },
-                        { $multiply: [{ $divide: ['$clicks', '$impressions'] }, 100] },
-                        0,
-                    ],
-                },
-                cpm: {
-                    $cond: [
-                        { $gt: ['$impressions', 0] },
-                        { $multiply: [{ $divide: ['$spend', '$impressions'] }, 1000] },
-                        0,
-                    ],
-                },
-                cpc: {
-                    $cond: [{ $gt: ['$clicks', 0] }, { $divide: ['$spend', '$clicks'] }, 0],
-                },
-                cpi: {
-                    $cond: [{ $gt: ['$installs', 0] }, { $divide: ['$spend', '$installs'] }, 0],
-                },
-                roas: {
-                    $cond: [
-                        { $and: [{ $gt: ['$spend', 0] }, { $gt: ['$purchase_value', 0] }] },
-                        { $divide: ['$purchase_value', '$spend'] },
-                        0,
-                    ],
-                },
-            },
-        },
-    ]);
+        }
+        if (campaignMap.has(campaignId)) {
+            const existing = campaignMap.get(campaignId);
+            existing.spend += parseFloat(insight.spend || '0');
+            existing.impressions += parseInt(insight.impressions || '0', 10);
+            existing.clicks += parseInt(insight.clicks || '0', 10);
+            existing.purchase_value += purchase_value;
+        }
+        else {
+            campaignMap.set(campaignId, {
+                campaignId,
+                spend: parseFloat(insight.spend || '0'),
+                impressions: parseInt(insight.impressions || '0', 10),
+                clicks: parseInt(insight.clicks || '0', 10),
+                installs: 0,
+                purchase_value
+            });
+        }
+    });
+    // 转换为数组并排序
+    let data = Array.from(campaignMap.values())
+        .sort((a, b) => b.spend - a.spend)
+        .slice(0, limit);
+    // 获取 campaign 名称
+    const campaignIds = data.map(d => d.campaignId);
+    const campaigns = await models_1.Campaign.find({ campaignId: { $in: campaignIds } }).lean();
+    const campaignNameMap = new Map(campaigns.map((c) => [c.campaignId, c.name]));
+    // 计算派生指标
+    data = data.map(d => {
+        const ctr = d.impressions > 0 ? (d.clicks / d.impressions) * 100 : 0;
+        const cpm = d.impressions > 0 ? (d.spend / d.impressions) * 1000 : 0;
+        const cpc = d.clicks > 0 ? d.spend / d.clicks : 0;
+        const cpi = d.installs > 0 ? d.spend / d.installs : 0;
+        const roas = d.spend > 0 && d.purchase_value > 0 ? d.purchase_value / d.spend : 0;
+        return {
+            ...d,
+            campaignName: campaignNameMap.get(d.campaignId) || d.campaignId,
+            ctr,
+            cpm,
+            cpc,
+            cpi,
+            roas
+        };
+    });
+    logger_1.default.info(`[Dashboard] Campaign ranking: top spend is $${data[0]?.spend?.toFixed(2) || 0}`);
     return data;
 }
 /**

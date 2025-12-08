@@ -1,4 +1,5 @@
 import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3'
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { v4 as uuidv4 } from 'uuid'
 import path from 'path'
 import logger from '../utils/logger'
@@ -156,9 +157,119 @@ export const checkR2Config = (): {
   }
 }
 
+/**
+ * 生成预签名上传 URL（用于客户端直传）
+ * 客户端可以使用此 URL 直接 PUT 文件到 R2，无需经过服务器
+ */
+export const generatePresignedUploadUrl = async (params: {
+  fileName: string
+  mimeType: string
+  folder?: string
+  expiresIn?: number // 过期时间（秒），默认 3600（1小时）
+}): Promise<{
+  success: boolean
+  uploadUrl?: string
+  key?: string
+  publicUrl?: string
+  error?: string
+}> => {
+  const { fileName, mimeType, folder, expiresIn = 3600 } = params
+  
+  logger.info(`[R2] Generating presigned URL for: ${fileName}, type: ${mimeType}`)
+  
+  try {
+    const client = getS3Client()
+    const key = generateStorageKey(fileName, folder)
+    
+    const command = new PutObjectCommand({
+      Bucket: R2_BUCKET_NAME,
+      Key: key,
+      ContentType: mimeType,
+    })
+    
+    const uploadUrl = await getSignedUrl(client, command, { expiresIn })
+    
+    // 生成公开访问 URL
+    const publicUrl = R2_PUBLIC_URL 
+      ? `${R2_PUBLIC_URL}/${key}`
+      : `https://${R2_BUCKET_NAME}.${R2_ACCOUNT_ID}.r2.dev/${key}`
+    
+    logger.info(`[R2] Presigned URL generated for: ${key}`)
+    
+    return {
+      success: true,
+      uploadUrl,
+      key,
+      publicUrl,
+    }
+  } catch (error: any) {
+    logger.error('[R2] Generate presigned URL failed:', error.message)
+    return {
+      success: false,
+      error: error.message,
+    }
+  }
+}
+
+/**
+ * 批量生成预签名上传 URL
+ */
+export const generatePresignedUploadUrls = async (files: Array<{
+  fileName: string
+  mimeType: string
+  size: number
+}>): Promise<{
+  success: boolean
+  urls?: Array<{
+    fileName: string
+    uploadUrl: string
+    key: string
+    publicUrl: string
+  }>
+  error?: string
+}> => {
+  logger.info(`[R2] Generating presigned URLs for ${files.length} files`)
+  
+  try {
+    const results = await Promise.all(
+      files.map(async (file) => {
+        const result = await generatePresignedUploadUrl({
+          fileName: file.fileName,
+          mimeType: file.mimeType,
+          folder: 'materials',
+        })
+        
+        if (!result.success) {
+          throw new Error(`Failed to generate URL for ${file.fileName}: ${result.error}`)
+        }
+        
+        return {
+          fileName: file.fileName,
+          uploadUrl: result.uploadUrl!,
+          key: result.key!,
+          publicUrl: result.publicUrl!,
+        }
+      })
+    )
+    
+    return {
+      success: true,
+      urls: results,
+    }
+  } catch (error: any) {
+    logger.error('[R2] Generate presigned URLs failed:', error.message)
+    return {
+      success: false,
+      error: error.message,
+    }
+  }
+}
+
 export default {
   uploadToR2,
   deleteFromR2,
   checkR2Config,
+  generatePresignedUploadUrl,
+  generatePresignedUploadUrls,
 }
 

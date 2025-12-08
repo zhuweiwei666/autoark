@@ -4,12 +4,16 @@ import * as bulkAdController from '../controllers/bulkAd.controller'
 const router = Router()
 
 // ==================== 独立 OAuth 授权（批量广告专用）====================
+router.get('/auth/apps', bulkAdController.getAvailableApps) // 获取可用的 Facebook Apps
 router.get('/auth/login-url', bulkAdController.getAuthLoginUrl)
 router.get('/auth/callback', bulkAdController.handleAuthCallback)
 router.get('/auth/status', bulkAdController.getAuthStatus)
 router.get('/auth/ad-accounts', bulkAdController.getAuthAdAccounts)
 router.get('/auth/pages', bulkAdController.getAuthPages)
 router.get('/auth/pixels', bulkAdController.getAuthPixels)
+router.get('/auth/cached-pixels', bulkAdController.getCachedPixels) // 预加载的 Pixels
+router.get('/auth/sync-status', bulkAdController.getPixelSyncStatus) // 同步状态
+router.post('/auth/resync', bulkAdController.resyncFacebookAssets) // 手动重新同步
 
 // ==================== 草稿管理 ====================
 router.post('/drafts', bulkAdController.createDraft)
@@ -27,6 +31,12 @@ router.post('/tasks/:id/cancel', bulkAdController.cancelTask)
 router.post('/tasks/:id/retry', bulkAdController.retryTask)
 router.post('/tasks/:id/rerun', bulkAdController.rerunTask)
 
+// ==================== 广告审核状态 ====================
+router.get('/tasks/:id/review-status', bulkAdController.getTaskReviewStatus)
+router.post('/tasks/:id/check-review', bulkAdController.checkTaskReviewStatus)
+router.get('/ads/review-overview', bulkAdController.getAdsReviewOverview)
+router.post('/ads/refresh-review', bulkAdController.refreshAdsReviewStatus)
+
 // ==================== 定向包管理 ====================
 router.post('/targeting-packages', bulkAdController.createTargetingPackage)
 router.get('/targeting-packages', bulkAdController.getTargetingPackageList)
@@ -38,6 +48,7 @@ router.post('/copywriting-packages', bulkAdController.createCopywritingPackage)
 router.get('/copywriting-packages', bulkAdController.getCopywritingPackageList)
 router.put('/copywriting-packages/:id', bulkAdController.updateCopywritingPackage)
 router.delete('/copywriting-packages/:id', bulkAdController.deleteCopywritingPackage)
+router.post('/copywriting-packages/parse-products', bulkAdController.parseAllCopywritingProducts) // 批量解析产品信息
 
 // ==================== 创意组管理 ====================
 router.post('/creative-groups', bulkAdController.createCreativeGroup)

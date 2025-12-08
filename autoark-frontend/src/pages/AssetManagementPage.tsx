@@ -330,6 +330,11 @@ export default function AssetManagementPage() {
   const [materialFilter, setMaterialFilter] = useState({ folder: '', type: '' })
   const [loadingMaterials, setLoadingMaterials] = useState(false)
   
+  // 产品名编辑
+  const [editingProductId, setEditingProductId] = useState<string | null>(null)
+  const [editingProductName, setEditingProductName] = useState('')
+  const [savingProduct, setSavingProduct] = useState(false)
+  
   useEffect(() => {
     loadItems()
   }, [activeTab])
@@ -420,6 +425,44 @@ export default function AssetManagementPage() {
   const handleEdit = (item: any) => {
     setFormData(item)
     setShowForm(true)
+  }
+  
+  // 保存产品名
+  const handleSaveProductName = async (itemId: string) => {
+    if (!editingProductName.trim()) {
+      setEditingProductId(null)
+      return
+    }
+    
+    setSavingProduct(true)
+    try {
+      const res = await fetch(`${API_BASE}/bulk-ad/copywriting-packages/${itemId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          product: {
+            name: editingProductName.trim(),
+            autoExtracted: false, // 标记为手动设置
+          }
+        })
+      })
+      const data = await res.json()
+      if (data.success && data.data) {
+        // 使用服务器返回的完整数据更新本地状态
+        setItems(prev => prev.map(item => 
+          item._id === itemId ? data.data : item
+        ))
+      } else {
+        console.error('Save failed:', data.error)
+        alert('保存失败: ' + (data.error || '未知错误'))
+      }
+    } catch (err) {
+      console.error('Failed to save product name:', err)
+      alert('保存失败，请重试')
+    } finally {
+      setSavingProduct(false)
+      setEditingProductId(null)
+    }
   }
   
   const openMaterialPicker = () => {
@@ -754,8 +797,16 @@ export default function AssetManagementPage() {
               <select value={formData.callToAction || 'SHOP_NOW'} onChange={(e) => setFormData({...formData, callToAction: e.target.value})} className="w-full px-3 py-2 border rounded-lg">
                 <option value="SHOP_NOW">立即购买</option><option value="LEARN_MORE">了解更多</option><option value="SIGN_UP">注册</option><option value="DOWNLOAD">下载</option><option value="GET_OFFER">领取优惠</option>
               </select></div>
-            <div><label className="block text-sm text-slate-600 mb-1">落地页 URL</label>
-              <input type="url" value={formData.links?.websiteUrl || ''} onChange={(e) => setFormData({...formData, links: {...formData.links, websiteUrl: e.target.value}})} className="w-full px-3 py-2 border rounded-lg" /></div>
+            {/* 链接设置区块 */}
+            <div className="border-t pt-4 mt-4">
+              <h4 className="text-sm font-medium text-slate-700 mb-3">链接设置</h4>
+              <div className="space-y-3">
+                <div><label className="block text-sm text-slate-600 mb-1">落地页 URL</label>
+                  <input type="url" value={formData.links?.websiteUrl || ''} onChange={(e) => setFormData({...formData, links: {...formData.links, websiteUrl: e.target.value}})} className="w-full px-3 py-2 border rounded-lg" /></div>
+                <div><label className="block text-sm text-slate-600 mb-1">显示链接 <span className="text-slate-400 text-xs">(广告中展示的简短链接)</span></label>
+                  <input type="text" value={formData.links?.displayLink || ''} onChange={(e) => setFormData({...formData, links: {...formData.links, displayLink: e.target.value}})} placeholder="如: app.pilipa.com" className="w-full px-3 py-2 border rounded-lg" /></div>
+              </div>
+            </div>
           </div>
         )
       case 'creative':
@@ -849,6 +900,67 @@ export default function AssetManagementPage() {
       case 'copywriting':
         return (
           <div className="p-4 border rounded-lg hover:border-slate-300 transition-colors">
+            {/* 产品名称区域 - 支持编辑 */}
+            <div className="mb-3 -mx-4 -mt-4 px-4 py-2 bg-gradient-to-r from-emerald-500 to-teal-500 rounded-t-lg">
+              {editingProductId === item._id ? (
+                // 编辑模式
+                <div className="flex items-center gap-2">
+                  <svg className="w-4 h-4 text-white flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z" />
+                  </svg>
+                  <input
+                    type="text"
+                    value={editingProductName}
+                    onChange={(e) => setEditingProductName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleSaveProductName(item._id)
+                      if (e.key === 'Escape') setEditingProductId(null)
+                    }}
+                    placeholder="输入产品名称"
+                    className="flex-1 px-2 py-1 text-sm rounded bg-white/20 text-white placeholder-white/60 border border-white/30 focus:outline-none focus:bg-white/30"
+                    autoFocus
+                    disabled={savingProduct}
+                  />
+                  <button
+                    onClick={() => handleSaveProductName(item._id)}
+                    disabled={savingProduct}
+                    className="px-2 py-1 text-xs bg-white/20 hover:bg-white/30 text-white rounded transition-colors"
+                  >
+                    {savingProduct ? '...' : '保存'}
+                  </button>
+                  <button
+                    onClick={() => setEditingProductId(null)}
+                    className="px-2 py-1 text-xs bg-white/10 hover:bg-white/20 text-white rounded transition-colors"
+                  >
+                    取消
+                  </button>
+                </div>
+              ) : (
+                // 显示模式
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z" />
+                    </svg>
+                    <span className="text-white font-semibold text-sm">
+                      {item.product?.name || '点击设置产品名'}
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setEditingProductId(item._id)
+                      setEditingProductName(item.product?.name || '')
+                    }}
+                    className="px-2 py-1 text-xs bg-white/20 hover:bg-white/30 text-white rounded transition-colors flex items-center gap-1"
+                  >
+                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                    </svg>
+                    编辑
+                  </button>
+                </div>
+              )}
+            </div>
             <div className="flex justify-between items-start mb-2">
               <div className="font-semibold">{item.name}</div>
               <div className="flex gap-2">

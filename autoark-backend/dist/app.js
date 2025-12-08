@@ -13,6 +13,13 @@ const dashboard_routes_1 = __importDefault(require("./routes/dashboard.routes"))
 const facebook_sync_routes_1 = __importDefault(require("./routes/facebook.sync.routes"));
 const fbToken_routes_1 = __importDefault(require("./routes/fbToken.routes"));
 const user_settings_routes_1 = __importDefault(require("./routes/user.settings.routes")); // New: User settings routes
+const bulkAd_routes_1 = __importDefault(require("./routes/bulkAd.routes")); // New: Bulk ad creation routes
+const material_routes_1 = __importDefault(require("./routes/material.routes")); // New: Material management routes
+const materialMetrics_routes_1 = __importDefault(require("./routes/materialMetrics.routes")); // New: Material metrics & recommendations
+const agent_controller_1 = __importDefault(require("./domain/agent/agent.controller")); // New: AI Agent routes
+const summary_controller_1 = __importDefault(require("./controllers/summary.controller")); // New: 预聚合数据快速读取
+const productMapping_routes_1 = __importDefault(require("./routes/productMapping.routes")); // New: 产品关系映射
+const facebookApp_routes_1 = __importDefault(require("./routes/facebookApp.routes")); // New: Facebook App 管理
 const logger_1 = __importDefault(require("./utils/logger"));
 const sync_cron_1 = __importDefault(require("./cron/sync.cron"));
 const cron_1 = __importDefault(require("./cron"));
@@ -32,8 +39,10 @@ facebook_token_pool_1.tokenPool.initialize().catch((error) => {
 // Initialize Queues and Workers
 const facebook_queue_1 = require("./queue/facebook.queue");
 const facebook_worker_1 = require("./queue/facebook.worker");
+const bulkAd_worker_1 = require("./queue/bulkAd.worker");
 (0, facebook_queue_1.initQueues)();
 (0, facebook_worker_1.initWorkers)();
+(0, bulkAd_worker_1.initBulkAdWorker)(); // Initialize bulk ad creation worker
 // Initialize Crons
 const preaggregation_cron_1 = __importDefault(require("./cron/preaggregation.cron"));
 const aggregation_cron_1 = __importDefault(require("./cron/aggregation.cron"));
@@ -61,6 +70,13 @@ app.use('/api/facebook', facebook_sync_routes_1.default);
 app.use('/api/dashboard', dashboard_routes_1.default);
 app.use('/api/fb-token', fbToken_routes_1.default); // Facebook token management
 app.use('/api/user-settings', user_settings_routes_1.default); // New: User settings management
+app.use('/api/bulk-ad', bulkAd_routes_1.default); // New: Bulk ad creation management
+app.use('/api/materials', material_routes_1.default); // New: Material management
+app.use('/api/material-metrics', materialMetrics_routes_1.default); // New: Material metrics & recommendations
+app.use('/api/agent', agent_controller_1.default); // New: AI Agent
+app.use('/api/summary', summary_controller_1.default); // New: 预聚合数据快速读取（加速前端页面）
+app.use('/api/product-mapping', productMapping_routes_1.default); // New: 产品关系映射（自动投放核心）
+app.use('/api/facebook-apps', facebookApp_routes_1.default); // New: Facebook App 管理（多App负载均衡）
 // Dashboard UI 已迁移到 React 前端，不再需要后端路由
 // app.use('/dashboard', dashboardRoutes) // 已禁用，让前端 React Router 处理
 // Serve frontend static files (if dist directory exists)

@@ -1,6 +1,7 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import DatePicker from '../components/DatePicker'
 import PurchaseValueTooltip from '../components/PurchaseValueTooltip'
+import Loading from '../components/Loading'
 
 // 获取今天的日期字符串 (YYYY-MM-DD)
 const getToday = () => {
@@ -9,7 +10,6 @@ const getToday = () => {
 }
 import {
   getCampaigns,
-  syncCampaigns,
   getCampaignColumnSettings,
   saveCampaignColumnSettings,
   type FbCampaign,
@@ -183,6 +183,35 @@ export default function FacebookCampaignsPage() {
 
   // 排序状态 - 默认按 spend 降序
   const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' } | null>({ key: 'spend', direction: 'desc' })
+  const isFirstRender = useRef(true) // 用于跳过排序变化时的初始加载
+
+  // 前端排序（避免每次排序都请求服务器）
+  const sortedCampaigns = useMemo(() => {
+    if (!sortConfig?.key) return campaigns
+    
+    return [...campaigns].sort((a: any, b: any) => {
+      const aVal = a[sortConfig.key]
+      const bVal = b[sortConfig.key]
+      
+      // 处理 null/undefined
+      if (aVal == null && bVal == null) return 0
+      if (aVal == null) return sortConfig.direction === 'asc' ? -1 : 1
+      if (bVal == null) return sortConfig.direction === 'asc' ? 1 : -1
+      
+      // 数字比较
+      if (typeof aVal === 'number' && typeof bVal === 'number') {
+        return sortConfig.direction === 'asc' ? aVal - bVal : bVal - aVal
+      }
+      
+      // 字符串比较
+      const aStr = String(aVal).toLowerCase()
+      const bStr = String(bVal).toLowerCase()
+      if (sortConfig.direction === 'asc') {
+        return aStr.localeCompare(bStr)
+      }
+      return bStr.localeCompare(aStr)
+    })
+  }, [campaigns, sortConfig?.key, sortConfig?.direction])
 
   // 筛选条件 - 默认显示今天的数据
   const today = getToday()
@@ -199,6 +228,7 @@ export default function FacebookCampaignsPage() {
   const [visibleColumns, setVisibleColumns] = useState<string[]>([])
   const [columnOrder, setColumnOrder] = useState<string[]>([]) // 列的顺序（包括所有列）
   const [showColumnSettings, setShowColumnSettings] = useState(false)
+  const [columnSettingsLoaded, setColumnSettingsLoaded] = useState(false) // 列设置是否已加载
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null)
   const [columnSearchQuery, setColumnSearchQuery] = useState<string>('') // 搜索关键词
 
@@ -261,6 +291,8 @@ export default function FacebookCampaignsPage() {
       setVisibleColumns(defaultVisible)
       setColumnOrder(ALL_CAMPAIGN_COLUMNS.map(col => col.key))
       // 不设置错误消息，因为这是可选的设置，失败时使用默认设置即可
+    } finally {
+      setColumnSettingsLoaded(true) // 无论成功失败，都标记为已加载
     }
   }
 
@@ -302,7 +334,7 @@ export default function FacebookCampaignsPage() {
     setDraggedIndex(null)
   }
 
-  // 缓存 key
+  // 缓存 key（包含筛选和排序参数）
   const getCacheKey = () => `fb-campaigns-${JSON.stringify(filters)}-${sortConfig?.key}-${sortConfig?.direction}`
   
   // 加载广告系列列表（支持缓存优先）
@@ -330,9 +362,9 @@ export default function FacebookCampaignsPage() {
       const response = await getCampaigns({
         page,
         limit: pagination.limit,
-        ...filters,
         sortBy: sortConfig?.key || 'spend',
         sortOrder: sortConfig?.direction || 'desc',
+        ...filters,
       })
       setCampaigns(response.data)
       setPagination(response.pagination)
@@ -382,28 +414,29 @@ export default function FacebookCampaignsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filters.name, filters.accountId, filters.status, filters.objective, filters.startDate, filters.endDate])
 
-  // 当排序配置改变时，重新加载数据
+  // 排序变化时重新加载（后端排序）
   useEffect(() => {
-    loadCampaigns(1, false) // 排序时重置到第一页，使用缓存优先
+    // 跳过初始加载（第一次渲染时不触发，因为初始加载已在上面的 useEffect 处理）
+    if (isFirstRender.current) {
+      isFirstRender.current = false
+      return
+    }
+    if (!sortConfig) return
+    loadCampaigns(1, true) // 强制刷新以获取后端排序结果
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sortConfig?.key, sortConfig?.direction])
 
-  // 执行同步（强制刷新）
+  // 刷新数据（只从服务器获取，不调用 Facebook API）
   const handleSync = async () => {
     setSyncing(true)
     setMessage(null)
     try {
-      const result = await syncCampaigns()
-      setMessage({ 
-        type: 'success', 
-        text: `同步完成！成功: ${result.data.syncedCampaigns}个广告系列, ${result.data.syncedMetrics}个指标, 失败: ${result.data.errorCount}个`,
-        errors: result.data.errors || [],
-      })
       // 清除缓存并强制刷新
       localStorage.removeItem(getCacheKey())
-      loadCampaigns(1, true)
+      await loadCampaigns(1, true)
+      setMessage({ type: 'success', text: '数据已刷新' })
     } catch (error: any) {
-      setMessage({ type: 'error', text: error.message || '同步失败' })
+      setMessage({ type: 'error', text: error.message || '刷新失败' })
     } finally {
       setSyncing(false)
     }
@@ -453,7 +486,7 @@ export default function FacebookCampaignsPage() {
               <svg className={`w-5 h-5 ${syncing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
               </svg>
-              {syncing ? '同步中...' : '同步广告系列'}
+              {syncing ? '刷新中...' : '刷新数据'}
             </button>
 
             {/* 纯白底自定义列设置按钮 */}
@@ -787,12 +820,14 @@ export default function FacebookCampaignsPage() {
                 </tr>
               </thead>
               <tbody>
-                {loading ? (
-                  <tr><td colSpan={safeColumnsToRender.length + 1} className="px-6 py-12 text-center text-slate-500 animate-pulse">加载中...</td></tr>
-                ) : campaigns.length === 0 ? (
+                {(loading || !columnSettingsLoaded) ? (
+                  <tr><td colSpan={safeColumnsToRender.length + 1} className="px-6 py-12">
+                    <Loading.Inline message="加载中..." size="md" />
+                  </td></tr>
+                ) : sortedCampaigns.length === 0 ? (
                   <tr><td colSpan={safeColumnsToRender.length + 1} className="px-6 py-12 text-center text-slate-500">暂无数据</td></tr>
                 ) : (
-                  campaigns.map((campaign) => (
+                  sortedCampaigns.map((campaign) => (
                     <tr key={campaign.id || (campaign as any).id} className="group hover:bg-slate-50 transition-colors border-b border-slate-100">
                       {safeColumnsToRender.map(col => (
                         <td key={col.key} className="px-6 py-4">

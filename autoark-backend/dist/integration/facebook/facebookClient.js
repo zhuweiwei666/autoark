@@ -10,6 +10,18 @@ const fbToken_1 = require("../../utils/fbToken");
 const tokenPool_1 = require("./tokenPool");
 const FB_API_VERSION = 'v19.0';
 const FB_BASE_URL = 'https://graph.facebook.com';
+class FacebookApiError extends Error {
+    constructor(message, responseData) {
+        super(message);
+        this.name = 'FacebookApiError';
+        this.response = responseData;
+        if (responseData?.error) {
+            this.code = responseData.error.code;
+            this.subcode = responseData.error.error_subcode;
+            this.userMessage = responseData.error.error_user_msg || responseData.error.error_user_title;
+        }
+    }
+}
 const handleApiError = (context, error, token) => {
     const errMsg = error.response?.data?.error?.message || error.message;
     const errorCode = error.response?.data?.error?.code;
@@ -23,10 +35,13 @@ const handleApiError = (context, error, token) => {
             tokenPool_1.tokenPool.markTokenFailure(token, error);
         }
         logger_1.default.warn(`Facebook API Rate Limit [${context}]: ${errMsg}`);
-        throw new Error(`RATE_LIMIT: ${errMsg}`);
+        const rateLimitError = new FacebookApiError(`RATE_LIMIT: ${errMsg}`, error.response?.data);
+        throw rateLimitError;
     }
-    logger_1.default.error(`Facebook API Error [${context}]: ${errMsg}`, error.response?.data);
-    throw new Error(`Facebook API [${context}] failed: ${errMsg}`);
+    logger_1.default.error(`Facebook API Error [${context}]: ${errMsg}`);
+    logger_1.default.error(`Facebook API Full Response: ${JSON.stringify(error.response?.data, null, 2)}`);
+    const apiError = new FacebookApiError(`Facebook API [${context}] failed: ${errMsg}`, error.response?.data);
+    throw apiError;
 };
 exports.facebookClient = {
     get: async (endpoint, params = {}) => {
@@ -62,17 +77,28 @@ const request = async (method, endpoint, dataOrParams = {}) => {
                 method,
                 url,
             };
-            if (method === 'GET') {
-                config.params = {
-                    access_token: token,
-                    ...dataOrParams,
-                };
+            // Facebook Graph API: 所有参数都放在 URL query string 中
+            // 手动构建查询字符串，确保 JSON 参数正确编码
+            const allParams = {
+                access_token: token,
+            };
+            // 处理参数，确保不重复添加 access_token
+            for (const [key, value] of Object.entries(dataOrParams)) {
+                if (key !== 'access_token' && value !== undefined) {
+                    allParams[key] = value;
+                }
             }
-            else {
-                // POST
-                config.params = { access_token: token }; // Token 通常放在 URL 参数中
-                config.data = dataOrParams;
-            }
+            // 使用自定义序列化器确保 JSON 字符串正确编码
+            config.params = allParams;
+            config.paramsSerializer = (params) => {
+                const parts = [];
+                for (const [key, value] of Object.entries(params)) {
+                    if (value !== undefined && value !== null) {
+                        parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`);
+                    }
+                }
+                return parts.join('&');
+            };
             const res = await (0, axios_1.default)(config);
             // 标记成功
             if (tokenPool_1.tokenPool && tokenPool_1.tokenPool.markTokenSuccess) {

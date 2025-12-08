@@ -15,6 +15,7 @@ import FbToken from '../models/FbToken'
 import logger from '../utils/logger'
 import * as oauthService from '../services/facebook.oauth.service'
 import { facebookClient } from '../integration/facebook/facebookClient'
+import { parseProductUrl } from '../services/productMapping.service'
 
 // ==================== 草稿管理 ====================
 
@@ -24,6 +25,13 @@ import { facebookClient } from '../integration/facebook/facebookClient'
  */
 export const createDraft = async (req: Request, res: Response) => {
   try {
+    // Debug: 打印接收到的账户配置
+    logger.info('[BulkAd] createDraft received accounts:', JSON.stringify(req.body.accounts?.map((a: any) => ({
+      accountId: a.accountId,
+      pixelId: a.pixelId,
+      pixelName: a.pixelName
+    }))))
+    
     const draft = await bulkAdService.createDraft(req.body)
     res.json({ success: true, data: draft })
   } catch (error: any) {
@@ -276,7 +284,23 @@ export const deleteTargetingPackage = async (req: Request, res: Response) => {
  */
 export const createCopywritingPackage = async (req: Request, res: Response) => {
   try {
-    const pkg = new CopywritingPackage(req.body)
+    const data = { ...req.body }
+    
+    // 自动从 websiteUrl 提取产品信息
+    if (data.links?.websiteUrl && !data.product?.name) {
+      const parsed = parseProductUrl(data.links.websiteUrl)
+      if (parsed) {
+        data.product = {
+          name: parsed.productName || parsed.domain,
+          identifier: parsed.productIdentifier,
+          domain: parsed.domain,
+          autoExtracted: true,
+        }
+        logger.info(`[BulkAd] Auto-extracted product: ${data.product.name} from ${data.links.websiteUrl}`)
+      }
+    }
+    
+    const pkg = new CopywritingPackage(data)
     await pkg.save()
     res.json({ success: true, data: pkg })
   } catch (error: any) {
@@ -291,9 +315,31 @@ export const createCopywritingPackage = async (req: Request, res: Response) => {
  */
 export const updateCopywritingPackage = async (req: Request, res: Response) => {
   try {
+    const data = { ...req.body }
+    
+    // 如果更新了 websiteUrl，自动重新提取产品信息
+    if (data.links?.websiteUrl) {
+      const existingPkg = await CopywritingPackage.findById(req.params.id)
+      const urlChanged = existingPkg?.links?.websiteUrl !== data.links.websiteUrl
+      const productNotManual = !existingPkg?.product || existingPkg.product.autoExtracted !== false
+      
+      if (urlChanged && productNotManual) {
+        const parsed = parseProductUrl(data.links.websiteUrl)
+        if (parsed) {
+          data.product = {
+            name: parsed.productName || parsed.domain,
+            identifier: parsed.productIdentifier,
+            domain: parsed.domain,
+            autoExtracted: true,
+          }
+          logger.info(`[BulkAd] Auto-updated product: ${data.product.name} from ${data.links.websiteUrl}`)
+        }
+      }
+    }
+    
     const pkg = await CopywritingPackage.findByIdAndUpdate(
       req.params.id,
-      req.body,
+      data,
       { new: true }
     )
     if (!pkg) {
@@ -345,6 +391,63 @@ export const deleteCopywritingPackage = async (req: Request, res: Response) => {
   } catch (error: any) {
     logger.error('[BulkAd] Delete copywriting package failed:', error)
     res.status(400).json({ success: false, error: error.message })
+  }
+}
+
+/**
+ * 批量解析所有文案包的产品信息
+ * POST /api/bulk-ad/copywriting-packages/parse-products
+ */
+export const parseAllCopywritingProducts = async (req: Request, res: Response) => {
+  try {
+    const packages = await CopywritingPackage.find({
+      'links.websiteUrl': { $exists: true, $ne: '' },
+      $or: [
+        { 'product.name': { $exists: false } },
+        { 'product.name': '' },
+        { 'product.name': null },
+      ]
+    })
+    
+    let updated = 0
+    let failed = 0
+    const results: Array<{ id: string; name: string; productName?: string; error?: string }> = []
+    
+    for (const pkg of packages) {
+      try {
+        const urlString = pkg.links?.websiteUrl
+        if (!urlString) continue
+        
+        const parsed = parseProductUrl(urlString)
+        if (parsed) {
+          pkg.product = {
+            name: parsed.productName || parsed.domain,
+            identifier: parsed.productIdentifier,
+            domain: parsed.domain,
+            autoExtracted: true,
+          }
+          await pkg.save()
+          updated++
+          results.push({ id: pkg._id.toString(), name: pkg.name, productName: parsed.productName })
+        }
+      } catch (error: any) {
+        failed++
+        results.push({ id: pkg._id.toString(), name: pkg.name, error: error.message })
+      }
+    }
+    
+    res.json({ 
+      success: true, 
+      data: { 
+        total: packages.length,
+        updated, 
+        failed,
+        results 
+      } 
+    })
+  } catch (error: any) {
+    logger.error('[BulkAd] Parse all copywriting products failed:', error)
+    res.status(500).json({ success: false, error: error.message })
   }
 }
 
@@ -627,21 +730,40 @@ export const getFacebookCustomConversions = async (req: Request, res: Response) 
 // ==================== 独立 OAuth 授权 ====================
 
 /**
- * 获取 Facebook 登录 URL（批量广告专用）
+ * 获取可用的 Facebook Apps 列表
+ * GET /api/bulk-ad/auth/apps
+ */
+export const getAvailableApps = async (req: Request, res: Response) => {
+  try {
+    const apps = await oauthService.getAvailableApps()
+    res.json({ success: true, data: apps })
+  } catch (error: any) {
+    logger.error('[BulkAd] Get available apps failed:', error)
+    res.status(500).json({ success: false, error: error.message })
+  }
+}
+
+/**
+ * 获取 Facebook 登录 URL（批量广告专用，支持选择 App）
  * GET /api/bulk-ad/auth/login-url
  */
 export const getAuthLoginUrl = async (req: Request, res: Response) => {
   try {
-    const config = oauthService.validateOAuthConfig()
+    const { appId } = req.query // 可选，指定使用哪个 App
+    
+    const config = await oauthService.validateOAuthConfig()
     if (!config.valid) {
       return res.status(500).json({
         success: false,
-        error: `OAuth 配置不完整，缺少: ${config.missing.join(', ')}`,
+        error: config.hasDbApps 
+          ? `OAuth 配置不完整，缺少: ${config.missing.join(', ')}`
+          : '未配置 Facebook App，请在 App 管理页面添加',
+        needsAppSetup: !config.hasDbApps,
       })
     }
     
     // 使用特殊 state 标记来自批量广告模块
-    const loginUrl = oauthService.getFacebookLoginUrl('bulk-ad')
+    const loginUrl = await oauthService.getFacebookLoginUrl('bulk-ad', appId as string | undefined)
     
     res.json({
       success: true,
@@ -663,19 +785,31 @@ export const handleAuthCallback = async (req: Request, res: Response) => {
     
     if (error) {
       logger.error('[BulkAd OAuth] Facebook returned error:', { error, error_description })
+      // 重定向到专门的 OAuth 回调页面（用于关闭弹窗）
       return res.redirect(
-        `/bulk-ad/create?oauth_error=${encodeURIComponent(error_description as string || error as string)}`
+        `/oauth/callback?oauth_error=${encodeURIComponent(error_description as string || error as string)}`
       )
     }
     
     if (!code) {
-      return res.redirect('/bulk-ad/create?oauth_error=No authorization code received')
+      return res.redirect('/oauth/callback?oauth_error=No authorization code received')
     }
     
-    // 处理 OAuth 回调
-    const result = await oauthService.handleOAuthCallback(code as string)
+    // 处理 OAuth 回调（传递 state 以解析使用的 App）
+    const result = await oauthService.handleOAuthCallback(code as string, state as string | undefined)
     
-    // 重定向到批量广告创建页面
+    // 异步同步 Facebook 用户资产（Pixels、账户、粉丝页）
+    // 不阻塞用户，后台执行
+    const facebookUserService = require('../services/facebookUser.service')
+    facebookUserService.syncFacebookUserAssets(
+      result.fbUserId, 
+      result.accessToken,
+      result.tokenId
+    ).catch((err: any) => {
+      logger.error('[BulkAd OAuth] Failed to sync Facebook user assets:', err)
+    })
+    
+    // 重定向到专门的 OAuth 回调页面（用于关闭弹窗并通知父窗口）
     const params = new URLSearchParams({
       oauth_success: 'true',
       token_id: result.tokenId,
@@ -683,10 +817,10 @@ export const handleAuthCallback = async (req: Request, res: Response) => {
       fb_user_name: encodeURIComponent(result.fbUserName || ''),
     })
     
-    res.redirect(`/bulk-ad/create?${params.toString()}`)
+    res.redirect(`/oauth/callback?${params.toString()}`)
   } catch (error: any) {
     logger.error('[BulkAd OAuth] Callback handler failed:', error)
-    res.redirect(`/bulk-ad/create?oauth_error=${encodeURIComponent(error.message || 'OAuth callback failed')}`)
+    res.redirect(`/oauth/callback?oauth_error=${encodeURIComponent(error.message || 'OAuth callback failed')}`)
   }
 }
 
@@ -763,6 +897,10 @@ export const getAuthAdAccounts = async (req: Request, res: Response) => {
 /**
  * 获取账户的 Pages
  * GET /api/bulk-ad/auth/pages
+ * 
+ * 策略：
+ * 1. 先尝试从广告账户获取 promote_pages（BM 分配的主页）
+ * 2. 如果没有结果，回退获取用户有广告权限的所有主页
  */
 export const getAuthPages = async (req: Request, res: Response) => {
   try {
@@ -776,13 +914,39 @@ export const getAuthPages = async (req: Request, res: Response) => {
       return res.status(401).json({ success: false, error: '未授权 Facebook 账号' })
     }
     
-    const result = await facebookClient.get(`/act_${accountId}/promote_pages`, {
-      access_token: fbToken.token,
-      fields: 'id,name,picture',
-      limit: 100,
-    })
+    // 1. 先尝试从广告账户获取 promote_pages
+    let pages: any[] = []
+    try {
+      const promoteResult = await facebookClient.get(`/act_${accountId}/promote_pages`, {
+        access_token: fbToken.token,
+        fields: 'id,name,picture',
+        limit: 100,
+      })
+      pages = promoteResult.data || []
+    } catch (e: any) {
+      logger.warn(`[BulkAd] Failed to get promote_pages for ${accountId}: ${e.message}`)
+    }
     
-    res.json({ success: true, data: result.data || [] })
+    // 2. 如果没有 promote_pages，获取用户有广告权限的所有主页
+    if (pages.length === 0) {
+      logger.info(`[BulkAd] No promote_pages for ${accountId}, falling back to user pages`)
+      try {
+        const userPagesResult = await facebookClient.get('/me/accounts', {
+          access_token: fbToken.token,
+          fields: 'id,name,picture,tasks',
+          limit: 100,
+        })
+        // 只返回有 ADVERTISE 权限的主页
+        pages = (userPagesResult.data || []).filter((page: any) => 
+          page.tasks && page.tasks.includes('ADVERTISE')
+        )
+        logger.info(`[BulkAd] Found ${pages.length} user pages with ADVERTISE permission`)
+      } catch (e: any) {
+        logger.error(`[BulkAd] Failed to get user pages: ${e.message}`)
+      }
+    }
+    
+    res.json({ success: true, data: pages })
   } catch (error: any) {
     logger.error('[BulkAd] Get pages failed:', error)
     res.status(500).json({ success: false, error: error.message })
@@ -814,6 +978,146 @@ export const getAuthPixels = async (req: Request, res: Response) => {
     res.json({ success: true, data: result.data || [] })
   } catch (error: any) {
     logger.error('[BulkAd] Get pixels failed:', error)
+    res.status(500).json({ success: false, error: error.message })
+  }
+}
+
+/**
+ * 获取缓存的所有 Pixels（预加载，速度快）
+ * GET /api/bulk-ad/auth/cached-pixels
+ */
+export const getCachedPixels = async (req: Request, res: Response) => {
+  try {
+    const fbToken: any = await FbToken.findOne({ status: 'active' }).sort({ updatedAt: -1 })
+    if (!fbToken) {
+      return res.status(401).json({ success: false, error: '未授权 Facebook 账号' })
+    }
+    
+    const facebookUserService = require('../services/facebookUser.service')
+    const pixels = await facebookUserService.getCachedPixels(fbToken.fbUserId)
+    
+    // 转换格式以兼容前端
+    const formattedPixels = pixels.map((p: any) => ({
+      id: p.pixelId,
+      name: p.name,
+      accounts: p.accounts || [],
+    }))
+    
+    res.json({ success: true, data: formattedPixels })
+  } catch (error: any) {
+    logger.error('[BulkAd] Get cached pixels failed:', error)
+    res.status(500).json({ success: false, error: error.message })
+  }
+}
+
+/**
+ * 获取 Pixel 同步状态
+ * GET /api/bulk-ad/auth/sync-status
+ */
+export const getPixelSyncStatus = async (req: Request, res: Response) => {
+  try {
+    const fbToken: any = await FbToken.findOne({ status: 'active' }).sort({ updatedAt: -1 })
+    if (!fbToken) {
+      return res.status(401).json({ success: false, error: '未授权 Facebook 账号' })
+    }
+    
+    const facebookUserService = require('../services/facebookUser.service')
+    const status = await facebookUserService.getSyncStatus(fbToken.fbUserId)
+    
+    res.json({ success: true, data: status })
+  } catch (error: any) {
+    logger.error('[BulkAd] Get sync status failed:', error)
+    res.status(500).json({ success: false, error: error.message })
+  }
+}
+
+/**
+ * 手动触发重新同步
+ * POST /api/bulk-ad/auth/resync
+ */
+export const resyncFacebookAssets = async (req: Request, res: Response) => {
+  try {
+    const fbToken: any = await FbToken.findOne({ status: 'active' }).sort({ updatedAt: -1 })
+    if (!fbToken) {
+      return res.status(401).json({ success: false, error: '未授权 Facebook 账号' })
+    }
+    
+    const facebookUserService = require('../services/facebookUser.service')
+    
+    // 异步执行同步
+    facebookUserService.syncFacebookUserAssets(
+      fbToken.fbUserId, 
+      fbToken.token,
+      fbToken._id.toString()
+    ).catch((err: any) => {
+      logger.error('[BulkAd] Resync failed:', err)
+    })
+    
+    res.json({ success: true, message: '同步已开始，请稍后刷新' })
+  } catch (error: any) {
+    logger.error('[BulkAd] Resync trigger failed:', error)
+    res.status(500).json({ success: false, error: error.message })
+  }
+}
+
+// ==================== 广告审核状态 ====================
+
+/**
+ * 获取任务的广告审核状态
+ * GET /api/bulk-ad/tasks/:id/review-status
+ */
+export const getTaskReviewStatus = async (req: Request, res: Response) => {
+  try {
+    const { getTaskReviewDetails } = await import('../services/adReview.service')
+    const result = await getTaskReviewDetails(req.params.id)
+    res.json({ success: true, data: result })
+  } catch (error: any) {
+    logger.error('[BulkAd] Get task review status failed:', error)
+    res.status(500).json({ success: false, error: error.message })
+  }
+}
+
+/**
+ * 检查/刷新任务的广告审核状态
+ * POST /api/bulk-ad/tasks/:id/check-review
+ */
+export const checkTaskReviewStatus = async (req: Request, res: Response) => {
+  try {
+    const { updateTaskAdsReviewStatus } = await import('../services/adReview.service')
+    const result = await updateTaskAdsReviewStatus(req.params.id)
+    res.json({ success: true, data: result })
+  } catch (error: any) {
+    logger.error('[BulkAd] Check task review status failed:', error)
+    res.status(500).json({ success: false, error: error.message })
+  }
+}
+
+/**
+ * 获取所有 AutoArk 广告审核概览
+ * GET /api/bulk-ad/ads/review-overview
+ */
+export const getAdsReviewOverview = async (req: Request, res: Response) => {
+  try {
+    const { getReviewOverview } = await import('../services/adReview.service')
+    const result = await getReviewOverview()
+    res.json({ success: true, data: result })
+  } catch (error: any) {
+    logger.error('[BulkAd] Get ads review overview failed:', error)
+    res.status(500).json({ success: false, error: error.message })
+  }
+}
+
+/**
+ * 刷新所有 AutoArk 广告的审核状态
+ * POST /api/bulk-ad/ads/refresh-review
+ */
+export const refreshAdsReviewStatus = async (req: Request, res: Response) => {
+  try {
+    const { refreshAllReviewStatus } = await import('../services/adReview.service')
+    const result = await refreshAllReviewStatus()
+    res.json({ success: true, data: result })
+  } catch (error: any) {
+    logger.error('[BulkAd] Refresh ads review status failed:', error)
     res.status(500).json({ success: false, error: error.message })
   }
 }

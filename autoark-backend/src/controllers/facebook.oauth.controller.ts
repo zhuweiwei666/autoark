@@ -7,18 +7,21 @@ import logger from '../utils/logger'
  */
 export const getLoginUrl = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    // 验证配置
-    const config = oauthService.validateOAuthConfig()
+    // 验证配置（异步版本，支持从数据库读取 App 配置）
+    const config = await oauthService.validateOAuthConfig()
     if (!config.valid) {
       return res.status(500).json({
         success: false,
-        message: `OAuth 配置不完整，缺少: ${config.missing.join(', ')}`,
+        message: config.hasDbApps 
+          ? `OAuth 配置不完整，缺少: ${config.missing.join(', ')}`
+          : `未配置 Facebook App，请在 App 管理页面添加 App，或设置环境变量: ${config.missing.join(', ')}`,
         missing: config.missing,
+        hasDbApps: config.hasDbApps,
       })
     }
 
-    const { state } = req.query
-    const loginUrl = oauthService.getFacebookLoginUrl(state as string | undefined)
+    const { state, appId } = req.query
+    const loginUrl = await oauthService.getFacebookLoginUrl(state as string | undefined, appId as string | undefined)
 
     res.json({
       success: true,
@@ -87,7 +90,7 @@ export const handleCallback = async (req: Request, res: Response, next: NextFunc
  */
 export const getOAuthConfig = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const config = oauthService.validateOAuthConfig()
+    const config = oauthService.validateOAuthConfigSync()
 
     res.json({
       success: true,

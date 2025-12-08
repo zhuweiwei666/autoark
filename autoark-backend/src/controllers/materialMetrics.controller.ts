@@ -262,4 +262,8 @@ router.post('/backfill', async (req: Request, res: Response) => {
   }
 })
 
+// ==================== 素材下载功能已移除 ====================
+// 所有素材从素材库上传，通过 Ad.materialId 精准归因
+// 归因流程：素材库上传 → 创建广告(记录materialId) → 数据聚合(通过materialId精准归因)
+
 export default router

@@ -2,6 +2,7 @@ import * as fbApi from './facebook.api'
 import { Campaign, AdSet, Ad, MetricsDaily, SyncLog, Creative } from '../models'
 import logger from '../utils/logger'
 import { normalizeForApi, normalizeForStorage } from '../utils/accountId'
+import { extractPurchaseValue } from '../utils/facebookPurchase'
 
 // 从 object_story_spec 中提取 image_hash
 const extractImageHashFromSpec = (spec: any): string | undefined => {
@@ -201,10 +202,11 @@ export const syncAccount = async (accountId: string) => {
     logger.error(`Failed to sync creatives for ${accountId}`, err)
   }
 
-  // 5. Insights (Daily)
+  // 5. Insights (Daily) - 使用 campaign 级别以获取完整的维度数据
   try {
-    const insights = await fbApi.fetchInsights(accountIdForApi, 'account', 'today') // or 'yesterday'
-    logger.info(`Syncing ${insights.length} insight records for ${accountId}`)
+    // 改用 campaign 级别 + country breakdown 以支持多维度聚合
+    const insights = await fbApi.fetchInsights(accountIdForApi, 'campaign', 'today', undefined, ['country'])
+    logger.info(`Syncing ${insights.length} campaign-level insight records for ${accountId}`)
 
     for (const i of insights) {
       const spendUsd = parseFloat(i.spend || '0')
@@ -218,9 +220,34 @@ export const syncAccount = async (accountId: string) => {
       )
       const installs = installAction ? parseFloat(installAction.value) : 0
 
+      // 确定数据级别和实体ID
+      let dataLevel: string
+      let entityId: string
+      if (i.ad_id) {
+        dataLevel = 'ad'
+        entityId = i.ad_id
+      } else if (i.adset_id) {
+        dataLevel = 'adset'
+        entityId = i.adset_id
+      } else if (i.campaign_id) {
+        dataLevel = 'campaign'
+        entityId = i.campaign_id
+      } else {
+        dataLevel = 'account'
+        entityId = accountIdForStorage
+      }
+      
+      // 从 action_values 提取 purchase_value
+      const purchaseValue = extractPurchaseValue(i.action_values || [])
+      
       await writeToMongo(
         MetricsDaily,
-        { adId: i.ad_id, date: i.date_start },
+        { 
+          date: i.date_start,
+          level: dataLevel,
+          entityId: entityId,
+          country: i.country || null,
+        },
         {
           date: i.date_start,
           channel: 'facebook',
@@ -228,6 +255,9 @@ export const syncAccount = async (accountId: string) => {
           campaignId: i.campaign_id,
           adsetId: i.adset_id,
           adId: i.ad_id,
+          level: dataLevel,
+          entityId: entityId,
+          country: i.country || null,
           impressions,
           clicks,
           spendUsd,
@@ -235,6 +265,10 @@ export const syncAccount = async (accountId: string) => {
           ctr: i.ctr ? parseFloat(i.ctr) : 0,
           cpm: i.cpm ? parseFloat(i.cpm) : 0,
           installs,
+          conversions: installs, // 保持 conversions 字段兼容
+          purchase_value: purchaseValue,
+          actions: i.actions,
+          action_values: i.action_values,
           raw: i,
         },
       )

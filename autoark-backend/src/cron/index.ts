@@ -4,6 +4,7 @@ import fetchFacebookMetrics from './fetchFacebookMetrics'
 import { runRulesDaily } from '../rules'
 import { runAiOptimizerDaily } from '../ai'
 import { initMaterialMetricsCron } from './materialMetrics.cron'
+import { initSummaryAggregationCron } from './summaryAggregation.cron'
 import logger from '../utils/logger'
 
 const initCronJobs = () => {
@@ -30,6 +31,9 @@ const initCronJobs = () => {
 
   // Material Metrics Aggregation (Daily at 4 AM)
   initMaterialMetricsCron()
+
+  // Summary Aggregation (Every 10 minutes) - 加速前端页面加载
+  initSummaryAggregationCron()
 
   logger.info('Cron jobs initialized')
 }

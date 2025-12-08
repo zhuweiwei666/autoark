@@ -144,7 +144,7 @@ export const getCampaignsList = async (
     
     const page = parseInt(req.query.page as string) || 1
     const limit = parseInt(req.query.limit as string) || 20
-    const sortBy = (req.query.sortBy as string) || 'createdAt'
+    const sortBy = (req.query.sortBy as string) || 'spend' // 默认按消耗排序
     const sortOrder = (req.query.sortOrder as 'asc' | 'desc') || 'desc'
     const filters = {
         name: req.query.name,

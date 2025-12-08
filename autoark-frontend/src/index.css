@@ -2,21 +2,901 @@
 @tailwind components;
 @tailwind utilities;
 
-/* 自定义滚动条 */
+/* ==================== 高级字体 ==================== */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+:root {
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  
+  /* 高级玻璃效果变量 */
+  --glass-bg: rgba(255, 255, 255, 0.7);
+  --glass-border: rgba(255, 255, 255, 0.3);
+  --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.08);
+  --glass-blur: 12px;
+  
+  /* 动画时间 */
+  --transition-fast: 150ms;
+  --transition-normal: 250ms;
+  --transition-slow: 400ms;
+}
+
+body {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ==================== 自定义滚动条 ==================== */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #0f172a;
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #334155;
-  border-radius: 4px;
+  background: rgba(100, 116, 139, 0.3);
+  border-radius: 3px;
+  transition: background var(--transition-normal);
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #475569;
+  background: rgba(100, 116, 139, 0.5);
+}
+
+/* 暗色区域的滚动条 */
+.dark-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.dark-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+/* ==================== 高级玻璃卡片 ==================== */
+.glass-card {
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
+  transition: all var(--transition-normal) cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.glass-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.12);
+}
+
+/* 液态玻璃加载卡片 */
+.glass-loading-card {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.95) 0%, rgba(255, 255, 255, 0.85) 100%);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  box-shadow: 
+    0 8px 32px rgba(0, 0, 0, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.8),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.05);
+  border-radius: 24px;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.glass-loading-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 
+    0 12px 40px rgba(0, 0, 0, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+/* ==================== 液态玻璃按钮系统 ==================== */
+
+/* 基础按钮样式 */
+.btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 20px;
+  font-weight: 500;
+  font-size: 14px;
+  border-radius: 12px;
+  cursor: pointer;
+  overflow: hidden;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  border: none;
+  outline: none;
+}
+
+.btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none !important;
+}
+
+/* 主要按钮 - 液态玻璃蓝 */
+.btn-primary {
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.9) 0%, rgba(99, 102, 241, 0.9) 100%);
+  color: white;
+  box-shadow: 
+    0 4px 15px rgba(59, 130, 246, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.1);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.btn-primary::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3), transparent);
+  transition: left 0.6s ease;
+}
+
+.btn-primary:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 
+    0 8px 25px rgba(59, 130, 246, 0.45),
+    0 0 30px rgba(99, 102, 241, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.3);
+}
+
+.btn-primary:hover:not(:disabled)::before {
+  left: 100%;
+}
+
+.btn-primary:active:not(:disabled) {
+  transform: translateY(0) scale(0.98);
+  box-shadow: 
+    0 2px 10px rgba(59, 130, 246, 0.3),
+    inset 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+/* 次要按钮 - 玻璃白 */
+.btn-secondary {
+  background: rgba(255, 255, 255, 0.8);
+  color: #374151;
+  border: 1px solid rgba(209, 213, 219, 0.8);
+  box-shadow: 
+    0 2px 8px rgba(0, 0, 0, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.95);
+  border-color: rgba(156, 163, 175, 0.6);
+  transform: translateY(-2px);
+  box-shadow: 
+    0 6px 20px rgba(0, 0, 0, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 1);
+}
+
+.btn-secondary:active:not(:disabled) {
+  transform: translateY(0) scale(0.98);
+  background: rgba(249, 250, 251, 0.9);
+}
+
+/* 成功按钮 - 液态玻璃绿 */
+.btn-success {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.9) 0%, rgba(5, 150, 105, 0.9) 100%);
+  color: white;
+  box-shadow: 
+    0 4px 15px rgba(16, 185, 129, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.btn-success:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 
+    0 8px 25px rgba(16, 185, 129, 0.45),
+    0 0 30px rgba(5, 150, 105, 0.2);
+}
+
+.btn-success:active:not(:disabled) {
+  transform: translateY(0) scale(0.98);
+}
+
+/* 危险按钮 - 液态玻璃红 */
+.btn-danger {
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.9) 0%, rgba(220, 38, 38, 0.9) 100%);
+  color: white;
+  box-shadow: 
+    0 4px 15px rgba(239, 68, 68, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.btn-danger:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 
+    0 8px 25px rgba(239, 68, 68, 0.45),
+    0 0 30px rgba(220, 38, 38, 0.2);
+}
+
+.btn-danger:active:not(:disabled) {
+  transform: translateY(0) scale(0.98);
+}
+
+/* 警告按钮 - 液态玻璃橙 */
+.btn-warning {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.9) 0%, rgba(217, 119, 6, 0.9) 100%);
+  color: white;
+  box-shadow: 
+    0 4px 15px rgba(245, 158, 11, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.btn-warning:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 
+    0 8px 25px rgba(245, 158, 11, 0.45),
+    0 0 30px rgba(217, 119, 6, 0.2);
+}
+
+.btn-warning:active:not(:disabled) {
+  transform: translateY(0) scale(0.98);
+}
+
+/* 幽灵按钮 - 纯玻璃 */
+.btn-ghost {
+  background: rgba(255, 255, 255, 0.1);
+  color: #374151;
+  border: 1px solid rgba(209, 213, 219, 0.5);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.btn-ghost:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.3);
+  border-color: rgba(156, 163, 175, 0.6);
+  transform: translateY(-1px);
+}
+
+.btn-ghost:active:not(:disabled) {
+  transform: translateY(0) scale(0.98);
+  background: rgba(243, 244, 246, 0.5);
+}
+
+/* 链接按钮 */
+.btn-link {
+  background: transparent;
+  color: #3b82f6;
+  padding: 8px 12px;
+  box-shadow: none;
+}
+
+.btn-link:hover:not(:disabled) {
+  color: #2563eb;
+  background: rgba(59, 130, 246, 0.08);
+}
+
+/* 图标按钮 */
+.btn-icon {
+  padding: 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(209, 213, 219, 0.5);
+  color: #6b7280;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.btn-icon:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.95);
+  color: #374151;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+/* 按钮尺寸 */
+.btn-sm {
+  padding: 6px 14px;
+  font-size: 13px;
+  border-radius: 8px;
+}
+
+.btn-lg {
+  padding: 14px 28px;
+  font-size: 16px;
+  border-radius: 14px;
+}
+
+.btn-xl {
+  padding: 16px 36px;
+  font-size: 18px;
+  border-radius: 16px;
+}
+
+/* 全宽按钮 */
+.btn-block {
+  width: 100%;
+}
+
+/* 按钮组 */
+.btn-group {
+  display: inline-flex;
+  gap: 0;
+}
+
+.btn-group .btn {
+  border-radius: 0;
+}
+
+.btn-group .btn:first-child {
+  border-radius: 12px 0 0 12px;
+}
+
+.btn-group .btn:last-child {
+  border-radius: 0 12px 12px 0;
+}
+
+/* 加载状态 */
+.btn-loading {
+  pointer-events: none;
+  opacity: 0.8;
+}
+
+.btn-loading::after {
+  content: '';
+  width: 16px;
+  height: 16px;
+  border: 2px solid transparent;
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: btn-spin 0.8s linear infinite;
+  margin-left: 8px;
+}
+
+@keyframes btn-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* 发光效果 */
+.btn-glow {
+  animation: btn-glow-pulse 2s ease-in-out infinite;
+}
+
+@keyframes btn-glow-pulse {
+  0%, 100% {
+    box-shadow: 
+      0 4px 15px rgba(59, 130, 246, 0.35),
+      0 0 20px rgba(99, 102, 241, 0.1);
+  }
+  50% {
+    box-shadow: 
+      0 4px 20px rgba(59, 130, 246, 0.5),
+      0 0 40px rgba(99, 102, 241, 0.25);
+  }
+}
+
+/* ==================== 输入框聚焦效果 ==================== */
+input, select, textarea {
+  transition: all var(--transition-normal) cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+}
+
+/* ==================== 复选框美化 ==================== */
+input[type="checkbox"] {
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border: 2px solid #cbd5e1;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all var(--transition-fast) ease;
+  position: relative;
+}
+
+input[type="checkbox"]:checked {
+  background: linear-gradient(135deg, #3b82f6, #2563eb);
+  border-color: #3b82f6;
+}
+
+input[type="checkbox"]:checked::after {
+  content: '';
+  position: absolute;
+  left: 5px;
+  top: 2px;
+  width: 5px;
+  height: 9px;
+  border: solid white;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+input[type="checkbox"]:hover {
+  border-color: #3b82f6;
+}
+
+/* ==================== 表格行悬浮效果 ==================== */
+tr {
+  transition: all var(--transition-fast) ease;
+}
+
+tbody tr:hover {
+  background: rgba(59, 130, 246, 0.04);
+}
+
+/* ==================== 骨架屏动画 ==================== */
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.skeleton {
+  background: linear-gradient(90deg, #f1f5f9 25%, #e2e8f0 50%, #f1f5f9 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: 4px;
+}
+
+/* ==================== 页面淡入动画 ==================== */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in {
+  animation: fadeInUp 0.4s ease-out;
+}
+
+/* 列表项交错动画 */
+.stagger-item {
+  opacity: 0;
+  animation: fadeInUp 0.4s ease-out forwards;
+}
+
+.stagger-item:nth-child(1) { animation-delay: 0ms; }
+.stagger-item:nth-child(2) { animation-delay: 50ms; }
+.stagger-item:nth-child(3) { animation-delay: 100ms; }
+.stagger-item:nth-child(4) { animation-delay: 150ms; }
+.stagger-item:nth-child(5) { animation-delay: 200ms; }
+.stagger-item:nth-child(6) { animation-delay: 250ms; }
+.stagger-item:nth-child(7) { animation-delay: 300ms; }
+.stagger-item:nth-child(8) { animation-delay: 350ms; }
+
+/* ==================== 菜单项悬浮效果 ==================== */
+.menu-item {
+  position: relative;
+  transition: all var(--transition-normal) cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.menu-item::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 0;
+  background: linear-gradient(180deg, #3b82f6, #8b5cf6);
+  border-radius: 0 2px 2px 0;
+  transition: height var(--transition-normal) cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.menu-item:hover::before,
+.menu-item.active::before {
+  height: 60%;
+}
+
+/* ==================== 数字跳动动画 ==================== */
+@keyframes countUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-count {
+  animation: countUp 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ==================== 加载旋转动画 ==================== */
+@keyframes spin-slow {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-spin-slow {
+  animation: spin-slow 1.5s linear infinite;
+}
+
+/* ==================== 脉冲呼吸效果 ==================== */
+@keyframes pulse-soft {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+
+.animate-pulse-soft {
+  animation: pulse-soft 2s ease-in-out infinite;
+}
+
+/* ==================== 渐变边框效果 ==================== */
+.gradient-border {
+  position: relative;
+  background: white;
+  border-radius: 12px;
+}
+
+.gradient-border::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 12px;
+  padding: 1px;
+  background: linear-gradient(135deg, #3b82f6, #8b5cf6, #ec4899);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  opacity: 0;
+  transition: opacity var(--transition-normal);
+}
+
+.gradient-border:hover::before {
+  opacity: 1;
+}
+
+/* ==================== 状态标签动画 ==================== */
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: all var(--transition-fast) ease;
+}
+
+.status-badge:hover {
+  transform: scale(1.05);
+}
+
+/* ==================== 工具提示 ==================== */
+.tooltip {
+  position: relative;
+}
+
+.tooltip::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%) translateY(-4px);
+  padding: 6px 12px;
+  background: #1e293b;
+  color: white;
+  font-size: 12px;
+  border-radius: 6px;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: all var(--transition-fast) ease;
+}
+
+.tooltip:hover::after {
+  opacity: 1;
+  transform: translateX(-50%) translateY(-8px);
+}
+
+/* ==================== 进度条动画 ==================== */
+.progress-bar {
+  background: linear-gradient(90deg, #3b82f6, #8b5cf6);
+  background-size: 200% 100%;
+  animation: gradient-shift 2s ease infinite;
+}
+
+@keyframes gradient-shift {
+  0%, 100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+}
+
+/* ==================== 卡片选中效果 ==================== */
+.card-selectable {
+  cursor: pointer;
+  transition: all var(--transition-normal) cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.card-selectable:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+}
+
+.card-selectable.selected {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2), 0 8px 24px rgba(59, 130, 246, 0.15);
+}
+
+/* ==================== 浮动操作按钮 ==================== */
+.fab {
+  box-shadow: 0 4px 14px rgba(59, 130, 246, 0.4);
+  transition: all var(--transition-normal) cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.fab:hover {
+  transform: translateY(-2px) scale(1.05);
+  box-shadow: 0 6px 20px rgba(59, 130, 246, 0.5);
+}
+
+.fab:active {
+  transform: translateY(0) scale(0.98);
+}
+
+/* ==================== Tailwind 按钮增强 - 液态玻璃效果 ==================== */
+/* 自动为使用 Tailwind 类的按钮添加液态玻璃效果 */
+
+/* 蓝色主按钮 (bg-blue-xxx) */
+button.bg-blue-500,
+button.bg-blue-600,
+a.bg-blue-500,
+a.bg-blue-600,
+.bg-blue-500[role="button"],
+.bg-blue-600[role="button"] {
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.95) 0%, rgba(79, 70, 229, 0.95) 100%) !important;
+  box-shadow: 
+    0 4px 15px rgba(59, 130, 246, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.1);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: none !important;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+  overflow: hidden;
+}
+
+button.bg-blue-500:hover:not(:disabled),
+button.bg-blue-600:hover:not(:disabled),
+a.bg-blue-500:hover,
+a.bg-blue-600:hover {
+  transform: translateY(-2px);
+  box-shadow: 
+    0 8px 25px rgba(59, 130, 246, 0.45),
+    0 0 30px rgba(99, 102, 241, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.3) !important;
+}
+
+button.bg-blue-500:active:not(:disabled),
+button.bg-blue-600:active:not(:disabled) {
+  transform: translateY(0) scale(0.98);
+}
+
+/* 绿色成功按钮 */
+button.bg-green-500,
+button.bg-green-600,
+button.bg-emerald-500,
+button.bg-emerald-600 {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.95) 0%, rgba(5, 150, 105, 0.95) 100%) !important;
+  box-shadow: 
+    0 4px 15px rgba(16, 185, 129, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+button.bg-green-500:hover:not(:disabled),
+button.bg-green-600:hover:not(:disabled),
+button.bg-emerald-500:hover:not(:disabled),
+button.bg-emerald-600:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 
+    0 8px 25px rgba(16, 185, 129, 0.45),
+    0 0 30px rgba(5, 150, 105, 0.2) !important;
+}
+
+/* 红色危险按钮 */
+button.bg-red-500,
+button.bg-red-600 {
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.95) 0%, rgba(220, 38, 38, 0.95) 100%) !important;
+  box-shadow: 
+    0 4px 15px rgba(239, 68, 68, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+button.bg-red-500:hover:not(:disabled),
+button.bg-red-600:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 
+    0 8px 25px rgba(239, 68, 68, 0.45),
+    0 0 30px rgba(220, 38, 38, 0.2) !important;
+}
+
+/* 灰色次要按钮 */
+button.bg-gray-100,
+button.bg-gray-200,
+button.bg-slate-100,
+button.bg-slate-200,
+button.bg-white {
+  background: rgba(255, 255, 255, 0.85) !important;
+  box-shadow: 
+    0 2px 8px rgba(0, 0, 0, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(209, 213, 219, 0.6) !important;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+button.bg-gray-100:hover:not(:disabled),
+button.bg-gray-200:hover:not(:disabled),
+button.bg-slate-100:hover:not(:disabled),
+button.bg-slate-200:hover:not(:disabled),
+button.bg-white:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.98) !important;
+  transform: translateY(-1px);
+  box-shadow: 
+    0 6px 20px rgba(0, 0, 0, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 1) !important;
+}
+
+/* 紫色按钮 */
+button.bg-purple-500,
+button.bg-purple-600,
+button.bg-violet-500,
+button.bg-violet-600,
+button.bg-indigo-500,
+button.bg-indigo-600 {
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.95) 0%, rgba(124, 58, 237, 0.95) 100%) !important;
+  box-shadow: 
+    0 4px 15px rgba(139, 92, 246, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+button.bg-purple-500:hover:not(:disabled),
+button.bg-purple-600:hover:not(:disabled),
+button.bg-violet-500:hover:not(:disabled),
+button.bg-violet-600:hover:not(:disabled),
+button.bg-indigo-500:hover:not(:disabled),
+button.bg-indigo-600:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 
+    0 8px 25px rgba(139, 92, 246, 0.45),
+    0 0 30px rgba(124, 58, 237, 0.2) !important;
+}
+
+/* 橙色/琥珀按钮 */
+button.bg-orange-500,
+button.bg-orange-600,
+button.bg-amber-500,
+button.bg-amber-600,
+button.bg-yellow-500,
+button.bg-yellow-600 {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.95) 0%, rgba(217, 119, 6, 0.95) 100%) !important;
+  box-shadow: 
+    0 4px 15px rgba(245, 158, 11, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+button.bg-orange-500:hover:not(:disabled),
+button.bg-orange-600:hover:not(:disabled),
+button.bg-amber-500:hover:not(:disabled),
+button.bg-amber-600:hover:not(:disabled),
+button.bg-yellow-500:hover:not(:disabled),
+button.bg-yellow-600:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 
+    0 8px 25px rgba(245, 158, 11, 0.45),
+    0 0 30px rgba(217, 119, 6, 0.2) !important;
+}
+
+/* 禁用状态 */
+button:disabled,
+button[disabled] {
+  opacity: 0.6 !important;
+  cursor: not-allowed !important;
+  transform: none !important;
+}
+
+/* 通用按钮圆角增强 */
+button[class*="rounded-lg"],
+button[class*="rounded-md"],
+a[class*="rounded-lg"],
+a[class*="rounded-md"] {
+  border-radius: 12px !important;
+}
+
+/* 按钮加载动画 */
+button.loading {
+  pointer-events: none;
+  position: relative;
+}
+
+button.loading::after {
+  content: '';
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  top: 50%;
+  left: 50%;
+  margin: -8px 0 0 -8px;
+  border: 2px solid transparent;
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: btn-spin 0.8s linear infinite;
+}
+
+/* 移除 hover 时的 bg 类覆盖 */
+button:hover.hover\:bg-blue-600,
+button:hover.hover\:bg-blue-700,
+button:hover.hover\:bg-green-600,
+button:hover.hover\:bg-green-700,
+button:hover.hover\:bg-red-600,
+button:hover.hover\:bg-red-700 {
+  background: inherit !important;
+}
+
+/* ==================== 特殊场景按钮 ==================== */
+
+/* 表格内操作按钮 */
+table button,
+.table-actions button {
+  padding: 6px 12px;
+  font-size: 13px;
+  border-radius: 8px !important;
+}
+
+/* 模态框底部按钮 */
+.modal-footer button,
+[class*="DialogFooter"] button {
+  min-width: 100px;
+}
+
+/* 表单提交按钮 */
+form button[type="submit"] {
+  font-weight: 600;
+}
+
+/* 图标按钮样式 */
+button[class*="p-2"]:not([class*="px-"]):not([class*="py-"]),
+button[class*="p-1"]:not([class*="px-"]):not([class*="py-"]) {
+  border-radius: 10px !important;
 }

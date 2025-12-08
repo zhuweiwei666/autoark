@@ -54,6 +54,14 @@ const copywritingPackageSchema = new mongoose.Schema(
       deepLink: { type: String },  // App 深度链接
     },
     
+    // 产品信息（从 websiteUrl 自动解析）
+    product: {
+      name: { type: String },           // 产品名称（自动提取或手动设置）
+      identifier: { type: String },     // 产品唯一标识
+      domain: { type: String },         // 主域名
+      autoExtracted: { type: Boolean, default: true }, // 是否自动提取
+    },
+    
     // URL 参数（用于追踪）
     urlParameters: {
       utmSource: { type: String },

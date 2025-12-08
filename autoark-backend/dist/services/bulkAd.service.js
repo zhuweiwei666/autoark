@@ -443,6 +443,8 @@ const executeTaskForAccount = async (taskId, accountId) => {
             }
             logger_1.default.info(`[BulkAd] Non-CBO mode, adset budget: ${adsetBudget}`);
         }
+        // DSA 受益方：使用 Pixel 名称（欧盟合规）
+        const dsaBeneficiary = accountConfig.pixelName || accountConfig.pixelId || undefined;
         const adsetResult = await (0, bulkCreate_api_1.createAdSet)({
             accountId,
             token,
@@ -461,6 +463,8 @@ const executeTaskForAccount = async (taskId, accountId) => {
                 pixel_id: accountConfig.pixelId,
                 custom_event_type: accountConfig.conversionEvent || 'PURCHASE',
             } : undefined,
+            dsa_beneficiary: dsaBeneficiary,
+            dsa_payor: dsaBeneficiary,
         });
         if (!adsetResult.success) {
             throw new Error(`AdSet creation failed: ${adsetResult.error?.message}`);
@@ -486,6 +490,7 @@ const executeTaskForAccount = async (taskId, accountId) => {
         // ==================== 5. 创建广告 ====================
         // 遍历每个创意组的每个素材，为每个素材创建一条广告
         const adIds = [];
+        const adsDetails = [];
         let globalAdIndex = 0;
         for (let cgIndex = 0; cgIndex < creativeGroups.length; cgIndex++) {
             const creativeGroup = creativeGroups[cgIndex];
@@ -545,18 +550,23 @@ const executeTaskForAccount = async (taskId, accountId) => {
                 }
                 // 创建 Ad Creative
                 const creativeName = `${adsetName}_creative_${globalAdIndex}`;
+                const linkData = {
+                    link: copywriting.links?.websiteUrl || '',
+                    message: copywriting.content?.primaryTexts?.[0] || '',
+                    name: copywriting.content?.headlines?.[0] || '',
+                    description: copywriting.content?.descriptions?.[0] || '',
+                    call_to_action: {
+                        type: copywriting.callToAction || 'SHOP_NOW',
+                        value: { link: copywriting.links?.websiteUrl || '' },
+                    },
+                };
+                // 添加显示链接（caption）
+                if (copywriting.links?.displayLink) {
+                    linkData.caption = copywriting.links.displayLink;
+                }
                 const objectStorySpec = {
                     page_id: accountConfig.pageId,
-                    link_data: {
-                        link: copywriting.links?.websiteUrl || '',
-                        message: copywriting.content?.primaryTexts?.[0] || '',
-                        name: copywriting.content?.headlines?.[0] || '',
-                        description: copywriting.content?.descriptions?.[0] || '',
-                        call_to_action: {
-                            type: copywriting.callToAction || 'SHOP_NOW',
-                            value: { link: copywriting.links?.websiteUrl || '' },
-                        },
-                    },
+                    link_data: linkData,
                 };
                 if (materialRef.image_hash) {
                     objectStorySpec.link_data.image_hash = materialRef.image_hash;
@@ -570,12 +580,11 @@ const executeTaskForAccount = async (taskId, accountId) => {
                     const message = objectStorySpec.link_data.message;
                     const title = objectStorySpec.link_data.name;
                     const description = objectStorySpec.link_data.description;
-                    let ctaType = copywriting.callToAction || 'SHOP_NOW';
-                    if (ctaType === 'DOWNLOAD' || ctaType === 'INSTALL_MOBILE_APP') {
-                        ctaType = 'SHOP_NOW';
-                    }
+                    const caption = objectStorySpec.link_data.caption;
+                    // 使用用户选择的 CTA，不做强制转换
+                    const ctaType = copywriting.callToAction || 'SHOP_NOW';
                     delete objectStorySpec.link_data;
-                    objectStorySpec.video_data = {
+                    const videoData = {
                         video_id: materialRef.video_id,
                         image_url: materialRef.thumbnail_url,
                         message: message,
@@ -585,6 +594,11 @@ const executeTaskForAccount = async (taskId, accountId) => {
                             value: { link: link },
                         },
                     };
+                    // 添加显示链接
+                    if (caption) {
+                        videoData.caption = caption;
+                    }
+                    objectStorySpec.video_data = videoData;
                     logger_1.default.info(`[BulkAd] Video creative with thumbnail: ${materialRef.thumbnail_url}`);
                 }
                 if (accountConfig.instagramAccountId) {
@@ -625,6 +639,15 @@ const executeTaskForAccount = async (taskId, accountId) => {
                     continue;
                 }
                 adIds.push(adResult.id);
+                // 记录广告详情（用于审核状态追踪）
+                adsDetails.push({
+                    adId: adResult.id,
+                    adName,
+                    adsetId,
+                    creativeId,
+                    materialId: material._id?.toString(),
+                    effectiveStatus: 'PENDING_REVIEW', // 新创建的广告默认为审核中
+                });
                 logger_1.default.info(`[BulkAd] Created ad ${globalAdIndex}: ${adName}`);
             }
         }
@@ -643,11 +666,36 @@ const executeTaskForAccount = async (taskId, accountId) => {
             'items.$.result.adIds': adIds,
             'items.$.result.createdCount': adIds.length,
             'items.$.completedAt': new Date(),
+            'items.$.ads': adsDetails, // 保存广告详情用于审核追踪
         };
         if (errorInfo) {
             updateData['items.$.errors'] = errorInfo;
         }
         await updateTaskItemAtomic(taskId, accountId, updateData);
+        // 同步创建 Ad 记录到数据库（用于后续审核状态追踪）
+        try {
+            const Ad = require('../models/Ad').default;
+            for (const adDetail of adsDetails) {
+                await Ad.findOneAndUpdate({ adId: adDetail.adId }, {
+                    $set: {
+                        adId: adDetail.adId,
+                        name: adDetail.adName,
+                        adsetId: adDetail.adsetId,
+                        campaignId,
+                        accountId,
+                        creativeId: adDetail.creativeId,
+                        materialId: adDetail.materialId,
+                        taskId,
+                        effectiveStatus: 'PENDING_REVIEW',
+                        status: config.ad.status || 'PAUSED',
+                    },
+                }, { upsert: true });
+            }
+            logger_1.default.info(`[BulkAd] Saved ${adsDetails.length} ad records for review tracking`);
+        }
+        catch (adSaveErr) {
+            logger_1.default.warn(`[BulkAd] Failed to save ad records:`, adSaveErr.message);
+        }
         // 更新总体进度（原子操作）
         await updateTaskProgressAtomic(taskId);
         logger_1.default.info(`[BulkAd] Task ${finalStatus} for account ${accountId}: ${adIds.length} ads created`);

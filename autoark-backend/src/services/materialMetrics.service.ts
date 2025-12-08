@@ -4,6 +4,8 @@ import Ad from '../models/Ad'
 import MetricsDaily from '../models/MetricsDaily'
 import MaterialMetrics from '../models/MaterialMetrics'
 import Material from '../models/Material'
+import Creative from '../models/Creative'
+import { generateFingerprint } from './materialSync.service'
 
 /**
  * 素材指标聚合服务
@@ -68,32 +70,120 @@ const extractOptimizer = (campaignName: string): string => {
 
 /**
  * 聚合指定日期的素材级别指标
+ * 
+ * 🎯 精准归因逻辑：
+ * 1. 优先使用 Ad.materialId（直接关联，100% 可靠）
+ * 2. 回退到 imageHash/videoId 反查（兼容旧数据）
  */
 export const aggregateMaterialMetrics = async (date: string): Promise<{ 
   processed: number
   created: number
   updated: number
-  errors: number 
+  errors: number
+  directMatch: number   // 直接通过 materialId 匹配的数量
+  fallbackMatch: number // 通过 hash 反查匹配的数量 
 }> => {
   logger.info(`[MaterialMetrics] Aggregating material metrics for ${date}`)
   
-  const stats = { processed: 0, created: 0, updated: 0, errors: 0 }
+  const stats = { processed: 0, created: 0, updated: 0, errors: 0, directMatch: 0, fallbackMatch: 0 }
   
   try {
     // 1. 获取所有广告及其素材信息
     const ads = await Ad.find({}).lean()
     logger.info(`[MaterialMetrics] Found ${ads.length} ads to process`)
     
-    // 2. 构建 adId -> 素材信息 的映射（使用 creativeId 作为主要标识）
-    const adCreativeMap = new Map<string, { creativeId?: string; imageHash?: string; videoId?: string; thumbnailUrl?: string }>()
-    for (const ad of ads) {
-      const creativeInfo = extractCreativeInfo(ad)
-      // 只要有 creativeId 就可以追踪
-      if (creativeInfo.creativeId) {
-        adCreativeMap.set(ad.adId, creativeInfo)
+    // 1.1 获取所有 Creative 信息（包含本地存储 URL 和指纹）
+    const creatives = await Creative.find({}).lean()
+    const creativeInfoMap = new Map<string, any>()
+    for (const creative of creatives) {
+      creativeInfoMap.set(creative.creativeId, {
+        localStorageUrl: creative.localStorageUrl,
+        originalUrl: creative.imageUrl || creative.thumbnailUrl,
+        fingerprint: creative.fingerprint?.pHash,
+        name: creative.name,
+        downloaded: creative.downloaded,
+        materialId: creative.materialId,  // Creative 也可能关联到 Material
+      })
+    }
+    logger.info(`[MaterialMetrics] Loaded ${creativeInfoMap.size} creatives with details`)
+    
+    // 1.2 获取所有 Material（用于 hash 反查）
+    const materials = await Material.find({ status: 'uploaded' }).lean()
+    const materialByHash = new Map<string, any>()
+    const materialByVideoId = new Map<string, any>()
+    for (const m of materials) {
+      const mat = m as any
+      // 通过 Facebook 映射查找
+      if (mat.facebook?.imageHash) materialByHash.set(mat.facebook.imageHash, mat)
+      if (mat.facebook?.videoId) materialByVideoId.set(mat.facebook.videoId, mat)
+      // 通过 facebookMappings 查找
+      for (const mapping of (mat.facebookMappings || [])) {
+        if (mapping.imageHash) materialByHash.set(mapping.imageHash, mat)
+        if (mapping.videoId) materialByVideoId.set(mapping.videoId, mat)
       }
     }
-    logger.info(`[MaterialMetrics] Built creative map for ${adCreativeMap.size} ads with creatives`)
+    logger.info(`[MaterialMetrics] Built material lookup: ${materialByHash.size} by hash, ${materialByVideoId.size} by videoId`)
+    
+    // 2. 构建 adId -> 素材信息 的映射
+    // 🎯 关键：优先使用 Ad.materialId（直接归因）
+    const adCreativeMap = new Map<string, { 
+      materialId?: string         // 🎯 直接关联的素材库 ID
+      creativeId?: string
+      imageHash?: string
+      videoId?: string
+      thumbnailUrl?: string
+      localStorageUrl?: string
+      originalUrl?: string
+      fingerprint?: string
+      creativeName?: string
+      matchType: 'direct' | 'fallback' | 'none'  // 匹配类型
+    }>()
+    
+    for (const ad of ads) {
+      const creativeInfo = extractCreativeInfo(ad)
+      const creativeDetail = creativeInfo.creativeId ? creativeInfoMap.get(creativeInfo.creativeId) : null
+      
+      // 🎯 优先使用 Ad.materialId（直接归因）
+      let materialId: string | undefined = (ad as any).materialId?.toString()
+      let matchType: 'direct' | 'fallback' | 'none' = 'none'
+      
+      if (materialId) {
+        matchType = 'direct'
+      } else if (creativeDetail?.materialId) {
+        // 其次使用 Creative.materialId
+        materialId = creativeDetail.materialId.toString()
+        matchType = 'direct'
+      } else {
+        // 回退：通过 hash 反查
+        const imageHash = creativeInfo.imageHash
+        const videoId = creativeInfo.videoId
+        
+        if (imageHash && materialByHash.has(imageHash)) {
+          materialId = materialByHash.get(imageHash)._id.toString()
+          matchType = 'fallback'
+        } else if (videoId && materialByVideoId.has(videoId)) {
+          materialId = materialByVideoId.get(videoId)._id.toString()
+          matchType = 'fallback'
+        }
+      }
+      
+      // 只要有素材信息就记录
+      if (creativeInfo.creativeId || materialId) {
+        adCreativeMap.set(ad.adId, {
+          materialId,
+          ...creativeInfo,
+          localStorageUrl: creativeDetail?.localStorageUrl,
+          originalUrl: creativeDetail?.originalUrl || creativeInfo.thumbnailUrl,
+          fingerprint: creativeDetail?.fingerprint,
+          creativeName: creativeDetail?.name,
+          matchType,
+        })
+      }
+    }
+    
+    const directCount = Array.from(adCreativeMap.values()).filter(v => v.matchType === 'direct').length
+    const fallbackCount = Array.from(adCreativeMap.values()).filter(v => v.matchType === 'fallback').length
+    logger.info(`[MaterialMetrics] Ad-Material mapping: ${directCount} direct, ${fallbackCount} fallback, ${adCreativeMap.size - directCount - fallbackCount} none`)
     
     // 3. 获取当天的 ad 级别指标
     const adMetrics = await MetricsDaily.find({
@@ -103,17 +193,24 @@ export const aggregateMaterialMetrics = async (date: string): Promise<{
     }).lean()
     logger.info(`[MaterialMetrics] Found ${adMetrics.length} ad metrics for ${date}`)
     
-    // 4. 按素材聚合指标（使用 creativeId 作为 key）
+    // 4. 按素材聚合指标
+    // 🎯 优先使用 materialId 作为 key（精准归因）
+    // 回退使用 creativeId（兼容）
     const materialAggregation = new Map<string, any>()
     
     for (const metric of adMetrics) {
       const creativeInfo = adCreativeMap.get(metric.adId)
-      if (!creativeInfo || !creativeInfo.creativeId) continue
+      if (!creativeInfo) continue
       
-      // 使用 creativeId 作为 key（优先），或者 imageHash/videoId
-      const materialKey = creativeInfo.creativeId
+      // 🎯 优先使用 materialId（精准归因），其次 creativeId（兼容）
+      const materialKey = creativeInfo.materialId || creativeInfo.creativeId
+      if (!materialKey) continue
       
       stats.processed++
+      
+      // 统计匹配类型
+      if (creativeInfo.matchType === 'direct') stats.directMatch++
+      else if (creativeInfo.matchType === 'fallback') stats.fallbackMatch++
       
       // 提取 actions 数据
       const rawActions = metric.raw?.actions || []
@@ -122,11 +219,22 @@ export const aggregateMaterialMetrics = async (date: string): Promise<{
       if (!materialAggregation.has(materialKey)) {
         materialAggregation.set(materialKey, {
           date,
+          // 🎯 精准归因：记录 materialId
+          materialId: creativeInfo.materialId,
           creativeId: creativeInfo.creativeId,
           imageHash: creativeInfo.imageHash,
           videoId: creativeInfo.videoId,
           thumbnailUrl: creativeInfo.thumbnailUrl,
           materialType: creativeInfo.videoId ? 'video' : 'image',
+          
+          // 素材展示信息
+          localStorageUrl: creativeInfo.localStorageUrl,
+          originalUrl: creativeInfo.originalUrl,
+          fingerprint: creativeInfo.fingerprint,
+          creativeName: creativeInfo.creativeName,
+          
+          // 归因类型（用于诊断）
+          matchType: creativeInfo.matchType,
           
           accountIds: new Set(),
           campaignIds: new Set(),
@@ -176,17 +284,37 @@ export const aggregateMaterialMetrics = async (date: string): Promise<{
       agg.purchaseValue += purchaseVal
     }
     
-    logger.info(`[MaterialMetrics] Aggregated ${materialAggregation.size} unique materials`)
+    logger.info(`[MaterialMetrics] Aggregated ${materialAggregation.size} unique materials (direct: ${stats.directMatch}, fallback: ${stats.fallbackMatch})`)
     
     // 5. 保存到数据库
     for (const [materialKey, agg] of materialAggregation) {
       try {
-        // 尝试匹配 Material 表
-        let materialDoc = null
-        if (agg.imageHash) {
-          materialDoc = await Material.findOne({ 'facebook.imageHash': agg.imageHash }).lean()
-        } else if (agg.videoId) {
-          materialDoc = await Material.findOne({ 'facebook.videoId': agg.videoId }).lean()
+        // 🎯 优先使用聚合时已确定的 materialId（精准归因）
+        let materialId = agg.materialId
+        let materialName = agg.creativeName
+        
+        // 如果没有 materialId，尝试反查（兼容旧数据）
+        if (!materialId) {
+          let materialDoc = null
+          if (agg.imageHash) {
+            materialDoc = await Material.findOne({
+              $or: [
+                { 'facebook.imageHash': agg.imageHash },
+                { 'facebookMappings.imageHash': agg.imageHash },
+              ]
+            }).lean()
+          } else if (agg.videoId) {
+            materialDoc = await Material.findOne({
+              $or: [
+                { 'facebook.videoId': agg.videoId },
+                { 'facebookMappings.videoId': agg.videoId },
+              ]
+            }).lean()
+          }
+          if (materialDoc) {
+            materialId = (materialDoc as any)._id.toString()
+            materialName = materialName || (materialDoc as any).name
+          }
         }
         
         // 计算派生指标
@@ -210,23 +338,36 @@ export const aggregateMaterialMetrics = async (date: string): Promise<{
         
         qualityScore = Math.max(0, Math.min(100, qualityScore))
         
+        // 构建查询条件
         const filter: any = { date }
-        // 优先使用 creativeId，其次使用 imageHash/videoId
-        if (agg.creativeId) filter.creativeId = agg.creativeId
-        else if (agg.imageHash) filter.imageHash = agg.imageHash
-        else if (agg.videoId) filter.videoId = agg.videoId
+        // 🎯 优先使用 materialId 作为唯一标识（精准归因）
+        if (materialId) {
+          filter.materialId = materialId
+        } else if (agg.creativeId) {
+          filter.creativeId = agg.creativeId
+        } else if (agg.imageHash) {
+          filter.imageHash = agg.imageHash
+        } else if (agg.videoId) {
+          filter.videoId = agg.videoId
+        }
         
         const result = await MaterialMetrics.findOneAndUpdate(
           filter,
           {
             date,
-            materialId: materialDoc?._id,
+            materialId,  // 🎯 精准归因
             creativeId: agg.creativeId,
             imageHash: agg.imageHash,
             videoId: agg.videoId,
             thumbnailUrl: agg.thumbnailUrl,
             materialType: agg.materialType,
-            materialName: materialDoc?.name,
+            materialName,
+            
+            // 素材展示信息
+            localStorageUrl: agg.localStorageUrl,
+            originalUrl: agg.originalUrl,
+            fingerprint: agg.fingerprint,
+            matchType: agg.matchType,  // 记录归因类型
             
             accountIds: Array.from(agg.accountIds),
             campaignIds: Array.from(agg.campaignIds),
@@ -295,11 +436,12 @@ export const getMaterialRankings = async (options: {
   }
   if (materialType) match.materialType = materialType
   
-  return MaterialMetrics.aggregate([
+  const results = await MaterialMetrics.aggregate([
     { $match: match },
     {
       $group: {
-        _id: { $ifNull: ['$imageHash', '$videoId'] },
+        _id: { $ifNull: ['$creativeId', { $ifNull: ['$imageHash', '$videoId'] }] },
+        creativeId: { $first: '$creativeId' },
         materialId: { $first: '$materialId' },
         materialType: { $first: '$materialType' },
         materialName: { $first: '$materialName' },
@@ -333,6 +475,7 @@ export const getMaterialRankings = async (options: {
     {
       $project: {
         materialKey: '$_id',
+        creativeId: 1,
         materialId: 1,
         materialType: 1,
         materialName: 1,
@@ -381,6 +524,45 @@ export const getMaterialRankings = async (options: {
       }
     }
   ])
+  
+  // 后处理：为每个结果生成指纹并查找本地素材
+  const enrichedResults = await Promise.all(results.map(async (item: any) => {
+    // 生成指纹
+    const fingerprint = generateFingerprint({
+      imageHash: item.imageHash,
+      videoId: item.videoId,
+      creativeId: item.creativeId,
+    })
+    
+    // 查找本地素材（通过 fingerprintKey 或 Facebook 映射）
+    let localMaterial = null
+    if (fingerprint) {
+      localMaterial = await Material.findOne({ fingerprintKey: fingerprint }).lean()
+    }
+    // 如果没找到，尝试通过 Facebook 映射查找
+    if (!localMaterial && (item.imageHash || item.videoId)) {
+      localMaterial = await Material.findOne({
+        $or: [
+          { 'facebook.imageHash': item.imageHash },
+          { 'facebook.videoId': item.videoId },
+          { 'facebookMappings.imageHash': item.imageHash },
+          { 'facebookMappings.videoId': item.videoId },
+        ].filter(q => Object.values(q)[0])
+      }).lean()
+    }
+    
+    return {
+      ...item,
+      fingerprint,
+      // 优先使用本地素材的信息
+      materialName: localMaterial?.name || item.materialName || `素材_${fingerprint?.substring(0, 12) || 'unknown'}`,
+      thumbnailUrl: (localMaterial as any)?.storage?.url || item.thumbnailUrl,
+      localMaterialId: localMaterial?._id?.toString(),
+      hasLocalMaterial: !!localMaterial,
+    }
+  }))
+  
+  return enrichedResults
 }
 
 /**

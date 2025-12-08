@@ -20,6 +20,14 @@ const materialMetricsSchema = new mongoose.Schema(
     videoId: { type: String },   // 视频的 ID
     thumbnailUrl: { type: String }, // 缩略图 URL
     
+    // ========== 素材展示信息（关键！）==========
+    localStorageUrl: { type: String }, // R2 本地存储的 URL（可直接展示）
+    originalUrl: { type: String },     // Facebook 原始 URL
+    fingerprint: { type: String },     // 素材指纹（pHash）用于跨系统识别
+    
+    // 🎯 归因类型（诊断用）
+    matchType: { type: String, enum: ['direct', 'fallback', 'none'] }, // direct=通过materialId, fallback=通过hash反查
+    
     // 关联维度
     accountIds: [{ type: String }],    // 使用该素材的账户
     campaignIds: [{ type: String }],   // 使用该素材的广告系列

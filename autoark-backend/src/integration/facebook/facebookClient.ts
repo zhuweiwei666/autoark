@@ -47,8 +47,8 @@ const handleApiError = (context: string, error: any, token?: string) => {
   
   logger.error(
     `Facebook API Error [${context}]: ${errMsg}`,
-    error.response?.data,
   )
+  logger.error(`Facebook API Full Response: ${JSON.stringify(error.response?.data, null, 2)}`)
   const apiError = new FacebookApiError(`Facebook API [${context}] failed: ${errMsg}`, error.response?.data)
   throw apiError
 }

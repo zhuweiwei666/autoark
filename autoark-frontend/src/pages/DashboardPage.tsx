@@ -15,6 +15,31 @@ const getSevenDaysAgo = () => {
   return date.toISOString().split('T')[0]
 }
 
+// 缓存 key
+const getCacheKey = (startDate: string, endDate: string) => `dashboard_${startDate}_${endDate}`
+
+// 从缓存加载数据
+const loadFromCache = (startDate: string, endDate: string) => {
+  try {
+    const cached = localStorage.getItem(getCacheKey(startDate, endDate))
+    if (cached) {
+      return JSON.parse(cached)
+    }
+  } catch (e) {
+    console.error('Failed to load from cache:', e)
+  }
+  return null
+}
+
+// 保存到缓存
+const saveToCache = (startDate: string, endDate: string, data: any) => {
+  try {
+    localStorage.setItem(getCacheKey(startDate, endDate), JSON.stringify(data))
+  } catch (e) {
+    console.error('Failed to save to cache:', e)
+  }
+}
+
 export default function DashboardPage() {
   const today = getToday()
   const sevenDaysAgo = getSevenDaysAgo()
@@ -30,14 +55,16 @@ export default function DashboardPage() {
   const [spendTrend, setSpendTrend] = useState<any[]>([])
   const [campaignRanking, setCampaignRanking] = useState<any[]>([])
   const [accountRanking, setAccountRanking] = useState<any[]>([])
+  const [isRefreshing, setIsRefreshing] = useState(false)
 
   // 图表引用
   const spendTrendChartRef = useRef<any>(null)
   const campaignRankingChartRef = useRef<any>(null)
   const accountRankingChartRef = useRef<any>(null)
 
-  // 加载数据
-  const loadData = async () => {
+  // 从 API 加载数据
+  const fetchData = async () => {
+    setIsRefreshing(true)
     try {
       const [metricsRes, trendRes, campaignRes, accountRes] = await Promise.all([
         getCoreMetrics(filters.startDate, filters.endDate),
@@ -46,18 +73,44 @@ export default function DashboardPage() {
         getAccountRanking(10, filters.startDate, filters.endDate)
       ])
 
-      setCoreMetrics(metricsRes.data)
-      setSpendTrend(trendRes.data || [])
-      setCampaignRanking(campaignRes.data || [])
-      setAccountRanking(accountRes.data || [])
+      const data = {
+        coreMetrics: metricsRes.data,
+        spendTrend: trendRes.data || [],
+        campaignRanking: campaignRes.data || [],
+        accountRanking: accountRes.data || [],
+      }
+      
+      setCoreMetrics(data.coreMetrics)
+      setSpendTrend(data.spendTrend)
+      setCampaignRanking(data.campaignRanking)
+      setAccountRanking(data.accountRanking)
+      
+      // 保存到缓存
+      saveToCache(filters.startDate, filters.endDate, data)
     } catch (error: any) {
       console.error('Failed to load dashboard data:', error)
+    } finally {
+      setIsRefreshing(false)
     }
   }
 
-  // 初始加载和日期变化时重新加载
+  // 手动刷新（只从服务器获取）
+  const handleRefresh = () => {
+    fetchData()
+  }
+
+  // 初始加载 - 优先使用缓存
   useEffect(() => {
-    loadData()
+    const cached = loadFromCache(filters.startDate, filters.endDate)
+    if (cached) {
+      setCoreMetrics(cached.coreMetrics)
+      setSpendTrend(cached.spendTrend)
+      setCampaignRanking(cached.campaignRanking)
+      setAccountRanking(cached.accountRanking)
+    } else {
+      // 无缓存时才请求
+      fetchData()
+    }
   }, [filters.startDate, filters.endDate])
 
   // 渲染图表
@@ -236,7 +289,29 @@ export default function DashboardPage() {
       <div className="max-w-7xl mx-auto space-y-6">
         {/* 头部 */}
         <header className="flex items-center justify-between bg-white rounded-3xl p-6 shadow-lg shadow-black/5 border border-slate-200">
-          <h1 className="text-3xl font-bold text-slate-900 tracking-tight">Dashboard</h1>
+          <h1 className="text-3xl font-bold text-slate-900 tracking-tight">Dashboard <span className="text-xs text-emerald-500">v5-实时</span></h1>
+          <button
+            onClick={handleRefresh}
+            disabled={isRefreshing}
+            className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white text-sm font-medium rounded-xl transition-colors disabled:opacity-50 flex items-center gap-2"
+          >
+            {isRefreshing ? (
+              <>
+                <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                <span>刷新中...</span>
+              </>
+            ) : (
+              <>
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                <span>刷新数据</span>
+              </>
+            )}
+          </button>
         </header>
 
         {/* 数据看板 */}
@@ -334,4 +409,5 @@ export default function DashboardPage() {
     </div>
   )
 }
+
 

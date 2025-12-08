@@ -8,51 +8,86 @@ import * as oauthApi from '../integration/facebook/oauth.api'
 /**
  * Facebook OAuth 服务
  * 处理 Facebook 登录、授权码交换、Token 存储
+ * 支持多 App 负载均衡
  */
 
 /**
- * 生成 Facebook 登录 URL
+ * 生成 Facebook 登录 URL（异步，支持多 App）
  */
-export const getFacebookLoginUrl = (state?: string): string => {
-  return oauthApi.getFacebookLoginUrl(state)
+export const getFacebookLoginUrl = async (state?: string, appId?: string): Promise<string> => {
+  return oauthApi.getFacebookLoginUrl(state, appId)
 }
 
 /**
- * 验证 OAuth 配置
+ * 生成 Facebook 登录 URL（同步版本，兼容旧代码）
  */
-export const validateOAuthConfig = (): { valid: boolean; missing: string[] } => {
+export const getFacebookLoginUrlSync = (state?: string): string => {
+  return oauthApi.getFacebookLoginUrlSync(state)
+}
+
+/**
+ * 获取可用的 Apps 列表
+ */
+export const getAvailableApps = async () => {
+  return oauthApi.getAvailableApps()
+}
+
+/**
+ * 验证 OAuth 配置（异步）
+ */
+export const validateOAuthConfig = async (): Promise<{ valid: boolean; missing: string[]; hasDbApps: boolean }> => {
   return oauthApi.validateOAuthConfig()
 }
 
 /**
- * 处理 OAuth 回调：获取 code → 交换 token → 存储 → 检查权限
+ * 验证 OAuth 配置（同步，兼容旧代码）
  */
-export const handleOAuthCallback = async (code: string): Promise<{
+export const validateOAuthConfigSync = (): { valid: boolean; missing: string[] } => {
+  return oauthApi.validateOAuthConfigSync()
+}
+
+/**
+ * 处理 OAuth 回调：获取 code → 交换 token → 存储 → 检查权限
+ * 支持从 state 中解析使用的 App
+ */
+export const handleOAuthCallback = async (code: string, state?: string): Promise<{
   tokenId: string
   fbUserId: string
   fbUserName: string
+  accessToken: string
   userDetails?: any
   permissions?: any
+  appId?: string
 }> => {
   try {
     logger.info('[OAuth] Handling OAuth callback')
 
+    // 解析 state 获取 appId
+    let appId: string | undefined
+    let originalState: string = ''
+    if (state) {
+      const stateData = oauthApi.parseStateParam(state)
+      appId = stateData.appId
+      originalState = stateData.originalState
+      logger.info(`[OAuth] Using App ${appId || 'default'} from state`)
+    }
+
     // 1. 将 code 交换为 Short-Lived Token
-    const shortLivedTokenData = await oauthApi.exchangeCodeForToken(code)
+    const shortLivedTokenData = await oauthApi.exchangeCodeForToken(code, appId)
     const shortLivedToken = shortLivedTokenData.access_token
 
     // 2. 获取用户信息
     const userInfo = await oauthApi.getUserInfo(shortLivedToken)
 
     // 3. 将 Short-Lived Token 交换为 Long-Lived Token
-    const longLivedTokenData = await oauthApi.exchangeForLongLivedToken(shortLivedToken)
+    const longLivedTokenData = await oauthApi.exchangeForLongLivedToken(shortLivedToken, appId)
     const longLivedToken = longLivedTokenData.access_token
 
     // 计算过期时间
     const expiresIn = longLivedTokenData.expires_in || 5184000 // 默认 60 天
     const expiresAt = new Date(Date.now() + expiresIn * 1000)
 
-    // 4. 存储或更新 Token
+    // 4. 存储或更新 Token（记录使用的 App）
     const tokenDoc = await FbToken.findOneAndUpdate(
       { fbUserId: userInfo.id },
       {
@@ -62,6 +97,8 @@ export const handleOAuthCallback = async (code: string): Promise<{
         status: 'active',
         expiresAt,
         lastCheckedAt: new Date(),
+        // 记录使用的 App
+        ...(appId && { lastAuthAppId: appId }),
       },
       {
         upsert: true,
@@ -69,7 +106,7 @@ export const handleOAuthCallback = async (code: string): Promise<{
       }
     )
 
-    logger.info(`[OAuth] Token saved/updated for user ${userInfo.id} (${userInfo.name})`)
+    logger.info(`[OAuth] Token saved/updated for user ${userInfo.id} (${userInfo.name}) via App ${appId || 'env'}`)
 
     // 5. 重新初始化 Token Pool（包含新 token）
     await tokenPool.initialize()
@@ -110,11 +147,14 @@ export const handleOAuthCallback = async (code: string): Promise<{
       tokenId: tokenDoc._id.toString(),
       fbUserId: userInfo.id,
       fbUserName: userInfo.name,
+      accessToken: longLivedToken,
       userDetails,
       permissions,
+      appId,
     }
   } catch (error: any) {
     logger.error('[OAuth] Failed to handle OAuth callback:', error)
     throw error
   }
 }
+

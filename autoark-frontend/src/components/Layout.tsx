@@ -1,4 +1,6 @@
 import { Link, useLocation } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
+import { getAccounts, getCampaigns, getCountries, getMaterialRankings } from '../services/api'
 
 interface LayoutProps {
   children: React.ReactNode
@@ -6,28 +8,70 @@ interface LayoutProps {
 
 export default function Layout({ children }: LayoutProps) {
   const location = useLocation()
+  const queryClient = useQueryClient()
 
   const isActive = (path: string) => {
     return location.pathname === path
   }
 
-  // 菜单项组件 - 液态玻璃风格
+  // 预加载数据的配置（仅在无缓存时才会请求）
+  const prefetchConfig: Record<string, () => void> = {
+    '/fb-accounts': () => {
+      queryClient.prefetchQuery({
+        queryKey: ['accounts', { page: 1, limit: 20, sortBy: 'periodSpend', sortOrder: 'desc' }],
+        queryFn: () => getAccounts({ page: 1, limit: 20, sortBy: 'periodSpend', sortOrder: 'desc' }),
+      })
+    },
+    '/fb-campaigns': () => {
+      queryClient.prefetchQuery({
+        queryKey: ['campaigns', { page: 1, limit: 20, sortBy: 'spend', sortOrder: 'desc' }],
+        queryFn: () => getCampaigns({ page: 1, limit: 20, sortBy: 'spend', sortOrder: 'desc' }),
+      })
+    },
+    '/fb-countries': () => {
+      queryClient.prefetchQuery({
+        queryKey: ['countries', { page: 1, limit: 20, sortBy: 'spend', sortOrder: 'desc' }],
+        queryFn: () => getCountries({ page: 1, limit: 20, sortBy: 'spend', sortOrder: 'desc' }),
+      })
+    },
+    '/fb-materials': () => {
+      queryClient.prefetchQuery({
+        queryKey: ['materialRankings', {}],
+        queryFn: () => getMaterialRankings({}),
+      })
+    },
+  }
+
+  // 菜单项组件 - 液态玻璃风格（带预加载）
   const MenuItem = ({ to, icon, label }: { to: string; icon: React.ReactNode; label: string }) => {
     const active = isActive(to)
+    
+    const handleMouseEnter = () => {
+      // 在 hover 时预加载数据
+      const prefetch = prefetchConfig[to]
+      if (prefetch) {
+        prefetch()
+      }
+    }
     
     return (
       <Link
         to={to}
+        onMouseEnter={handleMouseEnter}
         className={`
-          w-full px-4 py-2.5 rounded-xl text-sm font-medium transition-all duration-300 flex items-center gap-3
+          menu-item w-full px-4 py-2.5 rounded-xl text-sm font-medium flex items-center gap-3
+          transition-all duration-300 ease-out
           ${active
-            ? 'bg-white/80 backdrop-blur-xl shadow-lg shadow-blue-500/10 text-slate-900 border border-white/50'
-            : 'text-slate-600 hover:text-slate-900 hover:bg-white/40 hover:backdrop-blur-sm'
+            ? 'bg-white/90 backdrop-blur-xl shadow-lg shadow-blue-500/10 text-slate-900 border border-white/60 scale-[1.02]'
+            : 'text-slate-600 hover:text-slate-900 hover:bg-white/50 hover:backdrop-blur-sm hover:scale-[1.01]'
           }
         `}
       >
-        <span className={`transition-colors ${active ? 'text-blue-500' : ''}`}>{icon}</span>
-        <span>{label}</span>
+        <span className={`transition-all duration-300 ${active ? 'text-blue-500 scale-110' : 'group-hover:scale-105'}`}>{icon}</span>
+        <span className="relative">
+          {label}
+          {active && <span className="absolute -bottom-0.5 left-0 w-full h-0.5 bg-gradient-to-r from-blue-500 to-purple-500 rounded-full" />}
+        </span>
       </Link>
     )
   }
@@ -77,11 +121,6 @@ export default function Layout({ children }: LayoutProps) {
             label="仪表盘"
           />
           <MenuItem
-            to="/fb-token"
-            icon={<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-5 h-5"><path strokeLinecap="round" strokeLinejoin="round" d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 9z" /></svg>}
-            label="Token 管理"
-          />
-          <MenuItem
             to="/fb-accounts"
             icon={<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-5 h-5"><path strokeLinecap="round" strokeLinejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z" /></svg>}
             label="账户管理"
@@ -97,9 +136,19 @@ export default function Layout({ children }: LayoutProps) {
             label="广告系列"
           />
           <MenuItem
-            to="/fb-pixels"
-            icon={<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-5 h-5"><path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z" /></svg>}
-            label="像素"
+            to="/fb-materials"
+            icon={<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-5 h-5"><path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z" /></svg>}
+            label="素材数据"
+          />
+          <MenuItem
+            to="/fb-settings"
+            icon={<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-5 h-5"><path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 010 .255c-.007.378.138.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 010-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.281z" /><path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>}
+            label="Token & 像素"
+          />
+          <MenuItem
+            to="/fb-apps"
+            icon={<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-5 h-5"><path strokeLinecap="round" strokeLinejoin="round" d="M21 7.5l-9-5.25L3 7.5m18 0l-9 5.25m9-5.25v9l-9 5.25M3 7.5l9 5.25M3 7.5v9l9 5.25m0-9v9" /></svg>}
+            label="App 管理"
           />
 
           {/* ========== 广告发布板块 ========== */}
@@ -114,6 +163,11 @@ export default function Layout({ children }: LayoutProps) {
             to="/bulk-ad/tasks"
             icon={<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-5 h-5"><path strokeLinecap="round" strokeLinejoin="round" d="M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 002.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 00-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 00.75-.75 2.25 2.25 0 00-.1-.664m-5.8 0A2.251 2.251 0 0113.5 2.25H15c1.012 0 1.867.668 2.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V8.25m0 0H4.875c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125V9.375c0-.621-.504-1.125-1.125-1.125H8.25zM6.75 12h.008v.008H6.75V12zm0 3h.008v.008H6.75V15zm0 3h.008v.008H6.75V18z" /></svg>}
             label="任务管理"
+          />
+          <MenuItem
+            to="/bulk-ad/review"
+            icon={<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-5 h-5"><path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12c0 1.268-.63 2.39-1.593 3.068a3.745 3.745 0 01-1.043 3.296 3.745 3.745 0 01-3.296 1.043A3.745 3.745 0 0112 21c-1.268 0-2.39-.63-3.068-1.593a3.746 3.746 0 01-3.296-1.043 3.745 3.745 0 01-1.043-3.296A3.745 3.745 0 013 12c0-1.268.63-2.39 1.593-3.068a3.745 3.745 0 011.043-3.296 3.746 3.746 0 013.296-1.043A3.746 3.746 0 0112 3c1.268 0 2.39.63 3.068 1.593a3.746 3.746 0 013.296 1.043 3.746 3.746 0 011.043 3.296A3.745 3.745 0 0121 12z" /></svg>}
+            label="审核状态"
           />
           <MenuItem
             to="/bulk-ad/assets"
@@ -153,8 +207,10 @@ export default function Layout({ children }: LayoutProps) {
 
       {/* 主内容区域 */}
       <main className="flex-1 overflow-hidden">
-        <div className="h-full overflow-y-auto">
-          {children}
+        <div className="h-full overflow-y-auto scroll-smooth">
+          <div key={location.pathname} className="animate-fade-in">
+            {children}
+          </div>
         </div>
       </main>
     </div>
