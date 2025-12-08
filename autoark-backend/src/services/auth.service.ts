@@ -14,6 +14,7 @@ export interface RegisterData {
   email: string
   role?: UserRole
   organizationId?: string
+  skipOrgValidation?: boolean // 创建组织时跳过组织验证
 }
 
 export interface AuthResponse {
@@ -64,7 +65,7 @@ class AuthService {
    * 创建用户
    */
   async createUser(data: RegisterData, createdBy: string): Promise<IUser> {
-    const { username, password, email, role, organizationId } = data
+    const { username, password, email, role, organizationId, skipOrgValidation } = data
 
     // 检查用户名是否已存在
     const existingUser = await User.findOne({
@@ -79,8 +80,8 @@ class AuthService {
       throw new Error('必须指定所属组织')
     }
 
-    // 验证组织是否存在
-    if (organizationId) {
+    // 验证组织是否存在（创建组织时跳过）
+    if (organizationId && !skipOrgValidation) {
       const organization = await Organization.findById(organizationId)
       if (!organization) {
         throw new Error('组织不存在')

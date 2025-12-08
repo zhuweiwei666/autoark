@@ -93,7 +93,7 @@ class OrganizationService {
     // 先创建一个临时的占位组织 ID
     const tempOrgId = new mongoose.Types.ObjectId()
 
-    // 创建组织管理员（使用临时 ID）
+    // 创建组织管理员（使用临时 ID，跳过组织验证）
     const admin = await authService.createUser(
       {
         username: data.adminUsername,
@@ -101,6 +101,7 @@ class OrganizationService {
         email: data.adminEmail,
         role: UserRole.ORG_ADMIN,
         organizationId: tempOrgId.toString(),
+        skipOrgValidation: true, // 跳过组织存在性验证
       },
       currentUser.userId
     )
