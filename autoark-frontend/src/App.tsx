@@ -45,40 +45,40 @@ function App() {
     <QueryClientProvider client={queryClient}>
       <Router>
         <AuthProvider>
-          <Routes>
+        <Routes>
             {/* 登录页面（无需认证） */}
             <Route path="/login" element={<LoginPage />} />
             
-            {/* OAuth 回调页面（无 Layout，用于弹窗） */}
-            <Route path="/oauth/callback" element={<OAuthCallbackPage />} />
-            
+        {/* OAuth 回调页面（无 Layout，用于弹窗） */}
+        <Route path="/oauth/callback" element={<OAuthCallbackPage />} />
+        
             {/* 主应用页面（需要认证） */}
-            <Route path="/*" element={
+        <Route path="/*" element={
               <ProtectedRoute>
-                <Layout>
-                  <Routes>
-                    <Route path="/dashboard" element={<DashboardPage />} />
-                    <Route path="/fb-accounts" element={<FacebookAccountsPage />} />
-                    <Route path="/fb-countries" element={<FacebookCountriesPage />} />
-                    <Route path="/fb-campaigns" element={<FacebookCampaignsPage />} />
-                    <Route path="/fb-materials" element={<MaterialMetricsPage />} />
-                    <Route path="/fb-settings" element={<FacebookSettingsPage />} />
-                    {/* 保留旧路由兼容 */}
-                    <Route path="/fb-token" element={<FacebookTokenPage />} />
-                    <Route path="/fb-pixels" element={<FacebookPixelsPage />} />
-                    <Route path="/fb-apps" element={<FacebookAppPage />} />
-                    {/* Bulk Ad Creation Routes */}
-                    <Route path="/bulk-ad/create" element={<BulkAdCreatePage />} />
-                    <Route path="/bulk-ad/tasks" element={<TaskManagementPage />} />
-                    <Route path="/bulk-ad/review" element={<AdReviewStatusPage />} />
-                    <Route path="/bulk-ad/assets" element={<AssetManagementPage />} />
-                    <Route path="/bulk-ad/targeting" element={<AssetManagementPage />} />
-                    <Route path="/bulk-ad/copywriting" element={<AssetManagementPage />} />
-                    <Route path="/bulk-ad/creative" element={<AssetManagementPage />} />
-                    <Route path="/bulk-ad/materials" element={<MaterialLibraryPage />} />
-                    {/* AI Agent Routes */}
-                    <Route path="/ai/analysis" element={<AIAnalysisPage />} />
-                    <Route path="/ai/agents" element={<AgentManagementPage />} />
+          <Layout>
+            <Routes>
+              <Route path="/dashboard" element={<DashboardPage />} />
+              <Route path="/fb-accounts" element={<FacebookAccountsPage />} />
+              <Route path="/fb-countries" element={<FacebookCountriesPage />} />
+              <Route path="/fb-campaigns" element={<FacebookCampaignsPage />} />
+              <Route path="/fb-materials" element={<MaterialMetricsPage />} />
+              <Route path="/fb-settings" element={<FacebookSettingsPage />} />
+              {/* 保留旧路由兼容 */}
+              <Route path="/fb-token" element={<FacebookTokenPage />} />
+              <Route path="/fb-pixels" element={<FacebookPixelsPage />} />
+              <Route path="/fb-apps" element={<FacebookAppPage />} />
+              {/* Bulk Ad Creation Routes */}
+              <Route path="/bulk-ad/create" element={<BulkAdCreatePage />} />
+              <Route path="/bulk-ad/tasks" element={<TaskManagementPage />} />
+              <Route path="/bulk-ad/review" element={<AdReviewStatusPage />} />
+              <Route path="/bulk-ad/assets" element={<AssetManagementPage />} />
+              <Route path="/bulk-ad/targeting" element={<AssetManagementPage />} />
+              <Route path="/bulk-ad/copywriting" element={<AssetManagementPage />} />
+              <Route path="/bulk-ad/creative" element={<AssetManagementPage />} />
+              <Route path="/bulk-ad/materials" element={<MaterialLibraryPage />} />
+              {/* AI Agent Routes */}
+              <Route path="/ai/analysis" element={<AIAnalysisPage />} />
+              <Route path="/ai/agents" element={<AgentManagementPage />} />
                     {/* 用户和组织管理 */}
                     <Route path="/users" element={<UserManagementPage />} />
                     <Route path="/organizations" element={
@@ -87,11 +87,11 @@ function App() {
                       </ProtectedRoute>
                     } />
                     <Route path="/" element={<Navigate to="/dashboard" replace />} />
-                  </Routes>
-                </Layout>
+            </Routes>
+          </Layout>
               </ProtectedRoute>
-            } />
-          </Routes>
+        } />
+        </Routes>
         </AuthProvider>
       </Router>
     </QueryClientProvider>

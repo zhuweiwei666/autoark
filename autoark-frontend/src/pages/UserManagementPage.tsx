@@ -13,10 +13,11 @@ interface User {
 }
 
 const UserManagementPage: React.FC = () => {
-  const { token, isSuperAdmin, isOrgAdmin } = useAuth()
+  const { token, isSuperAdmin, isOrgAdmin, user } = useAuth()
   const [users, setUsers] = useState<User[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [showCreateModal, setShowCreateModal] = useState(false)
+  const [organizations, setOrganizations] = useState<any[]>([])
   const [formData, setFormData] = useState({
     username: '',
     password: '',
@@ -26,11 +27,6 @@ const UserManagementPage: React.FC = () => {
   })
 
   const fetchUsers = async () => {
-    if (!token) {
-      setIsLoading(false)
-      return
-    }
-    
     try {
       const response = await fetch('/api/users', {
         headers: {
@@ -38,6 +34,11 @@ const UserManagementPage: React.FC = () => {
         },
       })
       const data = await response.json()
+      if (response.status === 401) {
+        alert('登录已过期，请重新登录')
+        window.location.href = '/login'
+        return
+      }
       if (data.success) {
         setUsers(data.data)
       } else {
@@ -50,9 +51,27 @@ const UserManagementPage: React.FC = () => {
     }
   }
 
+  const fetchOrganizations = async () => {
+    if (!isSuperAdmin) return
+    try {
+      const response = await fetch('/api/organizations', {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      })
+      const data = await response.json()
+      if (data.success) {
+        setOrganizations(data.data)
+      }
+    } catch (error) {
+      console.error('获取组织列表失败:', error)
+    }
+  }
+
   useEffect(() => {
     if (token) {
       fetchUsers()
+      fetchOrganizations()
     }
   }, [token])
 
@@ -269,22 +288,55 @@ const UserManagementPage: React.FC = () => {
                   />
                 </div>
                 {isSuperAdmin && (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      角色
-                    </label>
-                    <select
-                      value={formData.role}
-                      onChange={(e) =>
-                        setFormData({ ...formData, role: e.target.value })
-                      }
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                    >
-                      <option value="member">普通成员</option>
-                      <option value="org_admin">组织管理员</option>
-                      <option value="super_admin">超级管理员</option>
-                    </select>
-                  </div>
+                  <>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        角色
+                      </label>
+                      <select
+                        value={formData.role}
+                        onChange={(e) =>
+                          setFormData({ ...formData, role: e.target.value })
+                        }
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                      >
+                        <option value="member">普通成员</option>
+                        <option value="org_admin">组织管理员</option>
+                        <option value="super_admin">超级管理员</option>
+                      </select>
+                    </div>
+                    {formData.role !== 'super_admin' && (
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          所属组织
+                        </label>
+                        <select
+                          value={formData.organizationId}
+                          onChange={(e) =>
+                            setFormData({ ...formData, organizationId: e.target.value })
+                          }
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                          required
+                        >
+                          <option value="">请选择组织</option>
+                          {organizations.map((org) => (
+                            <option key={org._id} value={org._id}>
+                              {org.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+                  </>
+                )}
+                {isOrgAdmin && user?.organizationId && (
+                  <input
+                    type="hidden"
+                    value={user.organizationId}
+                    onChange={(e) =>
+                      setFormData({ ...formData, organizationId: e.target.value })
+                    }
+                  />
                 )}
                 <div className="flex gap-2 justify-end mt-6">
                   <button

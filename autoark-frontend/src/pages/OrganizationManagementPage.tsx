@@ -29,11 +29,6 @@ const OrganizationManagementPage: React.FC = () => {
   })
 
   const fetchOrganizations = async () => {
-    if (!token) {
-      setIsLoading(false)
-      return
-    }
-    
     try {
       const response = await fetch('/api/organizations', {
         headers: {
@@ -41,6 +36,11 @@ const OrganizationManagementPage: React.FC = () => {
         },
       })
       const data = await response.json()
+      if (response.status === 401) {
+        alert('登录已过期，请重新登录')
+        window.location.href = '/login'
+        return
+      }
       if (data.success) {
         setOrganizations(data.data)
       } else {
@@ -54,7 +54,7 @@ const OrganizationManagementPage: React.FC = () => {
   }
 
   useEffect(() => {
-    if (token && isSuperAdmin) {
+    if (isSuperAdmin && token) {
       fetchOrganizations()
     } else {
       setIsLoading(false)
