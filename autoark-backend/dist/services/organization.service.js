@@ -36,6 +36,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+const mongoose_1 = __importDefault(require("mongoose"));
 const Organization_1 = __importStar(require("../models/Organization"));
 const User_1 = __importStar(require("../models/User"));
 const logger_1 = __importDefault(require("../utils/logger"));
@@ -89,37 +90,44 @@ class OrganizationService {
         if (existingOrg) {
             throw new Error('组织名称已存在');
         }
-        // 创建临时组织（用于创建管理员）
-        const tempOrg = new Organization_1.default({
-            name: data.name,
-            description: data.description,
-            adminId: null, // 临时设置为 null
-            status: Organization_1.OrganizationStatus.ACTIVE,
-            settings: data.settings,
-            createdBy: currentUser.userId,
+        // 检查管理员用户名和邮箱是否已存在
+        const existingUser = await User_1.default.findOne({
+            $or: [{ username: data.adminUsername }, { email: data.adminEmail }],
         });
-        await tempOrg.save();
+        if (existingUser) {
+            throw new Error('管理员用户名或邮箱已存在');
+        }
+        // 先创建一个临时的占位组织 ID
+        const tempOrgId = new mongoose_1.default.Types.ObjectId();
+        // 创建组织管理员（使用临时 ID）
+        const admin = await auth_service_1.default.createUser({
+            username: data.adminUsername,
+            password: data.adminPassword,
+            email: data.adminEmail,
+            role: User_1.UserRole.ORG_ADMIN,
+            organizationId: tempOrgId.toString(),
+        }, currentUser.userId);
         try {
-            // 创建组织管理员
-            const admin = await auth_service_1.default.createUser({
-                username: data.adminUsername,
-                password: data.adminPassword,
-                email: data.adminEmail,
-                role: User_1.UserRole.ORG_ADMIN,
-                organizationId: tempOrg._id.toString(),
-            }, currentUser.userId);
-            // 更新组织的 adminId
-            tempOrg.adminId = admin._id;
-            await tempOrg.save();
+            // 创建组织（使用真实的管理员 ID）
+            const organization = new Organization_1.default({
+                _id: tempOrgId,
+                name: data.name,
+                description: data.description,
+                adminId: admin._id,
+                status: Organization_1.OrganizationStatus.ACTIVE,
+                settings: data.settings,
+                createdBy: currentUser.userId,
+            });
+            await organization.save();
             logger_1.default.info(`Organization ${data.name} created with admin ${data.adminUsername}`);
             return {
-                organization: tempOrg,
+                organization,
                 admin: admin.toJSON(),
             };
         }
         catch (error) {
-            // 如果创建管理员失败，删除已创建的组织
-            await Organization_1.default.findByIdAndDelete(tempOrg._id);
+            // 如果创建组织失败，删除已创建的管理员
+            await User_1.default.findByIdAndDelete(admin._id);
             throw error;
         }
     }

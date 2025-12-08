@@ -1,3 +1,4 @@
+import mongoose from 'mongoose'
 import Organization, { IOrganization, OrganizationStatus } from '../models/Organization'
 import User, { UserRole } from '../models/User'
 import { JwtPayload } from '../utils/jwt'
@@ -81,44 +82,52 @@ class OrganizationService {
       throw new Error('组织名称已存在')
     }
 
-    // 创建临时组织（用于创建管理员）
-    const tempOrg = new Organization({
-      name: data.name,
-      description: data.description,
-      adminId: null, // 临时设置为 null
-      status: OrganizationStatus.ACTIVE,
-      settings: data.settings,
-      createdBy: currentUser.userId,
+    // 检查管理员用户名和邮箱是否已存在
+    const existingUser = await User.findOne({
+      $or: [{ username: data.adminUsername }, { email: data.adminEmail }],
     })
+    if (existingUser) {
+      throw new Error('管理员用户名或邮箱已存在')
+    }
 
-    await tempOrg.save()
+    // 先创建一个临时的占位组织 ID
+    const tempOrgId = new mongoose.Types.ObjectId()
+
+    // 创建组织管理员（使用临时 ID）
+    const admin = await authService.createUser(
+      {
+        username: data.adminUsername,
+        password: data.adminPassword,
+        email: data.adminEmail,
+        role: UserRole.ORG_ADMIN,
+        organizationId: tempOrgId.toString(),
+      },
+      currentUser.userId
+    )
 
     try {
-      // 创建组织管理员
-      const admin = await authService.createUser(
-        {
-          username: data.adminUsername,
-          password: data.adminPassword,
-          email: data.adminEmail,
-          role: UserRole.ORG_ADMIN,
-          organizationId: tempOrg._id.toString(),
-        },
-        currentUser.userId
-      )
+      // 创建组织（使用真实的管理员 ID）
+      const organization = new Organization({
+        _id: tempOrgId,
+        name: data.name,
+        description: data.description,
+        adminId: admin._id,
+        status: OrganizationStatus.ACTIVE,
+        settings: data.settings,
+        createdBy: currentUser.userId,
+      })
 
-      // 更新组织的 adminId
-      tempOrg.adminId = admin._id
-      await tempOrg.save()
+      await organization.save()
 
       logger.info(`Organization ${data.name} created with admin ${data.adminUsername}`)
 
       return {
-        organization: tempOrg,
+        organization,
         admin: admin.toJSON(),
       }
     } catch (error) {
-      // 如果创建管理员失败，删除已创建的组织
-      await Organization.findByIdAndDelete(tempOrg._id)
+      // 如果创建组织失败，删除已创建的管理员
+      await User.findByIdAndDelete(admin._id)
       throw error
     }
   }
