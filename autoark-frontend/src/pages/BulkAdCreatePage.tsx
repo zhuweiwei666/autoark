@@ -69,7 +69,7 @@ export default function BulkAdCreatePage() {
   // 表单数据
   const [selectedAccounts, setSelectedAccounts] = useState<AccountConfig[]>([])
   const [campaign, setCampaign] = useState({
-    nameTemplate: '{accountName}_{date}',
+    nameTemplate: '优化师_fb_产品名_定向包_{accountName}_{date}',
     status: 'PAUSED',
     objective: 'OUTCOME_SALES',
     budgetOptimization: true,

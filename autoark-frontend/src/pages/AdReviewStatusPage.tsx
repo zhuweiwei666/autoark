@@ -141,11 +141,11 @@ export default function AdReviewStatusPage() {
           <button
             onClick={refreshReviewStatus}
             disabled={refreshing}
-            className="btn-primary flex items-center gap-2"
+            className="inline-flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-blue-500 to-indigo-500 text-white font-medium rounded-xl shadow-lg shadow-blue-500/30 hover:shadow-xl hover:shadow-blue-500/40 hover:-translate-y-0.5 active:scale-95 transition-all disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:translate-y-0"
           >
             {refreshing ? (
               <>
-                <Loading.Spinner size="sm" />
+                <Loading.Spinner size="sm" color="white" />
                 刷新中...
               </>
             ) : (

@@ -1,6 +1,7 @@
 import { Link, useLocation } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { getAccounts, getCampaigns, getCountries, getMaterialRankings } from '../services/api'
+import { useAuth } from '../contexts/AuthContext'
 
 interface LayoutProps {
   children: React.ReactNode
@@ -9,6 +10,7 @@ interface LayoutProps {
 export default function Layout({ children }: LayoutProps) {
   const location = useLocation()
   const queryClient = useQueryClient()
+  const { user, logout, isSuperAdmin, isOrgAdmin } = useAuth()
 
   const isActive = (path: string) => {
     return location.pathname === path
@@ -194,10 +196,54 @@ export default function Layout({ children }: LayoutProps) {
             label="Agent管理"
           />
 
+          {/* ========== 系统管理板块 ========== */}
+          {(isSuperAdmin || isOrgAdmin) && (
+            <>
+              <SectionTitle title="系统管理" />
+              
+              <MenuItem
+                to="/users"
+                icon={<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-5 h-5"><path strokeLinecap="round" strokeLinejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z" /></svg>}
+                label="用户管理"
+              />
+              
+              {isSuperAdmin && (
+                <MenuItem
+                  to="/organizations"
+                  icon={<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-5 h-5"><path strokeLinecap="round" strokeLinejoin="round" d="M2.25 21h19.5m-18-18v18m10.5-18v18m6-13.5V21M6.75 6.75h.75m-.75 3h.75m-.75 3h.75m3-6h.75m-.75 3h.75m-.75 3h.75M6.75 21v-3.375c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21M3 3h12m-.75 4.5H21m-3.75 3.75h.008v.008h-.008v-.008zm0 3h.008v.008h-.008v-.008zm0 3h.008v.008h-.008v-.008z" /></svg>}
+                  label="组织管理"
+                />
+              )}
+            </>
+          )}
+
         </nav>
         
-        {/* Health Badge - 液态玻璃风格 */}
-        <div className="p-4 border-t border-white/40">
+        {/* User Info & Logout - 液态玻璃风格 */}
+        <div className="p-4 border-t border-white/40 space-y-3">
+          {/* User Info */}
+          <div className="px-3 py-2 rounded-xl bg-white/50 backdrop-blur-sm border border-white/60">
+            <div className="text-xs font-medium text-gray-700 mb-1">{user?.username}</div>
+            <div className="text-[10px] text-gray-500">{user?.email}</div>
+            <div className="mt-1">
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">
+                {user?.role === 'super_admin' ? '超级管理员' : user?.role === 'org_admin' ? '组织管理员' : '普通成员'}
+              </span>
+            </div>
+          </div>
+          
+          {/* Logout Button */}
+          <button
+            onClick={logout}
+            className="w-full px-4 py-2 rounded-xl text-sm font-medium text-red-600 hover:text-red-700 hover:bg-red-50 transition-all duration-200 flex items-center justify-center gap-2"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-4 h-4">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15M12 9l-3 3m0 0l3 3m-3-3h12.75" />
+            </svg>
+            登出
+          </button>
+          
+          {/* Health Badge */}
           <div className="flex items-center justify-center gap-2 px-4 py-2 rounded-full bg-gradient-to-r from-emerald-500/10 to-teal-500/10 backdrop-blur-sm border border-emerald-200/50">
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shadow-lg shadow-emerald-500/50"></span>
             <span className="text-xs font-medium text-emerald-700">系统运行正常</span>

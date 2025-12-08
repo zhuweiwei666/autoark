@@ -20,6 +20,9 @@ const agent_controller_1 = __importDefault(require("./domain/agent/agent.control
 const summary_controller_1 = __importDefault(require("./controllers/summary.controller")); // New: 预聚合数据快速读取
 const productMapping_routes_1 = __importDefault(require("./routes/productMapping.routes")); // New: 产品关系映射
 const facebookApp_routes_1 = __importDefault(require("./routes/facebookApp.routes")); // New: Facebook App 管理
+const auth_routes_1 = __importDefault(require("./routes/auth.routes")); // New: 认证路由
+const user_routes_1 = __importDefault(require("./routes/user.routes")); // New: 用户管理路由
+const organization_routes_1 = __importDefault(require("./routes/organization.routes")); // New: 组织管理路由
 const logger_1 = __importDefault(require("./utils/logger"));
 const sync_cron_1 = __importDefault(require("./cron/sync.cron"));
 const cron_1 = __importDefault(require("./cron"));
@@ -65,6 +68,12 @@ app.use((req, res, next) => {
     next();
 });
 // API Routes
+// 认证路由（公开）
+app.use('/api/auth', auth_routes_1.default);
+// 用户和组织管理（需要认证）
+app.use('/api/users', user_routes_1.default);
+app.use('/api/organizations', organization_routes_1.default);
+// 其他业务路由
 app.use('/api/facebook', facebook_routes_1.default);
 app.use('/api/facebook', facebook_sync_routes_1.default);
 app.use('/api/dashboard', dashboard_routes_1.default);

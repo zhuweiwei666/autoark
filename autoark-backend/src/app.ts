@@ -15,6 +15,9 @@ import agentRoutes from './domain/agent/agent.controller' // New: AI Agent route
 import summaryRoutes from './controllers/summary.controller' // New: 预聚合数据快速读取
 import productMappingRoutes from './routes/productMapping.routes' // New: 产品关系映射
 import facebookAppRoutes from './routes/facebookApp.routes' // New: Facebook App 管理
+import authRoutes from './routes/auth.routes' // New: 认证路由
+import userRoutes from './routes/user.routes' // New: 用户管理路由
+import organizationRoutes from './routes/organization.routes' // New: 组织管理路由
 import logger from './utils/logger'
 import initSyncCron from './cron/sync.cron'
 import initCronJobs from './cron'
@@ -71,6 +74,12 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 })
 
 // API Routes
+// 认证路由（公开）
+app.use('/api/auth', authRoutes)
+// 用户和组织管理（需要认证）
+app.use('/api/users', userRoutes)
+app.use('/api/organizations', organizationRoutes)
+// 其他业务路由
 app.use('/api/facebook', facebookRoutes)
 app.use('/api/facebook', facebookSyncRoutes)
 app.use('/api/dashboard', dashboardRoutes)

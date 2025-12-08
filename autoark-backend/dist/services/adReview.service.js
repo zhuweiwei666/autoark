@@ -62,13 +62,15 @@ async function fetchAdReviewStatus(adIds, token) {
                 try {
                     const response = await facebookClient_1.facebookClient.get(`/${adId}`, {
                         access_token: token,
-                        fields: 'id,name,status,effective_status,ad_review_feedback',
+                        fields: 'id,name,status,effective_status,ad_review_feedback,adset_id,campaign_id',
                     });
                     results.set(adId, {
                         effectiveStatus: response.effective_status,
                         status: response.status,
                         reviewFeedback: response.ad_review_feedback,
                         name: response.name,
+                        adsetId: response.adset_id,
+                        campaignId: response.campaign_id,
                     });
                 }
                 catch (err) {
@@ -84,6 +86,44 @@ async function fetchAdReviewStatus(adIds, token) {
     }
     catch (error) {
         logger_1.default.error('[AdReview] Batch fetch failed:', error);
+    }
+    return results;
+}
+/**
+ * 批量获取 Campaign 名称
+ */
+async function fetchCampaignNames(campaignIds, token) {
+    const results = new Map();
+    for (const campaignId of campaignIds) {
+        try {
+            const response = await facebookClient_1.facebookClient.get(`/${campaignId}`, {
+                access_token: token,
+                fields: 'id,name,status',
+            });
+            results.set(campaignId, response.name);
+        }
+        catch (err) {
+            logger_1.default.warn(`[AdReview] Failed to fetch campaign ${campaignId}:`, err.message);
+        }
+    }
+    return results;
+}
+/**
+ * 批量获取 AdSet 名称
+ */
+async function fetchAdSetNames(adsetIds, token) {
+    const results = new Map();
+    for (const adsetId of adsetIds) {
+        try {
+            const response = await facebookClient_1.facebookClient.get(`/${adsetId}`, {
+                access_token: token,
+                fields: 'id,name',
+            });
+            results.set(adsetId, response.name);
+        }
+        catch (err) {
+            logger_1.default.warn(`[AdReview] Failed to fetch adset ${adsetId}:`, err.message);
+        }
     }
     return results;
 }
@@ -362,22 +402,52 @@ async function refreshAllReviewStatus() {
         // 批量查询状态
         const adIds = ads.map(ad => ad.adId);
         const statusMap = await fetchAdReviewStatus(adIds, activeToken.token);
-        // 更新状态
+        // 收集所有需要查询名称的 Campaign 和 AdSet ID
+        const campaignIdsToFetch = new Set();
+        const adsetIdsToFetch = new Set();
+        // 先更新广告状态，同时收集需要查询的 ID
         for (const [adId, data] of statusMap) {
             if (data.error) {
                 result.errors.push(`Ad ${adId}: ${data.error}`);
                 continue;
             }
             const reviewFeedback = parseReviewFeedback(data.reviewFeedback);
-            await Ad_1.default.findOneAndUpdate({ adId }, {
-                $set: {
-                    effectiveStatus: data.effectiveStatus,
-                    name: data.name,
-                    reviewFeedback,
-                    reviewStatusUpdatedAt: new Date(),
-                },
-            });
+            // 更新广告基本信息
+            const updateData = {
+                effectiveStatus: data.effectiveStatus,
+                name: data.name,
+                reviewFeedback,
+                reviewStatusUpdatedAt: new Date(),
+            };
+            // 更新 adsetId 和 campaignId（如果有）
+            if (data.adsetId) {
+                updateData.adsetId = data.adsetId;
+                adsetIdsToFetch.add(data.adsetId);
+            }
+            if (data.campaignId) {
+                updateData.campaignId = data.campaignId;
+                campaignIdsToFetch.add(data.campaignId);
+            }
+            await Ad_1.default.findOneAndUpdate({ adId }, { $set: updateData });
             result.updated++;
+        }
+        // 批量获取 Campaign 名称并更新
+        if (campaignIdsToFetch.size > 0) {
+            logger_1.default.info(`[AdReview] Fetching names for ${campaignIdsToFetch.size} campaigns...`);
+            const campaignNames = await fetchCampaignNames(Array.from(campaignIdsToFetch), activeToken.token);
+            for (const [campaignId, campaignName] of campaignNames) {
+                await Ad_1.default.updateMany({ campaignId }, { $set: { campaignName } });
+            }
+            logger_1.default.info(`[AdReview] Updated ${campaignNames.size} campaign names`);
+        }
+        // 批量获取 AdSet 名称并更新
+        if (adsetIdsToFetch.size > 0) {
+            logger_1.default.info(`[AdReview] Fetching names for ${adsetIdsToFetch.size} adsets...`);
+            const adsetNames = await fetchAdSetNames(Array.from(adsetIdsToFetch), activeToken.token);
+            for (const [adsetId, adsetName] of adsetNames) {
+                await Ad_1.default.updateMany({ adsetId }, { $set: { adsetName } });
+            }
+            logger_1.default.info(`[AdReview] Updated ${adsetNames.size} adset names`);
         }
         logger_1.default.info(`[AdReview] Refresh all completed: ${result.total} total, ${result.updated} updated`);
     }
