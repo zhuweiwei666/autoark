@@ -446,6 +446,17 @@ const executeTaskForAccount = async (taskId, accountId) => {
         }
         // DSA 受益方：使用 Pixel 名称（欧盟合规）
         const dsaBeneficiary = accountConfig.pixelName || accountConfig.pixelId || undefined;
+        // 构建归因设置
+        const attributionSpec = config.adset.attribution ? [{
+                event_type: 'CLICK_THROUGH',
+                window_days: config.adset.attribution.clickWindow || 1,
+            }, ...(config.adset.attribution.viewWindow > 0 ? [{
+                    event_type: 'VIEW_THROUGH',
+                    window_days: config.adset.attribution.viewWindow,
+                }] : []), ...(config.adset.attribution.engagedViewWindow > 0 ? [{
+                    event_type: 'ENGAGED_VIDEO_VIEW',
+                    window_days: config.adset.attribution.engagedViewWindow,
+                }] : [])] : undefined;
         const adsetResult = await (0, bulkCreate_api_1.createAdSet)({
             accountId,
             token,
@@ -464,6 +475,7 @@ const executeTaskForAccount = async (taskId, accountId) => {
                 pixel_id: accountConfig.pixelId,
                 custom_event_type: accountConfig.conversionEvent || 'PURCHASE',
             } : undefined,
+            attribution_spec: attributionSpec,
             dsa_beneficiary: dsaBeneficiary,
             dsa_payor: dsaBeneficiary,
         });

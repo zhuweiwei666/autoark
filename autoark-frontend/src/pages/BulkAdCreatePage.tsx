@@ -85,6 +85,12 @@ export default function BulkAdCreatePage() {
     billingEvent: 'IMPRESSIONS',
     placementType: 'AUTOMATIC',
     budget: 50, // AdSet 级别预算（非 CBO 模式时使用）
+    // 归因设置
+    attribution: {
+      clickWindow: 1,      // 点击后归因窗口（天）: 1, 7, 28
+      viewWindow: 1,       // 浏览后归因窗口（天）: 1 或 0(禁用)
+      engagedViewWindow: 1 // 互动观看后归因窗口（天）: 1 或 0(禁用)
+    }
   })
   const [ad, setAd] = useState({
     nameTemplate: '{adsetName}_ad_{index}',
@@ -1288,6 +1294,61 @@ export default function BulkAdCreatePage() {
                   </div>
                 ) : null
               })()}
+              
+              {/* 归因设置 */}
+              <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl">
+                <div className="flex items-center gap-2 mb-3">
+                  <h4 className="font-medium text-slate-800">归因设置</h4>
+                  <div className="relative group">
+                    <svg className="w-4 h-4 text-slate-400 cursor-help" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <div className="absolute left-0 bottom-full mb-2 hidden group-hover:block w-64 p-2 bg-slate-800 text-white text-xs rounded-lg shadow-lg z-10">
+                      归因设置决定广告转化如何归功于您的广告。点击归因表示用户点击广告后产生的转化，浏览归因表示用户看到广告后产生的转化。
+                    </div>
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-sm text-slate-600 mb-1">点击后归因</label>
+                    <select 
+                      value={adset.attribution.clickWindow} 
+                      onChange={(e) => setAdset({...adset, attribution: {...adset.attribution, clickWindow: Number(e.target.value)}})} 
+                      className="w-full px-3 py-2 border border-blue-200 rounded-lg bg-white text-sm"
+                    >
+                      <option value={1}>1天</option>
+                      <option value={7}>7天</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm text-slate-600 mb-1">互动观看后归因</label>
+                    <select 
+                      value={adset.attribution.engagedViewWindow} 
+                      onChange={(e) => setAdset({...adset, attribution: {...adset.attribution, engagedViewWindow: Number(e.target.value)}})} 
+                      className="w-full px-3 py-2 border border-blue-200 rounded-lg bg-white text-sm"
+                    >
+                      <option value={0}>不启用</option>
+                      <option value={1}>1天</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm text-slate-600 mb-1">浏览后归因</label>
+                    <select 
+                      value={adset.attribution.viewWindow} 
+                      onChange={(e) => setAdset({...adset, attribution: {...adset.attribution, viewWindow: Number(e.target.value)}})} 
+                      className="w-full px-3 py-2 border border-blue-200 rounded-lg bg-white text-sm"
+                    >
+                      <option value={0}>不启用</option>
+                      <option value={1}>1天</option>
+                    </select>
+                  </div>
+                </div>
+                <p className="text-xs text-blue-600 mt-2">
+                  当前设置：点击后{adset.attribution.clickWindow}天内
+                  {adset.attribution.engagedViewWindow > 0 ? `，互动观看后${adset.attribution.engagedViewWindow}天内` : ''}
+                  {adset.attribution.viewWindow > 0 ? `，浏览后${adset.attribution.viewWindow}天内` : ''}
+                </p>
+              </div>
               
               {/* 广告组预算（非 CBO 模式） */}
               {!campaign.budgetOptimization && (
