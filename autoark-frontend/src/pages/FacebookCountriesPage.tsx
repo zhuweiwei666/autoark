@@ -692,7 +692,7 @@ export default function FacebookCountriesPage() {
              )}
           </div>
           
-          <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-6 items-end">
+          <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-6 items-end">
             <div className="group">
               <label className="block text-xs font-medium text-slate-400 mb-2 group-focus-within:text-indigo-400 transition-colors">开始日期</label>
               <DatePicker
@@ -711,38 +711,52 @@ export default function FacebookCountriesPage() {
                 className="w-full"
               />
             </div>
-            {/* 事件筛选 - 三部分 */}
-            <div className="group">
-              <label className="block text-xs font-semibold text-slate-600 mb-2">事件</label>
-              <select
-                value={metricFilter.metric}
-                onChange={e => setMetricFilter({...metricFilter, metric: e.target.value})}
-                className="w-full px-4 py-3 bg-white border border-slate-200 rounded-2xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition-all shadow-sm cursor-pointer"
-              >
-                {METRIC_OPTIONS.map(opt => (
-                  <option key={opt.value} value={opt.value}>{opt.label}</option>
-                ))}
-              </select>
-            </div>
-            <div className="group">
-              <label className="block text-xs font-semibold text-slate-600 mb-2">条件</label>
-              <div className="flex gap-2">
+            {/* 高级事件筛选 */}
+            <div className="col-span-2 group">
+              <label className="block text-xs font-semibold text-slate-600 mb-2">指标筛选</label>
+              <div className="flex items-center bg-gradient-to-r from-slate-50 to-slate-100 rounded-2xl p-1.5 border border-slate-200 shadow-sm">
+                {/* 事件选择 */}
+                <div className="relative flex-1">
+                  <select
+                    value={metricFilter.metric}
+                    onChange={e => setMetricFilter({...metricFilter, metric: e.target.value})}
+                    className="w-full px-4 py-2.5 bg-white border-0 rounded-xl text-sm text-slate-700 font-medium focus:outline-none focus:ring-2 focus:ring-blue-500/20 cursor-pointer appearance-none shadow-sm"
+                  >
+                    {METRIC_OPTIONS.map(opt => (
+                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    ))}
+                  </select>
+                  <svg className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
+                  </svg>
+                </div>
+                
+                {/* 分隔线 */}
+                <div className="w-px h-8 bg-slate-300 mx-2" />
+                
+                {/* 比较符切换 */}
                 <button
                   onClick={() => setMetricFilter({...metricFilter, operator: metricFilter.operator === 'gt' ? 'lt' : 'gt'})}
-                  className={`px-4 py-3 rounded-2xl text-sm font-bold transition-all shadow-sm border flex-shrink-0 min-w-[60px] ${
-                    metricFilter.operator === 'gt' 
-                      ? 'bg-blue-500 text-white border-blue-500' 
-                      : 'bg-orange-500 text-white border-orange-500'
-                  }`}
+                  className="group/btn relative px-4 py-2.5 rounded-xl transition-all duration-300 hover:scale-105 active:scale-95"
                 >
-                  {metricFilter.operator === 'gt' ? '>' : '<'}
+                  <div className={`absolute inset-0 rounded-xl transition-all duration-300 ${
+                    metricFilter.operator === 'gt' 
+                      ? 'bg-gradient-to-br from-emerald-400 to-teal-500 shadow-lg shadow-emerald-500/30' 
+                      : 'bg-gradient-to-br from-rose-400 to-pink-500 shadow-lg shadow-rose-500/30'
+                  }`} />
+                  <span className="relative text-white font-bold text-lg">{metricFilter.operator === 'gt' ? '>' : '<'}</span>
                 </button>
+                
+                {/* 分隔线 */}
+                <div className="w-px h-8 bg-slate-300 mx-2" />
+                
+                {/* 数值输入 */}
                 <input
                   type="number"
                   value={metricFilter.value}
                   onChange={e => setMetricFilter({...metricFilter, value: e.target.value})}
-                  placeholder="输入值"
-                  className="flex-1 px-4 py-3 bg-white border border-slate-200 rounded-2xl text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition-all shadow-sm"
+                  placeholder="目标值"
+                  className="w-32 px-4 py-2.5 bg-white border-0 rounded-xl text-sm text-slate-700 font-medium placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 shadow-sm text-center"
                 />
               </div>
             </div>
