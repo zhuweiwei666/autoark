@@ -505,164 +505,192 @@ const executeTaskForAccount = async (taskId, accountId) => {
         const adIds = [];
         const adsDetails = [];
         let globalAdIndex = 0;
+        // ===== 优化：先并行上传所有视频 =====
+        const allMaterials = [];
         for (let cgIndex = 0; cgIndex < creativeGroups.length; cgIndex++) {
             const creativeGroup = creativeGroups[cgIndex];
             const copywriting = copywritingPackages[cgIndex % copywritingPackages.length];
-            // 获取所有有效素材
             const validMaterials = creativeGroup.materials?.filter((m) => m.status === 'uploaded' || m.url) || [];
-            if (validMaterials.length === 0) {
-                logger_1.default.warn(`[BulkAd] No material found in creative group: ${creativeGroup.name}`);
-                continue;
-            }
-            logger_1.default.info(`[BulkAd] Processing creative group "${creativeGroup.name}" with ${validMaterials.length} materials`);
-            // 为每个素材创建一条广告
-            for (let matIndex = 0; matIndex < validMaterials.length; matIndex++) {
-                const material = validMaterials[matIndex];
-                globalAdIndex++;
-                // 处理素材引用
-                let materialRef = {};
-                if (material.type === 'image') {
-                    if (material.facebookImageHash) {
-                        materialRef.image_hash = material.facebookImageHash;
-                    }
-                    else if (material.url) {
-                        materialRef.image_url = material.url;
-                        logger_1.default.info(`[BulkAd] Using image URL directly: ${material.url}`);
-                    }
-                }
-                else if (material.type === 'video') {
-                    if (material.facebookVideoId) {
-                        materialRef.video_id = material.facebookVideoId;
-                        if (material.thumbnailUrl) {
-                            materialRef.thumbnail_url = material.thumbnailUrl;
-                        }
-                    }
-                    else if (material.url) {
-                        // 视频必须先上传到 Facebook
-                        logger_1.default.info(`[BulkAd] Uploading video ${matIndex + 1}/${validMaterials.length}: ${material.name}`);
-                        const uploadResult = await (0, bulkCreate_api_1.uploadVideoFromUrl)({
+            validMaterials.forEach((material, matIndex) => {
+                allMaterials.push({ cgIndex, matIndex, material, copywriting });
+            });
+        }
+        // 收集需要上传的视频
+        const videosToUpload = allMaterials.filter(m => m.material.type === 'video' && !m.material.facebookVideoId && m.material.url);
+        // 并行上传视频（限制并发数为 5）
+        const videoUploadResults = new Map();
+        if (videosToUpload.length > 0) {
+            logger_1.default.info(`[BulkAd] Uploading ${videosToUpload.length} videos in parallel...`);
+            const BATCH_SIZE = 5;
+            for (let i = 0; i < videosToUpload.length; i += BATCH_SIZE) {
+                const batch = videosToUpload.slice(i, i + BATCH_SIZE);
+                const uploadPromises = batch.map(async ({ material }) => {
+                    try {
+                        const result = await (0, bulkCreate_api_1.uploadVideoFromUrl)({
                             accountId,
                             token,
                             videoUrl: material.url,
                             title: material.name,
                         });
-                        if (uploadResult.success) {
-                            materialRef.video_id = uploadResult.id;
-                            materialRef.thumbnail_url = uploadResult.thumbnailUrl || material.thumbnailUrl || material.url;
+                        if (result.success) {
+                            return { url: material.url, video_id: result.id, thumbnail_url: result.thumbnailUrl };
                         }
-                        else {
-                            logger_1.default.error(`[BulkAd] Video upload failed, skipping: ${uploadResult.error}`);
-                            continue;
-                        }
+                        logger_1.default.error(`[BulkAd] Video upload failed: ${result.error?.message}`);
+                        return { url: material.url };
+                    }
+                    catch (err) {
+                        logger_1.default.error(`[BulkAd] Video upload error: ${err.message}`);
+                        return { url: material.url };
+                    }
+                });
+                const results = await Promise.all(uploadPromises);
+                results.forEach(r => {
+                    if (r.video_id) {
+                        videoUploadResults.set(r.url, { video_id: r.video_id, thumbnail_url: r.thumbnail_url });
+                    }
+                });
+                logger_1.default.info(`[BulkAd] Uploaded batch ${Math.ceil((i + 1) / BATCH_SIZE)}/${Math.ceil(videosToUpload.length / BATCH_SIZE)}`);
+            }
+            logger_1.default.info(`[BulkAd] All videos uploaded: ${videoUploadResults.size}/${videosToUpload.length} success`);
+        }
+        // 创建广告
+        for (const { cgIndex, matIndex, material, copywriting } of allMaterials) {
+            const creativeGroup = creativeGroups[cgIndex];
+            globalAdIndex++;
+            // 处理素材引用
+            let materialRef = {};
+            if (material.type === 'image') {
+                if (material.facebookImageHash) {
+                    materialRef.image_hash = material.facebookImageHash;
+                }
+                else if (material.url) {
+                    materialRef.image_url = material.url;
+                }
+            }
+            else if (material.type === 'video') {
+                if (material.facebookVideoId) {
+                    materialRef.video_id = material.facebookVideoId;
+                    materialRef.thumbnail_url = material.thumbnailUrl;
+                }
+                else if (material.url) {
+                    // 使用预上传的结果
+                    const uploadResult = videoUploadResults.get(material.url);
+                    if (uploadResult?.video_id) {
+                        materialRef.video_id = uploadResult.video_id;
+                        materialRef.thumbnail_url = uploadResult.thumbnail_url || material.thumbnailUrl || material.url;
+                    }
+                    else {
+                        logger_1.default.error(`[BulkAd] No upload result for video: ${material.name}, skipping`);
+                        continue;
                     }
                 }
-                // 检查是否有有效素材
-                if (!materialRef.image_hash && !materialRef.image_url && !materialRef.video_id) {
-                    logger_1.default.warn(`[BulkAd] No valid material reference for material: ${material.name}, skipping`);
-                    continue;
-                }
-                // 创建 Ad Creative
-                const creativeName = `${adsetName}_creative_${globalAdIndex}`;
-                const linkData = {
-                    link: copywriting.links?.websiteUrl || '',
-                    message: copywriting.content?.primaryTexts?.[0] || '',
-                    name: copywriting.content?.headlines?.[0] || '',
-                    description: copywriting.content?.descriptions?.[0] || '',
+            }
+            // 检查是否有有效素材
+            if (!materialRef.image_hash && !materialRef.image_url && !materialRef.video_id) {
+                logger_1.default.warn(`[BulkAd] No valid material reference for material: ${material.name}, skipping`);
+                continue;
+            }
+            // 创建 Ad Creative
+            const creativeName = `${adsetName}_creative_${globalAdIndex}`;
+            const linkData = {
+                link: copywriting.links?.websiteUrl || '',
+                message: copywriting.content?.primaryTexts?.[0] || '',
+                name: copywriting.content?.headlines?.[0] || '',
+                description: copywriting.content?.descriptions?.[0] || '',
+                call_to_action: {
+                    type: copywriting.callToAction || 'SHOP_NOW',
+                    value: { link: copywriting.links?.websiteUrl || '' },
+                },
+            };
+            // 添加显示链接（caption）
+            if (copywriting.links?.displayLink) {
+                linkData.caption = copywriting.links.displayLink;
+            }
+            const objectStorySpec = {
+                page_id: accountConfig.pageId,
+                link_data: linkData,
+            };
+            if (materialRef.image_hash) {
+                objectStorySpec.link_data.image_hash = materialRef.image_hash;
+            }
+            else if (materialRef.image_url) {
+                objectStorySpec.link_data.picture = materialRef.image_url;
+            }
+            else if (materialRef.video_id) {
+                // 视频广告：使用 video_data 替代 link_data
+                const link = objectStorySpec.link_data.link;
+                const message = objectStorySpec.link_data.message;
+                const title = objectStorySpec.link_data.name;
+                const description = objectStorySpec.link_data.description;
+                const caption = objectStorySpec.link_data.caption;
+                // 使用用户选择的 CTA，不做强制转换
+                const ctaType = copywriting.callToAction || 'SHOP_NOW';
+                delete objectStorySpec.link_data;
+                const videoData = {
+                    video_id: materialRef.video_id,
+                    image_url: materialRef.thumbnail_url,
+                    message: message,
+                    link_description: description || title,
                     call_to_action: {
-                        type: copywriting.callToAction || 'SHOP_NOW',
-                        value: { link: copywriting.links?.websiteUrl || '' },
+                        type: ctaType,
+                        value: { link: link },
                     },
                 };
-                // 添加显示链接（caption）
-                if (copywriting.links?.displayLink) {
-                    linkData.caption = copywriting.links.displayLink;
+                // 添加显示链接
+                if (caption) {
+                    videoData.caption = caption;
                 }
-                const objectStorySpec = {
-                    page_id: accountConfig.pageId,
-                    link_data: linkData,
-                };
-                if (materialRef.image_hash) {
-                    objectStorySpec.link_data.image_hash = materialRef.image_hash;
-                }
-                else if (materialRef.image_url) {
-                    objectStorySpec.link_data.picture = materialRef.image_url;
-                }
-                else if (materialRef.video_id) {
-                    // 视频广告：使用 video_data 替代 link_data
-                    const link = objectStorySpec.link_data.link;
-                    const message = objectStorySpec.link_data.message;
-                    const title = objectStorySpec.link_data.name;
-                    const description = objectStorySpec.link_data.description;
-                    const caption = objectStorySpec.link_data.caption;
-                    // 使用用户选择的 CTA，不做强制转换
-                    const ctaType = copywriting.callToAction || 'SHOP_NOW';
-                    delete objectStorySpec.link_data;
-                    const videoData = {
-                        video_id: materialRef.video_id,
-                        image_url: materialRef.thumbnail_url,
-                        message: message,
-                        link_description: description || title,
-                        call_to_action: {
-                            type: ctaType,
-                            value: { link: link },
-                        },
-                    };
-                    // 添加显示链接
-                    if (caption) {
-                        videoData.caption = caption;
-                    }
-                    objectStorySpec.video_data = videoData;
-                    logger_1.default.info(`[BulkAd] Video creative with thumbnail: ${materialRef.thumbnail_url}`);
-                }
-                if (accountConfig.instagramAccountId) {
-                    objectStorySpec.instagram_actor_id = accountConfig.instagramAccountId;
-                }
-                const creativeResult = await (0, bulkCreate_api_1.createAdCreative)({
-                    accountId,
-                    token,
-                    name: creativeName,
-                    objectStorySpec,
-                });
-                if (!creativeResult.success) {
-                    logger_1.default.error(`[BulkAd] Failed to create creative for material ${matIndex + 1}:`, creativeResult.error);
-                    continue;
-                }
-                const creativeId = creativeResult.id;
-                // 创建 Ad
-                const adName = generateName(config.ad.nameTemplate, {
-                    accountName: accountConfig.accountName,
-                    campaignName,
-                    adsetName,
-                    creativeGroupName: creativeGroup.name,
-                    materialName: material.name || `素材${matIndex + 1}`,
-                    index: globalAdIndex,
-                    date: new Date().toISOString().slice(0, 10),
-                });
-                const adResult = await (0, bulkCreate_api_1.createAd)({
-                    accountId,
-                    token,
-                    adsetId,
-                    creativeId,
-                    name: adName,
-                    status: config.ad.status || 'PAUSED',
-                    urlTags: config.ad.tracking?.urlTags,
-                });
-                if (!adResult.success) {
-                    logger_1.default.error(`[BulkAd] Failed to create ad for material ${matIndex + 1}:`, adResult.error);
-                    continue;
-                }
-                adIds.push(adResult.id);
-                // 记录广告详情（用于审核状态追踪）
-                adsDetails.push({
-                    adId: adResult.id,
-                    adName,
-                    adsetId,
-                    creativeId,
-                    materialId: material._id?.toString(),
-                    effectiveStatus: 'PENDING_REVIEW', // 新创建的广告默认为审核中
-                });
-                logger_1.default.info(`[BulkAd] Created ad ${globalAdIndex}: ${adName}`);
+                objectStorySpec.video_data = videoData;
+                logger_1.default.info(`[BulkAd] Video creative with thumbnail: ${materialRef.thumbnail_url}`);
             }
+            if (accountConfig.instagramAccountId) {
+                objectStorySpec.instagram_actor_id = accountConfig.instagramAccountId;
+            }
+            const creativeResult = await (0, bulkCreate_api_1.createAdCreative)({
+                accountId,
+                token,
+                name: creativeName,
+                objectStorySpec,
+            });
+            if (!creativeResult.success) {
+                logger_1.default.error(`[BulkAd] Failed to create creative for material ${matIndex + 1}:`, creativeResult.error);
+                continue;
+            }
+            const creativeId = creativeResult.id;
+            // 创建 Ad
+            const adName = generateName(config.ad.nameTemplate, {
+                accountName: accountConfig.accountName,
+                campaignName,
+                adsetName,
+                creativeGroupName: creativeGroup.name,
+                materialName: material.name || `素材${matIndex + 1}`,
+                index: globalAdIndex,
+                date: new Date().toISOString().slice(0, 10),
+            });
+            const adResult = await (0, bulkCreate_api_1.createAd)({
+                accountId,
+                token,
+                adsetId,
+                creativeId,
+                name: adName,
+                status: config.ad.status || 'PAUSED',
+                urlTags: config.ad.tracking?.urlTags,
+            });
+            if (!adResult.success) {
+                logger_1.default.error(`[BulkAd] Failed to create ad for material ${matIndex + 1}:`, adResult.error);
+                continue;
+            }
+            adIds.push(adResult.id);
+            // 记录广告详情（用于审核状态追踪）
+            adsDetails.push({
+                adId: adResult.id,
+                adName,
+                adsetId,
+                creativeId,
+                materialId: material._id?.toString(),
+                effectiveStatus: 'PENDING_REVIEW', // 新创建的广告默认为审核中
+            });
+            logger_1.default.info(`[BulkAd] Created ad ${globalAdIndex}: ${adName}`);
         }
         // ==================== 6. 完成任务 ====================
         // 如果没有创建任何广告，标记为失败

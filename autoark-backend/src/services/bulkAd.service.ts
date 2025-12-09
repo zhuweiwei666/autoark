@@ -559,68 +559,95 @@ export const executeTaskForAccount = async (
     }> = []
     let globalAdIndex = 0
     
+    // ===== 优化：先并行上传所有视频 =====
+    const allMaterials: Array<{ cgIndex: number; matIndex: number; material: any; copywriting: any }> = []
     for (let cgIndex = 0; cgIndex < creativeGroups.length; cgIndex++) {
       const creativeGroup = creativeGroups[cgIndex]
       const copywriting = copywritingPackages[cgIndex % copywritingPackages.length]
-      
-      // 获取所有有效素材
-      const validMaterials = creativeGroup.materials?.filter((m: any) => 
-        m.status === 'uploaded' || m.url
-      ) || []
-      
-      if (validMaterials.length === 0) {
-        logger.warn(`[BulkAd] No material found in creative group: ${creativeGroup.name}`)
-        continue
-      }
-      
-      logger.info(`[BulkAd] Processing creative group "${creativeGroup.name}" with ${validMaterials.length} materials`)
-      
-      // 为每个素材创建一条广告
-      for (let matIndex = 0; matIndex < validMaterials.length; matIndex++) {
-        const material = validMaterials[matIndex]
-        globalAdIndex++
-        
-        // 处理素材引用
-        let materialRef: any = {}
-        if (material.type === 'image') {
-          if (material.facebookImageHash) {
-            materialRef.image_hash = material.facebookImageHash
-          } else if (material.url) {
-            materialRef.image_url = material.url
-            logger.info(`[BulkAd] Using image URL directly: ${material.url}`)
-          }
-        } else if (material.type === 'video') {
-          if (material.facebookVideoId) {
-            materialRef.video_id = material.facebookVideoId
-            if (material.thumbnailUrl) {
-              materialRef.thumbnail_url = material.thumbnailUrl
-            }
-          } else if (material.url) {
-            // 视频必须先上传到 Facebook
-            logger.info(`[BulkAd] Uploading video ${matIndex + 1}/${validMaterials.length}: ${material.name}`)
-            const uploadResult = await uploadVideoFromUrl({
+      const validMaterials = creativeGroup.materials?.filter((m: any) => m.status === 'uploaded' || m.url) || []
+      validMaterials.forEach((material: any, matIndex: number) => {
+        allMaterials.push({ cgIndex, matIndex, material, copywriting })
+      })
+    }
+    
+    // 收集需要上传的视频
+    const videosToUpload = allMaterials.filter(m => 
+      m.material.type === 'video' && !m.material.facebookVideoId && m.material.url
+    )
+    
+    // 并行上传视频（限制并发数为 5）
+    const videoUploadResults: Map<string, { video_id?: string; thumbnail_url?: string }> = new Map()
+    if (videosToUpload.length > 0) {
+      logger.info(`[BulkAd] Uploading ${videosToUpload.length} videos in parallel...`)
+      const BATCH_SIZE = 5
+      for (let i = 0; i < videosToUpload.length; i += BATCH_SIZE) {
+        const batch = videosToUpload.slice(i, i + BATCH_SIZE)
+        const uploadPromises = batch.map(async ({ material }) => {
+          try {
+            const result = await uploadVideoFromUrl({
               accountId,
               token,
               videoUrl: material.url,
               title: material.name,
             })
-            if (uploadResult.success) {
-              materialRef.video_id = uploadResult.id
-              materialRef.thumbnail_url = uploadResult.thumbnailUrl || material.thumbnailUrl || material.url
-            } else {
-              logger.error(`[BulkAd] Video upload failed, skipping: ${uploadResult.error}`)
-              continue
+            if (result.success) {
+              return { url: material.url, video_id: result.id, thumbnail_url: result.thumbnailUrl }
             }
+            logger.error(`[BulkAd] Video upload failed: ${result.error?.message}`)
+            return { url: material.url }
+          } catch (err: any) {
+            logger.error(`[BulkAd] Video upload error: ${err.message}`)
+            return { url: material.url }
+          }
+        })
+        const results = await Promise.all(uploadPromises)
+        results.forEach(r => {
+          if (r.video_id) {
+            videoUploadResults.set(r.url, { video_id: r.video_id, thumbnail_url: r.thumbnail_url })
+          }
+        })
+        logger.info(`[BulkAd] Uploaded batch ${Math.ceil((i + 1) / BATCH_SIZE)}/${Math.ceil(videosToUpload.length / BATCH_SIZE)}`)
+      }
+      logger.info(`[BulkAd] All videos uploaded: ${videoUploadResults.size}/${videosToUpload.length} success`)
+    }
+    
+    // 创建广告
+    for (const { cgIndex, matIndex, material, copywriting } of allMaterials) {
+      const creativeGroup = creativeGroups[cgIndex]
+      globalAdIndex++
+      
+      // 处理素材引用
+      let materialRef: any = {}
+      if (material.type === 'image') {
+        if (material.facebookImageHash) {
+          materialRef.image_hash = material.facebookImageHash
+        } else if (material.url) {
+          materialRef.image_url = material.url
+        }
+      } else if (material.type === 'video') {
+        if (material.facebookVideoId) {
+          materialRef.video_id = material.facebookVideoId
+          materialRef.thumbnail_url = material.thumbnailUrl
+        } else if (material.url) {
+          // 使用预上传的结果
+          const uploadResult = videoUploadResults.get(material.url)
+          if (uploadResult?.video_id) {
+            materialRef.video_id = uploadResult.video_id
+            materialRef.thumbnail_url = uploadResult.thumbnail_url || material.thumbnailUrl || material.url
+          } else {
+            logger.error(`[BulkAd] No upload result for video: ${material.name}, skipping`)
+            continue
           }
         }
-        
-        // 检查是否有有效素材
-        if (!materialRef.image_hash && !materialRef.image_url && !materialRef.video_id) {
-          logger.warn(`[BulkAd] No valid material reference for material: ${material.name}, skipping`)
-          continue
-        }
-        
-        // 创建 Ad Creative
+      }
+      
+      // 检查是否有有效素材
+      if (!materialRef.image_hash && !materialRef.image_url && !materialRef.video_id) {
+        logger.warn(`[BulkAd] No valid material reference for material: ${material.name}, skipping`)
+        continue
+      }
+      
+      // 创建 Ad Creative
         const creativeName = `${adsetName}_creative_${globalAdIndex}`
         const linkData: any = {
           link: copywriting.links?.websiteUrl || '',
@@ -736,7 +763,6 @@ export const executeTaskForAccount = async (
         })
         
         logger.info(`[BulkAd] Created ad ${globalAdIndex}: ${adName}`)
-      }
     }
     
     // ==================== 6. 完成任务 ====================
