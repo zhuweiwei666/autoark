@@ -75,7 +75,7 @@ class AuthService {
      * 创建用户
      */
     async createUser(data, createdBy) {
-        const { username, password, email, role, organizationId } = data;
+        const { username, password, email, role, organizationId, skipOrgValidation } = data;
         // 检查用户名是否已存在
         const existingUser = await User_1.default.findOne({
             $or: [{ username }, { email }],
@@ -87,8 +87,8 @@ class AuthService {
         if (role !== User_1.UserRole.SUPER_ADMIN && !organizationId) {
             throw new Error('必须指定所属组织');
         }
-        // 验证组织是否存在
-        if (organizationId) {
+        // 验证组织是否存在（创建组织时跳过）
+        if (organizationId && !skipOrgValidation) {
             const organization = await Organization_1.default.findById(organizationId);
             if (!organization) {
                 throw new Error('组织不存在');

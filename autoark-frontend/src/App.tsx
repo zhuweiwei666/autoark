@@ -6,6 +6,7 @@ import Layout from './components/Layout'
 import LoginPage from './pages/LoginPage'
 import UserManagementPage from './pages/UserManagementPage'
 import OrganizationManagementPage from './pages/OrganizationManagementPage'
+import AccountPoolPage from './pages/AccountPoolPage'
 
 // 创建 QueryClient 实例，配置全局缓存策略
 // 策略：显示缓存数据的同时后台刷新（stale-while-revalidate）
@@ -84,6 +85,11 @@ function App() {
                     <Route path="/organizations" element={
                       <ProtectedRoute requireRole="super_admin">
                         <OrganizationManagementPage />
+                      </ProtectedRoute>
+                    } />
+                    <Route path="/account-pool" element={
+                      <ProtectedRoute requireRole="super_admin">
+                        <AccountPoolPage />
                       </ProtectedRoute>
                     } />
                     <Route path="/" element={<Navigate to="/dashboard" replace />} />

@@ -23,6 +23,7 @@ const facebookApp_routes_1 = __importDefault(require("./routes/facebookApp.route
 const auth_routes_1 = __importDefault(require("./routes/auth.routes")); // New: 认证路由
 const user_routes_1 = __importDefault(require("./routes/user.routes")); // New: 用户管理路由
 const organization_routes_1 = __importDefault(require("./routes/organization.routes")); // New: 组织管理路由
+const account_management_routes_1 = __importDefault(require("./routes/account.management.routes")); // New: 账户管理路由
 const logger_1 = __importDefault(require("./utils/logger"));
 const sync_cron_1 = __importDefault(require("./cron/sync.cron"));
 const cron_1 = __importDefault(require("./cron"));
@@ -73,6 +74,7 @@ app.use('/api/auth', auth_routes_1.default);
 // 用户和组织管理（需要认证）
 app.use('/api/users', user_routes_1.default);
 app.use('/api/organizations', organization_routes_1.default);
+app.use('/api/account-management', account_management_routes_1.default);
 // 其他业务路由
 app.use('/api/facebook', facebook_routes_1.default);
 app.use('/api/facebook', facebook_sync_routes_1.default);
