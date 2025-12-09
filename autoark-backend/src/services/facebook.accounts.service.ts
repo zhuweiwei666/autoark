@@ -23,7 +23,7 @@ export const syncAccountsFromTokens = async () => {
         
         // 3. 更新数据库
         for (const acc of accounts) {
-          const accountData = {
+          const accountData: any = {
             channel: 'facebook',
             accountId: normalizeForStorage(acc.id), // 统一格式：数据库存储时去掉前缀
             name: acc.name,
@@ -36,6 +36,11 @@ export const syncAccountsFromTokens = async () => {
             amountSpent: acc.amount_spent,
             token: tokenDoc.token, // 关联的 Token
             operator: tokenDoc.optimizer, // 关联的优化师
+          }
+          
+          // 从 Token 继承 organizationId（组织隔离）
+          if (tokenDoc.organizationId) {
+            accountData.organizationId = tokenDoc.organizationId
           }
 
           await Account.findOneAndUpdate(
@@ -87,8 +92,13 @@ const mapAccountStatus = (status: number): string => {
   }
 }
 
-export const getAccounts = async (filters: any = {}, pagination: { page: number, limit: number, sortBy?: string, sortOrder?: 'asc' | 'desc' }) => {
+export const getAccounts = async (filters: any = {}, pagination: { page: number, limit: number, sortBy?: string, sortOrder?: 'asc' | 'desc' }, organizationId?: string) => {
     const query: any = {}
+    
+    // 组织隔离过滤
+    if (organizationId) {
+        query.organizationId = organizationId
+    }
     
     if (filters.optimizer) {
         query.operator = { $regex: filters.optimizer, $options: 'i' }

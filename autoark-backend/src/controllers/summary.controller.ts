@@ -16,6 +16,7 @@ import {
   refreshMaterialSummary,
   getSummaryStatus,
 } from '../services/summaryAggregation.service'
+import { UserRole } from '../models/User'
 
 const router = Router()
 
@@ -186,11 +187,15 @@ router.get('/accounts', async (req: Request, res: Response) => {
     const limit = parseInt(req.query.limit as string) || 100
     const page = parseInt(req.query.page as string) || 1
     
+    // 组织隔离：超管可见全部，其他用户只能看本组织
+    const organizationId = req.user?.role === UserRole.SUPER_ADMIN ? undefined : req.user?.organizationId
+    
     // 直接使用完整的 getAccounts service
     const { getAccounts } = await import('../services/facebook.accounts.service')
     const result = await getAccounts(
       { startDate, endDate },
-      { page, limit, sortBy, sortOrder }
+      { page, limit, sortBy, sortOrder },
+      organizationId
     )
     
     res.json({

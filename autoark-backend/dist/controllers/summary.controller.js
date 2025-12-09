@@ -41,6 +41,7 @@ const dayjs_1 = __importDefault(require("dayjs"));
 const logger_1 = __importDefault(require("../utils/logger"));
 const Summary_1 = require("../models/Summary");
 const summaryAggregation_service_1 = require("../services/summaryAggregation.service");
+const User_1 = require("../models/User");
 const router = (0, express_1.Router)();
 // ==================== 仪表盘汇总 ====================
 /**
@@ -187,9 +188,11 @@ router.get('/accounts', async (req, res) => {
         const sortOrder = req.query.order === 'asc' ? 'asc' : 'desc';
         const limit = parseInt(req.query.limit) || 100;
         const page = parseInt(req.query.page) || 1;
+        // 组织隔离：超管可见全部，其他用户只能看本组织
+        const organizationId = req.user?.role === User_1.UserRole.SUPER_ADMIN ? undefined : req.user?.organizationId;
         // 直接使用完整的 getAccounts service
         const { getAccounts } = await Promise.resolve().then(() => __importStar(require('../services/facebook.accounts.service')));
-        const result = await getAccounts({ startDate, endDate }, { page, limit, sortBy, sortOrder });
+        const result = await getAccounts({ startDate, endDate }, { page, limit, sortBy, sortOrder }, organizationId);
         res.json({
             success: true,
             data: result.data || [],

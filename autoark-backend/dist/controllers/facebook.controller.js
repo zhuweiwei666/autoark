@@ -43,6 +43,7 @@ const facebookPurchaseCorrectionService = __importStar(require("../services/face
 const facebook_token_pool_1 = require("../services/facebook.token.pool");
 const facebookCountriesService = __importStar(require("../services/facebook.countries.service"));
 const facebook_sync_service_1 = require("../services/facebook.sync.service");
+const User_1 = require("../models/User");
 const syncCampaigns = async (req, res, next) => {
     try {
         // 使用新的队列系统（V2）
@@ -200,7 +201,9 @@ const getAccountsList = async (req, res, next) => {
             startDate: req.query.startDate,
             endDate: req.query.endDate,
         };
-        const result = await facebookAccountsService.getAccounts(filters, { page, limit, sortBy, sortOrder });
+        // 组织隔离：超管可见全部，其他用户只能看本组织
+        const organizationId = req.user?.role === User_1.UserRole.SUPER_ADMIN ? undefined : req.user?.organizationId;
+        const result = await facebookAccountsService.getAccounts(filters, { page, limit, sortBy, sortOrder }, organizationId);
         res.json({
             success: true,
             ...result

@@ -8,6 +8,8 @@ import * as facebookPurchaseCorrectionService from '../services/facebook.purchas
 import { tokenPool } from '../services/facebook.token.pool'
 import * as facebookCountriesService from '../services/facebook.countries.service'
 import { getEffectiveAdAccounts } from '../services/facebook.sync.service'
+import { getOrgFilter } from '../middlewares/auth'
+import { UserRole } from '../models/User'
 
 export const syncCampaigns = async (
   req: Request,
@@ -201,7 +203,9 @@ export const getAccountsList = async (
         endDate: req.query.endDate as string | undefined,
     }
 
-    const result = await facebookAccountsService.getAccounts(filters, { page, limit, sortBy, sortOrder })
+    // 组织隔离：超管可见全部，其他用户只能看本组织
+    const organizationId = req.user?.role === UserRole.SUPER_ADMIN ? undefined : req.user?.organizationId
+    const result = await facebookAccountsService.getAccounts(filters, { page, limit, sortBy, sortOrder }, organizationId)
     res.json({
       success: true,
       ...result

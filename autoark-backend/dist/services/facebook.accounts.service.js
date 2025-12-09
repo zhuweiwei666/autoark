@@ -38,6 +38,10 @@ const syncAccountsFromTokens = async () => {
                         token: tokenDoc.token, // 关联的 Token
                         operator: tokenDoc.optimizer, // 关联的优化师
                     };
+                    // 从 Token 继承 organizationId（组织隔离）
+                    if (tokenDoc.organizationId) {
+                        accountData.organizationId = tokenDoc.organizationId;
+                    }
                     await Account_1.default.findOneAndUpdate({ accountId: accountData.accountId }, accountData, { upsert: true, new: true });
                     syncedCount++;
                 }
@@ -80,8 +84,12 @@ const mapAccountStatus = (status) => {
         default: return `status_${status}`;
     }
 };
-const getAccounts = async (filters = {}, pagination) => {
+const getAccounts = async (filters = {}, pagination, organizationId) => {
     const query = {};
+    // 组织隔离过滤
+    if (organizationId) {
+        query.organizationId = organizationId;
+    }
     if (filters.optimizer) {
         query.operator = { $regex: filters.optimizer, $options: 'i' };
     }
