@@ -295,6 +295,35 @@ const getAccounts = async (req, res, next) => {
     }
 };
 exports.getAccounts = getAccounts;
+// 刷新指定 Campaign 下所有广告的状态
+async function refreshCampaignAdsStatus(campaignId, token) {
+    const Ad = require('../models/Ad').default;
+    // 获取该 Campaign 下的所有广告
+    const ads = await Ad.find({ campaignId }).select('adId').lean();
+    if (ads.length === 0)
+        return;
+    const adIds = ads.map((ad) => ad.adId);
+    // 批量查询广告状态（每次最多50个）
+    const batchSize = 50;
+    for (let i = 0; i < adIds.length; i += batchSize) {
+        const batch = adIds.slice(i, i + batchSize);
+        const idsParam = batch.join(',');
+        try {
+            const response = await fetch(`https://graph.facebook.com/v21.0/?ids=${idsParam}&fields=effective_status&access_token=${token}`);
+            const result = await response.json();
+            // 更新每个广告的状态
+            for (const adId of batch) {
+                if (result[adId] && result[adId].effective_status) {
+                    await Ad.findOneAndUpdate({ adId }, { effectiveStatus: result[adId].effective_status, updatedAt: new Date() });
+                }
+            }
+        }
+        catch (err) {
+            console.error(`[RefreshAdsStatus] Batch failed:`, err.message);
+        }
+    }
+    console.log(`[RefreshAdsStatus] Refreshed ${adIds.length} ads for campaign ${campaignId}`);
+}
 // 更新 Campaign 状态 (ACTIVE/PAUSED)
 const updateCampaignStatus = async (req, res, next) => {
     try {
@@ -329,7 +358,12 @@ const updateCampaignStatus = async (req, res, next) => {
         }
         // 更新本地数据库
         const Campaign = require('../models/Campaign').default;
+        const Ad = require('../models/Ad').default;
         await Campaign.findOneAndUpdate({ campaignId }, { status, updatedAt: new Date() });
+        // 异步刷新该 Campaign 下所有广告的状态
+        refreshCampaignAdsStatus(campaignId, token).catch(err => {
+            console.error(`[Campaign Status] Failed to refresh ads status:`, err.message);
+        });
         res.json({
             success: true,
             message: `Campaign status updated to ${status}`,
