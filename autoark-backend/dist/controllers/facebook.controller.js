@@ -33,7 +33,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getAccounts = exports.getInsightsDaily = exports.getAds = exports.getAdSets = exports.getCampaigns = exports.getCountriesList = exports.getAccountsList = exports.syncAccounts = exports.getCampaignsList = exports.getPurchaseValueInfo = exports.getTokenPoolStatus = exports.diagnoseTokens = exports.getQueueStatus = exports.syncCampaigns = void 0;
+exports.updateCampaignStatus = exports.getAccounts = exports.getInsightsDaily = exports.getAds = exports.getAdSets = exports.getCampaigns = exports.getCountriesList = exports.getAccountsList = exports.syncAccounts = exports.getCampaignsList = exports.getPurchaseValueInfo = exports.getTokenPoolStatus = exports.diagnoseTokens = exports.getQueueStatus = exports.syncCampaigns = void 0;
 const facebookService = __importStar(require("../services/facebook.service"));
 const facebookAccountsService = __importStar(require("../services/facebook.accounts.service"));
 const facebookCampaignsService = __importStar(require("../services/facebook.campaigns.service"));
@@ -295,3 +295,49 @@ const getAccounts = async (req, res, next) => {
     }
 };
 exports.getAccounts = getAccounts;
+// 更新 Campaign 状态 (ACTIVE/PAUSED)
+const updateCampaignStatus = async (req, res, next) => {
+    try {
+        const { campaignId } = req.params;
+        const { status } = req.body;
+        if (!campaignId) {
+            return res.status(400).json({ success: false, error: 'Campaign ID is required' });
+        }
+        if (!status || !['ACTIVE', 'PAUSED'].includes(status)) {
+            return res.status(400).json({ success: false, error: 'Status must be ACTIVE or PAUSED' });
+        }
+        // 获取 token
+        const token = facebook_token_pool_1.tokenPool.getNextToken();
+        if (!token) {
+            return res.status(500).json({ success: false, error: 'No valid Facebook token available' });
+        }
+        // 调用 Facebook API 更新状态
+        const response = await fetch(`https://graph.facebook.com/v21.0/${campaignId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                access_token: token,
+                status: status,
+            }),
+        });
+        const result = await response.json();
+        if (result.error) {
+            return res.status(400).json({
+                success: false,
+                error: result.error.message || 'Failed to update campaign status'
+            });
+        }
+        // 更新本地数据库
+        const Campaign = require('../models/Campaign').default;
+        await Campaign.findOneAndUpdate({ campaignId }, { status, updatedAt: new Date() });
+        res.json({
+            success: true,
+            message: `Campaign status updated to ${status}`,
+            data: { campaignId, status }
+        });
+    }
+    catch (error) {
+        next(error);
+    }
+};
+exports.updateCampaignStatus = updateCampaignStatus;

@@ -12,6 +12,7 @@ router.post('/accounts/sync', facebookController.syncAccounts) // New: Trigger s
 // Campaign management
 router.get('/campaigns-list', facebookController.getCampaignsList) // New: Campaign management list
 router.post('/campaigns/sync', facebookController.syncCampaigns) // New: Trigger sync
+router.put('/campaigns/:campaignId/status', facebookController.updateCampaignStatus) // Update campaign status
 
 // Country management
 router.get('/countries-list', facebookController.getCountriesList) // New: Country management list
