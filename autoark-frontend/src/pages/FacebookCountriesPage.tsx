@@ -187,6 +187,28 @@ export default function FacebookCountriesPage() {
     startDate: today,
     endDate: today,
   })
+  
+  // 目标筛选 - 事件+比较符+值
+  const [metricFilter, setMetricFilter] = useState({
+    metric: '',
+    operator: 'gt' as 'gt' | 'lt',
+    value: '',
+  })
+  
+  // 常用事件列表
+  const METRIC_OPTIONS = [
+    { value: '', label: '选择事件' },
+    { value: 'spend', label: '花费 (spend)' },
+    { value: 'impressions', label: '曝光 (impressions)' },
+    { value: 'clicks', label: '点击 (clicks)' },
+    { value: 'ctr', label: '点击率 (ctr)' },
+    { value: 'cpc', label: '单次点击成本 (cpc)' },
+    { value: 'cpm', label: '千次曝光成本 (cpm)' },
+    { value: 'mobile_app_install', label: '应用安装 (install)' },
+    { value: 'purchase_value', label: '购买金额 (purchase_value)' },
+    { value: 'purchase_roas', label: 'ROAS' },
+    { value: 'conversions', label: '转化 (conversions)' },
+  ]
 
   // 自定义列相关
   const [visibleColumns, setVisibleColumns] = useState<string[]>([])
@@ -311,9 +333,22 @@ export default function FacebookCountriesPage() {
     // 使用全局默认配置：staleTime=5分钟, refetchOnMount=true
   })
 
-  // 前端排序（避免每次排序都请求服务器）
+  // 前端排序和筛选
   const countries = useMemo(() => {
-    const rawData = data?.data || []
+    let rawData = data?.data || []
+    
+    // 事件筛选
+    if (metricFilter.metric && metricFilter.value !== '') {
+      const targetValue = parseFloat(metricFilter.value)
+      if (!isNaN(targetValue)) {
+        rawData = rawData.filter((item: any) => {
+          const itemValue = parseFloat(item[metricFilter.metric])
+          if (isNaN(itemValue)) return false
+          return metricFilter.operator === 'gt' ? itemValue > targetValue : itemValue < targetValue
+        })
+      }
+    }
+    
     if (!sortConfig.key) return rawData
     
     return [...rawData].sort((a: any, b: any) => {
@@ -338,7 +373,7 @@ export default function FacebookCountriesPage() {
       }
       return bStr.localeCompare(aStr)
     })
-  }, [data?.data, sortConfig.key, sortConfig.direction])
+  }, [data?.data, sortConfig.key, sortConfig.direction, metricFilter])
   
   const pagination = data?.pagination || { page: 1, limit: 20, total: 0, pages: 1 }
 
@@ -676,15 +711,40 @@ export default function FacebookCountriesPage() {
                 className="w-full"
               />
             </div>
+            {/* 事件筛选 - 三部分 */}
             <div className="group">
-              <label className="block text-xs font-semibold text-slate-600 mb-2 group-focus-within:text-blue-600 transition-colors">目标</label>
-              <input
-                type="text"
-                value={filters.objective}
-                onChange={e => setFilters({...filters, objective: e.target.value})}
-                placeholder="输入目标 (如 LEAD_GENERATION)"
-                className="w-full px-4 py-3 bg-white/80 backdrop-blur-sm border border-slate-200 rounded-2xl text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition-all shadow-sm"
-              />
+              <label className="block text-xs font-semibold text-slate-600 mb-2">事件</label>
+              <select
+                value={metricFilter.metric}
+                onChange={e => setMetricFilter({...metricFilter, metric: e.target.value})}
+                className="w-full px-4 py-3 bg-white border border-slate-200 rounded-2xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition-all shadow-sm cursor-pointer"
+              >
+                {METRIC_OPTIONS.map(opt => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+            </div>
+            <div className="group">
+              <label className="block text-xs font-semibold text-slate-600 mb-2">条件</label>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setMetricFilter({...metricFilter, operator: metricFilter.operator === 'gt' ? 'lt' : 'gt'})}
+                  className={`px-4 py-3 rounded-2xl text-sm font-bold transition-all shadow-sm border flex-shrink-0 min-w-[60px] ${
+                    metricFilter.operator === 'gt' 
+                      ? 'bg-blue-500 text-white border-blue-500' 
+                      : 'bg-orange-500 text-white border-orange-500'
+                  }`}
+                >
+                  {metricFilter.operator === 'gt' ? '>' : '<'}
+                </button>
+                <input
+                  type="number"
+                  value={metricFilter.value}
+                  onChange={e => setMetricFilter({...metricFilter, value: e.target.value})}
+                  placeholder="输入值"
+                  className="flex-1 px-4 py-3 bg-white border border-slate-200 rounded-2xl text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition-all shadow-sm"
+                />
+              </div>
             </div>
             <div>
                <button
