@@ -251,13 +251,22 @@ export async function updateTaskAdsReviewStatus(taskId: string): Promise<{
       
       result.updated++
       
-      // 统计
-      if (data.effectiveStatus === 'PENDING_REVIEW') {
-        result.pending++
-      } else if (data.effectiveStatus === 'ACTIVE' || data.effectiveStatus === 'PREAPPROVED') {
-        result.approved++
-      } else if (data.effectiveStatus === 'DISAPPROVED') {
+      // 统计 - 修复：区分审核状态和运行状态
+      const effectiveStatus = data.effectiveStatus || ''
+      
+      if (effectiveStatus === 'DISAPPROVED' || effectiveStatus === 'WITH_ISSUES') {
         result.rejected++
+      } else if (effectiveStatus === 'PENDING_REVIEW' || effectiveStatus === 'IN_PROCESS') {
+        result.pending++
+      } else if (
+        effectiveStatus === 'ACTIVE' ||
+        effectiveStatus === 'PREAPPROVED' ||
+        effectiveStatus === 'PAUSED' ||
+        effectiveStatus === 'CAMPAIGN_PAUSED' ||
+        effectiveStatus === 'ADSET_PAUSED' ||
+        effectiveStatus === 'ARCHIVED'
+      ) {
+        result.approved++
       }
     }
     
@@ -350,13 +359,31 @@ export async function getTaskReviewDetails(taskId: string): Promise<{
       accountId: ad.accountId,
     })
     
-    // 统计
-    if (ad.effectiveStatus === 'PENDING_REVIEW') {
-      result.summary.pending++
-    } else if (ad.effectiveStatus === 'ACTIVE' || ad.effectiveStatus === 'PREAPPROVED') {
-      result.summary.approved++
-    } else if (ad.effectiveStatus === 'DISAPPROVED') {
+    // 统计 - 修复：区分审核状态和运行状态
+    const effectiveStatus = ad.effectiveStatus || ''
+    
+    // 审核被拒
+    if (effectiveStatus === 'DISAPPROVED' || effectiveStatus === 'WITH_ISSUES') {
       result.summary.rejected++
+    }
+    // 审核中
+    else if (effectiveStatus === 'PENDING_REVIEW' || effectiveStatus === 'IN_PROCESS') {
+      result.summary.pending++
+    }
+    // 已通过（包括暂停状态）
+    else if (
+      effectiveStatus === 'ACTIVE' ||
+      effectiveStatus === 'PREAPPROVED' ||
+      effectiveStatus === 'PAUSED' ||
+      effectiveStatus === 'CAMPAIGN_PAUSED' ||
+      effectiveStatus === 'ADSET_PAUSED' ||
+      effectiveStatus === 'ARCHIVED'
+    ) {
+      result.summary.approved++
+    }
+    // 其他状态算作待定
+    else {
+      result.summary.pending++
     }
     
     // 更新最后检查时间
@@ -413,13 +440,31 @@ export async function getReviewOverview(): Promise<{
     const campaign = campaignMap.get(campaignId)
     campaign.totalAds++
     
-    // 统计
-    if (ad.effectiveStatus === 'PENDING_REVIEW') {
-      campaign.pendingCount++
-    } else if (ad.effectiveStatus === 'ACTIVE' || ad.effectiveStatus === 'PREAPPROVED') {
-      campaign.approvedCount++
-    } else if (ad.effectiveStatus === 'DISAPPROVED') {
+    // 统计 - 修复：区分审核状态和运行状态
+    const effectiveStatus = ad.effectiveStatus || ''
+    
+    // 审核被拒
+    if (effectiveStatus === 'DISAPPROVED' || effectiveStatus === 'WITH_ISSUES') {
       campaign.rejectedCount++
+    }
+    // 审核中
+    else if (effectiveStatus === 'PENDING_REVIEW' || effectiveStatus === 'IN_PROCESS') {
+      campaign.pendingCount++
+    }
+    // 已通过（包括暂停状态的广告，因为它们已经通过审核）
+    else if (
+      effectiveStatus === 'ACTIVE' ||
+      effectiveStatus === 'PREAPPROVED' ||
+      effectiveStatus === 'PAUSED' ||
+      effectiveStatus === 'CAMPAIGN_PAUSED' ||
+      effectiveStatus === 'ADSET_PAUSED' ||
+      effectiveStatus === 'ARCHIVED'
+    ) {
+      campaign.approvedCount++
+    }
+    // 其他状态算作待定
+    else {
+      campaign.pendingCount++
     }
     
     // 添加到 adset

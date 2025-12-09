@@ -31,14 +31,20 @@ interface Campaign {
   rejectedCount: number
 }
 
-// 审核状态映射
+// 审核状态映射 - 区分审核状态和运行状态
 const REVIEW_STATUS_MAP: Record<string, { label: string; color: string; icon: string }> = {
+  // 真正的审核状态
   PENDING_REVIEW: { label: '审核中', color: 'bg-yellow-100 text-yellow-700 border-yellow-200', icon: '⏳' },
-  ACTIVE: { label: '已通过', color: 'bg-green-100 text-green-700 border-green-200', icon: '✅' },
+  IN_PROCESS: { label: '审核中', color: 'bg-yellow-100 text-yellow-700 border-yellow-200', icon: '⏳' },
   DISAPPROVED: { label: '被拒绝', color: 'bg-red-100 text-red-700 border-red-200', icon: '❌' },
-  PAUSED: { label: '已暂停', color: 'bg-slate-100 text-slate-600 border-slate-200', icon: '⏸️' },
-  PREAPPROVED: { label: '预通过', color: 'bg-blue-100 text-blue-700 border-blue-200', icon: '🔵' },
   WITH_ISSUES: { label: '有问题', color: 'bg-orange-100 text-orange-700 border-orange-200', icon: '⚠️' },
+  
+  // 已通过审核的运行状态
+  ACTIVE: { label: '运行中', color: 'bg-green-100 text-green-700 border-green-200', icon: '✅' },
+  PREAPPROVED: { label: '已通过', color: 'bg-blue-100 text-blue-700 border-blue-200', icon: '✅' },
+  PAUSED: { label: '已暂停', color: 'bg-slate-100 text-slate-600 border-slate-200', icon: '⏸️' },
+  CAMPAIGN_PAUSED: { label: '系列暂停（已过审）', color: 'bg-slate-100 text-slate-600 border-slate-200', icon: '⏸️' },
+  ADSET_PAUSED: { label: '广告组暂停（已过审）', color: 'bg-slate-100 text-slate-600 border-slate-200', icon: '⏸️' },
   ARCHIVED: { label: '已归档', color: 'bg-gray-100 text-gray-600 border-gray-200', icon: '📦' },
   DELETED: { label: '已删除', color: 'bg-gray-100 text-gray-500 border-gray-200', icon: '🗑️' },
 }
