@@ -7,6 +7,7 @@ exports.deleteToken = exports.updateToken = exports.checkTokenStatus = exports.g
 const FbToken_1 = __importDefault(require("../models/FbToken"));
 const fbToken_validation_service_1 = require("../services/fbToken.validation.service");
 const logger_1 = __importDefault(require("../utils/logger"));
+const auth_1 = require("../middlewares/auth");
 /**
  * 绑定/保存 Facebook token
  * POST /api/fb-token
@@ -42,6 +43,7 @@ const bindToken = async (req, res, next) => {
         }
         const tokenData = {
             userId,
+            organizationId: req.user?.organizationId, // 组织隔离
             token,
             status: 'active',
             lastCheckedAt: new Date(),
@@ -86,8 +88,8 @@ exports.bindToken = bindToken;
 const getTokens = async (req, res, next) => {
     try {
         const { optimizer, startDate, endDate, status } = req.query;
-        // 构建查询条件
-        const query = {};
+        // 构建查询条件 - 添加组织过滤
+        const query = { ...(0, auth_1.getOrgFilter)(req) };
         if (optimizer) {
             query.optimizer = optimizer;
         }

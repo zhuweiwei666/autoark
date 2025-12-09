@@ -5,6 +5,7 @@ import {
   checkAndUpdateTokenStatus,
 } from '../services/fbToken.validation.service'
 import logger from '../utils/logger'
+import { getOrgFilter } from '../middlewares/auth'
 
 /**
  * 绑定/保存 Facebook token
@@ -50,6 +51,7 @@ export const bindToken = async (
 
     const tokenData: any = {
       userId,
+      organizationId: req.user?.organizationId, // 组织隔离
       token,
       status: 'active',
       lastCheckedAt: new Date(),
@@ -107,8 +109,8 @@ export const getTokens = async (
   try {
     const { optimizer, startDate, endDate, status } = req.query
 
-    // 构建查询条件
-    const query: any = {}
+    // 构建查询条件 - 添加组织过滤
+    const query: any = { ...getOrgFilter(req) }
 
     if (optimizer) {
       query.optimizer = optimizer as string

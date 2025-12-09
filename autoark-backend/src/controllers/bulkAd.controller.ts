@@ -16,6 +16,7 @@ import logger from '../utils/logger'
 import * as oauthService from '../services/facebook.oauth.service'
 import { facebookClient } from '../integration/facebook/facebookClient'
 import { parseProductUrl } from '../services/productMapping.service'
+import { getOrgFilter } from '../middlewares/auth'
 
 // ==================== 草稿管理 ====================
 
@@ -204,7 +205,8 @@ export const rerunTask = async (req: Request, res: Response) => {
  */
 export const createTargetingPackage = async (req: Request, res: Response) => {
   try {
-    const pkg = new TargetingPackage(req.body)
+    const data = { ...req.body, organizationId: req.user?.organizationId }
+    const pkg = new TargetingPackage(data)
     await pkg.save()
     res.json({ success: true, data: pkg })
   } catch (error: any) {
@@ -242,7 +244,7 @@ export const getTargetingPackageList = async (req: Request, res: Response) => {
   try {
     const { accountId, platform, page = 1, pageSize = 20 } = req.query
     
-    const filter: any = {}
+    const filter: any = { ...getOrgFilter(req) }
     if (accountId) filter.accountId = accountId
     if (platform) filter.platform = platform
     
@@ -284,7 +286,7 @@ export const deleteTargetingPackage = async (req: Request, res: Response) => {
  */
 export const createCopywritingPackage = async (req: Request, res: Response) => {
   try {
-    const data = { ...req.body }
+    const data = { ...req.body, organizationId: req.user?.organizationId }
     
     // 自动从 websiteUrl 提取产品信息
     if (data.links?.websiteUrl && !data.product?.name) {
@@ -360,7 +362,7 @@ export const getCopywritingPackageList = async (req: Request, res: Response) => 
   try {
     const { accountId, platform, page = 1, pageSize = 20 } = req.query
     
-    const filter: any = {}
+    const filter: any = { ...getOrgFilter(req) }
     if (accountId) filter.accountId = accountId
     if (platform) filter.platform = platform
     
@@ -459,7 +461,8 @@ export const parseAllCopywritingProducts = async (req: Request, res: Response) =
  */
 export const createCreativeGroup = async (req: Request, res: Response) => {
   try {
-    const group = new CreativeGroup(req.body)
+    const data = { ...req.body, organizationId: req.user?.organizationId }
+    const group = new CreativeGroup(data)
     await group.save()
     res.json({ success: true, data: group })
   } catch (error: any) {
@@ -497,7 +500,7 @@ export const getCreativeGroupList = async (req: Request, res: Response) => {
   try {
     const { accountId, platform, page = 1, pageSize = 20 } = req.query
     
-    const filter: any = {}
+    const filter: any = { ...getOrgFilter(req) }
     if (accountId) filter.accountId = accountId
     if (platform) filter.platform = platform
     

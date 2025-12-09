@@ -46,6 +46,7 @@ const materialSchema = new mongoose_1.default.Schema({
 }, { _id: true });
 const creativeGroupSchema = new mongoose_1.default.Schema({
     name: { type: String, required: true },
+    organizationId: { type: mongoose_1.default.Schema.Types.ObjectId, ref: 'Organization', index: true }, // 组织隔离
     accountId: { type: String, index: true }, // 可选，创意组可跨账户使用
     platform: { type: String, default: 'facebook', enum: ['facebook', 'tiktok', 'google'] },
     // 素材列表

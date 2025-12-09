@@ -47,6 +47,7 @@ const logger_1 = __importDefault(require("../utils/logger"));
 const oauthService = __importStar(require("../services/facebook.oauth.service"));
 const facebookClient_1 = require("../integration/facebook/facebookClient");
 const productMapping_service_1 = require("../services/productMapping.service");
+const auth_1 = require("../middlewares/auth");
 // ==================== 草稿管理 ====================
 /**
  * 创建广告草稿
@@ -242,7 +243,8 @@ exports.rerunTask = rerunTask;
  */
 const createTargetingPackage = async (req, res) => {
     try {
-        const pkg = new TargetingPackage_1.default(req.body);
+        const data = { ...req.body, organizationId: req.user?.organizationId };
+        const pkg = new TargetingPackage_1.default(data);
         await pkg.save();
         res.json({ success: true, data: pkg });
     }
@@ -277,7 +279,7 @@ exports.updateTargetingPackage = updateTargetingPackage;
 const getTargetingPackageList = async (req, res) => {
     try {
         const { accountId, platform, page = 1, pageSize = 20 } = req.query;
-        const filter = {};
+        const filter = { ...(0, auth_1.getOrgFilter)(req) };
         if (accountId)
             filter.accountId = accountId;
         if (platform)
@@ -320,7 +322,7 @@ exports.deleteTargetingPackage = deleteTargetingPackage;
  */
 const createCopywritingPackage = async (req, res) => {
     try {
-        const data = { ...req.body };
+        const data = { ...req.body, organizationId: req.user?.organizationId };
         // 自动从 websiteUrl 提取产品信息
         if (data.links?.websiteUrl && !data.product?.name) {
             const parsed = (0, productMapping_service_1.parseProductUrl)(data.links.websiteUrl);
@@ -388,7 +390,7 @@ exports.updateCopywritingPackage = updateCopywritingPackage;
 const getCopywritingPackageList = async (req, res) => {
     try {
         const { accountId, platform, page = 1, pageSize = 20 } = req.query;
-        const filter = {};
+        const filter = { ...(0, auth_1.getOrgFilter)(req) };
         if (accountId)
             filter.accountId = accountId;
         if (platform)
@@ -487,7 +489,8 @@ exports.parseAllCopywritingProducts = parseAllCopywritingProducts;
  */
 const createCreativeGroup = async (req, res) => {
     try {
-        const group = new CreativeGroup_1.default(req.body);
+        const data = { ...req.body, organizationId: req.user?.organizationId };
+        const group = new CreativeGroup_1.default(data);
         await group.save();
         res.json({ success: true, data: group });
     }
@@ -522,7 +525,7 @@ exports.updateCreativeGroup = updateCreativeGroup;
 const getCreativeGroupList = async (req, res) => {
     try {
         const { accountId, platform, page = 1, pageSize = 20 } = req.query;
-        const filter = {};
+        const filter = { ...(0, auth_1.getOrgFilter)(req) };
         if (accountId)
             filter.accountId = accountId;
         if (platform)

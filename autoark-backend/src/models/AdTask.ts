@@ -63,14 +63,17 @@ const taskItemSchema = new mongoose.Schema({
 
 const adTaskSchema = new mongoose.Schema(
   {
+    // 组织隔离
+    organizationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Organization', index: true },
+    
     // 任务类型
-    taskType: { 
-      type: String, 
+    taskType: {
+      type: String,
       required: true,
       default: 'BULK_AD_CREATE',
       enum: ['BULK_AD_CREATE', 'BULK_AD_UPDATE', 'BULK_AD_DELETE', 'MATERIAL_UPLOAD'],
     },
-    
+
     // 任务状态
     status: { 
       type: String, 

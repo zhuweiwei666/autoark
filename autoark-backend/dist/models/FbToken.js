@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const mongoose_1 = __importDefault(require("mongoose"));
 const FbTokenSchema = new mongoose_1.default.Schema({
     userId: { type: String, required: true, index: true },
+    organizationId: { type: mongoose_1.default.Schema.Types.ObjectId, ref: 'Organization', index: true }, // 组织隔离
     token: { type: String, required: true },
     optimizer: { type: String, index: true }, // 优化师名称，支持筛选
     status: {

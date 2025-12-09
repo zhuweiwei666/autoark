@@ -7,6 +7,7 @@ import mongoose from 'mongoose'
 const targetingPackageSchema = new mongoose.Schema(
   {
     name: { type: String, required: true },
+    organizationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Organization', index: true }, // 组织隔离
     accountId: { type: String, index: true },  // 可选，定向包可跨账户使用
     platform: { type: String, default: 'facebook', enum: ['facebook', 'tiktok', 'google'] },
     

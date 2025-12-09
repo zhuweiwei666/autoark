@@ -129,6 +129,9 @@ const publishStrategySchema = new mongoose.Schema({
 
 const adDraftSchema = new mongoose.Schema(
   {
+    // 组织隔离
+    organizationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Organization', index: true },
+    
     // 草稿基本信息
     name: { type: String, required: true },
     status: { 

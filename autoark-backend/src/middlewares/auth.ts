@@ -115,6 +115,17 @@ export const dataIsolation = (req: Request, res: Response, next: NextFunction): 
 }
 
 /**
+ * 获取组织过滤条件
+ * - 超级管理员：返回空对象（可查看所有）
+ * - 其他用户：返回 { organizationId: xxx }
+ */
+export const getOrgFilter = (req: Request): { organizationId?: any } => {
+  if (!req.user) return {}
+  if (req.user.role === UserRole.SUPER_ADMIN) return {}
+  return req.user.organizationId ? { organizationId: req.user.organizationId } : {}
+}
+
+/**
  * 可选认证中间件 - 如果有 token 则验证，没有则继续
  * 用于某些公开但登录后有额外功能的接口
  */

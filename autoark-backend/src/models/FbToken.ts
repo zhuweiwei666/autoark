@@ -2,6 +2,7 @@ import mongoose from 'mongoose'
 
 export interface IFbToken extends mongoose.Document {
   userId: string
+  organizationId?: mongoose.Types.ObjectId // 组织隔离
   token: string
   optimizer?: string // 优化师名称
   status: 'active' | 'expired' | 'invalid' // token 状态
@@ -16,6 +17,7 @@ export interface IFbToken extends mongoose.Document {
 const FbTokenSchema = new mongoose.Schema(
   {
     userId: { type: String, required: true, index: true },
+    organizationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Organization', index: true }, // 组织隔离
     token: { type: String, required: true },
     optimizer: { type: String, index: true }, // 优化师名称，支持筛选
     status: {

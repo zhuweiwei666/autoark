@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.optionalAuth = exports.dataIsolation = exports.authorize = exports.authenticate = void 0;
+exports.optionalAuth = exports.getOrgFilter = exports.dataIsolation = exports.authorize = exports.authenticate = void 0;
 const jwt_1 = require("../utils/jwt");
 const User_1 = require("../models/User");
 const User_2 = __importDefault(require("../models/User"));
@@ -96,6 +96,19 @@ const dataIsolation = (req, res, next) => {
     next();
 };
 exports.dataIsolation = dataIsolation;
+/**
+ * 获取组织过滤条件
+ * - 超级管理员：返回空对象（可查看所有）
+ * - 其他用户：返回 { organizationId: xxx }
+ */
+const getOrgFilter = (req) => {
+    if (!req.user)
+        return {};
+    if (req.user.role === User_1.UserRole.SUPER_ADMIN)
+        return {};
+    return req.user.organizationId ? { organizationId: req.user.organizationId } : {};
+};
+exports.getOrgFilter = getOrgFilter;
 /**
  * 可选认证中间件 - 如果有 token 则验证，没有则继续
  * 用于某些公开但登录后有额外功能的接口

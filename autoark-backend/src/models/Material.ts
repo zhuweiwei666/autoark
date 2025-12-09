@@ -12,6 +12,9 @@ import mongoose from 'mongoose'
 
 const materialSchema = new mongoose.Schema(
   {
+    // 组织隔离
+    organizationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Organization', index: true },
+    
     // 素材名称
     name: { type: String, required: true },
     

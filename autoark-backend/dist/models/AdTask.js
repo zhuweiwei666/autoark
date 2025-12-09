@@ -58,6 +58,8 @@ const taskItemSchema = new mongoose_1.default.Schema({
     duration: { type: Number }, // 耗时（毫秒）
 }, { _id: true });
 const adTaskSchema = new mongoose_1.default.Schema({
+    // 组织隔离
+    organizationId: { type: mongoose_1.default.Schema.Types.ObjectId, ref: 'Organization', index: true },
     // 任务类型
     taskType: {
         type: String,

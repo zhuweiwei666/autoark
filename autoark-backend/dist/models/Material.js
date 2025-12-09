@@ -14,6 +14,8 @@ const mongoose_1 = __importDefault(require("mongoose"));
  * 4. 支持 AI 全自动化（素材库是单一真相源）
  */
 const materialSchema = new mongoose_1.default.Schema({
+    // 组织隔离
+    organizationId: { type: mongoose_1.default.Schema.Types.ObjectId, ref: 'Organization', index: true },
     // 素材名称
     name: { type: String, required: true },
     // 素材类型

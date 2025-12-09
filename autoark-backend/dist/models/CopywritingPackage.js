@@ -10,6 +10,7 @@ const mongoose_1 = __importDefault(require("mongoose"));
  */
 const copywritingPackageSchema = new mongoose_1.default.Schema({
     name: { type: String, required: true },
+    organizationId: { type: mongoose_1.default.Schema.Types.ObjectId, ref: 'Organization', index: true }, // 组织隔离
     accountId: { type: String, index: true }, // 可选，文案包可跨账户使用
     platform: { type: String, default: 'facebook', enum: ['facebook', 'tiktok', 'google'] },
     // 文案内容（支持多条，用于 A/B 测试或动态素材）

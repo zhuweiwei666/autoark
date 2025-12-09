@@ -109,6 +109,8 @@ const publishStrategySchema = new mongoose_1.default.Schema({
     scheduledTime: { type: Date },
 }, { _id: false });
 const adDraftSchema = new mongoose_1.default.Schema({
+    // 组织隔离
+    organizationId: { type: mongoose_1.default.Schema.Types.ObjectId, ref: 'Organization', index: true },
     // 草稿基本信息
     name: { type: String, required: true },
     status: {
