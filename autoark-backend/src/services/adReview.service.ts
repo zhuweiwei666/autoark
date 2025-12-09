@@ -9,6 +9,7 @@
 
 import Ad from '../models/Ad'
 import AdTask from '../models/AdTask'
+import Campaign from '../models/Campaign'
 import FbToken from '../models/FbToken'
 import { facebookClient } from '../integration/facebook/facebookClient'
 import logger from '../utils/logger'
@@ -488,9 +489,20 @@ export async function getReviewOverview(): Promise<{
     })
   }
   
-  // 转换为数组
+  // 获取所有 campaign 的真实状态
+  const campaignIds = Array.from(campaignMap.keys())
+  const campaignDocs = await Campaign.find({ campaignId: { $in: campaignIds } })
+    .select('campaignId status')
+    .lean()
+  
+  const campaignStatusMap = new Map(
+    campaignDocs.map(c => [c.campaignId, c.status])
+  )
+  
+  // 转换为数组，并设置真实状态
   const campaigns = Array.from(campaignMap.values()).map(campaign => ({
     ...campaign,
+    status: campaignStatusMap.get(campaign.campaignId) || 'UNKNOWN',
     adsets: Array.from(campaign.adsets.values()),
   }))
   

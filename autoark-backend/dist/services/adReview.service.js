@@ -20,6 +20,7 @@ exports.refreshAllReviewStatus = refreshAllReviewStatus;
 exports.checkPendingAdsReview = checkPendingAdsReview;
 const Ad_1 = __importDefault(require("../models/Ad"));
 const AdTask_1 = __importDefault(require("../models/AdTask"));
+const Campaign_1 = __importDefault(require("../models/Campaign"));
 const FbToken_1 = __importDefault(require("../models/FbToken"));
 const facebookClient_1 = require("../integration/facebook/facebookClient");
 const logger_1 = __importDefault(require("../utils/logger"));
@@ -400,9 +401,16 @@ async function getReviewOverview() {
             campaignId: ad.campaignId,
         });
     }
-    // 转换为数组
+    // 获取所有 campaign 的真实状态
+    const campaignIds = Array.from(campaignMap.keys());
+    const campaignDocs = await Campaign_1.default.find({ campaignId: { $in: campaignIds } })
+        .select('campaignId status')
+        .lean();
+    const campaignStatusMap = new Map(campaignDocs.map(c => [c.campaignId, c.status]));
+    // 转换为数组，并设置真实状态
     const campaigns = Array.from(campaignMap.values()).map(campaign => ({
         ...campaign,
+        status: campaignStatusMap.get(campaign.campaignId) || 'UNKNOWN',
         adsets: Array.from(campaign.adsets.values()),
     }));
     // 按总广告数排序
