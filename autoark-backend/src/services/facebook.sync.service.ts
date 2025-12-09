@@ -33,9 +33,9 @@ const extractVideoIdFromSpec = (spec: any): string | undefined => {
   return undefined
 }
 
-// 1. Get Effective Accounts
+// 1. Get Effective Accounts - 从所有 active token 获取账户
 export const getEffectiveAdAccounts = async (): Promise<string[]> => {
-  // Priority: Env Array > Env Single > Auto-discover
+  // Priority: Env Array > Env Single > Auto-discover from all tokens
   if (process.env.FB_ACCOUNT_IDS) {
     try {
       const ids = JSON.parse(process.env.FB_ACCOUNT_IDS)
@@ -49,9 +49,26 @@ export const getEffectiveAdAccounts = async (): Promise<string[]> => {
     return [process.env.FB_AD_ACCOUNT_ID]
   }
 
-  // Auto-discover
-  const accounts = await fbApi.fetchUserAdAccounts()
-  return accounts.map((a: any) => a.id)
+  // Auto-discover: 遍历所有 active token，获取各自的账户
+  const FbToken = require('../models/FbToken').default
+  const tokens = await FbToken.find({ status: 'active' }).lean()
+  
+  const allAccountIds = new Set<string>()
+  
+  for (const tokenDoc of tokens) {
+    try {
+      const accounts = await fbApi.fetchUserAdAccounts(tokenDoc.token)
+      for (const acc of accounts) {
+        allAccountIds.add(acc.id)
+      }
+      logger.info(`[GetAccounts] Token ${tokenDoc.fbUserName || tokenDoc.fbUserId}: found ${accounts.length} accounts`)
+    } catch (err: any) {
+      logger.warn(`[GetAccounts] Failed to fetch accounts for token ${tokenDoc.fbUserName || tokenDoc.fbUserId}: ${err.message}`)
+    }
+  }
+  
+  logger.info(`[GetAccounts] Total unique accounts from all tokens: ${allAccountIds.size}`)
+  return Array.from(allAccountIds)
 }
 
 // 6. Generic Mongo Writer
