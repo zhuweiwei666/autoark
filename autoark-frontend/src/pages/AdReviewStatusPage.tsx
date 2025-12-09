@@ -60,6 +60,7 @@ export default function AdReviewStatusPage() {
   const [selectedAdset, setSelectedAdset] = useState<AdSet | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [togglingCampaign, setTogglingCampaign] = useState<string | null>(null)
+  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'paused'>('all')
 
   useEffect(() => {
     loadData()
@@ -127,6 +128,13 @@ export default function AdReviewStatusPage() {
     return <Loading.Page message="加载审核数据..." />
   }
 
+  // 根据状态筛选广告系列
+  const filteredCampaigns = campaigns.filter(c => {
+    if (statusFilter === 'active') return c.status === 'ACTIVE'
+    if (statusFilter === 'paused') return c.status !== 'ACTIVE'
+    return true
+  })
+
   // 统计总数
   const totalStats = campaigns.reduce((acc, c) => ({
     total: acc.total + c.totalAds,
@@ -134,6 +142,10 @@ export default function AdReviewStatusPage() {
     approved: acc.approved + c.approvedCount,
     rejected: acc.rejected + c.rejectedCount,
   }), { total: 0, pending: 0, approved: 0, rejected: 0 })
+
+  // 统计各状态数量
+  const activeCampaignsCount = campaigns.filter(c => c.status === 'ACTIVE').length
+  const pausedCampaignsCount = campaigns.filter(c => c.status !== 'ACTIVE').length
 
   return (
     <div className="p-6 h-full">
@@ -190,21 +202,44 @@ export default function AdReviewStatusPage() {
           {/* 左列：广告系列 */}
           <div className="bg-white/80 backdrop-blur-xl rounded-xl border border-white/60 shadow-lg overflow-hidden flex flex-col">
             <div className="p-4 border-b border-slate-100 bg-gradient-to-r from-blue-50/50 to-indigo-50/50">
-              <h2 className="font-semibold text-slate-800 flex items-center gap-2">
+              <h2 className="font-semibold text-slate-800 flex items-center gap-2 mb-3">
                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-5 h-5 text-blue-500">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z" />
                 </svg>
                 广告系列
-                <span className="text-xs text-slate-500 font-normal">({campaigns.length})</span>
+                <span className="text-xs text-slate-500 font-normal">({filteredCampaigns.length})</span>
               </h2>
+              {/* 状态筛选标签 */}
+              <div className="flex gap-1 bg-slate-100 p-1 rounded-lg">
+                <button
+                  onClick={() => { setStatusFilter('paused'); setSelectedCampaign(null); setSelectedAdset(null) }}
+                  className={`flex-1 px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
+                    statusFilter === 'paused'
+                      ? 'bg-white text-slate-700 shadow-sm'
+                      : 'text-slate-500 hover:text-slate-700'
+                  }`}
+                >
+                  未开启 ({pausedCampaignsCount})
+                </button>
+                <button
+                  onClick={() => { setStatusFilter('active'); setSelectedCampaign(null); setSelectedAdset(null) }}
+                  className={`flex-1 px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
+                    statusFilter === 'active'
+                      ? 'bg-green-500 text-white shadow-sm'
+                      : 'text-slate-500 hover:text-slate-700'
+                  }`}
+                >
+                  投放中 ({activeCampaignsCount})
+                </button>
+              </div>
             </div>
             <div className="flex-1 overflow-y-auto p-2 space-y-2">
-              {campaigns.length === 0 ? (
+              {filteredCampaigns.length === 0 ? (
                 <div className="text-center text-slate-500 py-8">
-                  <p>暂无通过 AutoArk 发布的广告</p>
+                  <p>{statusFilter === 'active' ? '暂无投放中的广告系列' : statusFilter === 'paused' ? '暂无未开启的广告系列' : '暂无通过 AutoArk 发布的广告'}</p>
                 </div>
               ) : (
-                campaigns.map(campaign => (
+                filteredCampaigns.map(campaign => (
                   <div
                     key={campaign.campaignId}
                     onClick={() => {
