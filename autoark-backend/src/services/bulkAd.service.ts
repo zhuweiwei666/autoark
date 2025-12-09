@@ -4,6 +4,7 @@ import TargetingPackage from '../models/TargetingPackage'
 import CopywritingPackage from '../models/CopywritingPackage'
 import CreativeGroup from '../models/CreativeGroup'
 import FbToken from '../models/FbToken'
+import AdMaterialMapping from '../models/AdMaterialMapping'
 import logger from '../utils/logger'
 import {
   createCampaign,
@@ -772,6 +773,25 @@ export const executeTaskForAccount = async (
           },
           { upsert: true }
         )
+        
+        // 【关键修复】建立 Ad-Material 映射（用于素材数据归因）
+        if (adDetail.materialId) {
+          try {
+            await (AdMaterialMapping as any).recordMapping({
+              adId: adDetail.adId,
+              materialId: adDetail.materialId,
+              accountId,
+              campaignId,
+              adsetId: adDetail.adsetId,
+              creativeId: adDetail.creativeId,
+              publishedBy: task.createdBy?.toString(),
+              taskId,
+            })
+            logger.info(`[BulkAd] Recorded ad-material mapping: ${adDetail.adId} -> ${adDetail.materialId}`)
+          } catch (mappingErr: any) {
+            logger.warn(`[BulkAd] Failed to record ad-material mapping:`, mappingErr.message)
+          }
+        }
       }
       logger.info(`[BulkAd] Saved ${adsDetails.length} ad records for review tracking`)
     } catch (adSaveErr: any) {

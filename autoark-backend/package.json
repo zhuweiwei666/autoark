@@ -11,7 +11,8 @@
     "lint": "eslint 'src/**/*.ts' --fix",
     "webhook": "node src/webhook.js",
     "debug:purchase": "node scripts/debug_facebook_purchase.js",
-    "init:super-admin": "ts-node scripts/initSuperAdmin.ts"
+    "init:super-admin": "ts-node scripts/initSuperAdmin.ts",
+    "backfill:mapping": "ts-node scripts/backfillAdMaterialMapping.ts"
   },
   "keywords": [],
   "author": "",

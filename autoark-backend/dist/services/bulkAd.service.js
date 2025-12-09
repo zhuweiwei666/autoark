@@ -43,6 +43,7 @@ const TargetingPackage_1 = __importDefault(require("../models/TargetingPackage")
 const CopywritingPackage_1 = __importDefault(require("../models/CopywritingPackage"));
 const CreativeGroup_1 = __importDefault(require("../models/CreativeGroup"));
 const FbToken_1 = __importDefault(require("../models/FbToken"));
+const AdMaterialMapping_1 = __importDefault(require("../models/AdMaterialMapping"));
 const logger_1 = __importDefault(require("../utils/logger"));
 const bulkCreate_api_1 = require("../integration/facebook/bulkCreate.api");
 /**
@@ -692,6 +693,25 @@ const executeTaskForAccount = async (taskId, accountId) => {
                         status: config.ad.status || 'PAUSED',
                     },
                 }, { upsert: true });
+                // 【关键修复】建立 Ad-Material 映射（用于素材数据归因）
+                if (adDetail.materialId) {
+                    try {
+                        await AdMaterialMapping_1.default.recordMapping({
+                            adId: adDetail.adId,
+                            materialId: adDetail.materialId,
+                            accountId,
+                            campaignId,
+                            adsetId: adDetail.adsetId,
+                            creativeId: adDetail.creativeId,
+                            publishedBy: task.createdBy?.toString(),
+                            taskId,
+                        });
+                        logger_1.default.info(`[BulkAd] Recorded ad-material mapping: ${adDetail.adId} -> ${adDetail.materialId}`);
+                    }
+                    catch (mappingErr) {
+                        logger_1.default.warn(`[BulkAd] Failed to record ad-material mapping:`, mappingErr.message);
+                    }
+                }
             }
             logger_1.default.info(`[BulkAd] Saved ${adsDetails.length} ad records for review tracking`);
         }
