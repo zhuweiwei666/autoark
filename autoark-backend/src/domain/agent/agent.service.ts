@@ -19,7 +19,8 @@ import {
   AggCampaign, 
   AggOptimizer 
 } from '../../models/Aggregation'
-import { refreshRecentDays } from '../../services/aggregation.service'
+// 🚫 不再在 AI 对话中刷新数据，由后台 cron 统一刷新
+// import { refreshRecentDays } from '../../services/aggregation.service'
 
 const LLM_API_KEY = process.env.LLM_API_KEY
 const LLM_MODEL = process.env.LLM_MODEL || 'gemini-2.0-flash'
@@ -315,9 +316,8 @@ ${data.needsAttention.map((c: any) => `- ${c.entityName || c.entityId}: ${c.issu
     const yesterday = dayjs().subtract(1, 'day').format('YYYY-MM-DD')
     const sevenDaysAgo = dayjs().subtract(7, 'day').format('YYYY-MM-DD')
 
-    // 刷新最近3天的数据
-    logger.info('[AgentService] Refreshing recent data from Aggregation tables...')
-    await refreshRecentDays()
+    // ⚡ 不再实时刷新，直接读取预聚合表（数据由后台 cron 每 10 分钟更新）
+    logger.info('[AgentService] Reading from Aggregation tables (no refresh)...')
 
     // 并行获取所有预聚合数据
     const [
