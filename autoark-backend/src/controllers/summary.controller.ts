@@ -20,9 +20,12 @@ import {
 import MaterialMetrics from '../models/MaterialMetrics'
 import { refreshRecentDays } from '../services/aggregation.service'
 import { UserRole } from '../models/User'
-import { getUserAccountIds } from '../middlewares/auth'
+import { getUserAccountIds, authenticate } from '../middlewares/auth'
 
 const router = Router()
+
+// 所有路由需要认证
+router.use(authenticate)
 
 // ==================== 仪表盘汇总 ====================
 
