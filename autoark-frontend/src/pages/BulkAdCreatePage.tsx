@@ -35,8 +35,20 @@ interface AuthStatus {
 export default function BulkAdCreatePage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
-  const { user } = useAuth()  // 获取当前用户信息
+  const { user, token } = useAuth()  // 获取当前用户信息和认证 token
   const [currentStep, setCurrentStep] = useState(1)
+  
+  // 带认证的 fetch 辅助函数
+  const authFetch = async (url: string, options: RequestInit = {}) => {
+    const headers: HeadersInit = {
+      'Content-Type': 'application/json',
+      ...(options.headers || {}),
+    }
+    if (token) {
+      (headers as Record<string, string>)['Authorization'] = `Bearer ${token}`
+    }
+    return fetch(url, { ...options, headers })
+  }
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   
@@ -137,11 +149,13 @@ export default function BulkAdCreatePage() {
     }
   }, [searchParams])
   
-  // 初始化
+  // 初始化（token 准备好后才检查授权状态）
   useEffect(() => {
-    checkAuthStatus()
+    if (token) {
+      checkAuthStatus()
+    }
     loadAssets()
-  }, [])
+  }, [token])
   
   // 授权后立即加载缓存的 Pixels（不等到步骤2）
   useEffect(() => {
@@ -152,9 +166,15 @@ export default function BulkAdCreatePage() {
   
   // 检查授权状态
   const checkAuthStatus = async () => {
+    if (!token) {
+      setAuthLoading(false)
+      setAuthStatus({ authorized: false })
+      return
+    }
+    
     setAuthLoading(true)
     try {
-      const res = await fetch(`${API_BASE}/bulk-ad/auth/status`)
+      const res = await authFetch(`${API_BASE}/bulk-ad/auth/status`)
       const data = await res.json()
       if (data.success) {
         setAuthStatus(data.data)
@@ -177,8 +197,8 @@ export default function BulkAdCreatePage() {
     setError(null)
     
     try {
-      // 获取登录 URL
-      const res = await fetch(`${API_BASE}/bulk-ad/auth/login-url`)
+      // 获取登录 URL（传递认证信息以绑定到当前用户）
+      const res = await authFetch(`${API_BASE}/bulk-ad/auth/login-url`)
       const data = await res.json()
       
       if (!data.success || !data.data.loginUrl) {
@@ -252,7 +272,7 @@ export default function BulkAdCreatePage() {
   const loadAdAccounts = async () => {
     setAccountsLoading(true)
     try {
-      const res = await fetch(`${API_BASE}/bulk-ad/auth/ad-accounts`)
+      const res = await authFetch(`${API_BASE}/bulk-ad/auth/ad-accounts`)
       const data = await res.json()
       if (data.success) {
         setAccounts(data.data || [])
@@ -274,7 +294,7 @@ export default function BulkAdCreatePage() {
   const loadCachedPixels = async () => {
     setPixelsLoading(true)
     try {
-      const res = await fetch(`${API_BASE}/bulk-ad/auth/cached-pixels`)
+      const res = await authFetch(`${API_BASE}/bulk-ad/auth/cached-pixels`)
       const data = await res.json()
       if (data.success && data.data?.length > 0) {
         const pixels = data.data

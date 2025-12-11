@@ -752,9 +752,15 @@ export const getAvailableApps = async (req: Request, res: Response) => {
 /**
  * 获取 Facebook 登录 URL（批量广告专用，支持选择 App）
  * GET /api/bulk-ad/auth/login-url
+ * 
+ * 用户隔离：将当前 AutoArk 用户 ID 编码到 state 参数中
  */
 export const getAuthLoginUrl = async (req: Request, res: Response) => {
   try {
+    if (!req.user) {
+      return res.status(401).json({ success: false, error: '未认证' })
+    }
+    
     const { appId } = req.query // 可选，指定使用哪个 App
     
     const config = await oauthService.validateOAuthConfig()
@@ -768,8 +774,12 @@ export const getAuthLoginUrl = async (req: Request, res: Response) => {
       })
     }
     
-    // 使用特殊 state 标记来自批量广告模块
-    const loginUrl = await oauthService.getFacebookLoginUrl('bulk-ad', appId as string | undefined)
+    // 将 AutoArk 用户 ID 编码到 state 参数中
+    // 格式: bulk-ad|userId|organizationId
+    const stateData = `bulk-ad|${req.user.userId}|${req.user.organizationId || ''}`
+    const loginUrl = await oauthService.getFacebookLoginUrl(stateData, appId as string | undefined)
+    
+    logger.info(`[BulkAd] Generated login URL for user ${req.user.userId}`)
     
     res.json({
       success: true,
@@ -784,6 +794,8 @@ export const getAuthLoginUrl = async (req: Request, res: Response) => {
 /**
  * OAuth 回调处理（批量广告专用）
  * GET /api/bulk-ad/auth/callback
+ * 
+ * 用户隔离：从 state 参数解析 AutoArk 用户 ID，并将 token 与该用户关联
  */
 export const handleAuthCallback = async (req: Request, res: Response) => {
   try {
@@ -791,7 +803,6 @@ export const handleAuthCallback = async (req: Request, res: Response) => {
     
     if (error) {
       logger.error('[BulkAd OAuth] Facebook returned error:', { error, error_description })
-      // 重定向到专门的 OAuth 回调页面（用于关闭弹窗）
       return res.redirect(
         `/oauth/callback?oauth_error=${encodeURIComponent(error_description as string || error as string)}`
       )
@@ -801,11 +812,32 @@ export const handleAuthCallback = async (req: Request, res: Response) => {
       return res.redirect('/oauth/callback?oauth_error=No authorization code received')
     }
     
+    // 解析 state 参数获取 AutoArk 用户信息
+    // 格式: bulk-ad|userId|organizationId|appId（appId 可选）
+    let autoarkUserId: string | undefined
+    let organizationId: string | undefined
+    if (state) {
+      const parts = (state as string).split('|')
+      if (parts[0] === 'bulk-ad' && parts[1]) {
+        autoarkUserId = parts[1]
+        organizationId = parts[2] || undefined
+        logger.info(`[BulkAd OAuth] Binding token to AutoArk user: ${autoarkUserId}`)
+      }
+    }
+    
     // 处理 OAuth 回调（传递 state 以解析使用的 App）
     const result = await oauthService.handleOAuthCallback(code as string, state as string | undefined)
     
-    // 异步同步 Facebook 用户资产（Pixels、账户、粉丝页）
-    // 不阻塞用户，后台执行
+    // 更新 Token 的 userId 和 organizationId（关联到 AutoArk 用户）
+    if (autoarkUserId) {
+      await FbToken.findByIdAndUpdate(result.tokenId, {
+        userId: autoarkUserId,
+        ...(organizationId && { organizationId }),
+      })
+      logger.info(`[BulkAd OAuth] Token ${result.tokenId} bound to user ${autoarkUserId}`)
+    }
+    
+    // 异步同步 Facebook 用户资产
     const facebookUserService = require('../services/facebookUser.service')
     facebookUserService.syncFacebookUserAssets(
       result.fbUserId, 
@@ -815,7 +847,7 @@ export const handleAuthCallback = async (req: Request, res: Response) => {
       logger.error('[BulkAd OAuth] Failed to sync Facebook user assets:', err)
     })
     
-    // 重定向到专门的 OAuth 回调页面（用于关闭弹窗并通知父窗口）
+    // 重定向到专门的 OAuth 回调页面
     const params = new URLSearchParams({
       oauth_success: 'true',
       token_id: result.tokenId,
@@ -831,19 +863,80 @@ export const handleAuthCallback = async (req: Request, res: Response) => {
 }
 
 /**
- * 检查授权状态
+ * 检查授权状态（用户隔离）
  * GET /api/bulk-ad/auth/status
+ * 
+ * 每个 AutoArk 用户看到自己绑定的 Facebook 账号
+ * 超级管理员可以看到所有 token
  */
 export const getAuthStatus = async (req: Request, res: Response) => {
   try {
-    const fbToken: any = await FbToken.findOne({ status: 'active' }).sort({ updatedAt: -1 })
+    if (!req.user) {
+      return res.status(401).json({ success: false, error: '未认证' })
+    }
+    
+    // 构建查询条件
+    const tokenQuery: any = { status: 'active' }
+    
+    // 超级管理员看到所有，普通用户只看到自己绑定的或本组织的
+    if (req.user.role === UserRole.SUPER_ADMIN) {
+      // 超级管理员：获取所有活跃 token，优先显示自己绑定的
+      const userToken = await FbToken.findOne({ 
+        status: 'active', 
+        userId: req.user.userId 
+      }).sort({ updatedAt: -1 })
+      
+      if (userToken) {
+        return res.json({
+          success: true,
+          data: {
+            authorized: true,
+            tokenId: userToken._id,
+            fbUserId: userToken.fbUserId,
+            fbUserName: userToken.fbUserName,
+            expiresAt: userToken.expiresAt,
+            isOwnToken: true,
+          },
+        })
+      }
+      
+      // 如果超级管理员没有绑定自己的 token，显示第一个可用的
+      const anyToken: any = await FbToken.findOne({ status: 'active' }).sort({ updatedAt: -1 })
+      if (anyToken) {
+        return res.json({
+          success: true,
+          data: {
+            authorized: true,
+            tokenId: anyToken._id,
+            fbUserId: anyToken.fbUserId,
+            fbUserName: anyToken.fbUserName,
+            expiresAt: anyToken.expiresAt,
+            isOwnToken: false,
+            message: '当前使用的是其他用户的授权，建议绑定自己的 Facebook 账号',
+          },
+        })
+      }
+    } else {
+      // 普通用户：只看到自己绑定的 token
+      tokenQuery.userId = req.user.userId
+      // 如果有组织，也可以看到同组织的
+      if (req.user.organizationId) {
+        tokenQuery.$or = [
+          { userId: req.user.userId },
+          { organizationId: req.user.organizationId }
+        ]
+        delete tokenQuery.userId
+      }
+    }
+    
+    const fbToken: any = await FbToken.findOne(tokenQuery).sort({ updatedAt: -1 })
     
     if (!fbToken) {
       return res.json({
         success: true,
         data: {
           authorized: false,
-          message: '未授权 Facebook 账号',
+          message: '请先绑定您的 Facebook 账号',
         },
       })
     }
@@ -856,6 +949,7 @@ export const getAuthStatus = async (req: Request, res: Response) => {
         fbUserId: fbToken.fbUserId,
         fbUserName: fbToken.fbUserName,
         expiresAt: fbToken.expiresAt,
+        isOwnToken: fbToken.userId === req.user.userId,
       },
     })
   } catch (error: any) {
