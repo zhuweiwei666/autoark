@@ -22,6 +22,7 @@ import userRoutes from './routes/user.routes' // New: 用户管理路由
 import organizationRoutes from './routes/organization.routes' // New: 组织管理路由
 import accountManagementRoutes from './routes/account.management.routes' // New: 账户管理路由
 import aggregationRoutes from './controllers/aggregation.controller' // New: 预聚合数据 API
+import ruleRoutes from './controllers/rule.controller' // New: 自动化规则引擎
 import logger from './utils/logger'
 import initSyncCron from './cron/sync.cron'
 import initCronJobs from './cron'
@@ -96,6 +97,7 @@ app.use('/api/summary', summaryRoutes) // New: 预聚合数据快速读取（加
 app.use('/api/product-mapping', productMappingRoutes) // New: 产品关系映射（自动投放核心）
 app.use('/api/facebook-apps', facebookAppRoutes) // New: Facebook App 管理（多App负载均衡）
 app.use('/api/agg', aggregationRoutes) // New: 统一预聚合数据 API（前端+AI 共用）
+app.use('/api/rules', ruleRoutes) // New: 自动化规则引擎
 
 // Dashboard UI 已迁移到 React 前端，不再需要后端路由
 // app.use('/dashboard', dashboardRoutes) // 已禁用，让前端 React Router 处理

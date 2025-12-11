@@ -40,6 +40,7 @@ import AgentManagementPage from './pages/AgentManagementPage'
 import MaterialMetricsPage from './pages/MaterialMetricsPage'
 import FacebookAppPage from './pages/FacebookAppPage'
 import AdReviewStatusPage from './pages/AdReviewStatusPage'
+import RulesPage from './pages/RulesPage'
 
 function App() {
   return (
@@ -80,6 +81,7 @@ function App() {
               {/* AI Agent Routes */}
               <Route path="/ai/analysis" element={<AIAnalysisPage />} />
               <Route path="/ai/agents" element={<AgentManagementPage />} />
+              <Route path="/ai/rules" element={<RulesPage />} />
                     {/* 用户和组织管理 */}
                     <Route path="/users" element={<UserManagementPage />} />
                     <Route path="/organizations" element={

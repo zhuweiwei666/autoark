@@ -6,6 +6,7 @@ import { runAiOptimizerDaily } from '../ai'
 import { initMaterialMetricsCron } from './materialMetrics.cron'
 import { initSummaryAggregationCron } from './summaryAggregation.cron'
 import { initAggregationCron } from './aggregation.cron'
+import { initRuleCron } from './rule.cron'
 import logger from '../utils/logger'
 
 const initCronJobs = () => {
@@ -38,6 +39,9 @@ const initCronJobs = () => {
 
   // 统一预聚合 (Every 10 minutes) - 前端和 AI 共用的数据源
   initAggregationCron()
+
+  // 🤖 自动化规则引擎 (Hourly + Daily)
+  initRuleCron()
 
   logger.info('Cron jobs initialized')
 }
