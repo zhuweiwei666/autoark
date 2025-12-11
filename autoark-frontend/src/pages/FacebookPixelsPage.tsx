@@ -87,7 +87,7 @@ export default function FacebookPixelsPage() {
             <button
               onClick={loadPixels}
               disabled={loading}
-              className={`px-6 py-3 bg-slate-900 hover:bg-slate-800 rounded-2xl text-sm font-semibold text-white shadow-md hover:shadow-lg transition-all duration-200 flex items-center gap-2 active:scale-95 ${
+              className={`px-6 py-3 bg-blue-600 hover:bg-blue-700 rounded-2xl text-sm font-semibold text-white shadow-md hover:shadow-lg transition-all duration-200 flex items-center gap-2 active:scale-95 ${
                 loading ? 'opacity-70 cursor-not-allowed' : ''
               }`}
             >

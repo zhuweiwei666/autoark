@@ -293,7 +293,7 @@ export default function DashboardPage() {
           <button
             onClick={handleRefresh}
             disabled={isRefreshing}
-            className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white text-sm font-medium rounded-xl transition-colors disabled:opacity-50 flex items-center gap-2"
+            className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-xl transition-colors disabled:opacity-50 flex items-center gap-2"
           >
             {isRefreshing ? (
               <>

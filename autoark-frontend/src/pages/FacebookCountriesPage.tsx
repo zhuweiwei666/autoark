@@ -187,7 +187,7 @@ export default function FacebookCountriesPage() {
     startDate: today,
     endDate: today,
   })
-  
+
   // 目标筛选 - 事件+比较符+值
   const [metricFilter, setMetricFilter] = useState({
     metric: '',
@@ -466,7 +466,7 @@ export default function FacebookCountriesPage() {
             <button
               onClick={handleSync}
               disabled={syncMutation.isPending}
-              className={`group px-6 py-3 bg-slate-900 hover:bg-slate-800 rounded-2xl text-sm font-semibold text-white shadow-md hover:shadow-lg transition-all duration-200 flex items-center gap-2 active:scale-95 ${syncMutation.isPending ? 'opacity-70 cursor-not-allowed' : ''}`}
+              className={`group px-6 py-3 bg-blue-600 hover:bg-blue-700 rounded-2xl text-sm font-semibold text-white shadow-md hover:shadow-lg transition-all duration-200 flex items-center gap-2 active:scale-95 ${syncMutation.isPending ? 'opacity-70 cursor-not-allowed' : ''}`}
             >
               <svg className={`w-5 h-5 ${syncMutation.isPending ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -609,7 +609,7 @@ export default function FacebookCountriesPage() {
                       <button onClick={() => {
                         saveColumnSettings(visibleColumns, columnOrder)
                         setColumnSearchQuery('') // 保存时清空搜索
-                      }} className="px-6 py-2.5 bg-slate-900 hover:bg-slate-800 rounded-2xl text-white font-semibold transition-all shadow-md hover:shadow-lg active:scale-95">
+                      }} className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 rounded-2xl text-white font-semibold transition-all shadow-md hover:shadow-lg active:scale-95">
                         保存设置
                       </button>
                     </div>
@@ -751,13 +751,13 @@ export default function FacebookCountriesPage() {
                 <div className="w-px h-8 bg-slate-300 mx-2" />
                 
                 {/* 数值输入 */}
-                <input
+              <input
                   type="number"
                   value={metricFilter.value}
                   onChange={e => setMetricFilter({...metricFilter, value: e.target.value})}
                   placeholder="目标值"
                   className="w-32 px-4 py-2.5 bg-white border-0 rounded-xl text-sm text-slate-700 font-medium placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 shadow-sm text-center"
-                />
+              />
               </div>
             </div>
             <div>

@@ -517,7 +517,7 @@ export default function FacebookCampaignsPage() {
             <button
               onClick={handleSync}
               disabled={syncing}
-              className={`group px-6 py-3 bg-slate-900 hover:bg-slate-800 rounded-2xl text-sm font-semibold text-white shadow-md hover:shadow-lg transition-all duration-200 flex items-center gap-2 active:scale-95 ${syncing ? 'opacity-70 cursor-not-allowed' : ''}`}
+              className={`group px-6 py-3 bg-blue-600 hover:bg-blue-700 rounded-2xl text-sm font-semibold text-white shadow-md hover:shadow-lg transition-all duration-200 flex items-center gap-2 active:scale-95 ${syncing ? 'opacity-70 cursor-not-allowed' : ''}`}
             >
               <svg className={`w-5 h-5 ${syncing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -660,7 +660,7 @@ export default function FacebookCampaignsPage() {
                       <button onClick={() => {
                         saveColumnSettings(visibleColumns, columnOrder)
                         setColumnSearchQuery('') // 保存时清空搜索
-                      }} className="px-6 py-2.5 bg-slate-900 hover:bg-slate-800 rounded-2xl text-white font-semibold transition-all shadow-md hover:shadow-lg active:scale-95">
+                      }} className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 rounded-2xl text-white font-semibold transition-all shadow-md hover:shadow-lg active:scale-95">
                         保存设置
                       </button>
                     </div>

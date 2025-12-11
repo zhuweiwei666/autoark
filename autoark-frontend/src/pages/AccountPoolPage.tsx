@@ -311,7 +311,7 @@ const AccountPoolPage: React.FC = () => {
         <table className="min-w-full divide-y divide-gray-200">
           <thead className="bg-gray-50">
             <tr>
-              <th className="px-6 py-3">
+              <th className="w-12 px-4 py-3 text-left">
                 <input
                   type="checkbox"
                   checked={selectedAccounts.length === accounts.length && accounts.length > 0}
@@ -319,7 +319,7 @@ const AccountPoolPage: React.FC = () => {
                   className="rounded"
                 />
               </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
                 账户ID
               </th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
@@ -342,7 +342,7 @@ const AccountPoolPage: React.FC = () => {
           <tbody className="bg-white divide-y divide-gray-200">
             {accounts.map((account) => (
               <tr key={account._id} className="hover:bg-gray-50">
-                <td className="px-6 py-4">
+                <td className="w-12 px-4 py-4">
                   <input
                     type="checkbox"
                     checked={selectedAccounts.includes(account.accountId)}
@@ -350,7 +350,7 @@ const AccountPoolPage: React.FC = () => {
                     className="rounded"
                   />
                 </td>
-                <td className="px-6 py-4 text-sm font-mono text-gray-900">
+                <td className="px-4 py-4 text-sm font-mono text-gray-900">
                   {account.accountId}
                 </td>
                 <td className="px-6 py-4 text-sm text-gray-900">

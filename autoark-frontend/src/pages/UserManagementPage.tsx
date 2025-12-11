@@ -16,6 +16,8 @@ const UserManagementPage: React.FC = () => {
   const [users, setUsers] = useState<User[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [showCreateModal, setShowCreateModal] = useState(false)
+  const [showEditModal, setShowEditModal] = useState(false)
+  const [editingUser, setEditingUser] = useState<User | null>(null)
   const [organizations, setOrganizations] = useState<any[]>([])
   const [formData, setFormData] = useState({
     username: '',
@@ -23,6 +25,13 @@ const UserManagementPage: React.FC = () => {
     email: '',
     role: 'member',
     organizationId: '',
+  })
+  const [editFormData, setEditFormData] = useState({
+    username: '',
+    email: '',
+    role: 'member',
+    organizationId: '',
+    status: 'active',
   })
 
   const fetchUsers = async () => {
@@ -129,6 +138,46 @@ const UserManagementPage: React.FC = () => {
     }
   }
 
+  const handleEditClick = (userToEdit: User) => {
+    setEditingUser(userToEdit)
+    setEditFormData({
+      username: userToEdit.username,
+      email: userToEdit.email,
+      role: userToEdit.role,
+      organizationId: userToEdit.organizationId?._id || userToEdit.organizationId || '',
+      status: userToEdit.status,
+    })
+    setShowEditModal(true)
+  }
+
+  const handleUpdateUser = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!editingUser) return
+
+    try {
+      const response = await fetch(`/api/users/${editingUser._id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify(editFormData),
+      })
+      const data = await response.json()
+      if (data.success) {
+        alert('用户更新成功')
+        setShowEditModal(false)
+        setEditingUser(null)
+        fetchUsers()
+      } else {
+        alert(data.message || '更新失败')
+      }
+    } catch (error) {
+      console.error('更新用户失败:', error)
+      alert('更新失败')
+    }
+  }
+
   const getRoleName = (role: string) => {
     const roleMap: any = {
       super_admin: '超级管理员',
@@ -160,12 +209,12 @@ const UserManagementPage: React.FC = () => {
         <div className="flex justify-between items-center mb-6">
           <h1 className="text-2xl font-bold text-gray-800">用户管理</h1>
           {(isSuperAdmin || isOrgAdmin) && (
-            <button
-              onClick={() => setShowCreateModal(true)}
-              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-            >
-              创建用户
-            </button>
+<button
+            onClick={() => setShowCreateModal(true)}
+            className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
+          >
+            + 创建用户
+          </button>
           )}
         </div>
 
@@ -194,35 +243,45 @@ const UserManagementPage: React.FC = () => {
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
-              {users.map((user) => (
-                <tr key={user._id}>
+              {users.map((u) => (
+                <tr key={u._id}>
                   <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                    {user.username}
+                    {u.username}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                    {user.email}
+                    {u.email}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                    {getRoleName(user.role)}
+                    {getRoleName(u.role)}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                    {user.organizationId?.name || '-'}
+                    {u.organizationId?.name || '-'}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
                     <span
                       className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                        user.status === 'active'
+                        u.status === 'active'
                           ? 'bg-green-100 text-green-800'
                           : 'bg-red-100 text-red-800'
                       }`}
                     >
-                      {getStatusName(user.status)}
+                      {getStatusName(u.status)}
                     </span>
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                    {(isSuperAdmin || isOrgAdmin) && user.role === 'member' && (
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 space-x-3">
+                    {(isSuperAdmin || isOrgAdmin) && (
                       <button
-                        onClick={() => handleDeleteUser(user._id)}
+                        onClick={() => handleEditClick(u)}
+                        className="text-blue-600 hover:text-blue-900"
+                      >
+                        编辑
+                      </button>
+                    )}
+                    {/* 超级管理员可删除非超管用户，组织管理员只能删除普通成员 */}
+                    {((isSuperAdmin && u.role !== 'superadmin' && u._id !== user?._id) ||
+                      (isOrgAdmin && u.role === 'member')) && (
+                      <button
+                        onClick={() => handleDeleteUser(u._id)}
                         className="text-red-600 hover:text-red-900"
                       >
                         删除
@@ -234,6 +293,120 @@ const UserManagementPage: React.FC = () => {
             </tbody>
           </table>
         </div>
+
+        {/* 编辑用户模态框 */}
+        {showEditModal && editingUser && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div className="bg-white rounded-lg p-6 w-full max-w-md">
+              <h2 className="text-xl font-bold mb-4">编辑用户</h2>
+              <form onSubmit={handleUpdateUser} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    用户名
+                  </label>
+                  <input
+                    type="text"
+                    value={editFormData.username}
+                    onChange={(e) =>
+                      setEditFormData({ ...editFormData, username: e.target.value })
+                    }
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    邮箱
+                  </label>
+                  <input
+                    type="email"
+                    value={editFormData.email}
+                    onChange={(e) =>
+                      setEditFormData({ ...editFormData, email: e.target.value })
+                    }
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                    required
+                  />
+                </div>
+                {isSuperAdmin && (
+                  <>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        角色
+                      </label>
+                      <select
+                        value={editFormData.role}
+                        onChange={(e) =>
+                          setEditFormData({ ...editFormData, role: e.target.value })
+                        }
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                      >
+                        <option value="member">普通成员</option>
+                        <option value="org_admin">组织管理员</option>
+                        <option value="super_admin">超级管理员</option>
+                      </select>
+                    </div>
+                    {editFormData.role !== 'super_admin' && (
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          所属组织
+                        </label>
+                        <select
+                          value={editFormData.organizationId}
+                          onChange={(e) =>
+                            setEditFormData({ ...editFormData, organizationId: e.target.value })
+                          }
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                        >
+                          <option value="">请选择组织</option>
+                          {organizations.map((org) => (
+                            <option key={org._id} value={org._id}>
+                              {org.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+                  </>
+                )}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    状态
+                  </label>
+                  <select
+                    value={editFormData.status}
+                    onChange={(e) =>
+                      setEditFormData({ ...editFormData, status: e.target.value })
+                    }
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                  >
+                    <option value="active">激活</option>
+                    <option value="inactive">未激活</option>
+                    <option value="suspended">已停用</option>
+                  </select>
+                </div>
+                <div className="flex gap-2 justify-end mt-6">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowEditModal(false)
+                      setEditingUser(null)
+                    }}
+                    className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+                  >
+                    取消
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                  >
+                    保存
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
 
         {/* 创建用户模态框 */}
         {showCreateModal && (

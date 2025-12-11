@@ -302,6 +302,54 @@ const syncAccount = async (accountId) => {
     catch (err) {
         logger_1.default.error(`Failed to sync insights for ${accountId}`, err);
     }
+    // 6. Ad-level Insights (用于素材数据聚合)
+    try {
+        const adInsights = await fbApi.fetchInsights(accountIdForApi, 'ad', 'today', undefined, ['country']);
+        logger_1.default.info(`Syncing ${adInsights.length} ad-level insight records for ${accountId}`);
+        for (const i of adInsights) {
+            const spendUsd = parseFloat(i.spend || '0');
+            // 跳过无消耗的记录以减少数据量
+            if (spendUsd <= 0)
+                continue;
+            const impressions = parseInt(i.impressions || '0');
+            const clicks = parseInt(i.clicks || '0');
+            const actions = i.actions || [];
+            const installAction = actions.find((a) => a.action_type === 'mobile_app_install');
+            const installs = installAction ? parseFloat(installAction.value) : 0;
+            const purchaseValue = (0, facebookPurchase_1.extractPurchaseValue)(i.action_values || []);
+            await writeToMongo(models_1.MetricsDaily, {
+                date: i.date_start,
+                level: 'ad',
+                entityId: i.ad_id,
+                country: i.country || null,
+            }, {
+                date: i.date_start,
+                channel: 'facebook',
+                accountId: accountIdForStorage,
+                campaignId: i.campaign_id,
+                adsetId: i.adset_id,
+                adId: i.ad_id,
+                level: 'ad',
+                entityId: i.ad_id,
+                country: i.country || null,
+                impressions,
+                clicks,
+                spendUsd,
+                cpc: i.cpc ? parseFloat(i.cpc) : 0,
+                ctr: i.ctr ? parseFloat(i.ctr) : 0,
+                cpm: i.cpm ? parseFloat(i.cpm) : 0,
+                installs,
+                conversions: installs,
+                purchase_value: purchaseValue,
+                actions: i.actions,
+                action_values: i.action_values,
+                raw: i,
+            });
+        }
+    }
+    catch (err) {
+        logger_1.default.error(`Failed to sync ad-level insights for ${accountId}`, err);
+    }
 };
 exports.syncAccount = syncAccount;
 // 8. Full Sync Runner

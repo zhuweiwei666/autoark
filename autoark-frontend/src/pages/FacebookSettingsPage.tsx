@@ -187,7 +187,7 @@ export default function FacebookSettingsPage() {
             <button
               onClick={handleRefresh}
               disabled={loading || fetching}
-              className={`px-6 py-3 bg-slate-900 hover:bg-slate-800 rounded-2xl text-sm font-semibold text-white shadow-md hover:shadow-lg transition-all flex items-center gap-2 ${
+              className={`px-6 py-3 bg-blue-600 hover:bg-blue-700 rounded-2xl text-sm font-semibold text-white shadow-md hover:shadow-lg transition-all flex items-center gap-2 ${
                 loading || fetching ? 'opacity-70 cursor-not-allowed' : ''
               }`}
             >
@@ -214,23 +214,23 @@ export default function FacebookSettingsPage() {
         )}
 
         {/* Tab 切换 */}
-        <div className="flex gap-2">
+        <div className="flex border-b border-slate-200">
           <button
             onClick={() => setActiveTab('tokens')}
-            className={`px-6 py-3 rounded-2xl text-sm font-semibold transition-all ${
+            className={`px-6 py-3 text-sm font-medium transition-colors ${
               activeTab === 'tokens'
-                ? 'bg-slate-900 text-white shadow-lg'
-                : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'
+                ? 'text-blue-600 border-b-2 border-blue-600'
+                : 'text-slate-500 hover:text-slate-700'
             }`}
           >
             🔑 Token 管理
           </button>
           <button
             onClick={() => setActiveTab('pixels')}
-            className={`px-6 py-3 rounded-2xl text-sm font-semibold transition-all ${
+            className={`px-6 py-3 text-sm font-medium transition-colors ${
               activeTab === 'pixels'
-                ? 'bg-slate-900 text-white shadow-lg'
-                : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'
+                ? 'text-blue-600 border-b-2 border-blue-600'
+                : 'text-slate-500 hover:text-slate-700'
             }`}
           >
             ✨ 像素管理

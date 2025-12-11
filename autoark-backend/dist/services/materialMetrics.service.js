@@ -11,6 +11,7 @@ const MetricsDaily_1 = __importDefault(require("../models/MetricsDaily"));
 const MaterialMetrics_1 = __importDefault(require("../models/MaterialMetrics"));
 const Material_1 = __importDefault(require("../models/Material"));
 const Creative_1 = __importDefault(require("../models/Creative"));
+const AdMaterialMapping_1 = __importDefault(require("../models/AdMaterialMapping"));
 const materialSync_service_1 = require("./materialSync.service");
 /**
  * 素材指标聚合服务
@@ -95,7 +96,16 @@ const aggregateMaterialMetrics = async (date) => {
             });
         }
         logger_1.default.info(`[MaterialMetrics] Loaded ${creativeInfoMap.size} creatives with details`);
-        // 1.2 获取所有 Material（用于 hash 反查）
+        // 1.2 获取所有 AdMaterialMapping（优先级最高的映射源）
+        const adMaterialMappings = await AdMaterialMapping_1.default.find({ status: 'active' }).lean();
+        const adIdToMaterialId = new Map();
+        for (const mapping of adMaterialMappings) {
+            if (mapping.adId && mapping.materialId) {
+                adIdToMaterialId.set(mapping.adId, mapping.materialId.toString());
+            }
+        }
+        logger_1.default.info(`[MaterialMetrics] Loaded ${adIdToMaterialId.size} ad-material mappings`);
+        // 1.3 获取所有 Material（用于 hash 反查）
         const materials = await Material_1.default.find({ status: 'uploaded' }).lean();
         const materialByHash = new Map();
         const materialByVideoId = new Map();
@@ -121,19 +131,26 @@ const aggregateMaterialMetrics = async (date) => {
         for (const ad of ads) {
             const creativeInfo = extractCreativeInfo(ad);
             const creativeDetail = creativeInfo.creativeId ? creativeInfoMap.get(creativeInfo.creativeId) : null;
-            // 🎯 优先使用 Ad.materialId（直接归因）
-            let materialId = ad.materialId?.toString();
+            // 🎯 优先级：AdMaterialMapping > Ad.materialId > Creative.materialId > hash反查
+            let materialId;
             let matchType = 'none';
-            if (materialId) {
+            // 1️⃣ 最高优先级：从 AdMaterialMapping 表查找（批量创建时记录的映射）
+            if (adIdToMaterialId.has(ad.adId)) {
+                materialId = adIdToMaterialId.get(ad.adId);
                 matchType = 'direct';
             }
+            // 2️⃣ 其次：Ad.materialId（直接归因）
+            else if (ad.materialId) {
+                materialId = ad.materialId.toString();
+                matchType = 'direct';
+            }
+            // 3️⃣ 再次：Creative.materialId
             else if (creativeDetail?.materialId) {
-                // 其次使用 Creative.materialId
                 materialId = creativeDetail.materialId.toString();
                 matchType = 'direct';
             }
+            // 4️⃣ 最后：通过 hash 反查
             else {
-                // 回退：通过 hash 反查
                 const imageHash = creativeInfo.imageHash;
                 const videoId = creativeInfo.videoId;
                 if (imageHash && materialByHash.has(imageHash)) {
@@ -389,7 +406,7 @@ const getMaterialRankings = async (options) => {
     const { dateRange, sortBy = 'roas', limit = 20, materialType } = options;
     const match = {
         date: { $gte: dateRange.start, $lte: dateRange.end },
-        spend: { $gt: 5 }
+        spend: { $gt: 0 } // 只要有消耗就显示
     };
     if (materialType)
         match.materialType = materialType;
@@ -476,20 +493,25 @@ const getMaterialRankings = async (options) => {
             }
         }
     ]);
-    // 后处理：为每个结果生成指纹并查找本地素材
+    // 后处理：查找本地素材
     const enrichedResults = await Promise.all(results.map(async (item) => {
-        // 生成指纹
+        // 生成指纹（用于展示）
         const fingerprint = (0, materialSync_service_1.generateFingerprint)({
             imageHash: item.imageHash,
             videoId: item.videoId,
             creativeId: item.creativeId,
         });
-        // 查找本地素材（通过 fingerprintKey 或 Facebook 映射）
+        // 🎯 优先级：materialId > fingerprintKey > Facebook 映射
         let localMaterial = null;
-        if (fingerprint) {
+        // 1️⃣ 最高优先级：直接通过 materialId 查找（来自 AdMaterialMapping 的精准关联）
+        if (item.materialId) {
+            localMaterial = await Material_1.default.findById(item.materialId).lean();
+        }
+        // 2️⃣ 其次：通过 fingerprintKey 查找
+        if (!localMaterial && fingerprint) {
             localMaterial = await Material_1.default.findOne({ fingerprintKey: fingerprint }).lean();
         }
-        // 如果没找到，尝试通过 Facebook 映射查找
+        // 3️⃣ 最后：通过 Facebook 映射查找
         if (!localMaterial && (item.imageHash || item.videoId)) {
             localMaterial = await Material_1.default.findOne({
                 $or: [

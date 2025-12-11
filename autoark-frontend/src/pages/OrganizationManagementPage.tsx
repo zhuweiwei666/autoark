@@ -19,12 +19,19 @@ const OrganizationManagementPage: React.FC = () => {
   const [organizations, setOrganizations] = useState<Organization[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [showCreateModal, setShowCreateModal] = useState(false)
+  const [showEditModal, setShowEditModal] = useState(false)
+  const [editingOrg, setEditingOrg] = useState<Organization | null>(null)
   const [formData, setFormData] = useState({
     name: '',
     description: '',
     adminUsername: '',
     adminPassword: '',
     adminEmail: '',
+  })
+  const [editFormData, setEditFormData] = useState({
+    name: '',
+    description: '',
+    status: 'active',
   })
 
   const fetchOrganizations = async () => {
@@ -115,6 +122,44 @@ const OrganizationManagementPage: React.FC = () => {
     }
   }
 
+  const handleEditClick = (org: Organization) => {
+    setEditingOrg(org)
+    setEditFormData({
+      name: org.name,
+      description: org.description || '',
+      status: org.status,
+    })
+    setShowEditModal(true)
+  }
+
+  const handleUpdateOrganization = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!editingOrg) return
+
+    try {
+      const response = await fetch(`/api/organizations/${editingOrg._id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify(editFormData),
+      })
+      const data = await response.json()
+      if (data.success) {
+        alert('组织更新成功')
+        setShowEditModal(false)
+        setEditingOrg(null)
+        fetchOrganizations()
+      } else {
+        alert(data.message || '更新失败')
+      }
+    } catch (error) {
+      console.error('更新组织失败:', error)
+      alert('更新失败')
+    }
+  }
+
   if (!isSuperAdmin) {
     return (
       <div className="p-6">
@@ -139,9 +184,9 @@ const OrganizationManagementPage: React.FC = () => {
           <h1 className="text-2xl font-bold text-gray-800">组织管理</h1>
           <button
             onClick={() => setShowCreateModal(true)}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+            className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
           >
-            创建组织
+            + 创建组织
           </button>
         </div>
 
@@ -195,7 +240,13 @@ const OrganizationManagementPage: React.FC = () => {
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                     {new Date(org.createdAt).toLocaleDateString('zh-CN')}
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 space-x-3">
+                    <button
+                      onClick={() => handleEditClick(org)}
+                      className="text-blue-600 hover:text-blue-900"
+                    >
+                      编辑
+                    </button>
                     <button
                       onClick={() => handleDeleteOrganization(org._id)}
                       className="text-red-600 hover:text-red-900"
@@ -310,6 +361,77 @@ const OrganizationManagementPage: React.FC = () => {
                     className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
                   >
                     创建
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* 编辑组织模态框 */}
+        {showEditModal && editingOrg && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div className="bg-white rounded-lg p-6 w-full max-w-md">
+              <h2 className="text-xl font-bold mb-4">编辑组织</h2>
+              <form onSubmit={handleUpdateOrganization} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    组织名称
+                  </label>
+                  <input
+                    type="text"
+                    value={editFormData.name}
+                    onChange={(e) =>
+                      setEditFormData({ ...editFormData, name: e.target.value })
+                    }
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    描述
+                  </label>
+                  <textarea
+                    value={editFormData.description}
+                    onChange={(e) =>
+                      setEditFormData({ ...editFormData, description: e.target.value })
+                    }
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                    rows={3}
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    状态
+                  </label>
+                  <select
+                    value={editFormData.status}
+                    onChange={(e) =>
+                      setEditFormData({ ...editFormData, status: e.target.value })
+                    }
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                  >
+                    <option value="active">激活</option>
+                    <option value="inactive">停用</option>
+                  </select>
+                </div>
+                <div className="flex gap-2 justify-end mt-6">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowEditModal(false)
+                      setEditingOrg(null)
+                    }}
+                    className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+                  >
+                    取消
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                  >
+                    保存
                   </button>
                 </div>
               </form>

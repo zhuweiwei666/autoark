@@ -101,7 +101,7 @@ export default function FacebookAccountsPage() {
             <button
               onClick={handleSync}
               disabled={syncMutation.isPending}
-              className={`group px-6 py-3 bg-slate-900 hover:bg-slate-800 rounded-2xl text-sm font-semibold text-white shadow-md hover:shadow-lg transition-all duration-200 flex items-center gap-2 active:scale-95 ${syncMutation.isPending ? 'opacity-70 cursor-not-allowed' : ''}`}
+              className={`group px-6 py-3 bg-blue-600 hover:bg-blue-700 rounded-2xl text-sm font-semibold text-white shadow-md hover:shadow-lg transition-all duration-200 flex items-center gap-2 active:scale-95 ${syncMutation.isPending ? 'opacity-70 cursor-not-allowed' : ''}`}
             >
               <svg className={`w-5 h-5 ${syncMutation.isPending ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -233,7 +233,7 @@ export default function FacebookAccountsPage() {
             </div>
             <button
               onClick={() => loadAccounts(1)}
-              className="w-full px-4 py-3 bg-slate-900 hover:bg-slate-800 rounded-2xl text-sm font-semibold text-white transition-all shadow-md hover:shadow-lg active:scale-95"
+              className="w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 rounded-2xl text-sm font-semibold text-white transition-all shadow-md hover:shadow-lg active:scale-95"
             >
               搜索
             </button>
