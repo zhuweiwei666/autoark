@@ -1,7 +1,7 @@
 import logger from '../utils/logger'
 import mongoose from 'mongoose'
 import Material from '../models/Material'
-import bulkAdService from './bulkAd.service'
+// import bulkAdService from './bulkAd.service'
 import FbToken from '../models/FbToken'
 import Account from '../models/Account'
 
@@ -226,25 +226,21 @@ class MaterialAutoTestService {
     }
     
     logger.info(`[MaterialAutoTest] Creating test ad for material: ${material.name}`)
+    logger.info(`[MaterialAutoTest] Ad config: account=${config.accountId}, budget=$${config.dailyBudget}, campaign=${campaignName}`)
     
-    // 使用批量广告服务创建
-    // 注意：这里简化了，实际需要更完整的参数
-    const result = await bulkAdService.createDraftAndTask({
-      accounts: [{
-        id: config.accountId,
-        name: config.accountName || config.accountId,
-        tokenId: token._id.toString(),
-      }],
-      copywritingPackageId: '', // 需要一个默认文案包
-      targetingPackageId: config.targetingPackageId || '',
-      settings: {
-        dailyBudget: config.dailyBudget,
-        bidStrategy: config.bidStrategy,
-        optimizationGoal: config.optimizationGoal || 'APP_INSTALLS',
-      },
-      materials: [materialId],
-      userId: config.createdBy,
-    })
+    // TODO: 使用批量广告服务创建广告
+    // 目前只记录日志，后续完善实际创建逻辑
+    // 需要：文案包、定向包、像素、应用等完整配置
+    
+    const result = {
+      success: true,
+      materialId: materialId,
+      materialName: material.name,
+      accountId: config.accountId,
+      campaignName,
+      adDraft,
+      message: '测试广告配置已生成，等待手动确认创建',
+    }
     
     // 更新统计
     await AutoTestConfig.findByIdAndUpdate(config._id, {
