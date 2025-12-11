@@ -448,7 +448,7 @@ export default function BulkAdCreatePage() {
       let pagesForAccount = newAccountPages[accountId]
       if (!pagesForAccount) {
         try {
-          const res = await fetch(`${API_BASE}/bulk-ad/auth/pages?accountId=${accountId}`)
+          const res = await authFetch(`${API_BASE}/bulk-ad/auth/pages?accountId=${accountId}`)
           const data = await res.json()
           if (data.success && data.data) {
             pagesForAccount = data.data
@@ -566,7 +566,7 @@ export default function BulkAdCreatePage() {
     }
     
     try {
-      const res = await fetch(`${API_BASE}/bulk-ad/auth/pages?accountId=${accountId}`)
+      const res = await authFetch(`${API_BASE}/bulk-ad/auth/pages?accountId=${accountId}`)
       const data = await res.json()
       if (data.success && data.data) {
         setAccountPages(prev => ({ ...prev, [accountId]: data.data }))
