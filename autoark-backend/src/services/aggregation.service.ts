@@ -23,8 +23,6 @@ import {
 import Account from '../models/Account'
 import Campaign from '../models/Campaign'
 import FbToken from '../models/FbToken'
-import Material from '../models/Material'
-import AdMaterialMapping from '../models/AdMaterialMapping'
 import { fetchInsights } from '../integration/facebook/insights.api'
 
 // 国家代码到名称的映射

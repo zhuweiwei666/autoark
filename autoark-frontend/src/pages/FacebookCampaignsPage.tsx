@@ -371,13 +371,13 @@ export default function FacebookCampaignsPage() {
   }
 
   // 缓存 key（包含筛选和排序参数）
-  const getCacheKey = () => `fb-campaigns-${JSON.stringify(filters)}-${sortConfig?.key}-${sortConfig?.direction}`
+  const getCacheKey = (page: number) => `fb-campaigns-${JSON.stringify(filters)}-${sortConfig?.key}-${sortConfig?.direction}-${page}`
   
   // 加载广告系列列表（支持缓存优先）
   const loadCampaigns = async (page = 1, forceRefresh = false) => {
     // 如果不是强制刷新，先尝试从缓存加载
     if (!forceRefresh) {
-      const cachedData = localStorage.getItem(getCacheKey())
+      const cachedData = localStorage.getItem(getCacheKey(page))
       if (cachedData) {
         try {
           const { data, pagination: cachedPagination, timestamp } = JSON.parse(cachedData)
@@ -406,7 +406,7 @@ export default function FacebookCampaignsPage() {
       setPagination(response.pagination)
       
       // 保存到缓存
-      localStorage.setItem(getCacheKey(), JSON.stringify({
+      localStorage.setItem(getCacheKey(page), JSON.stringify({
         data: response.data,
         pagination: response.pagination,
         timestamp: Date.now()
@@ -468,7 +468,14 @@ export default function FacebookCampaignsPage() {
     setMessage(null)
     try {
       // 清除缓存并强制刷新
-      localStorage.removeItem(getCacheKey())
+      // 清除所有当前筛选条件下的缓存（所有分页）
+      const prefix = `fb-campaigns-${JSON.stringify(filters)}-${sortConfig?.key}-${sortConfig?.direction}`
+      Object.keys(localStorage).forEach(key => {
+        if (key.startsWith(prefix)) {
+          localStorage.removeItem(key)
+        }
+      })
+      
       await loadCampaigns(1, true)
       setMessage({ type: 'success', text: '数据已刷新' })
     } catch (error: any) {
