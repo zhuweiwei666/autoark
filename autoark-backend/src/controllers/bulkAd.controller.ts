@@ -1120,15 +1120,29 @@ export const getAuthPages = async (req: Request, res: Response) => {
       logger.warn(`[BulkAd] Failed to get promote_pages for ${accountId}: ${e.message}`)
     }
     
-    // 2. 如果没有 promote_pages，警告用户需要在 BM 中配置
+    // 2. 如果没有 promote_pages，回退获取用户管理的主页
     if (pages.length === 0) {
-      logger.warn(`[BulkAd] Account ${accountId} has no promote_pages - need BM configuration`)
-      // 不再回退到用户主页，因为那会导致权限问题
-      // 返回空数组并在响应中提示
+      logger.info(`[BulkAd] No promote_pages for ${accountId}, falling back to user pages`)
+      try {
+        // 使用找到的 token 获取该用户管理的所有主页
+        const userPagesResult = await facebookClient.get(`/${fbToken.fbUserId}/accounts`, {
+          access_token: fbToken.token,
+          fields: 'id,name,picture,access_token',
+          limit: 100,
+        })
+        pages = (userPagesResult.data || []).filter((p: any) => p.id && p.name)
+        logger.info(`[BulkAd] Found ${pages.length} user pages for account ${accountId}`)
+      } catch (e: any) {
+        logger.warn(`[BulkAd] Failed to get user pages: ${e.message}`)
+      }
+    }
+    
+    // 如果还是没有主页，返回警告
+    if (pages.length === 0) {
       return res.json({ 
         success: true, 
         data: [],
-        warning: '此广告账户没有被分配任何 Facebook 主页。请在 Business Manager 中将主页分配给此账户。'
+        warning: '此账户没有可用的 Facebook 主页。请确保您有主页管理权限。'
       })
     }
     
