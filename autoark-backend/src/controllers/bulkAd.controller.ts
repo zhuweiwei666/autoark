@@ -819,15 +819,32 @@ export const handleAuthCallback = async (req: Request, res: Response) => {
     }
     
     // 解析 state 参数获取 AutoArk 用户信息
-    // 格式: bulk-ad|userId|organizationId|appId（appId 可选）
+    // state 是 base64 编码的 JSON: { originalState: 'bulk-ad|userId|orgId', appId: 'xxx' }
+    // originalState 格式: bulk-ad|userId|organizationId
     let autoarkUserId: string | undefined
     let organizationId: string | undefined
     if (state) {
-      const parts = (state as string).split('|')
-      if (parts[0] === 'bulk-ad' && parts[1]) {
-        autoarkUserId = parts[1]
-        organizationId = parts[2] || undefined
-        logger.info(`[BulkAd OAuth] Binding token to AutoArk user: ${autoarkUserId}`)
+      try {
+        // 先解码 base64 JSON
+        const decoded = Buffer.from(state as string, 'base64').toString('utf-8')
+        const stateObj = JSON.parse(decoded)
+        const originalState = stateObj.originalState || ''
+        
+        // 从 originalState 解析 userId
+        const parts = originalState.split('|')
+        if (parts[0] === 'bulk-ad' && parts[1]) {
+          autoarkUserId = parts[1]
+          organizationId = parts[2] || undefined
+          logger.info(`[BulkAd OAuth] Binding token to AutoArk user: ${autoarkUserId}`)
+        }
+      } catch (e) {
+        // 旧格式，直接解析
+        const parts = (state as string).split('|')
+        if (parts[0] === 'bulk-ad' && parts[1]) {
+          autoarkUserId = parts[1]
+          organizationId = parts[2] || undefined
+          logger.info(`[BulkAd OAuth] Binding token to AutoArk user (legacy): ${autoarkUserId}`)
+        }
       }
     }
     
