@@ -5,7 +5,28 @@ import {
   checkAndUpdateTokenStatus,
 } from '../services/fbToken.validation.service'
 import logger from '../utils/logger'
-import { getOrgFilter } from '../middlewares/auth'
+import { UserRole } from '../models/User'
+
+/**
+ * 获取 Token 过滤条件
+ * - 超级管理员：看所有
+ * - 组织管理员：看本组织
+ * - 普通成员：只看自己绑定的
+ */
+const getTokenFilter = (req: Request): any => {
+  if (!req.user) return { _id: null } // 未认证，返回空结果
+  
+  // 超级管理员看所有
+  if (req.user.role === UserRole.SUPER_ADMIN) return {}
+  
+  // 组织管理员看本组织
+  if (req.user.role === UserRole.ORG_ADMIN && req.user.organizationId) {
+    return { organizationId: req.user.organizationId }
+  }
+  
+  // 普通成员只看自己绑定的
+  return { userId: req.user.userId }
+}
 
 /**
  * 绑定/保存 Facebook token
@@ -19,7 +40,8 @@ export const bindToken = async (
 ) => {
   try {
     const { token, optimizer } = req.body
-    const userId = req.body.userId || 'default-user' // 暂时使用 default-user
+    // 使用当前登录用户的 ID
+    const userId = req.user?.userId || 'default-user'
 
     if (!token) {
       return res.status(400).json({
@@ -109,8 +131,8 @@ export const getTokens = async (
   try {
     const { optimizer, startDate, endDate, status } = req.query
 
-    // 构建查询条件 - 添加组织过滤
-    const query: any = { ...getOrgFilter(req) }
+    // 构建查询条件 - 根据用户角色过滤
+    const query: any = { ...getTokenFilter(req) }
 
     if (optimizer) {
       query.optimizer = optimizer as string

@@ -19,6 +19,27 @@ import { parseProductUrl } from '../services/productMapping.service'
 import { getOrgFilter } from '../middlewares/auth'
 import { UserRole } from '../models/User'
 
+/**
+ * 获取资产过滤条件（文案包/定向包/创意组等）
+ * - 超级管理员：看所有
+ * - 组织管理员：看本组织
+ * - 普通成员：只看自己创建的
+ */
+const getAssetFilter = (req: Request): any => {
+  if (!req.user) return { _id: null } // 未认证，返回空结果
+  
+  // 超级管理员看所有
+  if (req.user.role === UserRole.SUPER_ADMIN) return {}
+  
+  // 组织管理员看本组织
+  if (req.user.role === UserRole.ORG_ADMIN && req.user.organizationId) {
+    return { organizationId: req.user.organizationId }
+  }
+  
+  // 普通成员只看自己创建的
+  return { createdBy: req.user.userId }
+}
+
 // ==================== 草稿管理 ====================
 
 /**
@@ -34,7 +55,13 @@ export const createDraft = async (req: Request, res: Response) => {
       pixelName: a.pixelName
     }))))
     
-    const draft = await bulkAdService.createDraft(req.body)
+    // 添加创建者信息
+    const draftData = {
+      ...req.body,
+      createdBy: req.user?.userId,
+      organizationId: req.user?.organizationId,
+    }
+    const draft = await bulkAdService.createDraft(draftData)
     res.json({ success: true, data: draft })
   } catch (error: any) {
     logger.error('[BulkAd] Create draft failed:', error)
@@ -76,7 +103,9 @@ export const getDraft = async (req: Request, res: Response) => {
  */
 export const getDraftList = async (req: Request, res: Response) => {
   try {
-    const result = await bulkAdService.getDraftList(req.query)
+    // 传递用户过滤条件
+    const userFilter = getAssetFilter(req)
+    const result = await bulkAdService.getDraftList(req.query, userFilter)
     res.json({ success: true, data: result })
   } catch (error: any) {
     logger.error('[BulkAd] Get draft list failed:', error)
@@ -148,7 +177,9 @@ export const getTask = async (req: Request, res: Response) => {
  */
 export const getTaskList = async (req: Request, res: Response) => {
   try {
-    const result = await bulkAdService.getTaskList(req.query)
+    // 传递用户过滤条件
+    const userFilter = getAssetFilter(req)
+    const result = await bulkAdService.getTaskList(req.query, userFilter)
     res.json({ success: true, data: result })
   } catch (error: any) {
     logger.error('[BulkAd] Get task list failed:', error)
@@ -208,7 +239,11 @@ export const rerunTask = async (req: Request, res: Response) => {
  */
 export const createTargetingPackage = async (req: Request, res: Response) => {
   try {
-    const data = { ...req.body, organizationId: req.user?.organizationId }
+    const data = { 
+      ...req.body, 
+      organizationId: req.user?.organizationId,
+      createdBy: req.user?.userId, // 记录创建者
+    }
     const pkg = new TargetingPackage(data)
     await pkg.save()
     res.json({ success: true, data: pkg })
@@ -247,7 +282,8 @@ export const getTargetingPackageList = async (req: Request, res: Response) => {
   try {
     const { accountId, platform, page = 1, pageSize = 20 } = req.query
     
-    const filter: any = { ...getOrgFilter(req) }
+    // 使用更严格的用户级别过滤
+    const filter: any = { ...getAssetFilter(req) }
     if (accountId) filter.accountId = accountId
     if (platform) filter.platform = platform
     
@@ -289,7 +325,11 @@ export const deleteTargetingPackage = async (req: Request, res: Response) => {
  */
 export const createCopywritingPackage = async (req: Request, res: Response) => {
   try {
-    const data = { ...req.body, organizationId: req.user?.organizationId }
+    const data = { 
+      ...req.body, 
+      organizationId: req.user?.organizationId,
+      createdBy: req.user?.userId, // 记录创建者
+    }
     
     // 自动从 websiteUrl 提取产品信息
     if (data.links?.websiteUrl && !data.product?.name) {
@@ -365,7 +405,8 @@ export const getCopywritingPackageList = async (req: Request, res: Response) => 
   try {
     const { accountId, platform, page = 1, pageSize = 20 } = req.query
     
-    const filter: any = { ...getOrgFilter(req) }
+    // 使用更严格的用户级别过滤
+    const filter: any = { ...getAssetFilter(req) }
     if (accountId) filter.accountId = accountId
     if (platform) filter.platform = platform
     
@@ -464,7 +505,11 @@ export const parseAllCopywritingProducts = async (req: Request, res: Response) =
  */
 export const createCreativeGroup = async (req: Request, res: Response) => {
   try {
-    const data = { ...req.body, organizationId: req.user?.organizationId }
+    const data = { 
+      ...req.body, 
+      organizationId: req.user?.organizationId,
+      createdBy: req.user?.userId, // 记录创建者
+    }
     const group = new CreativeGroup(data)
     await group.save()
     res.json({ success: true, data: group })
@@ -503,7 +548,8 @@ export const getCreativeGroupList = async (req: Request, res: Response) => {
   try {
     const { accountId, platform, page = 1, pageSize = 20 } = req.query
     
-    const filter: any = { ...getOrgFilter(req) }
+    // 使用更严格的用户级别过滤
+    const filter: any = { ...getAssetFilter(req) }
     if (accountId) filter.accountId = accountId
     if (platform) filter.platform = platform
     

@@ -126,6 +126,45 @@ export const getOrgFilter = (req: Request): { organizationId?: any } => {
 }
 
 /**
+ * 获取用户关联的账户 ID 列表
+ * 用于过滤 Facebook 数据（Dashboard、广告系列等）
+ * 
+ * 逻辑：
+ * - 超级管理员：返回 null（表示不限制）
+ * - 其他用户：返回该用户绑定的 Token 关联的所有账户 ID
+ */
+export const getUserAccountIds = async (req: Request): Promise<string[] | null> => {
+  if (!req.user) return []
+  
+  // 超级管理员看所有
+  if (req.user.role === UserRole.SUPER_ADMIN) return null
+  
+  // 查找用户绑定的 Token
+  const FbToken = require('../models/FbToken').default
+  const Account = require('../models/Account').default
+  
+  let tokenQuery: any = { status: 'active' }
+  
+  if (req.user.role === UserRole.ORG_ADMIN && req.user.organizationId) {
+    // 组织管理员：看本组织所有 Token 关联的账户
+    tokenQuery.organizationId = req.user.organizationId
+  } else {
+    // 普通用户：只看自己绑定的 Token 关联的账户
+    tokenQuery.userId = req.user.userId
+  }
+  
+  const tokens = await FbToken.find(tokenQuery).select('fbUserId').lean()
+  if (!tokens || tokens.length === 0) return []
+  
+  const fbUserIds = tokens.map((t: any) => t.fbUserId).filter(Boolean)
+  if (fbUserIds.length === 0) return []
+  
+  // 查找这些 Token 关联的账户
+  const accounts = await Account.find({ fbUserId: { $in: fbUserIds } }).select('accountId').lean()
+  return accounts.map((a: any) => a.accountId)
+}
+
+/**
  * 可选认证中间件 - 如果有 token 则验证，没有则继续
  * 用于某些公开但登录后有额外功能的接口
  */

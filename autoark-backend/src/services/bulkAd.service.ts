@@ -89,13 +89,15 @@ export const getDraft = async (draftId: string) => {
 
 /**
  * 获取草稿列表
+ * @param query 查询参数
+ * @param userFilter 用户过滤条件（来自 getAssetFilter）
  */
-export const getDraftList = async (query: any = {}) => {
-  const { status, createdBy, page = 1, pageSize = 20 } = query
+export const getDraftList = async (query: any = {}, userFilter: any = {}) => {
+  const { status, page = 1, pageSize = 20 } = query
   
-  const filter: any = {}
+  // 合并用户过滤条件
+  const filter: any = { ...userFilter }
   if (status) filter.status = status
-  if (createdBy) filter.createdBy = createdBy
   
   const [list, total] = await Promise.all([
     AdDraft.find(filter)
@@ -994,15 +996,17 @@ export const getTask = async (taskId: string) => {
 
 /**
  * 获取任务列表
+ * @param query 查询参数
+ * @param userFilter 用户过滤条件（来自 getAssetFilter）
  */
-export const getTaskList = async (query: any = {}) => {
-  const { status, taskType, platform, createdBy, page = 1, pageSize = 20 } = query
+export const getTaskList = async (query: any = {}, userFilter: any = {}) => {
+  const { status, taskType, platform, page = 1, pageSize = 20 } = query
   
-  const filter: any = {}
+  // 合并用户过滤条件
+  const filter: any = { ...userFilter }
   if (status) filter.status = status
   if (taskType) filter.taskType = taskType
   if (platform) filter.platform = platform
-  if (createdBy) filter.createdBy = createdBy
   
   const [list, total] = await Promise.all([
     AdTask.find(filter)

@@ -1,7 +1,11 @@
 import { Router } from 'express'
 import * as dashboardController from '../controllers/dashboard.controller'
+import { authenticate } from '../middlewares/auth'
 
 const router = Router()
+
+// 所有路由都需要认证
+router.use(authenticate)
 
 // Analytics
 router.get('/daily', dashboardController.getDaily)

@@ -1,8 +1,12 @@
 import { Router } from 'express'
 import multer from 'multer'
 import * as materialController from '../controllers/material.controller'
+import { authenticate } from '../middlewares/auth'
 
 const router = Router()
+
+// 所有路由都需要认证
+router.use(authenticate)
 
 // 配置 multer（内存存储）
 const upload = multer({

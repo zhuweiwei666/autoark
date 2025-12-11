@@ -8,7 +8,7 @@ import * as facebookPurchaseCorrectionService from '../services/facebook.purchas
 import { tokenPool } from '../services/facebook.token.pool'
 import * as facebookCountriesService from '../services/facebook.countries.service'
 import { getEffectiveAdAccounts } from '../services/facebook.sync.service'
-import { getOrgFilter } from '../middlewares/auth'
+import { getOrgFilter, getUserAccountIds } from '../middlewares/auth'
 import { UserRole } from '../models/User'
 
 export const syncCampaigns = async (
@@ -148,13 +148,19 @@ export const getCampaignsList = async (
     const limit = parseInt(req.query.limit as string) || 20
     const sortBy = (req.query.sortBy as string) || 'spend' // 默认按消耗排序
     const sortOrder = (req.query.sortOrder as 'asc' | 'desc') || 'desc'
-    const filters = {
+    const filters: any = {
         name: req.query.name,
         accountId: req.query.accountId,
         status: req.query.status,
         objective: req.query.objective,
         startDate: req.query.startDate as string | undefined,
         endDate: req.query.endDate as string | undefined,
+    }
+
+    // 用户隔离：根据用户绑定的 Token 过滤账户
+    const userAccountIds = await getUserAccountIds(req)
+    if (userAccountIds !== null) {
+      filters.accountIds = userAccountIds
     }
 
     const result = await facebookCampaignsService.getCampaigns(filters, { page, limit, sortBy, sortOrder })
@@ -194,7 +200,7 @@ export const getAccountsList = async (
     const limit = parseInt(req.query.limit as string) || 20
     const sortBy = (req.query.sortBy as string) || 'periodSpend'
     const sortOrder = (req.query.sortOrder as 'asc' | 'desc') || 'desc'
-    const filters = {
+    const filters: any = {
         optimizer: req.query.optimizer,
         status: req.query.status,
         accountId: req.query.accountId,
@@ -203,7 +209,14 @@ export const getAccountsList = async (
         endDate: req.query.endDate as string | undefined,
     }
 
-    // 组织隔离：超管可见全部，其他用户只能看本组织
+    // 用户隔离：根据用户绑定的 Token 过滤账户
+    const userAccountIds = await getUserAccountIds(req)
+    if (userAccountIds !== null) {
+      // 非超级管理员，限制只能看到自己关联的账户
+      filters.accountIds = userAccountIds
+    }
+    
+    // 组织隔离（兼容旧逻辑）
     const organizationId = req.user?.role === UserRole.SUPER_ADMIN ? undefined : req.user?.organizationId
     const result = await facebookAccountsService.getAccounts(filters, { page, limit, sortBy, sortOrder }, organizationId)
     res.json({

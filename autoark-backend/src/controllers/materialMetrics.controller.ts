@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express'
 import dayjs from 'dayjs'
 import logger from '../utils/logger'
+import { authenticate } from '../middlewares/auth'
 import {
   aggregateMaterialMetrics,
   getMaterialRankings,
@@ -12,6 +13,9 @@ import {
 } from '../services/materialMetrics.service'
 
 const router = Router()
+
+// 所有路由都需要认证
+router.use(authenticate)
 
 // ==================== 素材排行榜 ====================
 

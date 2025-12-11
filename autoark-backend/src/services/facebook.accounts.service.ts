@@ -100,14 +100,31 @@ export const getAccounts = async (filters: any = {}, pagination: { page: number,
         query.organizationId = organizationId
     }
     
+    // 用户隔离：限制只能看到关联的账户
+    if (filters.accountIds && Array.isArray(filters.accountIds)) {
+        if (filters.accountIds.length === 0) {
+            // 用户没有关联任何账户，返回空结果
+            return { data: [], total: 0, page: pagination.page, limit: pagination.limit }
+        }
+        query.accountId = { $in: filters.accountIds }
+    }
+    
     if (filters.optimizer) {
         query.operator = { $regex: filters.optimizer, $options: 'i' }
     }
     if (filters.status) {
         query.status = filters.status
     }
-    if (filters.accountId) {
+    if (filters.accountId && !filters.accountIds) {
+        // 只有在没有 accountIds 限制时才按关键字搜索
         query.accountId = { $regex: filters.accountId, $options: 'i' }
+    } else if (filters.accountId && filters.accountIds) {
+        // 有 accountIds 限制时，在限制范围内搜索
+        query.$and = [
+            { accountId: { $in: filters.accountIds } },
+            { accountId: { $regex: filters.accountId, $options: 'i' } }
+        ]
+        delete query.accountId
     }
     if (filters.name) {
         query.name = { $regex: filters.name, $options: 'i' }

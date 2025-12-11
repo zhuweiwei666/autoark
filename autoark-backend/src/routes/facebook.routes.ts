@@ -1,8 +1,12 @@
 import { Router } from 'express'
 import * as facebookController from '../controllers/facebook.controller'
 import { saveFacebookToken } from '../controllers/facebookToken.controller'
+import { authenticate } from '../middlewares/auth'
 
 const router = Router()
+
+// 所有路由都需要认证
+router.use(authenticate)
 
 router.post('/save-token', saveFacebookToken) // New token saving route
 router.get('/accounts', facebookController.getAccounts)

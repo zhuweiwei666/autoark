@@ -14,10 +14,32 @@ import {
   recordAdMaterialMappings,
 } from '../services/materialTracking.service'
 import logger from '../utils/logger'
+import { UserRole } from '../models/User'
 
 /**
  * 素材管理控制器
  */
+
+/**
+ * 获取素材过滤条件
+ * - 超级管理员：看所有
+ * - 组织管理员：看本组织
+ * - 普通成员：只看自己上传的
+ */
+const getMaterialFilter = (req: Request): any => {
+  if (!req.user) return { _id: null } // 未认证，返回空结果
+  
+  // 超级管理员看所有
+  if (req.user.role === UserRole.SUPER_ADMIN) return {}
+  
+  // 组织管理员看本组织
+  if (req.user.role === UserRole.ORG_ADMIN && req.user.organizationId) {
+    return { organizationId: req.user.organizationId }
+  }
+  
+  // 普通成员只看自己上传的
+  return { createdBy: req.user.userId }
+}
 
 /**
  * 检查 R2 配置状态
@@ -154,6 +176,9 @@ export const confirmUpload = async (req: Request, res: Response) => {
       tags: tags ? (Array.isArray(tags) ? tags : tags.split(',').map((t: string) => t.trim())) : [],
       folder: folder || '默认',
       notes,
+      // 记录创建者和组织
+      createdBy: req.user?.userId,
+      organizationId: req.user?.organizationId,
     })
     
     await material.save()
@@ -203,6 +228,9 @@ export const confirmUploads = async (req: Request, res: Response) => {
           },
           tags: tags ? (Array.isArray(tags) ? tags : tags.split(',').map((t: string) => t.trim())) : [],
           folder: folder || '默认',
+          // 记录创建者和组织
+          createdBy: req.user?.userId,
+          organizationId: req.user?.organizationId,
         })
         
         await material.save()
@@ -318,6 +346,9 @@ export const uploadMaterial = async (req: Request, res: Response) => {
       tags: tags ? (Array.isArray(tags) ? tags : tags.split(',').map((t: string) => t.trim())) : [],
       folder: folder || '默认',
       notes,
+      // 记录创建者和组织
+      createdBy: req.user?.userId,
+      organizationId: req.user?.organizationId,
     })
     
     await material.save()
@@ -384,6 +415,9 @@ export const uploadMaterialBatch = async (req: Request, res: Response) => {
           },
           tags: tags ? (Array.isArray(tags) ? tags : tags.split(',').map((t: string) => t.trim())) : [],
           folder: folder || '默认',
+          // 记录创建者和组织
+          createdBy: req.user?.userId,
+          organizationId: req.user?.organizationId,
         })
         
         await material.save()
@@ -429,7 +463,8 @@ export const getMaterialList = async (req: Request, res: Response) => {
       sortOrder = 'desc',
     } = req.query
     
-    const filter: any = { status }
+    // 根据用户权限过滤
+    const filter: any = { status, ...getMaterialFilter(req) }
     
     if (type) filter.type = type
     if (folder) filter.folder = folder

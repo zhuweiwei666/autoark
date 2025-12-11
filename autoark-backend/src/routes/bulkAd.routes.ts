@@ -4,17 +4,26 @@ import { authenticate } from '../middlewares/auth'
 
 const router = Router()
 
+// 所有路由都需要认证（除了 OAuth 回调）
+router.use((req, res, next) => {
+  // OAuth 回调不需要认证
+  if (req.path === '/auth/callback') {
+    return next()
+  }
+  return authenticate(req, res, next)
+})
+
 // ==================== 独立 OAuth 授权（批量广告专用）====================
 router.get('/auth/apps', bulkAdController.getAvailableApps) // 获取可用的 Facebook Apps
-router.get('/auth/login-url', authenticate, bulkAdController.getAuthLoginUrl) // 需要认证，绑定到当前用户
+router.get('/auth/login-url', bulkAdController.getAuthLoginUrl)
 router.get('/auth/callback', bulkAdController.handleAuthCallback)
-router.get('/auth/status', authenticate, bulkAdController.getAuthStatus) // 需要认证，返回当前用户的授权状态
-router.get('/auth/ad-accounts', authenticate, bulkAdController.getAuthAdAccounts) // 需要认证
-router.get('/auth/pages', authenticate, bulkAdController.getAuthPages) // 需要认证
-router.get('/auth/pixels', authenticate, bulkAdController.getAuthPixels) // 需要认证
-router.get('/auth/cached-pixels', authenticate, bulkAdController.getCachedPixels) // 需要认证，返回当前用户的 Pixels
-router.get('/auth/sync-status', authenticate, bulkAdController.getPixelSyncStatus) // 需要认证
-router.post('/auth/resync', authenticate, bulkAdController.resyncFacebookAssets) // 需要认证
+router.get('/auth/status', bulkAdController.getAuthStatus)
+router.get('/auth/ad-accounts', bulkAdController.getAuthAdAccounts)
+router.get('/auth/pages', bulkAdController.getAuthPages)
+router.get('/auth/pixels', bulkAdController.getAuthPixels)
+router.get('/auth/cached-pixels', bulkAdController.getCachedPixels)
+router.get('/auth/sync-status', bulkAdController.getPixelSyncStatus)
+router.post('/auth/resync', bulkAdController.resyncFacebookAssets)
 
 // ==================== 草稿管理 ====================
 router.post('/drafts', bulkAdController.createDraft)

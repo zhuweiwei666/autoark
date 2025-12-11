@@ -1,7 +1,11 @@
 import { Router } from 'express'
 import * as fbTokenController from '../controllers/fbToken.controller'
+import { authenticate } from '../middlewares/auth'
 
 const router = Router()
+
+// 所有路由都需要认证
+router.use(authenticate)
 
 // 绑定 token
 router.post('/', fbTokenController.bindToken)

@@ -15,6 +15,29 @@ const getApiBaseUrl = () => {
 
 const API_BASE_URL = getApiBaseUrl()
 
+/**
+ * 获取当前认证 Token
+ */
+const getAuthToken = (): string | null => {
+  return localStorage.getItem('auth_token')
+}
+
+/**
+ * 带认证的 fetch 封装
+ */
+export const authFetch = async (url: string, options: RequestInit = {}): Promise<Response> => {
+  const token = getAuthToken()
+  const headers: HeadersInit = {
+    ...options.headers,
+  }
+  
+  if (token) {
+    ;(headers as Record<string, string>)['Authorization'] = `Bearer ${token}`
+  }
+  
+  return fetch(url, { ...options, headers })
+}
+
 export interface FbToken {
   id: string
   userId: string
@@ -50,7 +73,7 @@ export interface TokenResponse {
 export async function bindToken(
   request: BindTokenRequest,
 ): Promise<TokenResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/fb-token`, {
+  const response = await authFetch(`${API_BASE_URL}/api/fb-token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request),
@@ -81,7 +104,7 @@ export async function getTokens(params?: {
     queryParams.toString() ? `?${queryParams.toString()}` : ''
   }`
 
-  const response = await fetch(url)
+  const response = await authFetch(url)
 
   if (!response.ok) {
     throw new Error('Failed to fetch tokens')
@@ -92,7 +115,7 @@ export async function getTokens(params?: {
 
 // 获取单个 token
 export async function getTokenById(id: string): Promise<TokenResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/fb-token/${id}`)
+  const response = await authFetch(`${API_BASE_URL}/api/fb-token/${id}`)
 
   if (!response.ok) {
     throw new Error('Failed to fetch token')
@@ -103,7 +126,7 @@ export async function getTokenById(id: string): Promise<TokenResponse> {
 
 // 检查 token 状态
 export async function checkTokenStatus(id: string): Promise<TokenResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/fb-token/${id}/check`, {
+  const response = await authFetch(`${API_BASE_URL}/api/fb-token/${id}/check`, {
     method: 'POST',
   })
 
@@ -120,7 +143,7 @@ export async function updateToken(
   id: string,
   data: { optimizer?: string },
 ): Promise<TokenResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/fb-token/${id}`, {
+  const response = await authFetch(`${API_BASE_URL}/api/fb-token/${id}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
@@ -136,7 +159,7 @@ export async function updateToken(
 
 // 删除 token
 export async function deleteToken(id: string): Promise<void> {
-  const response = await fetch(`${API_BASE_URL}/api/fb-token/${id}`, {
+  const response = await authFetch(`${API_BASE_URL}/api/fb-token/${id}`, {
     method: 'DELETE',
   })
 
@@ -208,7 +231,7 @@ export async function getAccounts(params?: {
     queryParams.toString() ? `?${queryParams.toString()}` : ''
   }`
 
-  const response = await fetch(url)
+  const response = await authFetch(url)
 
   if (!response.ok) {
     throw new Error('Failed to fetch accounts')
@@ -223,7 +246,7 @@ export async function syncAccounts(): Promise<{
   message: string
   data: { syncedCount: number; errorCount: number; errors?: Array<{ accountId?: string; tokenId?: string; optimizer?: string; error: string }> }
 }> {
-  const response = await fetch(`${API_BASE_URL}/api/facebook/accounts/sync`, {
+  const response = await authFetch(`${API_BASE_URL}/api/facebook/accounts/sync`, {
     method: 'POST',
   })
 
@@ -342,7 +365,7 @@ export async function getCampaigns(params?: {
     queryParams.toString() ? `?${queryParams.toString()}` : ''
   }`
 
-  const response = await fetch(url)
+  const response = await authFetch(url)
 
   if (!response.ok) {
     const errorText = await response.text()
@@ -401,7 +424,7 @@ export async function getCountries(params?: {
     queryParams.toString() ? `?${queryParams.toString()}` : ''
   }`
 
-  const response = await fetch(url)
+  const response = await authFetch(url)
 
   if (!response.ok) {
     const errorText = await response.text()
@@ -435,7 +458,7 @@ export async function syncCampaigns(): Promise<{
   message: string
   data: { syncedCampaigns: number; syncedMetrics: number; errorCount: number; errors?: Array<{ accountId?: string; tokenId?: string; optimizer?: string; error: string }> }
 }> {
-  const response = await fetch(`${API_BASE_URL}/api/facebook/campaigns/sync`, {
+  const response = await authFetch(`${API_BASE_URL}/api/facebook/campaigns/sync`, {
     method: 'POST',
   })
 
@@ -596,7 +619,7 @@ export async function getSpendTrend(startDate?: string, endDate?: string): Promi
     queryParams.toString() ? `?${queryParams.toString()}` : ''
   }`
 
-  const response = await fetch(url)
+  const response = await authFetch(url)
   if (!response.ok) {
     throw new Error('Failed to fetch spend trend')
   }
@@ -628,7 +651,7 @@ export async function getCampaignRanking(limit = 10, startDate?: string, endDate
 
   const url = `${API_BASE_URL}/api/summary/campaigns?${queryParams.toString()}`
 
-  const response = await fetch(url)
+  const response = await authFetch(url)
   if (!response.ok) {
     throw new Error('Failed to fetch campaign ranking')
   }
@@ -663,7 +686,7 @@ export async function getAccountRanking(limit = 10, startDate?: string, endDate?
 
   const url = `${API_BASE_URL}/api/summary/accounts?${queryParams.toString()}`
 
-  const response = await fetch(url)
+  const response = await authFetch(url)
   if (!response.ok) {
     throw new Error('Failed to fetch account ranking')
   }
@@ -697,7 +720,7 @@ export interface UserSettingsResponse {
 
 // 获取用户自定义列设置
 export async function getCampaignColumnSettings(): Promise<UserSettingsResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/user-settings/campaign-columns`)
+  const response = await authFetch(`${API_BASE_URL}/api/user-settings/campaign-columns`)
 
   if (!response.ok) {
     const errorText = await response.text()
@@ -727,7 +750,7 @@ export async function getCampaignColumnSettings(): Promise<UserSettingsResponse>
 
 // 保存用户自定义列设置
 export async function saveCampaignColumnSettings(columns: string[]): Promise<UserSettingsResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/user-settings/campaign-columns`, {
+  const response = await authFetch(`${API_BASE_URL}/api/user-settings/campaign-columns`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ columns }),
@@ -781,7 +804,7 @@ export async function getPurchaseValueInfo(params: {
   queryParams.append('date', params.date)
   if (params.country) queryParams.append('country', params.country)
 
-  const response = await fetch(`${API_BASE_URL}/api/facebook/purchase-value-info?${queryParams.toString()}`)
+  const response = await authFetch(`${API_BASE_URL}/api/facebook/purchase-value-info?${queryParams.toString()}`)
 
   if (!response.ok) {
     throw new Error('Failed to fetch purchase value info')
@@ -800,7 +823,7 @@ export interface OAuthConfig {
 
 // 获取 OAuth 配置状态
 export async function getOAuthConfig(): Promise<{ success: boolean; data: OAuthConfig }> {
-  const response = await fetch(`${API_BASE_URL}/api/facebook/oauth/config`)
+  const response = await authFetch(`${API_BASE_URL}/api/facebook/oauth/config`)
 
   if (!response.ok) {
     throw new Error('Failed to get OAuth config')
@@ -818,7 +841,7 @@ export async function getFacebookLoginUrl(state?: string): Promise<{ success: bo
     queryParams.toString() ? `?${queryParams.toString()}` : ''
   }`
 
-  const response = await fetch(url)
+  const response = await authFetch(url)
 
   if (!response.ok) {
     throw new Error('Failed to get Facebook login URL')
@@ -895,7 +918,7 @@ export async function getMaterialRankings(params?: {
     queryParams.toString() ? `?${queryParams.toString()}` : ''
   }`
 
-  const response = await fetch(url)
+  const response = await authFetch(url)
 
   if (!response.ok) {
     const errorText = await response.text()
@@ -931,7 +954,7 @@ export async function getMaterialRecommendations(params?: {
     queryParams.toString() ? `?${queryParams.toString()}` : ''
   }`
 
-  const response = await fetch(url)
+  const response = await authFetch(url)
   if (!response.ok) throw new Error('Failed to fetch material recommendations')
   return response.json()
 }
@@ -951,14 +974,14 @@ export async function getDecliningMaterials(params?: {
     queryParams.toString() ? `?${queryParams.toString()}` : ''
   }`
 
-  const response = await fetch(url)
+  const response = await authFetch(url)
   if (!response.ok) throw new Error('Failed to fetch declining materials')
   return response.json()
 }
 
 // 触发素材数据聚合
 export async function aggregateMaterialMetrics(date?: string): Promise<{ success: boolean; data: any; message: string }> {
-  const response = await fetch(`${API_BASE_URL}/api/material-metrics/aggregate`, {
+  const response = await authFetch(`${API_BASE_URL}/api/material-metrics/aggregate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ date }),
@@ -1014,7 +1037,7 @@ export async function getPixels(params?: {
     queryParams.toString() ? `?${queryParams.toString()}` : ''
   }`
 
-  const response = await fetch(url)
+  const response = await authFetch(url)
 
   if (!response.ok) {
     throw new Error('Failed to fetch pixels')
@@ -1035,7 +1058,7 @@ export async function getPixelDetails(
     queryParams.toString() ? `?${queryParams.toString()}` : ''
   }`
 
-  const response = await fetch(url)
+  const response = await authFetch(url)
 
   if (!response.ok) {
     throw new Error('Failed to fetch pixel details')
@@ -1058,7 +1081,7 @@ export async function getPixelEvents(
     queryParams.toString() ? `?${queryParams.toString()}` : ''
   }`
 
-  const response = await fetch(url)
+  const response = await authFetch(url)
 
   if (!response.ok) {
     throw new Error('Failed to fetch pixel events')
@@ -1141,7 +1164,7 @@ export async function getDashboardSummary(date?: string): Promise<{
   const url = date
     ? `${API_BASE_URL}/api/summary/dashboard?date=${date}`
     : `${API_BASE_URL}/api/summary/dashboard`
-  const response = await fetch(url)
+  const response = await authFetch(url)
   if (!response.ok) throw new Error('Failed to fetch dashboard summary')
   return response.json()
 }
@@ -1155,7 +1178,7 @@ export async function getDashboardTrend(days?: number): Promise<{
   const url = days
     ? `${API_BASE_URL}/api/summary/dashboard/trend?days=${days}`
     : `${API_BASE_URL}/api/summary/dashboard/trend`
-  const response = await fetch(url)
+  const response = await authFetch(url)
   if (!response.ok) throw new Error('Failed to fetch dashboard trend')
   return response.json()
 }
@@ -1185,7 +1208,7 @@ export async function getCountriesSummary(params?: {
   const url = `${API_BASE_URL}/api/summary/countries${
     queryParams.toString() ? `?${queryParams.toString()}` : ''
   }`
-  const response = await fetch(url)
+  const response = await authFetch(url)
   if (!response.ok) throw new Error('Failed to fetch countries summary')
   return response.json()
 }
@@ -1219,7 +1242,7 @@ export async function getCampaignsSummary(params?: {
   const url = `${API_BASE_URL}/api/summary/campaigns${
     queryParams.toString() ? `?${queryParams.toString()}` : ''
   }`
-  const response = await fetch(url)
+  const response = await authFetch(url)
   if (!response.ok) throw new Error('Failed to fetch campaigns summary')
   return response.json()
 }
@@ -1251,7 +1274,7 @@ export async function getMaterialsSummary(params?: {
   const url = `${API_BASE_URL}/api/summary/materials${
     queryParams.toString() ? `?${queryParams.toString()}` : ''
   }`
-  const response = await fetch(url)
+  const response = await authFetch(url)
   if (!response.ok) throw new Error('Failed to fetch materials summary')
   return response.json()
 }
@@ -1267,7 +1290,7 @@ export async function getSummaryStatus(): Promise<{
     error?: string
   }>
 }> {
-  const response = await fetch(`${API_BASE_URL}/api/summary/status`)
+  const response = await authFetch(`${API_BASE_URL}/api/summary/status`)
   if (!response.ok) throw new Error('Failed to fetch summary status')
   return response.json()
 }
@@ -1281,7 +1304,7 @@ export async function refreshSummary(params?: {
   data?: any
   message: string
 }> {
-  const response = await fetch(`${API_BASE_URL}/api/summary/refresh`, {
+  const response = await authFetch(`${API_BASE_URL}/api/summary/refresh`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(params || {}),
@@ -1325,7 +1348,7 @@ export async function analyzeMaterialWithAI(materialId: string): Promise<{
   }
   error?: string
 }> {
-  const response = await fetch(`${API_BASE_URL}/api/agent/materials/${materialId}/analyze`)
+  const response = await authFetch(`${API_BASE_URL}/api/agent/materials/${materialId}/analyze`)
   if (!response.ok) throw new Error('Failed to analyze material')
   return response.json()
 }
@@ -1363,7 +1386,7 @@ export async function getAIMaterialRecommendations(): Promise<{
     analyzedAt?: string
   }
 }> {
-  const response = await fetch(`${API_BASE_URL}/api/agent/materials/recommendations`)
+  const response = await authFetch(`${API_BASE_URL}/api/agent/materials/recommendations`)
   if (!response.ok) throw new Error('Failed to get AI recommendations')
   return response.json()
 }
@@ -1374,7 +1397,7 @@ export async function chatWithAI(message: string, context?: any): Promise<{
   data?: { response: string }
   error?: string
 }> {
-  const response = await fetch(`${API_BASE_URL}/api/agent/chat`, {
+  const response = await authFetch(`${API_BASE_URL}/api/agent/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ message, context }),
@@ -1389,7 +1412,7 @@ export async function chatWithAI(message: string, context?: any): Promise<{
  * 获取今日汇总数据（预聚合表，超快）
  */
 export async function getAggToday(): Promise<{ success: boolean; data: any }> {
-  const response = await fetch(`${API_BASE_URL}/api/agg/today`)
+  const response = await authFetch(`${API_BASE_URL}/api/agg/today`)
   if (!response.ok) throw new Error('Failed to fetch today data')
   return response.json()
 }
@@ -1402,7 +1425,7 @@ export async function getAggDaily(startDate?: string, endDate?: string): Promise
   if (startDate) params.append('startDate', startDate)
   if (endDate) params.append('endDate', endDate)
   
-  const response = await fetch(`${API_BASE_URL}/api/agg/daily?${params.toString()}`)
+  const response = await authFetch(`${API_BASE_URL}/api/agg/daily?${params.toString()}`)
   if (!response.ok) throw new Error('Failed to fetch daily data')
   return response.json()
 }
@@ -1467,7 +1490,7 @@ export async function getAggTrend(days: number = 7): Promise<{ success: boolean;
   const today = new Date().toISOString().split('T')[0]
   const startDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
   
-  const response = await fetch(`${API_BASE_URL}/api/agg/daily?startDate=${startDate}&endDate=${today}`)
+  const response = await authFetch(`${API_BASE_URL}/api/agg/daily?startDate=${startDate}&endDate=${today}`)
   const result = await response.json()
   
   // 转换为趋势格式
@@ -1489,7 +1512,7 @@ export async function getAggTrend(days: number = 7): Promise<{ success: boolean;
 export async function getAggCampaignRanking(limit: number = 10): Promise<{ success: boolean; data: any[] }> {
   const today = new Date().toISOString().split('T')[0]
   
-  const response = await fetch(`${API_BASE_URL}/api/agg/campaigns?date=${today}`)
+  const response = await authFetch(`${API_BASE_URL}/api/agg/campaigns?date=${today}`)
   const result = await response.json()
   
   // 取 Top N 并转换格式
@@ -1513,7 +1536,7 @@ export async function getAggCampaignRanking(limit: number = 10): Promise<{ succe
 export async function getAggAccountRanking(limit: number = 10): Promise<{ success: boolean; data: any[] }> {
   const today = new Date().toISOString().split('T')[0]
   
-  const response = await fetch(`${API_BASE_URL}/api/agg/accounts?date=${today}`)
+  const response = await authFetch(`${API_BASE_URL}/api/agg/accounts?date=${today}`)
   const result = await response.json()
   
   // 取 Top N
