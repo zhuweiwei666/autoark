@@ -1032,8 +1032,10 @@ export const retryFailedItems = async (taskId: string) => {
 
 /**
  * 重新执行任务（基于原任务配置创建新任务）
+ * @param taskId 原任务ID
+ * @param multiplier 执行倍率（创建多少个新任务）
  */
-export const rerunTask = async (taskId: string) => {
+export const rerunTask = async (taskId: string, multiplier: number = 1) => {
   const originalTask: any = await AdTask.findById(taskId)
   if (!originalTask) {
     throw new Error('Task not found')
@@ -1044,33 +1046,46 @@ export const rerunTask = async (taskId: string) => {
   }
   
   const config = originalTask.configSnapshot
+  const safeMultiplier = Math.min(20, Math.max(1, multiplier))  // 限制 1-20
   
-  // 创建新任务
-  const newTask: any = new AdTask({
-    taskType: originalTask.taskType,
-    status: 'pending',
-    platform: originalTask.platform,
-    draftId: originalTask.draftId,
-    configSnapshot: config,
-    publishSettings: originalTask.publishSettings,
-    notes: `重新执行自任务 ${taskId}`,
-    items: config.accounts.map((acc: any) => ({
-      accountId: acc.accountId,
-      accountName: acc.accountName || acc.accountId,
+  const newTasks: any[] = []
+  
+  for (let i = 0; i < safeMultiplier; i++) {
+    // 生成任务名称
+    const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '')
+    const timeStr = new Date().toTimeString().slice(0, 5).replace(':', '')
+    const firstAccountName = config.accounts?.[0]?.accountName?.replace(/[^a-zA-Z0-9\u4e00-\u9fa5-]/g, '') || 'unknown'
+    const taskName = `autoark${firstAccountName}_${dateStr}_${timeStr}${safeMultiplier > 1 ? `_${i + 1}` : ''}`
+    
+    // 创建新任务
+    const newTask: any = new AdTask({
+      name: taskName,
+      taskType: originalTask.taskType,
       status: 'pending',
-      progress: { current: 0, total: 0, percentage: 0 },
-    })),
-    progress: {
-      totalAccounts: config.accounts.length,
-      completedAccounts: 0,
-      successAccounts: 0,
-      failedAccounts: 0,
-      percentage: 0,
-    },
-  })
-  
-  await newTask.save()
-  logger.info(`[BulkAd] Task rerun created: ${newTask._id} (from ${taskId})`)
+      platform: originalTask.platform,
+      draftId: originalTask.draftId,
+      configSnapshot: config,
+      publishSettings: originalTask.publishSettings,
+      notes: `重新执行自任务 ${taskId}${safeMultiplier > 1 ? ` (${i + 1}/${safeMultiplier})` : ''}`,
+      items: config.accounts.map((acc: any) => ({
+        accountId: acc.accountId,
+        accountName: acc.accountName || acc.accountId,
+        status: 'pending',
+        progress: { current: 0, total: 0, percentage: 0 },
+      })),
+      progress: {
+        totalAccounts: config.accounts.length,
+        completedAccounts: 0,
+        successAccounts: 0,
+        failedAccounts: 0,
+        percentage: 0,
+      },
+    })
+    
+    await newTask.save()
+    newTasks.push(newTask)
+    logger.info(`[BulkAd] Task rerun created: ${newTask._id} (from ${taskId}, ${i + 1}/${safeMultiplier})`)
+  }
   
   // 检查 Redis 是否可用
   const { getRedisClient } = await import('../config/redis')
@@ -1082,35 +1097,38 @@ export const rerunTask = async (taskId: string) => {
     }
   })()
   
-  if (redisAvailable) {
-    // Redis 可用，使用队列异步执行
-    logger.info(`[BulkAd] Redis available, adding task to queue`)
-    const { addBulkAdJobsBatch } = await import('../queue/bulkAd.queue')
+  // 为每个新任务启动执行
+  for (const newTask of newTasks) {
     const accountIds = config.accounts.map((acc: any) => acc.accountId)
     
-    newTask.status = 'queued'
-    newTask.queuedAt = new Date()
-    await newTask.save()
-    
-    await addBulkAdJobsBatch(newTask._id.toString(), accountIds)
-    logger.info(`[BulkAd] Task ${newTask._id} queued, ${accountIds.length} accounts`)
-  } else {
-    // Redis 不可用，直接同步执行
-    logger.info(`[BulkAd] Redis unavailable, executing task synchronously`)
-    newTask.status = 'processing'
-    newTask.startedAt = new Date()
-    await newTask.save()
-    
-    for (const acc of config.accounts) {
-      try {
-        await executeTaskForAccount(newTask._id.toString(), acc.accountId)
-      } catch (err: any) {
-        logger.error(`[BulkAd] Failed for account ${acc.accountId}:`, err.message)
+    if (redisAvailable) {
+      // Redis 可用，使用队列异步执行
+      const { addBulkAdJobsBatch } = await import('../queue/bulkAd.queue')
+      
+      newTask.status = 'queued'
+      newTask.queuedAt = new Date()
+      await newTask.save()
+      
+      await addBulkAdJobsBatch(newTask._id.toString(), accountIds)
+      logger.info(`[BulkAd] Task ${newTask._id} queued, ${accountIds.length} accounts`)
+    } else {
+      // Redis 不可用，直接同步执行
+      logger.info(`[BulkAd] Redis unavailable, executing task ${newTask._id} synchronously`)
+      newTask.status = 'processing'
+      newTask.startedAt = new Date()
+      await newTask.save()
+      
+      for (const acc of config.accounts) {
+        try {
+          await executeTaskForAccount(newTask._id.toString(), acc.accountId)
+        } catch (err: any) {
+          logger.error(`[BulkAd] Failed for account ${acc.accountId}:`, err.message)
+        }
       }
     }
   }
   
-  return newTask
+  return newTasks
 }
 
 // ==================== 辅助函数 ====================

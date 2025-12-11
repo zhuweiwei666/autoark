@@ -186,11 +186,13 @@ export const retryTask = async (req: Request, res: Response) => {
 /**
  * 重新执行任务（基于原任务配置创建新任务）
  * POST /api/bulk-ad/tasks/:id/rerun
+ * @body multiplier 执行倍率（可选，默认1，最大20）
  */
 export const rerunTask = async (req: Request, res: Response) => {
   try {
-    const newTask = await bulkAdService.rerunTask(req.params.id)
-    res.json({ success: true, data: newTask })
+    const multiplier = parseInt(req.body.multiplier) || 1
+    const newTasks = await bulkAdService.rerunTask(req.params.id, multiplier)
+    res.json({ success: true, data: newTasks })
   } catch (error: any) {
     logger.error('[BulkAd] Rerun task failed:', error)
     res.status(400).json({ success: false, error: error.message })

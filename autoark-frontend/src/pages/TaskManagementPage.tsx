@@ -93,6 +93,12 @@ export default function TaskManagementPage() {
   const [checkingReview, setCheckingReview] = useState(false)
   const [reviewDetails, setReviewDetails] = useState<any>(null)
   
+  // 🆕 倍率执行弹窗状态
+  const [showRerunModal, setShowRerunModal] = useState(false)
+  const [rerunMultiplier, setRerunMultiplier] = useState(1)
+  const [rerunTaskId, setRerunTaskId] = useState<string>('')
+  const [rerunning, setRerunning] = useState(false)
+  
   useEffect(() => {
     loadTasks()
     const interval = setInterval(loadTasks, 5000) // Auto refresh every 5s
@@ -166,22 +172,39 @@ export default function TaskManagementPage() {
     }
   }
   
-  const handleRerun = async (taskId: string) => {
-    if (!confirm('确定要重新执行此任务吗？将基于原任务配置创建新任务。')) return
+  // 🆕 打开倍率选择弹窗
+  const openRerunModal = (taskId: string) => {
+    setRerunTaskId(taskId)
+    setRerunMultiplier(1)
+    setShowRerunModal(true)
+  }
+  
+  // 🆕 执行倍率重跑
+  const handleRerun = async () => {
+    if (!rerunTaskId) return
+    setRerunning(true)
     try {
-      const res = await fetch(`${API_BASE}/bulk-ad/tasks/${taskId}/rerun`, { method: 'POST' })
+      const res = await fetch(`${API_BASE}/bulk-ad/tasks/${rerunTaskId}/rerun`, { 
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ multiplier: rerunMultiplier })
+      })
       const data = await res.json()
       if (data.success) {
-        alert(`新任务已创建：${data.data._id}`)
+        const count = data.data.length || 1
+        alert(`已创建 ${count} 个新任务`)
         loadTasks()
-        // 选中新任务
-        setSelectedTask(data.data)
+        setShowRerunModal(false)
+        // 选中第一个新任务
+        if (data.data[0]) setSelectedTask(data.data[0])
       } else {
         alert(`重新执行失败：${data.error}`)
       }
     } catch (err) {
       console.error('Failed to rerun task:', err)
       alert('重新执行失败')
+    } finally {
+      setRerunning(false)
     }
   }
   
@@ -297,8 +320,8 @@ export default function TaskManagementPage() {
                     {['failed', 'partial_success'].includes(selectedTask.status) && (
                       <button onClick={() => handleRetry(selectedTask._id)} className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">重试失败项</button>
                     )}
-                    {['success', 'failed', 'partial_success', 'cancelled'].includes(selectedTask.status) && (
-                      <button onClick={() => handleRerun(selectedTask._id)} className="px-3 py-1 text-sm bg-green-600 text-white rounded hover:bg-green-700">重新执行</button>
+                    {['success', 'failed', 'partial_success', 'cancelled', 'completed'].includes(selectedTask.status) && (
+                      <button onClick={() => openRerunModal(selectedTask._id)} className="px-3 py-1 text-sm bg-green-600 text-white rounded hover:bg-green-700">🔄 再次执行</button>
                     )}
                     <button onClick={() => loadTaskDetail(selectedTask._id)} disabled={refreshing} className="px-3 py-1 text-sm border border-slate-300 rounded hover:bg-slate-50 disabled:opacity-50">
                       {refreshing ? '刷新中...' : '刷新'}
@@ -438,6 +461,60 @@ export default function TaskManagementPage() {
           </div>
         </div>
       </div>
+      
+      {/* 🆕 倍率执行弹窗 */}
+      {showRerunModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-2xl p-6 w-96 shadow-xl">
+            <h3 className="text-lg font-semibold mb-4">🔄 再次执行任务</h3>
+            <p className="text-sm text-slate-600 mb-4">选择执行次数，将基于原任务配置创建多个新任务。</p>
+            
+            <div className="mb-6">
+              <label className="block text-sm font-medium text-slate-700 mb-2">执行次数（倍率）</label>
+              <div className="flex gap-2">
+                {[1, 2, 3, 5, 10].map(n => (
+                  <button
+                    key={n}
+                    onClick={() => setRerunMultiplier(n)}
+                    className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${
+                      rerunMultiplier === n 
+                        ? 'bg-blue-600 text-white' 
+                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                    }`}
+                  >
+                    {n}x
+                  </button>
+                ))}
+              </div>
+              <input
+                type="number"
+                min="1"
+                max="20"
+                value={rerunMultiplier}
+                onChange={e => setRerunMultiplier(Math.min(20, Math.max(1, parseInt(e.target.value) || 1)))}
+                className="mt-2 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm"
+                placeholder="或输入自定义次数（最大20）"
+              />
+            </div>
+            
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowRerunModal(false)}
+                className="flex-1 px-4 py-2 border border-slate-300 rounded-lg text-slate-700 hover:bg-slate-50"
+              >
+                取消
+              </button>
+              <button
+                onClick={handleRerun}
+                disabled={rerunning}
+                className="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50"
+              >
+                {rerunning ? '执行中...' : `执行 ${rerunMultiplier} 次`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
