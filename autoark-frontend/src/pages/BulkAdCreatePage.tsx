@@ -95,7 +95,7 @@ export default function BulkAdCreatePage() {
     }
   })
   const [ad, setAd] = useState({
-    nameTemplate: '{adsetName}_ad_{index}',
+    nameTemplate: '{materialName}_{datetime}',
     status: 'ACTIVE', // 默认开启
     creativeGroupIds: [] as string[],
     copywritingPackageIds: [] as string[],

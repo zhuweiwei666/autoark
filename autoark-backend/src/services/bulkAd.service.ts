@@ -734,6 +734,10 @@ export const executeTaskForAccount = async (
         const creativeId = creativeResult.id
         
         // 创建 Ad
+        // 生成精确到分钟的时间戳
+        const now = new Date()
+        const datetime = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`
+        
         const adName = generateName(config.ad.nameTemplate, {
           accountName: accountConfig.accountName,
           campaignName,
@@ -741,7 +745,8 @@ export const executeTaskForAccount = async (
           creativeGroupName: creativeGroup.name,
           materialName: material.name || `素材${matIndex + 1}`,
           index: globalAdIndex,
-          date: new Date().toISOString().slice(0, 10),
+          date: now.toISOString().slice(0, 10),
+          datetime,  // 精确到分钟: 20251211_1430
         })
         
         const adResult = await createAd({
