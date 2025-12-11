@@ -8,6 +8,7 @@ import { initSummaryAggregationCron } from './summaryAggregation.cron'
 import { initAggregationCron } from './aggregation.cron'
 import { initRuleCron } from './rule.cron'
 import { initMaterialAutoTestCron } from './materialAutoTest.cron'
+import { initAiSuggestionCron } from './aiSuggestion.cron'
 import logger from '../utils/logger'
 
 const initCronJobs = () => {
@@ -46,6 +47,9 @@ const initCronJobs = () => {
 
   // 🧪 素材自动测试 (Every 10 minutes)
   initMaterialAutoTestCron()
+
+  // 🤖 AI 优化建议 (Hourly)
+  initAiSuggestionCron()
 
   logger.info('Cron jobs initialized')
 }

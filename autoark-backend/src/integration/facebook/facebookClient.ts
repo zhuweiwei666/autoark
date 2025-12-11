@@ -94,29 +94,51 @@ const request = async (method: 'GET' | 'POST', endpoint: string, dataOrParams: a
         url,
       }
 
-      // Facebook Graph API: 所有参数都放在 URL query string 中
-      // 手动构建查询字符串，确保 JSON 参数正确编码
-      const allParams: any = {
+      if (method === 'GET') {
+        // GET 请求：所有参数都放在 URL query string 中
+        const allParams: any = {
           access_token: token,
-      }
-      
-      // 处理参数，确保不重复添加 access_token
-      for (const [key, value] of Object.entries(dataOrParams)) {
-        if (key !== 'access_token' && value !== undefined) {
-          allParams[key] = value
         }
-      }
-      
-      // 使用自定义序列化器确保 JSON 字符串正确编码
-      config.params = allParams
-      config.paramsSerializer = (params: any) => {
-        const parts: string[] = []
-        for (const [key, value] of Object.entries(params)) {
-          if (value !== undefined && value !== null) {
-            parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`)
+        
+        // 处理参数，确保不重复添加 access_token
+        for (const [key, value] of Object.entries(dataOrParams)) {
+          if (key !== 'access_token' && value !== undefined) {
+            allParams[key] = value
           }
         }
-        return parts.join('&')
+        
+        // 使用自定义序列化器确保 JSON 字符串正确编码
+        config.params = allParams
+        config.paramsSerializer = (params: any) => {
+          const parts: string[] = []
+          for (const [key, value] of Object.entries(params)) {
+            if (value !== undefined && value !== null) {
+              parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`)
+            }
+          }
+          return parts.join('&')
+        }
+      } else {
+        // POST 请求：access_token 放在 URL 参数中，其他数据放在请求体中
+        // Facebook Graph API 要求 POST 请求使用 application/x-www-form-urlencoded 格式
+        // 这样可以避免 URL 长度限制，并符合 Facebook API 的标准要求
+        config.params = {
+          access_token: token,
+        }
+        
+        // 构建请求体数据（排除 access_token）
+        const bodyParts: string[] = []
+        for (const [key, value] of Object.entries(dataOrParams)) {
+          if (key !== 'access_token' && value !== undefined && value !== null) {
+            bodyParts.push(`${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`)
+          }
+        }
+        
+        // 使用 application/x-www-form-urlencoded 格式发送数据
+        config.data = bodyParts.join('&')
+        config.headers = {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        }
       }
 
       const res = await axios(config)

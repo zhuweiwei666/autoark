@@ -24,6 +24,7 @@ import accountManagementRoutes from './routes/account.management.routes' // New:
 import aggregationRoutes from './controllers/aggregation.controller' // New: 预聚合数据 API
 import ruleRoutes from './controllers/rule.controller' // New: 自动化规则引擎
 import materialAutoTestRoutes from './controllers/materialAutoTest.controller' // New: 素材自动测试
+import aiSuggestionRoutes from './controllers/aiSuggestion.controller' // New: AI 优化建议
 import logger from './utils/logger'
 import initSyncCron from './cron/sync.cron'
 import initCronJobs from './cron'
@@ -100,6 +101,7 @@ app.use('/api/facebook-apps', facebookAppRoutes) // New: Facebook App 管理（�
 app.use('/api/agg', aggregationRoutes) // New: 统一预聚合数据 API（前端+AI 共用）
 app.use('/api/rules', ruleRoutes) // New: 自动化规则引擎
 app.use('/api/material-auto-test', materialAutoTestRoutes) // New: 素材自动测试
+app.use('/api/ai-suggestions', aiSuggestionRoutes) // New: AI 优化建议
 
 // Dashboard UI 已迁移到 React 前端，不再需要后端路由
 // app.use('/dashboard', dashboardRoutes) // 已禁用，让前端 React Router 处理
