@@ -18,7 +18,7 @@ const router = Router()
 /**
  * 获取素材排行榜
  * GET /api/materials/rankings
- * Query: startDate, endDate, sortBy, limit, type
+ * Query: startDate, endDate, sortBy, limit, type, country
  */
 router.get('/rankings', async (req: Request, res: Response) => {
   try {
@@ -28,6 +28,7 @@ router.get('/rankings', async (req: Request, res: Response) => {
       sortBy = 'roas',
       limit = '20',
       type,
+      country,  // 🌍 新增：国家筛选
     } = req.query
     
     const rankings = await getMaterialRankings({
@@ -35,12 +36,13 @@ router.get('/rankings', async (req: Request, res: Response) => {
       sortBy: sortBy as any,
       limit: parseInt(limit as string, 10),
       materialType: type as any,
+      country: country as string,  // 🌍 传递国家参数
     })
     
     res.json({
       success: true,
       data: rankings,
-      query: { startDate, endDate, sortBy, limit, type },
+      query: { startDate, endDate, sortBy, limit, type, country },
     })
   } catch (error: any) {
     logger.error('[MaterialController] Get rankings failed:', error)

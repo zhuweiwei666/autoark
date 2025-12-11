@@ -877,6 +877,7 @@ export async function getMaterialRankings(params?: {
   sortBy?: 'roas' | 'spend' | 'qualityScore' | 'impressions'
   limit?: number
   type?: 'image' | 'video'
+  country?: string  // 🌍 新增：国家筛选
 }): Promise<MaterialRankingsResponse> {
   const queryParams = new URLSearchParams()
   if (params?.startDate) queryParams.append('startDate', params.startDate)
@@ -884,6 +885,7 @@ export async function getMaterialRankings(params?: {
   if (params?.sortBy) queryParams.append('sortBy', params.sortBy)
   if (params?.limit) queryParams.append('limit', params.limit.toString())
   if (params?.type) queryParams.append('type', params.type)
+  if (params?.country) queryParams.append('country', params.country)  // 🌍 添加国家参数
 
   const url = `${API_BASE_URL}/api/material-metrics/rankings${
     queryParams.toString() ? `?${queryParams.toString()}` : ''

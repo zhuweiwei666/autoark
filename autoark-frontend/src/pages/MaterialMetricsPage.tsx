@@ -5,6 +5,7 @@ import {
   getMaterialRankings,
   getMaterialRecommendations,
   getDecliningMaterials,
+  getCountriesSummary,
   type MaterialMetric,
 } from '../services/api'
 
@@ -143,6 +144,7 @@ export default function MaterialMetricsPage() {
   const [materials, setMaterials] = useState<MaterialMetric[]>([])
   const [recommendations, setRecommendations] = useState<MaterialMetric[]>([])
   const [decliningMaterials, setDecliningMaterials] = useState<any[]>([])
+  const [countries, setCountries] = useState<Array<{ country: string; countryName: string }>>([])
 
   // 筛选条件
   const [filters, setFilters] = useState({
@@ -150,8 +152,28 @@ export default function MaterialMetricsPage() {
     endDate: getToday(),
     sortBy: 'roas' as 'roas' | 'spend' | 'qualityScore' | 'impressions',
     type: '' as '' | 'image' | 'video',
+    country: '' as string,  // 🌍 新增：国家筛选
     limit: 50,
   })
+
+  // 加载国家列表
+  const loadCountries = async () => {
+    try {
+      const response = await getCountriesSummary({
+        startDate: filters.startDate,
+        endDate: filters.endDate,
+        limit: 100,
+        sortBy: 'spend',
+        order: 'desc',
+      })
+      setCountries(response.data?.map(c => ({ 
+        country: c.country, 
+        countryName: c.countryName || c.country 
+      })) || [])
+    } catch (error) {
+      console.error('Failed to load countries:', error)
+    }
+  }
 
   // 加载素材排行榜
   const loadRankings = async () => {
@@ -162,6 +184,7 @@ export default function MaterialMetricsPage() {
         endDate: filters.endDate,
         sortBy: filters.sortBy,
         type: filters.type || undefined,
+        country: filters.country || undefined,  // 🌍 添加国家筛选
         limit: filters.limit,
       })
       setMaterials(response.data || [])
@@ -215,8 +238,12 @@ export default function MaterialMetricsPage() {
     }
   }
 
+  // 加载国家列表
+  useEffect(() => {
+    loadCountries()
+  }, [filters.startDate, filters.endDate])
+
   // 根据当前 tab 加载数据
-  
   useEffect(() => {
     if (activeTab === 'rankings') {
       loadRankings()
@@ -225,7 +252,7 @@ export default function MaterialMetricsPage() {
     } else if (activeTab === 'declining') {
       loadDeclining()
     }
-  }, [activeTab, filters.startDate, filters.endDate, filters.sortBy, filters.type])
+  }, [activeTab, filters.startDate, filters.endDate, filters.sortBy, filters.type, filters.country])
 
   // Tab 配置
   const tabs = [
@@ -357,6 +384,23 @@ export default function MaterialMetricsPage() {
                 value={filters.endDate}
                 onChange={(date: string) => setFilters({ ...filters, endDate: date })}
               />
+            </div>
+
+            {/* 🌍 国家筛选 */}
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-2">国家</label>
+              <select
+                value={filters.country}
+                onChange={(e) => setFilters({ ...filters, country: e.target.value })}
+                className="w-full px-4 py-3 bg-white border border-slate-300 rounded-2xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400 transition-all appearance-none cursor-pointer shadow-sm"
+              >
+                <option value="">全部国家</option>
+                {countries.map((c) => (
+                  <option key={c.country} value={c.country}>
+                    {c.countryName || c.country}
+                  </option>
+                ))}
+              </select>
             </div>
 
             {/* 素材类型 */}

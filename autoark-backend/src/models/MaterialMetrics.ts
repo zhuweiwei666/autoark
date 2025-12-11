@@ -11,6 +11,9 @@ const materialMetricsSchema = new mongoose.Schema(
     // 日期
     date: { type: String, required: true }, // YYYY-MM-DD
     
+    // 国家（从 MetricsDaily 获取）
+    country: { type: String, default: 'ALL' }, // 国家代码，ALL 表示全部国家汇总
+    
     // 素材标识
     materialId: { type: mongoose.Schema.Types.ObjectId, ref: 'Material' }, // 关联到 Material 表
     
@@ -89,16 +92,18 @@ const materialMetricsSchema = new mongoose.Schema(
   { timestamps: true }
 )
 
-// 复合索引：确保唯一性（使用 creativeId 作为主要标识）
-materialMetricsSchema.index({ date: 1, creativeId: 1 }, { unique: true, sparse: true })
-materialMetricsSchema.index({ date: 1, imageHash: 1 }, { sparse: true })
-materialMetricsSchema.index({ date: 1, videoId: 1 }, { sparse: true })
-materialMetricsSchema.index({ date: 1, materialId: 1 }, { sparse: true })
+// 复合索引：确保唯一性（date + materialId + country）
+materialMetricsSchema.index({ date: 1, materialId: 1, country: 1 }, { unique: true, sparse: true })
+materialMetricsSchema.index({ date: 1, creativeId: 1, country: 1 }, { sparse: true })
+materialMetricsSchema.index({ date: 1, imageHash: 1, country: 1 }, { sparse: true })
+materialMetricsSchema.index({ date: 1, videoId: 1, country: 1 }, { sparse: true })
 
 // 查询索引
 materialMetricsSchema.index({ date: 1 })
+materialMetricsSchema.index({ country: 1, date: -1 })
 materialMetricsSchema.index({ creativeId: 1, date: -1 })
 materialMetricsSchema.index({ materialId: 1, date: -1 })
+materialMetricsSchema.index({ materialId: 1, country: 1, date: -1 })
 materialMetricsSchema.index({ imageHash: 1, date: -1 })
 materialMetricsSchema.index({ videoId: 1, date: -1 })
 materialMetricsSchema.index({ qualityScore: -1, date: -1 })

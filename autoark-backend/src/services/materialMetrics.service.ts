@@ -194,7 +194,7 @@ export const aggregateMaterialMetrics = async (date: string): Promise<{
     const fallbackCount = Array.from(adCreativeMap.values()).filter(v => v.matchType === 'fallback').length
     logger.info(`[MaterialMetrics] Ad-Material mapping: ${directCount} direct, ${fallbackCount} fallback, ${adCreativeMap.size - directCount - fallbackCount} none`)
     
-    // 3. 获取当天的 ad 级别指标
+    // 3. 获取当天的 ad 级别指标（包含 country 维度）
     const adMetrics = await MetricsDaily.find({
       date,
       adId: { $exists: true, $ne: null },
@@ -202,9 +202,8 @@ export const aggregateMaterialMetrics = async (date: string): Promise<{
     }).lean()
     logger.info(`[MaterialMetrics] Found ${adMetrics.length} ad metrics for ${date}`)
     
-    // 4. 按素材聚合指标
-    // 🎯 优先使用 materialId 作为 key（精准归因）
-    // 回退使用 creativeId（兼容）
+    // 4. 按素材 + 国家 聚合指标
+    // 🎯 key 格式：materialId_country（支持国家维度分析）
     const materialAggregation = new Map<string, any>()
     
     for (const metric of adMetrics) {
@@ -212,8 +211,14 @@ export const aggregateMaterialMetrics = async (date: string): Promise<{
       if (!creativeInfo) continue
       
       // 🎯 只使用 materialId（只统计 AutoArk 素材库的素材）
-      const materialKey = creativeInfo.materialId
-      if (!materialKey) continue
+      const materialId = creativeInfo.materialId
+      if (!materialId) continue
+      
+      // 获取国家代码，默认为 'ALL'
+      const country = (metric as any).country || 'ALL'
+      
+      // 🎯 key 格式：materialId_country（支持国家维度分析）
+      const materialKey = `${materialId}_${country}`
       
       stats.processed++
       
@@ -228,6 +233,7 @@ export const aggregateMaterialMetrics = async (date: string): Promise<{
       if (!materialAggregation.has(materialKey)) {
         materialAggregation.set(materialKey, {
           date,
+          country,  // 🌍 添加国家维度
           // 🎯 精准归因：记录 materialId
           materialId: creativeInfo.materialId,
           creativeId: creativeInfo.creativeId,
@@ -331,23 +337,18 @@ export const aggregateMaterialMetrics = async (date: string): Promise<{
         
         qualityScore = Math.max(0, Math.min(100, qualityScore))
         
-        // 构建查询条件
-        const filter: any = { date }
-        // 🎯 优先使用 materialId 作为唯一标识（精准归因）
-        if (materialId) {
-          filter.materialId = materialId
-        } else if (agg.creativeId) {
-          filter.creativeId = agg.creativeId
-        } else if (agg.imageHash) {
-          filter.imageHash = agg.imageHash
-        } else if (agg.videoId) {
-          filter.videoId = agg.videoId
+        // 构建查询条件（包含 country 维度）
+        const filter: any = { 
+          date,
+          country: agg.country || 'ALL',  // 🌍 添加国家维度
+          materialId,  // 🎯 使用 materialId 作为唯一标识
         }
         
         const result = await MaterialMetrics.findOneAndUpdate(
           filter,
           {
             date,
+            country: agg.country || 'ALL',  // 🌍 保存国家
             materialId,  // 🎯 精准归因
             creativeId: agg.creativeId,
             imageHash: agg.imageHash,
@@ -420,8 +421,9 @@ export const getMaterialRankings = async (options: {
   sortBy?: 'roas' | 'spend' | 'qualityScore' | 'impressions'
   limit?: number
   materialType?: 'image' | 'video'
+  country?: string  // 🌍 新增：国家筛选
 }) => {
-  const { dateRange, sortBy = 'roas', limit = 20, materialType } = options
+  const { dateRange, sortBy = 'roas', limit = 20, materialType, country } = options
   
   const match: any = {
     date: { $gte: dateRange.start, $lte: dateRange.end },
@@ -429,6 +431,8 @@ export const getMaterialRankings = async (options: {
     materialId: { $exists: true, $ne: null }  // 🎯 只显示有素材库关联的素材
   }
   if (materialType) match.materialType = materialType
+  // 🌍 国家筛选：如果指定了国家，只查询该国家的数据
+  if (country) match.country = country
   
   const results = await MaterialMetrics.aggregate([
     { $match: match },
