@@ -253,7 +253,7 @@ export const retryTask = async (req: Request, res: Response) => {
 export const rerunTask = async (req: Request, res: Response) => {
   try {
     const multiplier = parseInt(req.body.multiplier) || 1
-    const userId = req.user?.id || req.user?._id
+    const userId = req.user?.userId
     const newTasks = await bulkAdService.rerunTask(req.params.id, multiplier, userId)
     res.json({ success: true, data: newTasks })
   } catch (error: any) {
