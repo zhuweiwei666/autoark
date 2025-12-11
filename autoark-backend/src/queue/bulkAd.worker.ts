@@ -95,6 +95,64 @@ if (bulkAdWorker) {
 }
 
 /**
+ * 重置卡住的任务状态
+ * 将长时间处于 processing 状态的任务项重置为 pending 或 failed
+ */
+const recoverStuckTasks = async () => {
+  try {
+    const STUCK_THRESHOLD = 30 * 60 * 1000 // 30 minutes
+    const cutoffDate = new Date(Date.now() - STUCK_THRESHOLD)
+    
+    // Find tasks with processing items older than threshold
+    // Since items are array, we query tasks where ANY item is processing
+    // We assume if task is processing, and it's old, it might be stuck
+    
+    const stuckTasks = await AdTask.find({
+      status: { $in: ['processing', 'queued', 'pending'] },
+      $or: [
+        { startedAt: { $lt: cutoffDate } },
+        { queuedAt: { $lt: cutoffDate } }
+      ]
+    })
+    
+    if (stuckTasks.length === 0) return
+    
+    logger.info(`[BulkAdWorker] Found ${stuckTasks.length} potentially stuck tasks`)
+    
+    for (const task of stuckTasks) {
+      // Check if it's really stuck (no recent updates)
+      // Ideally we should check `updatedAt` but let's assume if it started > 30m ago it's stuck 
+      // (unless it has thousands of ads, but bulkAd is per account)
+      
+      logger.info(`[BulkAdWorker] Recovering stuck task: ${task._id}`)
+      
+      // Reset processing items to pending
+      let updated = false
+      for (const item of task.items) {
+        if (item.status === 'processing') {
+          item.status = 'failed' // Mark as failed instead of pending to avoid infinite loops of death
+          item.errors.push({
+            entityType: 'general',
+            errorCode: 'WORKER_TIMEOUT',
+            errorMessage: 'Task execution timed out or worker crashed',
+            timestamp: new Date()
+          })
+          updated = true
+        }
+      }
+      
+      if (updated) {
+        task.status = 'failed' // Or re-calculate status
+        await task.save()
+        logger.info(`[BulkAdWorker] Task ${task._id} marked as failed due to timeout`)
+      }
+    }
+  } catch (error) {
+    logger.error('[BulkAdWorker] Failed to recover stuck tasks:', error)
+  }
+}
+
+/**
  * 启动任务执行
  */
 export const startTaskExecution = async (taskId: string) => {
@@ -131,6 +189,9 @@ export const initBulkAdWorker = () => {
   }
   
   logger.info('[BulkAdWorker] Bulk ad worker initialized')
+  
+  // Run recovery on startup
+  recoverStuckTasks()
 }
 
 export default bulkAdWorker

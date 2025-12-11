@@ -192,8 +192,18 @@ export const publishDraft = async (draftId: string, userId?: string) => {
   const accountCount = draft.accounts?.length || 0
   const creativeGroupCount = draft.ad?.creativeGroupIds?.length || 1
   
-  // 🆕 生成任务名称：autoark{账户名}_{包名}_{日期}
-  const firstAccountName = draft.accounts?.[0]?.accountName?.replace(/[^a-zA-Z0-9\u4e00-\u9fa5-]/g, '') || 'unknown'
+  // 🆕 生成任务名称：autoark{用户名}_{包名}_{日期时间精确到秒}
+  // 获取用户名
+  let userName = 'unknown'
+  if (userId) {
+    try {
+      const User = require('../models/User').default
+      const user = await User.findById(userId).lean()
+      userName = user?.username?.replace(/[^a-zA-Z0-9\u4e00-\u9fa5-]/g, '') || 'unknown'
+    } catch (e) {
+      logger.warn('[BulkAd] Failed to get username')
+    }
+  }
   // 获取文案包名称
   let packageName = ''
   if (draft.ad?.copywritingPackageIds?.length > 0) {
@@ -205,8 +215,10 @@ export const publishDraft = async (draftId: string, userId?: string) => {
       logger.warn('[BulkAd] Failed to get copywriting package name')
     }
   }
-  const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '')
-  const taskName = `autoark${firstAccountName}${packageName ? '_' + packageName : ''}_${dateStr}`
+  // 日期时间精确到秒: YYYYMMDD_HHMMSS
+  const now = new Date()
+  const dateTimeStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`
+  const taskName = `autoark${userName}${packageName ? '_' + packageName : ''}_${dateTimeStr}`
   
   // 创建任务
   const task: any = new AdTask({
@@ -320,7 +332,7 @@ const executeTaskSynchronously = async (taskId: string) => {
       
       await executeTaskForAccount(taskId, item.accountId)
       
-      item.status = 'completed'
+      item.status = 'success'
       successCount++
       logger.info(`[BulkAd] Account ${item.accountId} completed`)
     } catch (error: any) {
@@ -332,14 +344,14 @@ const executeTaskSynchronously = async (taskId: string) => {
     
     // 更新进度
     const completedCount = task.items.filter((i: any) => 
-      i.status === 'completed' || i.status === 'failed'
+      i.status === 'success' || i.status === 'failed'
     ).length
     task.progress.percentage = Math.round((completedCount / task.items.length) * 100)
     await task.save()
   }
   
   // 任务完成
-  task.status = failCount === 0 ? 'completed' : (successCount === 0 ? 'failed' : 'partial')
+  task.status = failCount === 0 ? 'success' : (successCount === 0 ? 'failed' : 'partial_success')
   task.completedAt = new Date()
   task.results = {
     totalAccounts: task.items.length,
@@ -382,8 +394,8 @@ async function updateTaskProgressAtomic(taskId: string) {
   const percentage = items.length > 0 ? Math.round(((successCount + failedCount) / items.length) * 100) : 0
   
   const allDone = successCount + failedCount === items.length
-  // 使用 'completed' 作为成功状态，与前端 STATUS_MAP 保持一致
-  const status = allDone ? (failedCount === items.length ? 'failed' : successCount === items.length ? 'completed' : 'partial') : 'running'
+  // 使用 'success' 作为成功状态，与 Schema 保持一致
+  const status = allDone ? (failedCount === items.length ? 'failed' : successCount === items.length ? 'success' : 'partial_success') : 'processing'
   
   await AdTask.findByIdAndUpdate(taskId, {
     $set: {
@@ -1079,8 +1091,9 @@ export const retryFailedItems = async (taskId: string) => {
  * 重新执行任务（基于原任务配置创建新任务）
  * @param taskId 原任务ID
  * @param multiplier 执行倍率（创建多少个新任务）
+ * @param userId 当前用户ID（用于任务命名）
  */
-export const rerunTask = async (taskId: string, multiplier: number = 1) => {
+export const rerunTask = async (taskId: string, multiplier: number = 1, userId?: string) => {
   const originalTask: any = await AdTask.findById(taskId)
   if (!originalTask) {
     throw new Error('Task not found')
@@ -1093,14 +1106,34 @@ export const rerunTask = async (taskId: string, multiplier: number = 1) => {
   const config = originalTask.configSnapshot
   const safeMultiplier = Math.min(20, Math.max(1, multiplier))  // 限制 1-20
   
+  // 获取用户名
+  let userName = 'unknown'
+  if (userId) {
+    try {
+      const User = require('../models/User').default
+      const user = await User.findById(userId).lean()
+      userName = user?.username?.replace(/[^a-zA-Z0-9\u4e00-\u9fa5-]/g, '') || 'unknown'
+    } catch (e) {
+      logger.warn('[BulkAd] Failed to get username for rerun')
+    }
+  } else if (originalTask.createdBy) {
+    // 如果没有传入 userId，尝试从原任务获取
+    try {
+      const User = require('../models/User').default
+      const user = await User.findById(originalTask.createdBy).lean()
+      userName = user?.username?.replace(/[^a-zA-Z0-9\u4e00-\u9fa5-]/g, '') || 'unknown'
+    } catch (e) {
+      logger.warn('[BulkAd] Failed to get username from original task')
+    }
+  }
+  
   const newTasks: any[] = []
   
   for (let i = 0; i < safeMultiplier; i++) {
-    // 生成任务名称
-    const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '')
-    const timeStr = new Date().toTimeString().slice(0, 5).replace(':', '')
-    const firstAccountName = config.accounts?.[0]?.accountName?.replace(/[^a-zA-Z0-9\u4e00-\u9fa5-]/g, '') || 'unknown'
-    const taskName = `autoark${firstAccountName}_${dateStr}_${timeStr}${safeMultiplier > 1 ? `_${i + 1}` : ''}`
+    // 生成任务名称：日期时间精确到秒
+    const now = new Date()
+    const dateTimeStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`
+    const taskName = `autoark${userName}_${dateTimeStr}${safeMultiplier > 1 ? `_${i + 1}` : ''}`
     
     // 创建新任务
     const newTask: any = new AdTask({

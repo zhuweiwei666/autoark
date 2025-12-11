@@ -92,6 +92,7 @@ const request = async (method: 'GET' | 'POST', endpoint: string, dataOrParams: a
       const config: any = {
         method,
         url,
+        timeout: 60000, // 60s timeout
       }
 
       if (method === 'GET') {
