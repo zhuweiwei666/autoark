@@ -26,17 +26,27 @@ import { UserRole } from '../models/User'
  * - 普通成员：只看自己创建的
  */
 const getAssetFilter = (req: Request): any => {
-  if (!req.user) return { _id: null } // 未认证，返回空结果
+  if (!req.user) {
+    logger.warn('[BulkAd] No user in request, returning null filter')
+    return { _id: null } // 未认证，返回空结果
+  }
+  
+  logger.info(`[BulkAd] User role: ${req.user.role}, userId: ${req.user.userId}`)
   
   // 超级管理员看所有
-  if (req.user.role === UserRole.SUPER_ADMIN) return {}
+  if (req.user.role === UserRole.SUPER_ADMIN) {
+    logger.info('[BulkAd] User is SUPER_ADMIN, returning empty filter')
+    return {}
+  }
   
   // 组织管理员看本组织
   if (req.user.role === UserRole.ORG_ADMIN && req.user.organizationId) {
+    logger.info(`[BulkAd] User is ORG_ADMIN, filtering by org: ${req.user.organizationId}`)
     return { organizationId: req.user.organizationId }
   }
   
   // 普通成员只看自己创建的
+  logger.info(`[BulkAd] User is MEMBER, filtering by createdBy: ${req.user.userId}`)
   return { createdBy: req.user.userId }
 }
 

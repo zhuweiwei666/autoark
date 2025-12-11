@@ -27,17 +27,27 @@ import { UserRole } from '../models/User'
  * - 普通成员：只看自己上传的
  */
 const getMaterialFilter = (req: Request): any => {
-  if (!req.user) return { _id: null } // 未认证，返回空结果
+  if (!req.user) {
+    logger.warn('[Material] No user in request, returning null filter')
+    return { _id: null } // 未认证，返回空结果
+  }
+  
+  logger.info(`[Material] User role: ${req.user.role}, userId: ${req.user.userId}`)
   
   // 超级管理员看所有
-  if (req.user.role === UserRole.SUPER_ADMIN) return {}
+  if (req.user.role === UserRole.SUPER_ADMIN) {
+    logger.info('[Material] User is SUPER_ADMIN, returning empty filter')
+    return {}
+  }
   
   // 组织管理员看本组织
   if (req.user.role === UserRole.ORG_ADMIN && req.user.organizationId) {
+    logger.info(`[Material] User is ORG_ADMIN, filtering by org: ${req.user.organizationId}`)
     return { organizationId: req.user.organizationId }
   }
   
   // 普通成员只看自己上传的
+  logger.info(`[Material] User is MEMBER, filtering by createdBy: ${req.user.userId}`)
   return { createdBy: req.user.userId }
 }
 
@@ -623,9 +633,13 @@ export const deleteMaterialBatch = async (req: Request, res: Response) => {
  */
 export const getFolders = async (req: Request, res: Response) => {
   try {
-    const folders = await Material.distinct('folder', { status: 'uploaded' })
+    // 添加用户过滤
+    const userFilter = getMaterialFilter(req)
+    const baseFilter = { status: 'uploaded', ...userFilter }
+    
+    const folders = await Material.distinct('folder', baseFilter)
     const folderStats = await Material.aggregate([
-      { $match: { status: 'uploaded' } },
+      { $match: baseFilter },
       { $group: { _id: '$folder', count: { $sum: 1 } } },
       { $sort: { count: -1 } },
     ])
@@ -706,12 +720,16 @@ export const moveToFolder = async (req: Request, res: Response) => {
  */
 export const getFolderTree = async (req: Request, res: Response) => {
   try {
+    // 添加用户过滤
+    const userFilter = getMaterialFilter(req)
+    const baseFilter = { status: 'uploaded', ...userFilter }
+    
     // 获取所有文件夹
     const folders = await Folder.find().sort({ path: 1 }).lean()
     
-    // 获取每个文件夹的素材数量
+    // 获取每个文件夹的素材数量（仅统计用户可见的素材）
     const folderStats = await Material.aggregate([
-      { $match: { status: 'uploaded' } },
+      { $match: baseFilter },
       { $group: { _id: '$folder', count: { $sum: 1 } } },
     ])
     
