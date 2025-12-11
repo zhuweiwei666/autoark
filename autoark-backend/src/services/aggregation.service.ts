@@ -51,15 +51,24 @@ export async function refreshAggregation(date: string, forceRefresh = false): Pr
   const startTime = Date.now()
 
   try {
-    // 获取 Token
-    const tokenDoc = await FbToken.findOne({ status: 'active' })
-    if (!tokenDoc?.token) {
+    // 获取所有活跃 Token（用于后备）
+    const activeTokens = await FbToken.find({ status: 'active' }).lean()
+    if (activeTokens.length === 0) {
       logger.warn('[Aggregation] No active token found')
       return
     }
-    const token = tokenDoc.token
+    const defaultToken = activeTokens[0].token
+    
+    // 构建 Token 映射（fbUserId -> token）
+    const tokenMap = new Map<string, string>()
+    for (const t of activeTokens) {
+      if (t.fbUserId && t.token) {
+        tokenMap.set(t.fbUserId, t.token)
+      }
+    }
+    logger.info(`[Aggregation] Loaded ${activeTokens.length} active tokens`)
 
-    // 获取所有账户
+    // 获取所有活跃账户（包含 token 字段）
     const accounts = await Account.find({ status: 'active' }).lean()
     logger.info(`[Aggregation] Found ${accounts.length} active accounts`)
 
@@ -81,12 +90,19 @@ export async function refreshAggregation(date: string, forceRefresh = false): Pr
     // 遍历每个账户获取数据
     for (const account of accounts) {
       try {
+        // 使用账户关联的 token，如果没有则使用默认 token
+        const accountToken = (account as any).token || defaultToken
+        if (!accountToken) {
+          logger.warn(`[Aggregation] No token for account ${account.accountId}, skipping`)
+          continue
+        }
+        
         // 获取 campaign 级别数据（含国家维度）
         const insights = await fetchInsights(
           `act_${account.accountId}`,
           'campaign',
           undefined,
-          token,
+          accountToken,
           ['country'],
           { since: date, until: date }
         )
