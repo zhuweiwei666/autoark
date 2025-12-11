@@ -55,13 +55,12 @@ router.get('/daily', async (req: Request, res: Response) => {
 
 /**
  * GET /api/agg/today
- * 获取今日实时数据
+ * 获取今日数据（直接从数据库读取，超快）
  */
 router.get('/today', async (req: Request, res: Response) => {
   try {
     const today = dayjs().format('YYYY-MM-DD')
-    await refreshAggregation(today)
-    
+    // 🚀 直接读取，不刷新（刷新由后台定时任务完成）
     const data = await AggDaily.findOne({ date: today }).lean()
 
     res.json({
@@ -295,6 +294,7 @@ router.post('/refresh', async (req: Request, res: Response) => {
 /**
  * GET /api/agg/ai/snapshot
  * 获取 AI 使用的数据快照（所有维度）
+ * 🚀 直接读取，不刷新
  */
 router.get('/ai/snapshot', async (req: Request, res: Response) => {
   try {
@@ -302,10 +302,7 @@ router.get('/ai/snapshot', async (req: Request, res: Response) => {
     const yesterday = dayjs().subtract(1, 'day').format('YYYY-MM-DD')
     const sevenDaysAgo = dayjs().subtract(7, 'day').format('YYYY-MM-DD')
 
-    // 刷新最近数据
-    await refreshRecentDays()
-
-    // 并行获取所有数据
+    // 并行获取所有数据（直接从数据库读取）
     const [
       todaySummary,
       yesterdaySummary,

@@ -362,18 +362,13 @@ export async function refreshRecentDays(): Promise<void> {
   ])
 }
 
-// ==================== 查询接口 ====================
+// ==================== 查询接口（直接读取，不刷新） ====================
+// 🚀 刷新只在后台定时任务中进行，查询时直接返回数据库数据
 
 /**
  * 📊 获取日汇总数据
  */
 export async function getDailySummary(startDate: string, endDate: string) {
-  // 先刷新最近3天的数据
-  const today = dayjs().format('YYYY-MM-DD')
-  if (endDate >= dayjs().subtract(2, 'day').format('YYYY-MM-DD')) {
-    await refreshRecentDays()
-  }
-
   return AggDaily.find({ 
     date: { $gte: startDate, $lte: endDate } 
   }).sort({ date: -1 }).lean()
@@ -383,10 +378,6 @@ export async function getDailySummary(startDate: string, endDate: string) {
  * 🌍 获取国家数据
  */
 export async function getCountryData(date: string) {
-  if (isRecentDate(date)) {
-    await refreshAggregation(date)
-  }
-
   return AggCountry.find({ date })
     .sort({ spend: -1 })
     .lean()
@@ -396,10 +387,6 @@ export async function getCountryData(date: string) {
  * 💰 获取账户数据
  */
 export async function getAccountData(date: string) {
-  if (isRecentDate(date)) {
-    await refreshAggregation(date)
-  }
-
   return AggAccount.find({ date })
     .sort({ spend: -1 })
     .lean()
@@ -409,10 +396,6 @@ export async function getAccountData(date: string) {
  * 📈 获取广告系列数据
  */
 export async function getCampaignData(date: string, options?: { optimizer?: string; accountId?: string }) {
-  if (isRecentDate(date)) {
-    await refreshAggregation(date)
-  }
-
   const query: any = { date }
   if (options?.optimizer) query.optimizer = options.optimizer
   if (options?.accountId) query.accountId = options.accountId
@@ -426,10 +409,6 @@ export async function getCampaignData(date: string, options?: { optimizer?: stri
  * 👥 获取投手数据
  */
 export async function getOptimizerData(date: string) {
-  if (isRecentDate(date)) {
-    await refreshAggregation(date)
-  }
-
   return AggOptimizer.find({ date })
     .sort({ spend: -1 })
     .lean()
@@ -439,11 +418,6 @@ export async function getOptimizerData(date: string) {
  * 🎨 获取素材数据
  */
 export async function getMaterialData(date: string) {
-  if (isRecentDate(date)) {
-    // 素材数据需要单独的聚合逻辑（从 MaterialMetrics）
-    // TODO: 实现素材数据的实时刷新
-  }
-
   return AggMaterial.find({ date })
     .sort({ spend: -1 })
     .lean()
