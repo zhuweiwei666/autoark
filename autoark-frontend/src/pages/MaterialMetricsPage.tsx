@@ -8,6 +8,83 @@ import {
   type MaterialMetric,
 } from '../services/api'
 
+// 视频缩略图组件 - 从视频中提取首帧
+function VideoThumbnail({ src, className }: { src: string; className?: string }) {
+  const [thumbnail, setThumbnail] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
+  
+  useEffect(() => {
+    if (!src) {
+      setLoading(false)
+      return
+    }
+    
+    const video = document.createElement('video')
+    video.crossOrigin = 'anonymous'
+    video.muted = true
+    video.preload = 'metadata'
+    
+    video.onloadeddata = () => {
+      video.currentTime = 0.1 // 跳到0.1秒获取首帧
+    }
+    
+    video.onseeked = () => {
+      try {
+        const canvas = document.createElement('canvas')
+        canvas.width = video.videoWidth
+        canvas.height = video.videoHeight
+        const ctx = canvas.getContext('2d')
+        if (ctx) {
+          ctx.drawImage(video, 0, 0)
+          setThumbnail(canvas.toDataURL('image/jpeg', 0.8))
+        }
+      } catch (e) {
+        console.error('Failed to generate thumbnail:', e)
+      }
+      setLoading(false)
+    }
+    
+    video.onerror = () => {
+      setLoading(false)
+    }
+    
+    video.src = src
+    
+    return () => {
+      video.src = ''
+    }
+  }, [src])
+  
+  if (loading) {
+    return (
+      <div className={`flex items-center justify-center bg-slate-200 ${className}`}>
+        <div className="w-4 h-4 border-2 border-slate-400 border-t-transparent rounded-full animate-spin"></div>
+      </div>
+    )
+  }
+  
+  if (!thumbnail) {
+    return (
+      <div className={`flex items-center justify-center bg-slate-100 ${className}`}>
+        <span className="text-xl">🎬</span>
+      </div>
+    )
+  }
+  
+  return (
+    <div className={`relative ${className}`}>
+      <img src={thumbnail} alt="视频封面" className="w-full h-full object-cover" />
+      <div className="absolute inset-0 flex items-center justify-center">
+        <div className="w-6 h-6 bg-black/50 rounded-full flex items-center justify-center">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="white" viewBox="0 0 24 24" className="w-3 h-3 ml-0.5">
+            <path d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.985V5.653z" />
+          </svg>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // 获取今天的日期字符串 (YYYY-MM-DD)
 const getToday = () => {
   const today = new Date()
@@ -371,30 +448,33 @@ export default function MaterialMetricsPage() {
                         <tr key={m.materialKey || idx} className="hover:bg-blue-50/30 transition-colors">
 <td className="px-6 py-4">
                                             <div className="flex items-center gap-3">
-                                              {/* 优先使用本地存储 URL（R2），其次使用缩略图 URL */}
+                                              {/* 素材缩略图：视频使用 VideoThumbnail 组件，图片直接显示 */}
                                               {(m.localStorageUrl || m.thumbnailUrl || m.originalUrl) ? (
                                                 <a 
                                                   href={m.localStorageUrl || m.thumbnailUrl || m.originalUrl} 
                                                   target="_blank" 
                                                   rel="noopener noreferrer" 
                                                   className="flex-shrink-0 relative group"
-                                                  title="点击查看大图"
+                                                  title="点击查看素材"
                                                 >
-                                                  <img 
-                                                    src={m.localStorageUrl || m.thumbnailUrl || m.originalUrl} 
-                                                    alt={m.materialName || '素材预览'} 
-                                                    className="w-14 h-14 rounded-lg object-cover shadow-sm border border-slate-200 group-hover:scale-105 group-hover:shadow-md transition-all cursor-pointer"
-                                                    onError={(e) => {
-                                                      // 如果加载失败，尝试使用备用 URL
-                                                      const img = e.target as HTMLImageElement
-                                                      const fallbackUrl = m.thumbnailUrl || m.originalUrl
-                                                      if (img.src !== fallbackUrl && fallbackUrl) {
-                                                        img.src = fallbackUrl
-                                                      } else {
+                                                  {/* 视频素材：使用 VideoThumbnail 提取首帧 */}
+                                                  {m.materialType === 'video' && m.localStorageUrl ? (
+                                                    <VideoThumbnail 
+                                                      src={m.localStorageUrl} 
+                                                      className="w-14 h-14 rounded-lg overflow-hidden shadow-sm border border-slate-200 group-hover:scale-105 group-hover:shadow-md transition-all cursor-pointer"
+                                                    />
+                                                  ) : (
+                                                    /* 图片素材：直接显示图片 */
+                                                    <img 
+                                                      src={m.localStorageUrl || m.thumbnailUrl || m.originalUrl} 
+                                                      alt={m.materialName || '素材预览'} 
+                                                      className="w-14 h-14 rounded-lg object-cover shadow-sm border border-slate-200 group-hover:scale-105 group-hover:shadow-md transition-all cursor-pointer"
+                                                      onError={(e) => {
+                                                        const img = e.target as HTMLImageElement
                                                         img.src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%23cbd5e1"><path d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>'
-                                                      }
-                                                    }}
-                                                  />
+                                                      }}
+                                                    />
+                                                  )}
                                                   {/* 本地存储标识 */}
                                                   {m.localStorageUrl && (
                                                     <span className="absolute -top-1 -right-1 w-4 h-4 bg-emerald-500 rounded-full flex items-center justify-center text-white text-[8px] shadow">
