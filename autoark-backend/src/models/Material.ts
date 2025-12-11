@@ -128,6 +128,15 @@ const materialSchema = new mongoose.Schema(
     // 元数据
     createdBy: { type: String },
     notes: { type: String },
+    
+    // 🧪 自动测试
+    autoTestStatus: { 
+      type: String, 
+      enum: ['pending', 'tested', 'failed', 'skipped'],
+      default: 'pending'
+    },
+    autoTestAt: { type: Date },
+    autoTestError: { type: String },
   },
   {
     timestamps: true,
@@ -159,6 +168,9 @@ materialSchema.index({ 'facebook.videoId': 1 })
 materialSchema.index({ 'metrics.totalSpend': -1 })
 materialSchema.index({ 'metrics.avgRoas': -1 })
 materialSchema.index({ 'metrics.qualityScore': -1 })
+
+// 自动测试索引
+materialSchema.index({ autoTestStatus: 1, createdAt: -1 })
 
 // 虚拟字段：文件大小（友好格式）
 materialSchema.virtual('fileSizeFormatted').get(function() {

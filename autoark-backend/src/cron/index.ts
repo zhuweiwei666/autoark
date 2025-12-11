@@ -7,6 +7,7 @@ import { initMaterialMetricsCron } from './materialMetrics.cron'
 import { initSummaryAggregationCron } from './summaryAggregation.cron'
 import { initAggregationCron } from './aggregation.cron'
 import { initRuleCron } from './rule.cron'
+import { initMaterialAutoTestCron } from './materialAutoTest.cron'
 import logger from '../utils/logger'
 
 const initCronJobs = () => {
@@ -42,6 +43,9 @@ const initCronJobs = () => {
 
   // 🤖 自动化规则引擎 (Hourly + Daily)
   initRuleCron()
+
+  // 🧪 素材自动测试 (Every 10 minutes)
+  initMaterialAutoTestCron()
 
   logger.info('Cron jobs initialized')
 }
