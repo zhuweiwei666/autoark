@@ -10,6 +10,7 @@ export interface IFbToken extends mongoose.Document {
   expiresAt?: Date // token 过期时间（如果 Facebook API 返回）
   fbUserId?: string // Facebook 用户 ID
   fbUserName?: string // Facebook 用户名称
+  lastAuthAppId?: string // 上次授权使用的 Facebook App ID
   createdAt: Date
   updatedAt: Date
 }
@@ -30,6 +31,7 @@ const FbTokenSchema = new mongoose.Schema(
     expiresAt: { type: Date }, // token 过期时间
     fbUserId: { type: String }, // Facebook 用户 ID
     fbUserName: { type: String }, // Facebook 用户名称
+    lastAuthAppId: { type: String }, // 上次授权使用的 Facebook App ID
     createdAt: { type: Date, default: Date.now },
     updatedAt: { type: Date, default: Date.now },
   },
