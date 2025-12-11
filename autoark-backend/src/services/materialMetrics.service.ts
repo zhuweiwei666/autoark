@@ -298,33 +298,17 @@ export const aggregateMaterialMetrics = async (date: string): Promise<{
     // 5. 保存到数据库
     for (const [materialKey, agg] of materialAggregation) {
       try {
-        // 🎯 优先使用聚合时已确定的 materialId（精准归因）
-        let materialId = agg.materialId
-        let materialName = agg.creativeName
+        // 🎯 使用聚合时已确定的 materialId（精准归因）
+        const materialId = agg.materialId
+        if (!materialId) continue  // 没有 materialId 的跳过
         
-        // 如果没有 materialId，尝试反查（兼容旧数据）
-        if (!materialId) {
-          let materialDoc = null
-          if (agg.imageHash) {
-            materialDoc = await Material.findOne({
-              $or: [
-                { 'facebook.imageHash': agg.imageHash },
-                { 'facebookMappings.imageHash': agg.imageHash },
-              ]
-            }).lean()
-          } else if (agg.videoId) {
-            materialDoc = await Material.findOne({
-              $or: [
-                { 'facebook.videoId': agg.videoId },
-                { 'facebookMappings.videoId': agg.videoId },
-              ]
-            }).lean()
-          }
-          if (materialDoc) {
-            materialId = (materialDoc as any)._id.toString()
-            materialName = materialName || (materialDoc as any).name
-          }
+        // 🎯 从素材库获取素材信息（确保名称正确）
+        const materialDoc = await Material.findById(materialId).lean()
+        if (!materialDoc) {
+          logger.warn(`[MaterialMetrics] Material ${materialId} not found in library, skipping`)
+          continue
         }
+        const materialName = (materialDoc as any).name
         
         // 计算派生指标
         const ctr = agg.impressions > 0 ? (agg.clicks / agg.impressions) * 100 : 0
