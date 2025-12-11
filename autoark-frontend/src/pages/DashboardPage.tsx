@@ -1,18 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
-import { getCoreMetrics, getSpendTrend, getCampaignRanking, getAccountRanking, getDashboardTrend } from '../services/api'
-
-// 获取今天的日期字符串 (YYYY-MM-DD)
-const getToday = () => {
-  const today = new Date()
-  return today.toISOString().split('T')[0]
-}
-
-// 获取7天前的日期字符串
-const getSevenDaysAgo = () => {
-  const date = new Date()
-  date.setDate(date.getDate() - 7)
-  return date.toISOString().split('T')[0]
-}
+// 🚀 使用预聚合表 API，响应速度更快
+import { getAggCoreMetrics, getAggTrend, getAggCampaignRanking, getAggAccountRanking } from '../services/api'
 
 // 缓存 key
 const getCacheKey = () => `dashboard_7days`
@@ -44,9 +32,6 @@ const saveToCache = (data: any) => {
 }
 
 export default function DashboardPage() {
-  const today = getToday()
-  const sevenDaysAgo = getSevenDaysAgo()
-
   // 数据状态
   const [coreMetrics, setCoreMetrics] = useState<any>(null)
   const [spendTrend, setSpendTrend] = useState<any[]>([])
@@ -61,22 +46,23 @@ export default function DashboardPage() {
   const campaignRankingChartRef = useRef<any>(null)
   const accountRankingChartRef = useRef<any>(null)
 
-  // 从 API 加载数据
+  // 🚀 使用预聚合表 API，响应速度更快
   const fetchData = async () => {
     setIsRefreshing(true)
+    const startTime = performance.now()
     try {
-      const [metricsRes, trendRes, roasTrendRes, campaignRes, accountRes] = await Promise.all([
-        getCoreMetrics(sevenDaysAgo, today),
-        getSpendTrend(sevenDaysAgo, today),
-        getDashboardTrend(7),  // 获取 ROAS 趋势
-        getCampaignRanking(10, sevenDaysAgo, today),
-        getAccountRanking(10, sevenDaysAgo, today)
+      // 并行获取所有数据（预聚合表，超快）
+      const [metricsRes, trendRes, campaignRes, accountRes] = await Promise.all([
+        getAggCoreMetrics(),
+        getAggTrend(7),
+        getAggCampaignRanking(10),
+        getAggAccountRanking(10)
       ])
 
       const data = {
         coreMetrics: metricsRes.data,
         spendTrend: trendRes.data || [],
-        roasTrend: roasTrendRes.data || [],
+        roasTrend: trendRes.data || [],  // 趋势数据包含 ROAS
         campaignRanking: campaignRes.data || [],
         accountRanking: accountRes.data || [],
       }
@@ -89,6 +75,9 @@ export default function DashboardPage() {
       
       // 保存到缓存
       saveToCache(data)
+      
+      const duration = (performance.now() - startTime).toFixed(0)
+      console.log(`🚀 Dashboard loaded in ${duration}ms (using aggregation tables)`)
     } catch (error: any) {
       console.error('Failed to load dashboard data:', error)
     } finally {
@@ -151,7 +140,7 @@ export default function DashboardPage() {
             labels: formattedLabels,
             datasets: [{
               label: '消耗 ($)',
-              data: spendTrend.map(d => d.spend || 0),
+              data: spendTrend.map(d => d.totalSpend || d.spend || 0),
               borderColor: 'rgb(99, 102, 241)',
               backgroundColor: 'rgba(99, 102, 241, 0.1)',
               tension: 0.4,

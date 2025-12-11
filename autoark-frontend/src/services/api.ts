@@ -1382,3 +1382,150 @@ export async function chatWithAI(message: string, context?: any): Promise<{
   if (!response.ok) throw new Error('Failed to chat with AI')
   return response.json()
 }
+
+// ==================== 🚀 预聚合表 API（高性能） ====================
+
+/**
+ * 获取今日汇总数据（预聚合表，超快）
+ */
+export async function getAggToday(): Promise<{ success: boolean; data: any }> {
+  const response = await fetch(`${API_BASE_URL}/api/agg/today`)
+  if (!response.ok) throw new Error('Failed to fetch today data')
+  return response.json()
+}
+
+/**
+ * 获取每日趋势数据（预聚合表）
+ */
+export async function getAggDaily(startDate?: string, endDate?: string): Promise<{ success: boolean; data: any[]; meta: any }> {
+  const params = new URLSearchParams()
+  if (startDate) params.append('startDate', startDate)
+  if (endDate) params.append('endDate', endDate)
+  
+  const response = await fetch(`${API_BASE_URL}/api/agg/daily?${params.toString()}`)
+  if (!response.ok) throw new Error('Failed to fetch daily data')
+  return response.json()
+}
+
+/**
+ * 获取核心指标（使用预聚合表，最近3天实时更新）
+ */
+export async function getAggCoreMetrics(): Promise<{ success: boolean; data: CoreMetrics }> {
+  const today = new Date().toISOString().split('T')[0]
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+  
+  // 并行获取今日、昨日和7天数据
+  const [todayRes, dailyRes] = await Promise.all([
+    fetch(`${API_BASE_URL}/api/agg/today`),
+    fetch(`${API_BASE_URL}/api/agg/daily?startDate=${sevenDaysAgo}&endDate=${today}`)
+  ])
+  
+  const todayData = await todayRes.json()
+  const dailyData = await dailyRes.json()
+  
+  // 找出昨日数据
+  const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+  const yesterdayData = (dailyData.data || []).find((d: any) => d.date === yesterday) || {}
+  
+  // 计算7天总计
+  const sevenDaysSummary = (dailyData.data || []).reduce((acc: any, day: any) => ({
+    spend: acc.spend + (day.spend || 0),
+    impressions: acc.impressions + (day.impressions || 0),
+    clicks: acc.clicks + (day.clicks || 0),
+    installs: acc.installs + (day.installs || 0),
+  }), { spend: 0, impressions: 0, clicks: 0, installs: 0 })
+  
+  const dayCount = (dailyData.data || []).length || 1
+  sevenDaysSummary.avgDailySpend = sevenDaysSummary.spend / dayCount
+  
+  const mapData = (d: any) => ({
+    spend: d?.spend || 0,
+    impressions: d?.impressions || 0,
+    clicks: d?.clicks || 0,
+    installs: d?.installs || 0,
+    ctr: (d?.ctr || 0) / 100,
+    cpm: d?.cpm || 0,
+    cpc: d?.cpc || 0,
+    cpi: d?.cpi || 0,
+    roas: d?.roas || 0,
+  })
+  
+  return {
+    success: true,
+    data: {
+      today: mapData(todayData.data),
+      yesterday: mapData(yesterdayData),
+      sevenDays: sevenDaysSummary,
+    }
+  }
+}
+
+/**
+ * 获取消耗和 ROAS 趋势（预聚合表）
+ */
+export async function getAggTrend(days: number = 7): Promise<{ success: boolean; data: any[] }> {
+  const today = new Date().toISOString().split('T')[0]
+  const startDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+  
+  const response = await fetch(`${API_BASE_URL}/api/agg/daily?startDate=${startDate}&endDate=${today}`)
+  const result = await response.json()
+  
+  // 转换为趋势格式
+  const data = (result.data || []).map((d: any) => ({
+    date: d.date,
+    totalSpend: d.spend,
+    totalRevenue: d.revenue,
+    roas: d.roas,
+    impressions: d.impressions,
+    clicks: d.clicks,
+  })).sort((a: any, b: any) => a.date.localeCompare(b.date))
+  
+  return { success: true, data }
+}
+
+/**
+ * 获取广告系列排行（预聚合表）
+ */
+export async function getAggCampaignRanking(limit: number = 10): Promise<{ success: boolean; data: any[] }> {
+  const today = new Date().toISOString().split('T')[0]
+  
+  const response = await fetch(`${API_BASE_URL}/api/agg/campaigns?date=${today}`)
+  const result = await response.json()
+  
+  // 取 Top N 并转换格式
+  const data = (result.data || [])
+    .slice(0, limit)
+    .map((c: any) => ({
+      campaignId: c.campaignId,
+      campaignName: c.campaignName,
+      accountName: c.accountName,
+      spend: c.spend,
+      roas: c.roas,
+      status: c.status,
+    }))
+  
+  return { success: true, data }
+}
+
+/**
+ * 获取账户排行（预聚合表）
+ */
+export async function getAggAccountRanking(limit: number = 10): Promise<{ success: boolean; data: any[] }> {
+  const today = new Date().toISOString().split('T')[0]
+  
+  const response = await fetch(`${API_BASE_URL}/api/agg/accounts?date=${today}`)
+  const result = await response.json()
+  
+  // 取 Top N
+  const data = (result.data || [])
+    .slice(0, limit)
+    .map((a: any) => ({
+      accountId: a.accountId,
+      accountName: a.accountName,
+      spend: a.spend,
+      roas: a.roas,
+      campaigns: a.campaigns,
+    }))
+  
+  return { success: true, data }
+}
