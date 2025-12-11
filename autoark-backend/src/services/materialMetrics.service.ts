@@ -118,10 +118,11 @@ export const aggregateMaterialMetrics = async (date: string): Promise<{
     }
     logger.info(`[MaterialMetrics] Loaded ${adIdToMaterialId.size} ad-material mappings`)
     
-    // 1.3 获取所有 Material（用于 hash 反查）
+    // 1.3 获取所有 Material（用于 hash 反查 + 名称反查）
     const materials = await Material.find({ status: 'uploaded' }).lean()
     const materialByHash = new Map<string, any>()
     const materialByVideoId = new Map<string, any>()
+    const materialByName = new Map<string, any>()  // 🆕 按名称查找（用于命名解析兜底）
     for (const m of materials) {
       const mat = m as any
       // 通过 Facebook 映射查找
@@ -132,8 +133,14 @@ export const aggregateMaterialMetrics = async (date: string): Promise<{
         if (mapping.imageHash) materialByHash.set(mapping.imageHash, mat)
         if (mapping.videoId) materialByVideoId.set(mapping.videoId, mat)
       }
+      // 🆕 通过名称查找（用于命名解析兜底）
+      if (mat.name) {
+        materialByName.set(mat.name, mat)
+        // 也支持小写匹配
+        materialByName.set(mat.name.toLowerCase(), mat)
+      }
     }
-    logger.info(`[MaterialMetrics] Built material lookup: ${materialByHash.size} by hash, ${materialByVideoId.size} by videoId`)
+    logger.info(`[MaterialMetrics] Built material lookup: ${materialByHash.size} by hash, ${materialByVideoId.size} by videoId, ${materialByName.size} by name`)
     
     // 2. 构建 adId -> 素材信息 的映射
     // 🎯 关键：优先使用 Ad.materialId（直接归因）
@@ -174,10 +181,27 @@ export const aggregateMaterialMetrics = async (date: string): Promise<{
         materialId = creativeDetail.materialId.toString()
         matchType = 'direct'
       }
-      // ❌ 不再通过 hash 反查，只统计有明确 AutoArk 归因的广告
+      // 4️⃣ 🆕 兜底：从广告名称解析素材名（混合方案）
+      // 广告命名格式：{materialName}_{datetime} 如 pilipa_20251211_1430
+      else if ((ad as any).name) {
+        const adName = (ad as any).name as string
+        // 提取第一个下划线前的部分作为素材名
+        const possibleMaterialName = adName.split('_')[0]
+        if (possibleMaterialName && materialByName.has(possibleMaterialName)) {
+          const foundMaterial = materialByName.get(possibleMaterialName)
+          materialId = foundMaterial._id.toString()
+          matchType = 'fallback'
+        }
+        // 也尝试小写匹配
+        else if (possibleMaterialName && materialByName.has(possibleMaterialName.toLowerCase())) {
+          const foundMaterial = materialByName.get(possibleMaterialName.toLowerCase())
+          materialId = foundMaterial._id.toString()
+          matchType = 'fallback'
+        }
+      }
       
-      // 🎯 核心变更：只有明确关联到素材库素材的广告才统计
-      if (materialId && matchType === 'direct') {
+      // 🎯 混合方案：直接映射 + 命名解析兜底
+      if (materialId && (matchType === 'direct' || matchType === 'fallback')) {
         adCreativeMap.set(ad.adId, {
           materialId,
           ...creativeInfo,
