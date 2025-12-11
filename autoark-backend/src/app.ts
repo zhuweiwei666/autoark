@@ -1,6 +1,5 @@
-import dotenv from 'dotenv'
-// 🔥 必须在所有其他 import 之前加载环境变量
-dotenv.config()
+// 🔥 必须第一个导入，确保环境变量加载
+import './config/env'
 
 import express, { Request, Response, NextFunction } from 'express'
 import cors from 'cors'
