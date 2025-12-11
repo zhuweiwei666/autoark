@@ -515,9 +515,9 @@ export default function BulkAdCreatePage() {
   const loadAssets = async () => {
     try {
       const [tpRes, cpRes, cgRes] = await Promise.all([
-        fetch(`${API_BASE}/bulk-ad/targeting-packages`),
-        fetch(`${API_BASE}/bulk-ad/copywriting-packages`),
-        fetch(`${API_BASE}/bulk-ad/creative-groups`),
+        authFetch(`${API_BASE}/bulk-ad/targeting-packages`),
+        authFetch(`${API_BASE}/bulk-ad/copywriting-packages`),
+        authFetch(`${API_BASE}/bulk-ad/creative-groups`),
       ])
       const tpData = await tpRes.json()
       const cpData = await cpRes.json()

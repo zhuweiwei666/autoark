@@ -18,12 +18,13 @@ import { facebookClient } from '../integration/facebook/facebookClient'
 import { parseProductUrl } from '../services/productMapping.service'
 import { getOrgFilter } from '../middlewares/auth'
 import { UserRole } from '../models/User'
+import mongoose from 'mongoose'
 
 /**
  * 获取资产过滤条件（文案包/定向包/创意组等）
  * - 超级管理员：看所有
- * - 组织管理员：看本组织
- * - 普通成员：只看自己创建的
+ * - 组织管理员：看本组织 + 公共数据
+ * - 普通成员：看自己创建的 + 公共数据
  */
 const getAssetFilter = (req: Request): any => {
   if (!req.user) {
@@ -36,25 +37,35 @@ const getAssetFilter = (req: Request): any => {
     return {}
   }
   
-  // 组织管理员看本组织 + 公共数据（无 createdBy）
+  // 将 userId 转换为 ObjectId（如果是有效的 ObjectId 字符串）
+  // 这样可以同时匹配字符串类型和 ObjectId 类型的 createdBy
+  const userIdConditions: any[] = [{ createdBy: req.user.userId }]
+  if (mongoose.Types.ObjectId.isValid(req.user.userId)) {
+    userIdConditions.push({ createdBy: new mongoose.Types.ObjectId(req.user.userId) })
+  }
+  
+  // 公共数据条件（无 createdBy）
+  const publicDataConditions = [
+    { createdBy: { $exists: false } },
+    { createdBy: null },
+    { createdBy: '' }
+  ]
+  
+  // 组织管理员看本组织 + 公共数据
   if (req.user.role === UserRole.ORG_ADMIN && req.user.organizationId) {
     return {
       $or: [
         { organizationId: req.user.organizationId },
-        { createdBy: { $exists: false } },
-        { createdBy: null },
-        { createdBy: '' }
+        ...publicDataConditions
       ]
     }
   }
   
-  // 普通成员看自己创建的 + 公共数据（无 createdBy）
+  // 普通成员看自己创建的 + 公共数据
   return {
     $or: [
-      { createdBy: req.user.userId },
-      { createdBy: { $exists: false } },
-      { createdBy: null },
-      { createdBy: '' }
+      ...userIdConditions,
+      ...publicDataConditions
     ]
   }
 }

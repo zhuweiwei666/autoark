@@ -15,6 +15,7 @@ import {
 } from '../services/materialTracking.service'
 import logger from '../utils/logger'
 import { UserRole } from '../models/User'
+import mongoose from 'mongoose'
 
 /**
  * 素材管理控制器
@@ -23,8 +24,8 @@ import { UserRole } from '../models/User'
 /**
  * 获取素材过滤条件
  * - 超级管理员：看所有
- * - 组织管理员：看本组织
- * - 普通成员：只看自己上传的
+ * - 组织管理员：看本组织 + 公共数据
+ * - 普通成员：看自己上传的 + 公共数据
  */
 const getMaterialFilter = (req: Request): any => {
   if (!req.user) {
@@ -37,25 +38,34 @@ const getMaterialFilter = (req: Request): any => {
     return {}
   }
   
-  // 组织管理员看本组织 + 公共数据（无 createdBy）
+  // 将 userId 转换为 ObjectId（如果是有效的 ObjectId 字符串）
+  const userIdConditions: any[] = [{ createdBy: req.user.userId }]
+  if (mongoose.Types.ObjectId.isValid(req.user.userId)) {
+    userIdConditions.push({ createdBy: new mongoose.Types.ObjectId(req.user.userId) })
+  }
+  
+  // 公共数据条件（无 createdBy）
+  const publicDataConditions = [
+    { createdBy: { $exists: false } },
+    { createdBy: null },
+    { createdBy: '' }
+  ]
+  
+  // 组织管理员看本组织 + 公共数据
   if (req.user.role === UserRole.ORG_ADMIN && req.user.organizationId) {
     return {
       $or: [
         { organizationId: req.user.organizationId },
-        { createdBy: { $exists: false } },
-        { createdBy: null },
-        { createdBy: '' }
+        ...publicDataConditions
       ]
     }
   }
   
-  // 普通成员看自己上传的 + 公共数据（无 createdBy）
+  // 普通成员看自己上传的 + 公共数据
   return {
     $or: [
-      { createdBy: req.user.userId },
-      { createdBy: { $exists: false } },
-      { createdBy: null },
-      { createdBy: '' }
+      ...userIdConditions,
+      ...publicDataConditions
     ]
   }
 }
