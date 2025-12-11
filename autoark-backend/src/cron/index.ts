@@ -9,6 +9,7 @@ import { initAggregationCron } from './aggregation.cron'
 import { initRuleCron } from './rule.cron'
 import { initMaterialAutoTestCron } from './materialAutoTest.cron'
 import { initAiSuggestionCron } from './aiSuggestion.cron'
+import { initAccountSyncCron } from './accountSync.cron'
 import logger from '../utils/logger'
 
 const initCronJobs = () => {
@@ -50,6 +51,9 @@ const initCronJobs = () => {
 
   // 🤖 AI 优化建议 (Hourly)
   initAiSuggestionCron()
+
+  // 📊 账户同步 (Hourly + Startup)
+  initAccountSyncCron()
 
   logger.info('Cron jobs initialized')
 }
