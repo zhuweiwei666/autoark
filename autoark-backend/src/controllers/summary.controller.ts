@@ -223,6 +223,8 @@ router.get('/accounts', async (req: Request, res: Response) => {
           roas: { $cond: [{ $gt: ['$spend', 0] }, { $divide: ['$revenue', '$spend'] }, 0] },
           ctr: { $cond: [{ $gt: ['$impressions', 0] }, { $multiply: [{ $divide: ['$clicks', '$impressions'] }, 100] }, 0] },
           periodSpend: '$spend',  // 兼容前端字段名
+          name: '$accountName',   // 兼容前端字段名
+          id: '$accountId',       // 兼容前端字段名
         }
       },
       { $sort: { [sortBy === 'periodSpend' ? 'spend' : sortBy]: sortOrder } },
