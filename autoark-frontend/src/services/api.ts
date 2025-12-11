@@ -1325,7 +1325,7 @@ export async function analyzeMaterialWithAI(materialId: string): Promise<{
   }
   error?: string
 }> {
-  const response = await fetch(`${API_BASE_URL}/api/ai/materials/${materialId}/analyze`)
+  const response = await fetch(`${API_BASE_URL}/api/agent/materials/${materialId}/analyze`)
   if (!response.ok) throw new Error('Failed to analyze material')
   return response.json()
 }
@@ -1363,7 +1363,7 @@ export async function getAIMaterialRecommendations(): Promise<{
     analyzedAt?: string
   }
 }> {
-  const response = await fetch(`${API_BASE_URL}/api/ai/materials/recommendations`)
+  const response = await fetch(`${API_BASE_URL}/api/agent/materials/recommendations`)
   if (!response.ok) throw new Error('Failed to get AI recommendations')
   return response.json()
 }
@@ -1374,7 +1374,7 @@ export async function chatWithAI(message: string, context?: any): Promise<{
   data?: { response: string }
   error?: string
 }> {
-  const response = await fetch(`${API_BASE_URL}/api/ai/chat`, {
+  const response = await fetch(`${API_BASE_URL}/api/agent/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ message, context }),
