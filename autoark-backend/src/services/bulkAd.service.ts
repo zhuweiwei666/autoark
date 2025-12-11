@@ -416,9 +416,25 @@ export const executeTaskForAccount = async (
   })
   
   try {
+    // ==================== 0. 获取定向配置（先获取，用于名称生成） ====================
+    let targeting: any = {}
+    let targetingName = ''  // 定向包名称，用于名称模板
+    if (config.adset.targetingPackageId) {
+      const targetingPackage: any = await TargetingPackage.findById(config.adset.targetingPackageId)
+      if (targetingPackage) {
+        targetingName = targetingPackage.name || ''
+        if (targetingPackage.toFacebookTargeting) {
+          targeting = targetingPackage.toFacebookTargeting()
+        }
+      }
+    } else if (config.adset.inlineTargeting) {
+      targeting = config.adset.inlineTargeting
+    }
+    
     // ==================== 1. 创建 Campaign ====================
     const campaignName = generateName(config.campaign.nameTemplate, {
       accountName: accountConfig.accountName,
+      targetingName,  // 添加定向包名称变量
       date: new Date().toISOString().slice(0, 10),
     })
     
@@ -447,21 +463,14 @@ export const executeTaskForAccount = async (
       'items.$.result.campaignName': campaignName,
     })
     
-    // ==================== 2. 获取定向配置 ====================
-    let targeting: any = {}
-    if (config.adset.targetingPackageId) {
-      const targetingPackage: any = await TargetingPackage.findById(config.adset.targetingPackageId)
-      if (targetingPackage && targetingPackage.toFacebookTargeting) {
-        targeting = targetingPackage.toFacebookTargeting()
-      }
-    } else if (config.adset.inlineTargeting) {
-      targeting = config.adset.inlineTargeting
-    }
+    // ==================== 2. 使用已获取的定向配置 ====================
+    // (定向配置已在步骤0获取)
     
     // ==================== 3. 创建 AdSet ====================
     const adsetName = generateName(config.adset.nameTemplate, {
       accountName: accountConfig.accountName,
       campaignName,
+      targetingName,  // 添加定向包名称变量
       date: new Date().toISOString().slice(0, 10),
     })
     

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import Loading from '../components/Loading'
+import { useAuth } from '../contexts/AuthContext'
 
 const API_BASE = '/api'
 
@@ -34,6 +35,7 @@ interface AuthStatus {
 export default function BulkAdCreatePage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
+  const { user } = useAuth()  // 获取当前用户信息
   const [currentStep, setCurrentStep] = useState(1)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -105,6 +107,21 @@ export default function BulkAdCreatePage() {
     copywritingMode: 'SHARED',
     schedule: 'IMMEDIATE',
   })
+
+  // 🎯 自动生成系列名称模板
+  // 格式: autoark用户名_渠道_文案包产品名_定向包名_{accountName}_{date}
+  // 定向包名称实时更新：如果已选择定向包，显示实际名称；否则显示变量占位符
+  useEffect(() => {
+    const username = user?.username || 'user'
+    const channel = 'fb'  // 渠道固定为 fb
+    const productName = selectedProduct?.product?.name || selectedProduct?.name || '产品名'
+    const targetingPkg = targetingPackages.find((p: any) => p._id === adset.targetingPackageId)
+    // 如果已选择定向包，使用实际名称；否则使用变量占位符（将在后端替换）
+    const targetingName = targetingPkg?.name || '{targetingName}'
+    
+    const newTemplate = `${username}_${channel}_${productName}_${targetingName}_{accountName}_{date}`
+    setCampaign(prev => ({ ...prev, nameTemplate: newTemplate }))
+  }, [user?.username, selectedProduct, adset.targetingPackageId, targetingPackages])
   
   // 检查 URL 参数（OAuth 回调）
   useEffect(() => {
@@ -1176,7 +1193,7 @@ export default function BulkAdCreatePage() {
               <div className="grid grid-cols-2 gap-6">
                 <div><label className="block text-sm text-slate-600 mb-1">系列名称模板</label>
                   <input type="text" value={campaign.nameTemplate} onChange={(e) => setCampaign({...campaign, nameTemplate: e.target.value})} className="w-full px-3 py-2 border rounded-lg" />
-                  <p className="text-xs text-slate-400 mt-1">支持变量: {'{accountName}'}, {'{date}'}</p></div>
+                  <p className="text-xs text-slate-400 mt-1">自动填入: 用户名_渠道_产品名；变量: {'{targetingName}'}, {'{accountName}'}, {'{date}'}</p></div>
                 <div><label className="block text-sm text-slate-600 mb-1">推广目标</label>
                   <select value={campaign.objective} onChange={(e) => setCampaign({...campaign, objective: e.target.value})} className="w-full px-3 py-2 border rounded-lg">
                     <option value="OUTCOME_SALES">销量</option><option value="OUTCOME_LEADS">潜在客户</option><option value="OUTCOME_TRAFFIC">流量</option>
