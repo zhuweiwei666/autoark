@@ -238,10 +238,14 @@ export default function MaterialMetricsPage() {
     }
   }
 
-  // 加载国家列表
+  // 加载国家列表（组件挂载时和日期变化时）
   useEffect(() => {
     loadCountries()
-  }, [filters.startDate, filters.endDate])
+  }, []) // 组件挂载时加载一次
+  
+  useEffect(() => {
+    loadCountries()
+  }, [filters.startDate, filters.endDate]) // 日期变化时重新加载
 
   // 根据当前 tab 加载数据
   useEffect(() => {
