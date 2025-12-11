@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import DatePicker from '../components/DatePicker'
-import { getCoreMetrics, getSpendTrend, getCampaignRanking, getAccountRanking } from '../services/api'
+import { getCoreMetrics, getSpendTrend, getCampaignRanking, getAccountRanking, getDashboardTrend } from '../services/api'
 
 // 获取今天的日期字符串 (YYYY-MM-DD)
 const getToday = () => {
@@ -16,14 +15,18 @@ const getSevenDaysAgo = () => {
 }
 
 // 缓存 key
-const getCacheKey = (startDate: string, endDate: string) => `dashboard_${startDate}_${endDate}`
+const getCacheKey = () => `dashboard_7days`
 
 // 从缓存加载数据
-const loadFromCache = (startDate: string, endDate: string) => {
+const loadFromCache = () => {
   try {
-    const cached = localStorage.getItem(getCacheKey(startDate, endDate))
+    const cached = localStorage.getItem(getCacheKey())
     if (cached) {
-      return JSON.parse(cached)
+      const data = JSON.parse(cached)
+      // 检查缓存是否过期（5分钟）
+      if (data.timestamp && Date.now() - data.timestamp < 5 * 60 * 1000) {
+        return data
+      }
     }
   } catch (e) {
     console.error('Failed to load from cache:', e)
@@ -32,9 +35,9 @@ const loadFromCache = (startDate: string, endDate: string) => {
 }
 
 // 保存到缓存
-const saveToCache = (startDate: string, endDate: string, data: any) => {
+const saveToCache = (data: any) => {
   try {
-    localStorage.setItem(getCacheKey(startDate, endDate), JSON.stringify(data))
+    localStorage.setItem(getCacheKey(), JSON.stringify({ ...data, timestamp: Date.now() }))
   } catch (e) {
     console.error('Failed to save to cache:', e)
   }
@@ -44,21 +47,17 @@ export default function DashboardPage() {
   const today = getToday()
   const sevenDaysAgo = getSevenDaysAgo()
 
-  // 日期筛选 - 默认最近7天
-  const [filters, setFilters] = useState({
-    startDate: sevenDaysAgo,
-    endDate: today
-  })
-
   // 数据状态
   const [coreMetrics, setCoreMetrics] = useState<any>(null)
   const [spendTrend, setSpendTrend] = useState<any[]>([])
+  const [roasTrend, setRoasTrend] = useState<any[]>([])
   const [campaignRanking, setCampaignRanking] = useState<any[]>([])
   const [accountRanking, setAccountRanking] = useState<any[]>([])
   const [isRefreshing, setIsRefreshing] = useState(false)
 
   // 图表引用
   const spendTrendChartRef = useRef<any>(null)
+  const roasTrendChartRef = useRef<any>(null)
   const campaignRankingChartRef = useRef<any>(null)
   const accountRankingChartRef = useRef<any>(null)
 
@@ -66,27 +65,30 @@ export default function DashboardPage() {
   const fetchData = async () => {
     setIsRefreshing(true)
     try {
-      const [metricsRes, trendRes, campaignRes, accountRes] = await Promise.all([
-        getCoreMetrics(filters.startDate, filters.endDate),
-        getSpendTrend(filters.startDate, filters.endDate),
-        getCampaignRanking(10, filters.startDate, filters.endDate),
-        getAccountRanking(10, filters.startDate, filters.endDate)
+      const [metricsRes, trendRes, roasTrendRes, campaignRes, accountRes] = await Promise.all([
+        getCoreMetrics(sevenDaysAgo, today),
+        getSpendTrend(sevenDaysAgo, today),
+        getDashboardTrend(7),  // 获取 ROAS 趋势
+        getCampaignRanking(10, sevenDaysAgo, today),
+        getAccountRanking(10, sevenDaysAgo, today)
       ])
 
       const data = {
         coreMetrics: metricsRes.data,
         spendTrend: trendRes.data || [],
+        roasTrend: roasTrendRes.data || [],
         campaignRanking: campaignRes.data || [],
         accountRanking: accountRes.data || [],
       }
       
       setCoreMetrics(data.coreMetrics)
       setSpendTrend(data.spendTrend)
+      setRoasTrend(data.roasTrend)
       setCampaignRanking(data.campaignRanking)
       setAccountRanking(data.accountRanking)
       
       // 保存到缓存
-      saveToCache(filters.startDate, filters.endDate, data)
+      saveToCache(data)
     } catch (error: any) {
       console.error('Failed to load dashboard data:', error)
     } finally {
@@ -101,17 +103,17 @@ export default function DashboardPage() {
 
   // 初始加载 - 优先使用缓存
   useEffect(() => {
-    const cached = loadFromCache(filters.startDate, filters.endDate)
+    const cached = loadFromCache()
     if (cached) {
       setCoreMetrics(cached.coreMetrics)
       setSpendTrend(cached.spendTrend)
+      setRoasTrend(cached.roasTrend || [])
       setCampaignRanking(cached.campaignRanking)
       setAccountRanking(cached.accountRanking)
-    } else {
-      // 无缓存时才请求
-      fetchData()
     }
-  }, [filters.startDate, filters.endDate])
+    // 始终获取最新数据
+    fetchData()
+  }, [])
 
   // 渲染图表
   useEffect(() => {
@@ -174,6 +176,56 @@ export default function DashboardPage() {
                 ticks: { 
                   color: '#94a3b8',
                   callback: (value: any) => '$' + value.toFixed(0)
+                },
+                grid: { color: 'rgba(148, 163, 184, 0.1)' },
+                beginAtZero: true,
+              },
+            },
+          },
+        })
+      }
+
+      // ROAS 趋势图
+      const roasCtx = document.getElementById('roas-trend-chart') as HTMLCanvasElement
+      if (roasCtx && roasTrend.length > 0) {
+        if (roasTrendChartRef.current) {
+          roasTrendChartRef.current.destroy()
+        }
+        const formattedLabels = roasTrend.map(d => {
+          const date = new Date(d.date + 'T00:00:00')
+          return (date.getMonth() + 1) + '/' + date.getDate()
+        })
+        roasTrendChartRef.current = new Chart(roasCtx, {
+          type: 'line',
+          data: {
+            labels: formattedLabels,
+            datasets: [{
+              label: 'ROAS',
+              data: roasTrend.map(d => d.roas || 0),
+              borderColor: 'rgb(16, 185, 129)',
+              backgroundColor: 'rgba(16, 185, 129, 0.1)',
+              tension: 0.4,
+              fill: true,
+              pointRadius: 3,
+              pointHoverRadius: 5,
+            }],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: true,
+            aspectRatio: 2,
+            plugins: {
+              legend: { display: false },
+            },
+            scales: {
+              x: {
+                ticks: { color: '#94a3b8', maxTicksLimit: 10 },
+                grid: { display: false },
+              },
+              y: {
+                ticks: { 
+                  color: '#94a3b8',
+                  callback: (value: any) => value.toFixed(2)
                 },
                 grid: { color: 'rgba(148, 163, 184, 0.1)' },
                 beginAtZero: true,
@@ -268,10 +320,10 @@ export default function DashboardPage() {
       }
     }
 
-    if (spendTrend.length > 0 || campaignRanking.length > 0 || accountRanking.length > 0) {
+    if (spendTrend.length > 0 || roasTrend.length > 0 || campaignRanking.length > 0 || accountRanking.length > 0) {
       loadChart()
     }
-  }, [spendTrend, campaignRanking, accountRanking])
+  }, [spendTrend, roasTrend, campaignRanking, accountRanking])
 
   // 计算今日 vs 昨日变化
   const getTodayChange = () => {
@@ -316,32 +368,9 @@ export default function DashboardPage() {
 
         {/* 数据看板 */}
         <section className="bg-white rounded-3xl border border-slate-200 p-6 shadow-lg shadow-black/5">
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center justify-between mb-6">
             <h2 className="text-xl font-bold text-slate-900">📊 数据看板</h2>
-          </div>
-          
-          {/* 纯白底筛选区域 - 完全复用账户管理页面的样式 */}
-          <div className="bg-white rounded-3xl p-6 shadow-lg shadow-black/5 border border-slate-200 mb-6">
-            <div className="grid grid-cols-1 md:grid-cols-4 lg:grid-cols-5 gap-4 items-end">
-              <div className="group">
-                <label className="block text-xs font-medium text-slate-400 mb-2 group-focus-within:text-indigo-400 transition-colors">开始日期</label>
-                <DatePicker
-                  value={filters.startDate}
-                  onChange={(date) => setFilters({...filters, startDate: date})}
-                  placeholder="选择开始日期"
-                  className="w-full"
-                />
-              </div>
-              <div className="group">
-                <label className="block text-xs font-medium text-slate-400 mb-2 group-focus-within:text-indigo-400 transition-colors">结束日期</label>
-                <DatePicker
-                  value={filters.endDate}
-                  onChange={(date) => setFilters({...filters, endDate: date})}
-                  placeholder="选择结束日期"
-                  className="w-full"
-                />
-              </div>
-            </div>
+            <span className="text-sm text-slate-500">最近 7 天数据</span>
           </div>
 
           {/* 核心指标卡片 */}
@@ -378,30 +407,41 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          {/* 图表区域 */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* 图表区域 - 消耗和 ROAS 趋势 */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
             {/* 消耗趋势图 */}
             <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-sm">
-              <h3 className="text-sm font-semibold text-slate-900 mb-4">消耗趋势（按天）</h3>
+              <h3 className="text-sm font-semibold text-slate-900 mb-4">💰 消耗趋势（按天）</h3>
               <div className="h-64 overflow-hidden">
                 <canvas id="spend-trend-chart"></canvas>
               </div>
             </div>
 
-            {/* Campaign 消耗排行 */}
+            {/* ROAS 趋势图 */}
             <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-sm">
-              <h3 className="text-sm font-semibold text-slate-900 mb-4">Campaign 消耗排行（Top 10）</h3>
+              <h3 className="text-sm font-semibold text-slate-900 mb-4">📈 ROAS 趋势（按天）</h3>
               <div className="h-64 overflow-hidden">
-                <canvas id="campaign-ranking-chart"></canvas>
+                <canvas id="roas-trend-chart"></canvas>
               </div>
             </div>
           </div>
 
-          {/* 账户消耗排行 */}
-          <div className="mt-6 bg-white rounded-2xl p-4 border border-slate-200 shadow-sm">
-            <h3 className="text-sm font-semibold text-slate-900 mb-4">账户消耗排行（Top 10）</h3>
-            <div className="h-48 overflow-hidden">
-              <canvas id="account-ranking-chart"></canvas>
+          {/* 图表区域 - Campaign 排行 */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Campaign 消耗排行 */}
+            <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-sm">
+              <h3 className="text-sm font-semibold text-slate-900 mb-4">🏆 Campaign 消耗排行（Top 10）</h3>
+              <div className="h-64 overflow-hidden">
+                <canvas id="campaign-ranking-chart"></canvas>
+              </div>
+            </div>
+
+            {/* 账户消耗排行 */}
+            <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-sm">
+              <h3 className="text-sm font-semibold text-slate-900 mb-4">🏦 账户消耗排行（Top 10）</h3>
+              <div className="h-64 overflow-hidden">
+                <canvas id="account-ranking-chart"></canvas>
+              </div>
             </div>
           </div>
         </section>
@@ -409,5 +449,3 @@ export default function DashboardPage() {
     </div>
   )
 }
-
-
