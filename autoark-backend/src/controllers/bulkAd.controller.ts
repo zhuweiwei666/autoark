@@ -1053,23 +1053,64 @@ export const getAuthPixels = async (req: Request, res: Response) => {
 /**
  * 获取缓存的所有 Pixels（预加载，速度快）
  * GET /api/bulk-ad/auth/cached-pixels
+ * 
+ * 超级管理员：合并所有 token 的 Pixels
+ * 普通用户：只获取本组织 token 的 Pixels
  */
 export const getCachedPixels = async (req: Request, res: Response) => {
   try {
-    const fbToken: any = await FbToken.findOne({ status: 'active' }).sort({ updatedAt: -1 })
-    if (!fbToken) {
+    // 构建 token 查询条件（根据组织隔离）
+    const tokenQuery: any = { status: 'active' }
+    // 如果不是超级管理员，只查询本组织的 token
+    if (req.user?.role !== UserRole.SUPER_ADMIN && req.user?.organizationId) {
+      tokenQuery.organizationId = req.user.organizationId
+    }
+    
+    const fbTokens: any[] = await FbToken.find(tokenQuery).sort({ updatedAt: -1 })
+    if (!fbTokens || fbTokens.length === 0) {
       return res.status(401).json({ success: false, error: '未授权 Facebook 账号' })
     }
     
     const facebookUserService = require('../services/facebookUser.service')
-    const pixels = await facebookUserService.getCachedPixels(fbToken.fbUserId)
+    
+    // 合并所有 token 的 Pixels
+    const pixelMap = new Map<string, any>()
+    
+    for (const fbToken of fbTokens) {
+      try {
+        const pixels = await facebookUserService.getCachedPixels(fbToken.fbUserId)
+        
+        for (const p of pixels) {
+          const existing = pixelMap.get(p.pixelId)
+          if (existing) {
+            // 合并账户列表（去重）
+            const existingAccountIds = new Set(existing.accounts.map((a: any) => a.accountId))
+            for (const acc of (p.accounts || [])) {
+              if (!existingAccountIds.has(acc.accountId)) {
+                existing.accounts.push(acc)
+              }
+            }
+          } else {
+            pixelMap.set(p.pixelId, {
+              pixelId: p.pixelId,
+              name: p.name,
+              accounts: [...(p.accounts || [])],
+            })
+          }
+        }
+      } catch (tokenError: any) {
+        logger.warn(`[BulkAd] Failed to get pixels for token ${fbToken.fbUserName}:`, tokenError.message)
+      }
+    }
     
     // 转换格式以兼容前端
-    const formattedPixels = pixels.map((p: any) => ({
+    const formattedPixels = Array.from(pixelMap.values()).map((p: any) => ({
       id: p.pixelId,
       name: p.name,
       accounts: p.accounts || [],
     }))
+    
+    logger.info(`[BulkAd] Merged ${formattedPixels.length} pixels from ${fbTokens.length} tokens`)
     
     res.json({ success: true, data: formattedPixels })
   } catch (error: any) {
