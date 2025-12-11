@@ -782,7 +782,8 @@ export const getAuthLoginUrl = async (req: Request, res: Response) => {
     
     // 将 AutoArk 用户 ID 编码到 state 参数中
     // 格式: bulk-ad|userId|organizationId
-    const stateData = `bulk-ad|${req.user.userId}|${req.user.organizationId || ''}`
+    const orgId = req.user.organizationId ? String(req.user.organizationId) : ''
+    const stateData = `bulk-ad|${req.user.userId}|${orgId}`
     const loginUrl = await oauthService.getFacebookLoginUrl(stateData, appId)
     
     logger.info(`[BulkAd] Generated login URL for user ${req.user.userId}, App: ${appId}`)
