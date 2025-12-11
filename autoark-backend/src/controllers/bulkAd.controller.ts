@@ -753,7 +753,10 @@ export const getAvailableApps = async (req: Request, res: Response) => {
  * 获取 Facebook 登录 URL（批量广告专用，支持选择 App）
  * GET /api/bulk-ad/auth/login-url
  * 
- * 用户隔离：将当前 AutoArk 用户 ID 编码到 state 参数中
+ * 用户隔离：
+ * 1. 如果用户已有 Token，使用该 Token 上次授权时的 App
+ * 2. 如果指定了 appId 参数，使用指定的 App
+ * 3. 否则使用默认 App
  */
 export const getAuthLoginUrl = async (req: Request, res: Response) => {
   try {
@@ -761,7 +764,20 @@ export const getAuthLoginUrl = async (req: Request, res: Response) => {
       return res.status(401).json({ success: false, error: '未认证' })
     }
     
-    const { appId } = req.query // 可选，指定使用哪个 App
+    let appId = req.query.appId as string | undefined
+    
+    // 如果没有指定 App，尝试从用户现有的 Token 获取上次使用的 App
+    if (!appId) {
+      const existingToken = await FbToken.findOne({ 
+        userId: req.user.userId,
+        status: 'active'
+      }).sort({ updatedAt: -1 })
+      
+      if (existingToken?.lastAuthAppId) {
+        appId = existingToken.lastAuthAppId
+        logger.info(`[BulkAd] Using user's previous App: ${appId}`)
+      }
+    }
     
     const config = await oauthService.validateOAuthConfig()
     if (!config.valid) {
@@ -777,9 +793,9 @@ export const getAuthLoginUrl = async (req: Request, res: Response) => {
     // 将 AutoArk 用户 ID 编码到 state 参数中
     // 格式: bulk-ad|userId|organizationId
     const stateData = `bulk-ad|${req.user.userId}|${req.user.organizationId || ''}`
-    const loginUrl = await oauthService.getFacebookLoginUrl(stateData, appId as string | undefined)
+    const loginUrl = await oauthService.getFacebookLoginUrl(stateData, appId)
     
-    logger.info(`[BulkAd] Generated login URL for user ${req.user.userId}`)
+    logger.info(`[BulkAd] Generated login URL for user ${req.user.userId}, App: ${appId || 'default'}`)
     
     res.json({
       success: true,

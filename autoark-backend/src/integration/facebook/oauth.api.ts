@@ -32,14 +32,23 @@ export const getActiveAppConfig = async (appId?: string): Promise<{
       }
     }
 
-    // 否则查找负载最低的活跃 App
-    const app = await FacebookApp.findOne({
+    // 1. 优先查找默认 App
+    let app = await FacebookApp.findOne({
       status: 'active',
+      isDefault: true,
       'validation.isValid': true,
-    }).sort({
-      'currentLoad.activeTasks': 1,
-      'config.priority': -1,
     })
+    
+    // 2. 如果没有默认 App，查找负载最低的活跃 App
+    if (!app) {
+      app = await FacebookApp.findOne({
+        status: 'active',
+        'validation.isValid': true,
+      }).sort({
+        'currentLoad.activeTasks': 1,
+        'config.priority': -1,
+      })
+    }
 
     if (app) {
       return {
