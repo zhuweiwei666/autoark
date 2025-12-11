@@ -750,14 +750,11 @@ export const getAvailableApps = async (req: Request, res: Response) => {
 }
 
 /**
- * 获取 Facebook 登录 URL（批量广告专用，支持选择 App）
+ * 获取 Facebook 登录 URL（批量广告专用）
  * GET /api/bulk-ad/auth/login-url
  * 
- * 用户隔离（优先级从高到低）：
- * 1. 如果指定了 appId 参数，使用指定的 App
- * 2. 如果用户有 boundAppId（绑定的 App），使用绑定的 App
- * 3. 如果用户已有 Token 且记录了 lastAuthAppId，使用上次的 App
- * 4. 使用系统默认 App
+ * 用户隔离：用户创建的 App 就是他要用的 App
+ * 如果用户没有创建过 App，提示去 App 管理页面添加
  */
 export const getAuthLoginUrl = async (req: Request, res: Response) => {
   try {
@@ -765,48 +762,30 @@ export const getAuthLoginUrl = async (req: Request, res: Response) => {
       return res.status(401).json({ success: false, error: '未认证' })
     }
     
-    let appId = req.query.appId as string | undefined
+    // 查找用户创建的 App
+    const FacebookApp = require('../models/FacebookApp').default
+    const userApp = await FacebookApp.findOne({ 
+      createdBy: req.user.userId,
+      status: 'active'
+    }).sort({ createdAt: -1 })
     
-    // 1. 如果没有指定 App，查用户绑定的 App
-    if (!appId) {
-      const User = require('../models/User').default
-      const user = await User.findById(req.user.userId).lean()
-      if (user?.boundAppId) {
-        appId = user.boundAppId
-        logger.info(`[BulkAd] Using user's bound App: ${appId}`)
-      }
-    }
-    
-    // 2. 如果还没有，尝试从用户现有的 Token 获取上次使用的 App
-    if (!appId) {
-      const existingToken = await FbToken.findOne({ 
-        userId: req.user.userId,
-        status: 'active'
-      }).sort({ updatedAt: -1 })
-      
-      if (existingToken?.lastAuthAppId) {
-        appId = existingToken.lastAuthAppId
-        logger.info(`[BulkAd] Using user's previous App: ${appId}`)
-      }
-    }
-    
-    const config = await oauthService.validateOAuthConfig()
-    if (!config.valid) {
-      return res.status(500).json({
+    if (!userApp) {
+      return res.status(400).json({
         success: false,
-        error: config.hasDbApps 
-          ? `OAuth 配置不完整，缺少: ${config.missing.join(', ')}`
-          : '未配置 Facebook App，请在 App 管理页面添加',
-        needsAppSetup: !config.hasDbApps,
+        error: '您还没有添加 Facebook App，请先去「App 管理」页面添加您的 App',
+        needsAppSetup: true,
       })
     }
+    
+    const appId = userApp.appId
+    logger.info(`[BulkAd] Using user's own App: ${userApp.appName} (${appId})`)
     
     // 将 AutoArk 用户 ID 编码到 state 参数中
     // 格式: bulk-ad|userId|organizationId
     const stateData = `bulk-ad|${req.user.userId}|${req.user.organizationId || ''}`
     const loginUrl = await oauthService.getFacebookLoginUrl(stateData, appId)
     
-    logger.info(`[BulkAd] Generated login URL for user ${req.user.userId}, App: ${appId || 'default'}`)
+    logger.info(`[BulkAd] Generated login URL for user ${req.user.userId}, App: ${appId}`)
     
     res.json({
       success: true,

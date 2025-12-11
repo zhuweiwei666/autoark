@@ -1,9 +1,11 @@
 import express from 'express'
 import * as facebookAppController from '../controllers/facebookApp.controller'
+import { authenticate } from '../middlewares/auth'
 
 const router = express.Router()
 
-// App 管理
+// App 管理（需要认证）
+router.use(authenticate)
 router.get('/', facebookAppController.getApps)
 router.get('/stats', facebookAppController.getAppStats)
 router.get('/available', facebookAppController.getAvailableApps)

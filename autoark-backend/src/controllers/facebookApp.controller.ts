@@ -61,6 +61,7 @@ export const createApp = async (req: Request, res: Response) => {
         validationError: validationResult.error,
       },
       status: validationResult.isValid ? 'active' : 'inactive',
+      createdBy: req.user?.userId, // 记录创建者
     })
 
     await app.save()
