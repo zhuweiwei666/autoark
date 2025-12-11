@@ -135,7 +135,7 @@ async function getAvailableToken(accountId: string): Promise<string | null> {
     accounts: { $elemMatch: { accountId } },
     isValid: true,
   })
-  return token?.accessToken || null
+  return token?.token || null
 }
 
 // ==================== 规则服务 ====================
@@ -395,15 +395,15 @@ class RuleService {
   private async pauseEntity(level: string, entityId: string, token: string): Promise<void> {
     switch (level) {
       case 'campaign':
-        await updateCampaign(token, entityId, { status: 'PAUSED' })
+        await updateCampaign({ token, campaignId: entityId, status: 'PAUSED' })
         await Campaign.updateOne({ campaignId: entityId }, { status: 'PAUSED' })
         break
       case 'adset':
-        await updateAdSet(token, entityId, { status: 'PAUSED' })
+        await updateAdSet({ token, adsetId: entityId, status: 'PAUSED' })
         await AdSet.updateOne({ adsetId: entityId }, { status: 'PAUSED' })
         break
       case 'ad':
-        await updateAd(token, entityId, { status: 'PAUSED' })
+        await updateAd({ token, adId: entityId, status: 'PAUSED' })
         await Ad.updateOne({ adId: entityId }, { status: 'PAUSED' })
         break
     }
@@ -415,15 +415,15 @@ class RuleService {
   private async enableEntity(level: string, entityId: string, token: string): Promise<void> {
     switch (level) {
       case 'campaign':
-        await updateCampaign(token, entityId, { status: 'ACTIVE' })
+        await updateCampaign({ token, campaignId: entityId, status: 'ACTIVE' })
         await Campaign.updateOne({ campaignId: entityId }, { status: 'ACTIVE' })
         break
       case 'adset':
-        await updateAdSet(token, entityId, { status: 'ACTIVE' })
+        await updateAdSet({ token, adsetId: entityId, status: 'ACTIVE' })
         await AdSet.updateOne({ adsetId: entityId }, { status: 'ACTIVE' })
         break
       case 'ad':
-        await updateAd(token, entityId, { status: 'ACTIVE' })
+        await updateAd({ token, adId: entityId, status: 'ACTIVE' })
         await Ad.updateOne({ adId: entityId }, { status: 'ACTIVE' })
         break
     }
