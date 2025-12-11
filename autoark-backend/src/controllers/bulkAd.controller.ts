@@ -753,10 +753,11 @@ export const getAvailableApps = async (req: Request, res: Response) => {
  * 获取 Facebook 登录 URL（批量广告专用，支持选择 App）
  * GET /api/bulk-ad/auth/login-url
  * 
- * 用户隔离：
- * 1. 如果用户已有 Token，使用该 Token 上次授权时的 App
- * 2. 如果指定了 appId 参数，使用指定的 App
- * 3. 否则使用默认 App
+ * 用户隔离（优先级从高到低）：
+ * 1. 如果指定了 appId 参数，使用指定的 App
+ * 2. 如果用户有 boundAppId（绑定的 App），使用绑定的 App
+ * 3. 如果用户已有 Token 且记录了 lastAuthAppId，使用上次的 App
+ * 4. 使用系统默认 App
  */
 export const getAuthLoginUrl = async (req: Request, res: Response) => {
   try {
@@ -766,7 +767,17 @@ export const getAuthLoginUrl = async (req: Request, res: Response) => {
     
     let appId = req.query.appId as string | undefined
     
-    // 如果没有指定 App，尝试从用户现有的 Token 获取上次使用的 App
+    // 1. 如果没有指定 App，查用户绑定的 App
+    if (!appId) {
+      const User = require('../models/User').default
+      const user = await User.findById(req.user.userId).lean()
+      if (user?.boundAppId) {
+        appId = user.boundAppId
+        logger.info(`[BulkAd] Using user's bound App: ${appId}`)
+      }
+    }
+    
+    // 2. 如果还没有，尝试从用户现有的 Token 获取上次使用的 App
     if (!appId) {
       const existingToken = await FbToken.findOne({ 
         userId: req.user.userId,

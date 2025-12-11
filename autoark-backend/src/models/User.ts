@@ -22,6 +22,7 @@ export interface IUser extends mongoose.Document {
   status: UserStatus
   lastLoginAt?: Date
   createdBy?: mongoose.Types.ObjectId
+  boundAppId?: string // 用户绑定的 Facebook App ID
   comparePassword(candidatePassword: string): Promise<boolean>
 }
 
@@ -76,6 +77,9 @@ const userSchema = new mongoose.Schema(
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
+    },
+    boundAppId: {
+      type: String, // 用户绑定的 Facebook App ID
     },
   },
   {
