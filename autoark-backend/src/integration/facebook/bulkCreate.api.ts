@@ -505,7 +505,8 @@ export const searchTargetingLocations = async (params: SearchLocationsParams) =>
 
 export const getPages = async (accountId: string, token: string) => {
   try {
-    // 1. 先尝试从广告账户获取 promote_pages
+    // 从广告账户获取 promote_pages（BM 分配的主页）
+    // 不再回退到用户主页，因为那会导致权限问题
     let pages: any[] = []
     try {
       const promoteRes = await facebookClient.get(`/act_${accountId}/promote_pages`, {
@@ -514,23 +515,13 @@ export const getPages = async (accountId: string, token: string) => {
         limit: 100,
       })
       pages = promoteRes.data || []
+      logger.info(`[BulkCreate] Found ${pages.length} promote_pages for account ${accountId}`)
     } catch (e: any) {
       logger.warn(`[BulkCreate] Failed to get promote_pages for ${accountId}: ${e.message}`)
     }
     
-    // 2. 如果没有 promote_pages，获取用户有广告权限的所有主页
     if (pages.length === 0) {
-      logger.info(`[BulkCreate] No promote_pages for ${accountId}, falling back to user pages`)
-      const userPagesRes = await facebookClient.get('/me/accounts', {
-        access_token: token,
-        fields: 'id,name,picture,tasks',
-        limit: 100,
-      })
-      // 只返回有 ADVERTISE 权限的主页
-      pages = (userPagesRes.data || []).filter((page: any) => 
-        page.tasks && page.tasks.includes('ADVERTISE')
-      )
-      logger.info(`[BulkCreate] Found ${pages.length} user pages with ADVERTISE permission`)
+      logger.warn(`[BulkCreate] Account ${accountId} has no promote_pages - need BM configuration`)
     }
     
     return { success: true, data: pages }

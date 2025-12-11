@@ -962,12 +962,33 @@ export const getAuthPages = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, error: 'accountId is required' })
     }
     
-    const fbToken: any = await FbToken.findOne({ status: 'active' }).sort({ updatedAt: -1 })
-    if (!fbToken) {
-      return res.status(401).json({ success: false, error: '未授权 Facebook 账号' })
+    // 🔧 修复：根据账户 ID 找到正确的 token
+    let fbToken: any = null
+    
+    // 1. 尝试找到有权限访问此账户的 token
+    const allTokens = await FbToken.find({ status: 'active' })
+    for (const t of allTokens) {
+      try {
+        // 验证此 token 是否有权访问该账户
+        const res = await facebookClient.get(`/act_${accountId}`, { 
+          access_token: t.token,
+          fields: 'id,name'
+        })
+        if (res && res.id) {
+          fbToken = t
+          logger.info(`[BulkAd] Found token for account ${accountId}: ${t.fbUserName}`)
+          break
+        }
+      } catch (e: any) {
+        // 这个 token 没有权限，继续尝试下一个
+      }
     }
     
-    // 1. 先尝试从广告账户获取 promote_pages
+    if (!fbToken) {
+      return res.status(401).json({ success: false, error: `没有找到可访问账户 ${accountId} 的 Token` })
+    }
+    
+    // 1. 从广告账户获取 promote_pages（BM 分配的主页）
     let pages: any[] = []
     try {
       const promoteResult = await facebookClient.get(`/act_${accountId}/promote_pages`, {
@@ -976,27 +997,21 @@ export const getAuthPages = async (req: Request, res: Response) => {
         limit: 100,
       })
       pages = promoteResult.data || []
+      logger.info(`[BulkAd] Found ${pages.length} promote_pages for account ${accountId}`)
     } catch (e: any) {
       logger.warn(`[BulkAd] Failed to get promote_pages for ${accountId}: ${e.message}`)
     }
     
-    // 2. 如果没有 promote_pages，获取用户有广告权限的所有主页
+    // 2. 如果没有 promote_pages，警告用户需要在 BM 中配置
     if (pages.length === 0) {
-      logger.info(`[BulkAd] No promote_pages for ${accountId}, falling back to user pages`)
-      try {
-        const userPagesResult = await facebookClient.get('/me/accounts', {
-          access_token: fbToken.token,
-          fields: 'id,name,picture,tasks',
-          limit: 100,
-        })
-        // 只返回有 ADVERTISE 权限的主页
-        pages = (userPagesResult.data || []).filter((page: any) => 
-          page.tasks && page.tasks.includes('ADVERTISE')
-        )
-        logger.info(`[BulkAd] Found ${pages.length} user pages with ADVERTISE permission`)
-      } catch (e: any) {
-        logger.error(`[BulkAd] Failed to get user pages: ${e.message}`)
-      }
+      logger.warn(`[BulkAd] Account ${accountId} has no promote_pages - need BM configuration`)
+      // 不再回退到用户主页，因为那会导致权限问题
+      // 返回空数组并在响应中提示
+      return res.json({ 
+        success: true, 
+        data: [],
+        warning: '此广告账户没有被分配任何 Facebook 主页。请在 Business Manager 中将主页分配给此账户。'
+      })
     }
     
     res.json({ success: true, data: pages })
