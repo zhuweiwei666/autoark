@@ -14,6 +14,7 @@ import {
   uploadImageFromUrl,
   uploadVideoFromUrl,
 } from '../integration/facebook/bulkCreate.api'
+import { facebookClient } from '../integration/facebook/facebookClient'
 
 /**
  * 批量广告创建服务
@@ -408,10 +409,50 @@ export const executeTaskForAccount = async (
     throw new Error('Task item not found')
   }
   
-  // 获取 Token
-  const fbToken: any = await FbToken.findOne({ status: 'active' })
+  // 获取 Token - 根据账户 ID 找到正确的 token
+  // 1. 优先查找明确绑定了该账户的 token
+  let fbToken: any = await FbToken.findOne({ 
+    status: 'active',
+    'accounts.accountId': accountId 
+  })
+  
+  // 2. 如果没有绑定关系，尝试从 Account 模型获取 fbUserId
   if (!fbToken) {
-    throw new Error('No active Facebook token found')
+    const Account = require('../models/Account').default
+    const account = await Account.findOne({ accountId }).lean()
+    if (account?.fbUserId) {
+      fbToken = await FbToken.findOne({ 
+        status: 'active', 
+        fbUserId: account.fbUserId 
+      })
+    }
+  }
+  
+  // 3. 如果还没找到，查找所有 active token 并验证权限
+  if (!fbToken) {
+    const allTokens = await FbToken.find({ status: 'active' })
+    for (const t of allTokens) {
+      try {
+        // 验证此 token 是否有权访问该账户
+        const res = await facebookClient.get(`/act_${accountId}`, { 
+          access_token: t.token,
+          fields: 'id,name'
+        })
+        if (res && res.id) {
+          fbToken = t
+          // 可选：缓存这个绑定关系
+          logger.info(`[BulkAd] Found token for account ${accountId}: ${t.fbUserName}`)
+          break
+        }
+      } catch (e: any) {
+        // 这个 token 没有权限，继续尝试下一个
+        logger.debug(`[BulkAd] Token ${t.fbUserName} has no access to account ${accountId}`)
+      }
+    }
+  }
+  
+  if (!fbToken) {
+    throw new Error(`没有找到可访问账户 ${accountId} 的 Facebook Token，请检查授权`)
   }
   const token = fbToken.token
   
