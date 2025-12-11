@@ -137,9 +137,13 @@ export default function AIAnalysisPage() {
       const data = await res.json()
       if (data.success) {
         setChatMessages(prev => [...prev, { role: 'assistant', content: data.data.response }])
+      } else {
+        // 显示具体的错误信息
+        setChatMessages(prev => [...prev, { role: 'assistant', content: `抱歉，请求失败：${data.error || '未知错误'}` }])
       }
-    } catch (error) {
-      setChatMessages(prev => [...prev, { role: 'assistant', content: '抱歉，处理请求时出错了。' }])
+    } catch (error: any) {
+      console.error('AI Chat error:', error)
+      setChatMessages(prev => [...prev, { role: 'assistant', content: `抱歉，处理请求时出错了：${error.message || '网络错误'}` }])
     }
     setChatLoading(false)
   }
