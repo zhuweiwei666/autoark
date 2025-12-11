@@ -22,20 +22,20 @@ export default function FacebookSettingsPage() {
   const [showDetails, setShowDetails] = useState(false)
   const [showEvents, setShowEvents] = useState(false)
 
-  // Token 查询 - 手动触发，不自动加载
+  // Token 查询 - 默认自动加载
   const { data: tokenData, isLoading: tokensLoading, refetch: refetchTokens, isFetching: tokensFetching } = useQuery({
     queryKey: ['tokens'],
     queryFn: () => getTokens(),
-    enabled: false, // 不自动加载
+    enabled: true, // 页面进入默认加载
     staleTime: Infinity, // 永不过期，只在手动刷新时更新
   })
   const tokens = tokenData?.data || []
 
-  // Pixel 查询 - 手动触发，不自动加载
+  // Pixel 查询 - 在切换到像素 Tab 时加载
   const { data: pixelData, isLoading: pixelsLoading, refetch: refetchPixels, isFetching: pixelsFetching } = useQuery({
     queryKey: ['pixels', { allTokens }],
     queryFn: () => getPixels({ allTokens }),
-    enabled: false, // 不自动加载
+    enabled: activeTab === 'pixels', // 进入像素页时自动加载
     staleTime: Infinity,
   })
   const pixels = pixelData?.data || []
@@ -237,12 +237,12 @@ export default function FacebookSettingsPage() {
           </button>
         </div>
 
-        {/* 提示：点击刷新加载数据 */}
+        {/* 空状态 */}
         {!loading && !fetching && ((activeTab === 'tokens' && tokens.length === 0) || (activeTab === 'pixels' && pixels.length === 0)) && (
           <div className="text-center py-16 bg-white rounded-3xl border border-slate-200">
             <div className="text-6xl mb-4">{activeTab === 'tokens' ? '🔑' : '✨'}</div>
-            <p className="text-slate-500 mb-4">点击上方"刷新数据"按钮加载{activeTab === 'tokens' ? 'Token' : '像素'}列表</p>
-            <p className="text-xs text-slate-400">此页面数据不会自动刷新，仅在手动点击时加载</p>
+            <p className="text-slate-500 mb-2">暂无{activeTab === 'tokens' ? ' Token' : '像素'}数据</p>
+            <p className="text-xs text-slate-400">可点击“刷新数据”或新增后查看</p>
           </div>
         )}
 
