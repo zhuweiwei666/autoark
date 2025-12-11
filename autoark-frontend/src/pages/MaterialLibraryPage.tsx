@@ -521,6 +521,22 @@ export default function MaterialLibraryPage() {
   // 获取子文件夹
   const getChildren = (parentId: string) => folders.filter(f => f.parentId === parentId)
   
+  // 获取当前路径下的子文件夹（用于右侧内容区显示）
+  const getCurrentSubfolders = (): Folder[] => {
+    if (!currentPath) {
+      // 根目录时，返回所有根级文件夹
+      return rootFolders
+    }
+    // 找到当前选中的文件夹
+    const currentFolder = folders.find(f => f.path === currentPath)
+    if (currentFolder) {
+      return getChildren(currentFolder._id)
+    }
+    return []
+  }
+  
+  const currentSubfolders = getCurrentSubfolders()
+  
   // 渲染文件夹树节点
   const renderFolderNode = (folder: Folder, depth: number = 0) => {
     const children = getChildren(folder._id)
@@ -861,15 +877,63 @@ export default function MaterialLibraryPage() {
                 </span>
               )
             })}
-            <span className="ml-auto text-slate-400">{total} 项</span>
+            <span className="ml-auto text-slate-400">
+              {currentPath && currentSubfolders.length > 0 && `${currentSubfolders.length} 个文件夹`}
+              {currentPath && currentSubfolders.length > 0 && total > 0 && '，'}
+              {total > 0 && `${total} 个素材`}
+              {!currentPath && `${totalCount} 项`}
+              {currentPath && currentSubfolders.length === 0 && total === 0 && '0 项'}
+            </span>
           </div>
+          
+          {/* Subfolders Grid - 显示当前路径下的子文件夹 */}
+          {currentPath && currentSubfolders.length > 0 && (
+            <div className="mb-6">
+              <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-3">
+                {currentSubfolders.map(subfolder => (
+                  <div
+                    key={subfolder._id}
+                    className="cursor-pointer group"
+                    onDoubleClick={() => { 
+                      setCurrentPath(subfolder.path)
+                      setPage(1)
+                      // 在左侧树中也展开父文件夹
+                      const currentFolder = folders.find(f => f.path === currentPath)
+                      if (currentFolder) {
+                        setExpandedFolders(prev => new Set([...prev, currentFolder._id]))
+                      }
+                    }}
+                  >
+                    <div className="aspect-square bg-slate-50 rounded-lg overflow-hidden flex flex-col items-center justify-center border border-slate-200 group-hover:border-blue-400 group-hover:bg-blue-50 transition-colors">
+                      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1" stroke="currentColor" className="w-12 h-12 text-amber-400 group-hover:text-amber-500 transition-colors">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
+                      </svg>
+                      {/* 子文件夹数量和素材数量 */}
+                      <div className="mt-1 text-xs text-slate-400">
+                        {getChildren(subfolder._id).length > 0 && (
+                          <span>{getChildren(subfolder._id).length} 个文件夹</span>
+                        )}
+                        {getChildren(subfolder._id).length > 0 && subfolder.count > 0 && <span> · </span>}
+                        {subfolder.count > 0 && (
+                          <span>{subfolder.count} 个素材</span>
+                        )}
+                      </div>
+                    </div>
+                    <p className="mt-1.5 text-xs text-slate-600 truncate text-center group-hover:text-blue-600 transition-colors" title={subfolder.name}>
+                      {subfolder.name}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           
           {/* Materials Grid */}
           {loading ? (
             <div className="flex justify-center items-center h-64">
               <div className="text-slate-500">加载中...</div>
             </div>
-          ) : materials.length === 0 ? (
+          ) : materials.length === 0 && currentSubfolders.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-64 text-slate-400">
               <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1" stroke="currentColor" className="w-16 h-16 mb-4">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
@@ -882,6 +946,9 @@ export default function MaterialLibraryPage() {
                 上传素材
               </button>
             </div>
+          ) : materials.length === 0 && currentSubfolders.length > 0 ? (
+            // 只有子文件夹，没有素材时，不显示"文件夹为空"
+            null
           ) : (
             <>
               <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-3">
