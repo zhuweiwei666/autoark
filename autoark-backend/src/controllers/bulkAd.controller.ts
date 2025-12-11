@@ -868,6 +868,9 @@ export const getAuthStatus = async (req: Request, res: Response) => {
  * 获取当前授权用户的广告账户列表
  * GET /api/bulk-ad/auth/ad-accounts
  * 需要认证，并根据用户组织进行权限过滤
+ * 
+ * 超级管理员：获取所有 token 下的所有账户
+ * 普通用户：只获取本组织 token 下的账户
  */
 export const getAuthAdAccounts = async (req: Request, res: Response) => {
   try {
@@ -883,49 +886,61 @@ export const getAuthAdAccounts = async (req: Request, res: Response) => {
       tokenQuery.organizationId = req.user.organizationId
     }
 
-    // 查找符合条件的 token
-    const fbToken: any = await FbToken.findOne(tokenQuery).sort({ updatedAt: -1 })
-    if (!fbToken) {
+    // 查找所有符合条件的 token（超级管理员看到所有，普通用户只看到本组织）
+    const fbTokens: any[] = await FbToken.find(tokenQuery).sort({ updatedAt: -1 })
+    if (!fbTokens || fbTokens.length === 0) {
       return res.status(401).json({ success: false, error: '未找到可用的 Facebook 授权账号' })
     }
     
-    // 获取该 token 对应的所有广告账户
-    const result = await facebookClient.get('/me/adaccounts', {
-      access_token: fbToken.token,
-      fields: 'id,account_id,name,account_status,currency,timezone_name,amount_spent,balance',
-      limit: 100,
-    })
+    // 合并所有 token 下的广告账户
+    const allAccounts: any[] = []
+    const seenAccountIds = new Set<string>()
     
-    // 获取所有账户ID
-    const accountIds = (result.data || []).map((acc: any) => acc.account_id)
+    for (const fbToken of fbTokens) {
+      try {
+        const result = await facebookClient.get('/me/adaccounts', {
+          access_token: fbToken.token,
+          fields: 'id,account_id,name,account_status,currency,timezone_name,amount_spent,balance',
+          limit: 100,
+        })
+        
+        for (const acc of (result.data || [])) {
+          // 避免重复账户
+          if (!seenAccountIds.has(acc.account_id)) {
+            seenAccountIds.add(acc.account_id)
+            allAccounts.push({
+              id: acc.id,
+              account_id: acc.account_id,
+              name: acc.name,
+              account_status: acc.account_status,
+              currency: acc.currency,
+              timezone_name: acc.timezone_name,
+              amount_spent: acc.amount_spent,
+              balance: acc.balance,
+              // 额外信息：标记来源 token
+              _tokenOwner: fbToken.fbUserName || fbToken.optimizer || 'unknown',
+            })
+          }
+        }
+      } catch (tokenError: any) {
+        logger.warn(`[BulkAd] Failed to get accounts for token ${fbToken.fbUserName}: ${tokenError.message}`)
+        // 继续处理其他 token
+      }
+    }
     
-    // 根据 Account 模型中的 organizationId 进行过滤
-    // 如果不是超级管理员，只返回本组织的账户
-    let allowedAccountIds: string[] = accountIds
+    // 根据 Account 模型中的 organizationId 进行过滤（仅非超级管理员）
+    let filteredAccounts = allAccounts
     if (req.user.role !== UserRole.SUPER_ADMIN && req.user.organizationId) {
       const Account = require('../models/Account').default
       const allowedAccounts = await Account.find({
-        accountId: { $in: accountIds },
+        accountId: { $in: Array.from(seenAccountIds) },
         organizationId: req.user.organizationId,
       }).select('accountId').lean()
-      allowedAccountIds = allowedAccounts.map((acc: any) => acc.accountId)
+      const allowedAccountIds = new Set(allowedAccounts.map((acc: any) => acc.accountId))
+      filteredAccounts = allAccounts.filter((acc: any) => allowedAccountIds.has(acc.account_id))
     }
     
-    // 过滤并返回账户列表
-    const accounts = (result.data || [])
-      .filter((acc: any) => allowedAccountIds.includes(acc.account_id))
-      .map((acc: any) => ({
-        id: acc.id,
-        account_id: acc.account_id,
-        name: acc.name,
-        account_status: acc.account_status,
-        currency: acc.currency,
-        timezone_name: acc.timezone_name,
-        amount_spent: acc.amount_spent,
-        balance: acc.balance,
-      }))
-    
-    res.json({ success: true, data: accounts })
+    res.json({ success: true, data: filteredAccounts })
   } catch (error: any) {
     logger.error('[BulkAd] Get ad accounts failed:', error)
     res.status(500).json({ success: false, error: error.message })
