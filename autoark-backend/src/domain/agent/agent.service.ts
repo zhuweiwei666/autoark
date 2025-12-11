@@ -10,6 +10,7 @@ import FbToken from '../../models/FbToken'
 import dayjs from 'dayjs'
 import { fetchInsights } from '../../integration/facebook/insights.api'
 import { getMaterialRankings } from '../../services/materialMetrics.service'
+import { getCoreMetrics } from '../../services/dashboard.service'
 
 const LLM_API_KEY = process.env.LLM_API_KEY
 const LLM_MODEL = process.env.LLM_MODEL || 'gemini-2.0-flash'
@@ -443,63 +444,57 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
     const tokens = await FbToken.find({ status: 'active' }).lean()
     const token = tokens[0]?.token
 
-    // 1. 今日实时数据 - 从 Facebook API 获取
-    let todaySummary: any = { spend: 0, impressions: 0, clicks: 0, ctr: 0, cpc: 0, cpm: 0, purchase_value: 0, roas: 0, installs: 0 }
+    // 🔥 使用和 Dashboard 相同的数据源，确保数据准确
+    logger.info('[AgentService] Fetching core metrics from Dashboard API...')
+    let coreMetrics: any = null
+    try {
+      coreMetrics = await getCoreMetrics(sevenDaysAgo, today)
+    } catch (e: any) {
+      logger.error('[AgentService] Failed to get core metrics:', e.message)
+    }
+
+    // 1. 今日实时数据 - 使用 Dashboard 的准确数据
+    let todaySummary: any = {
+      spend: '$' + (coreMetrics?.today?.spend || 0).toFixed(2),
+      impressions: coreMetrics?.today?.impressions || 0,
+      clicks: coreMetrics?.today?.clicks || 0,
+      purchase_value: '$' + (coreMetrics?.today?.purchase_value || 0).toFixed(2),
+      roas: coreMetrics?.today?.spend > 0 
+        ? ((coreMetrics?.today?.purchase_value || 0) / coreMetrics?.today?.spend).toFixed(2) 
+        : '0',
+      installs: coreMetrics?.today?.installs || 0,
+    }
     
-    if (token) {
-      for (const account of accounts.slice(0, 10)) { // 限制账户数量避免超时
-        try {
-          const insights = await fetchInsights(
-            `act_${account.accountId}`,
-            'account',
-            undefined,
-            token,
-            undefined,
-            { since: today, until: today }
-          )
-          if (insights.length > 0) {
-            const data = insights[0]
-            todaySummary.spend += parseFloat(data.spend || '0')
-            todaySummary.impressions += parseInt(data.impressions || '0', 10)
-            todaySummary.clicks += parseInt(data.clicks || '0', 10)
-            
-            // 提取 purchase value 和 installs
-            if (data.action_values) {
-              for (const av of data.action_values) {
-                if (av.action_type === 'purchase' || av.action_type === 'omni_purchase') {
-                  todaySummary.purchase_value += parseFloat(av.value || '0')
-                }
-              }
-            }
-            if (data.actions) {
-              for (const action of data.actions) {
-                if (action.action_type === 'mobile_app_install') {
-                  todaySummary.installs += parseInt(action.value || '0', 10)
-                }
-              }
-            }
-          }
-        } catch (e) {
-          // 继续
-        }
-      }
-      
-      // 计算派生指标
-      if (todaySummary.impressions > 0) {
-        todaySummary.ctr = (todaySummary.clicks / todaySummary.impressions * 100).toFixed(2) + '%'
-        todaySummary.cpm = '$' + (todaySummary.spend / todaySummary.impressions * 1000).toFixed(2)
-      }
-      if (todaySummary.clicks > 0) {
-        todaySummary.cpc = '$' + (todaySummary.spend / todaySummary.clicks).toFixed(2)
-      }
-      if (todaySummary.spend > 0) {
-        todaySummary.roas = (todaySummary.purchase_value / todaySummary.spend).toFixed(2)
-      }
-      if (todaySummary.installs > 0) {
-        todaySummary.cpi = '$' + (todaySummary.spend / todaySummary.installs).toFixed(2)
-      }
-      todaySummary.spend = '$' + todaySummary.spend.toFixed(2)
-      todaySummary.purchase_value = '$' + todaySummary.purchase_value.toFixed(2)
+    // 计算派生指标
+    const todaySpend = coreMetrics?.today?.spend || 0
+    const todayImpressions = coreMetrics?.today?.impressions || 0
+    const todayClicks = coreMetrics?.today?.clicks || 0
+    if (todayImpressions > 0) {
+      todaySummary.ctr = (todayClicks / todayImpressions * 100).toFixed(2) + '%'
+      todaySummary.cpm = '$' + (todaySpend / todayImpressions * 1000).toFixed(2)
+    }
+    if (todayClicks > 0) {
+      todaySummary.cpc = '$' + (todaySpend / todayClicks).toFixed(2)
+    }
+
+    // 2. 昨日数据 - 使用 Dashboard 的准确数据
+    const yesterdaySummary = {
+      spend: '$' + (coreMetrics?.yesterday?.spend || 0).toFixed(2),
+      impressions: coreMetrics?.yesterday?.impressions || 0,
+      clicks: coreMetrics?.yesterday?.clicks || 0,
+      purchase_value: '$' + (coreMetrics?.yesterday?.purchase_value || 0).toFixed(2),
+      roas: coreMetrics?.yesterday?.spend > 0 
+        ? ((coreMetrics?.yesterday?.purchase_value || 0) / coreMetrics?.yesterday?.spend).toFixed(2) 
+        : '0',
+    }
+
+    // 3. 7日汇总数据
+    const sevenDaysSummary = {
+      totalSpend: '$' + (coreMetrics?.sevenDays?.spend || 0).toFixed(2),
+      totalRevenue: '$' + (coreMetrics?.sevenDays?.purchase_value || 0).toFixed(2),
+      avgRoas: coreMetrics?.sevenDays?.spend > 0 
+        ? ((coreMetrics?.sevenDays?.purchase_value || 0) / coreMetrics?.sevenDays?.spend).toFixed(2) 
+        : '0',
     }
 
     // 辅助函数：从 raw.action_values 中提取 purchase 值
@@ -1146,44 +1141,8 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
       }
     }
 
-    // 13. 今日 vs 昨日对比 - 提取 purchase_value
-    const yesterdayData = await MetricsDaily.aggregate([
-      {
-        $match: {
-          date: yesterday,
-          spendUsd: { $gt: 0 }
-        }
-      },
-      {
-        $addFields: {
-          extractedPurchaseValue: {
-            $reduce: {
-              input: { $ifNull: ['$raw.action_values', []] },
-              initialValue: 0,
-              in: {
-                $cond: [
-                  { $in: ['$$this.action_type', ['purchase', 'omni_purchase']] },
-                  { $add: ['$$value', { $toDouble: { $ifNull: ['$$this.value', '0'] } }] },
-                  '$$value'
-                ]
-              }
-            }
-          }
-        }
-      },
-      {
-        $group: {
-          _id: null,
-          spend: { $sum: '$spendUsd' },
-          revenue: { $sum: { $max: [{ $ifNull: ['$purchase_value', 0] }, '$extractedPurchaseValue'] } },
-          impressions: { $sum: '$impressions' },
-          clicks: { $sum: '$clicks' },
-          installs: { $sum: { $ifNull: ['$mobile_app_install_count', 0] } },
-        }
-      }
-    ])
-    
-    const yesterdaySummary = yesterdayData[0] || { spend: 0, revenue: 0, impressions: 0, clicks: 0, installs: 0 }
+    // 13. 今日 vs 昨日对比 - 现在使用 getCoreMetrics 的数据（更准确）
+    // 已在函数开头通过 yesterdaySummary 变量获取
 
     // 14. AdSet 级别数据（今日 Top 20）
     const adsetDataToday = await MetricsDaily.aggregate([
@@ -1242,16 +1201,14 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
         last30Days: { from: thirtyDaysAgo, to: today },
       },
       
-      // 今日实时概览
+      // 今日实时概览（来自 Dashboard API，数据准确）
       todaySummary,
-      yesterdaySummary: {
-        spend: '$' + yesterdaySummary.spend.toFixed(2),
-        revenue: '$' + yesterdaySummary.revenue.toFixed(2),
-        roas: yesterdaySummary.spend > 0 ? (yesterdaySummary.revenue / yesterdaySummary.spend).toFixed(2) : '0',
-        impressions: yesterdaySummary.impressions,
-        clicks: yesterdaySummary.clicks,
-        installs: yesterdaySummary.installs,
-      },
+      
+      // 昨日数据（来自 Dashboard API，数据准确）
+      yesterdaySummary,
+      
+      // 7日汇总（来自 Dashboard API）
+      sevenDaysSummary,
       
       // 时间趋势
       last7DaysTrend,
