@@ -525,7 +525,11 @@ export interface AccountRankingData {
 export async function getCoreMetrics(_startDate?: string, endDate?: string): Promise<{ success: boolean; data: CoreMetrics }> {
   // 获取今天、昨天、最近7天的汇总数据
   const today = endDate || new Date().toISOString().split('T')[0]
-  const yesterday = new Date(new Date(today).getTime() - 86400000).toISOString().split('T')[0]
+  // 安全计算昨天日期，避免时区问题
+  const todayParts = today.split('-').map(Number)
+  const todayDate = new Date(todayParts[0], todayParts[1] - 1, todayParts[2])
+  todayDate.setDate(todayDate.getDate() - 1)
+  const yesterday = `${todayDate.getFullYear()}-${String(todayDate.getMonth() + 1).padStart(2, '0')}-${String(todayDate.getDate()).padStart(2, '0')}`
   
   const [todayRes, yesterdayRes, trendRes] = await Promise.all([
     fetch(`${API_BASE_URL}/api/summary/dashboard?date=${today}`),
