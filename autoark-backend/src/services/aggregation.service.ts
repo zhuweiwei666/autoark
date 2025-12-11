@@ -97,12 +97,13 @@ export async function refreshAggregation(date: string, forceRefresh = false): Pr
           let revenue = 0
           let installs = 0
 
-          // 提取 purchase value
-          if (insight.action_values) {
-            for (const av of insight.action_values) {
-              if (['purchase', 'omni_purchase', 'mobile_app_purchase'].includes(av.action_type)) {
-                revenue += parseFloat(av.value || '0')
-              }
+          // 提取 purchase value - 只取第一个匹配的，避免重复计算
+          if (insight.action_values && Array.isArray(insight.action_values)) {
+            const purchaseAction = insight.action_values.find((a: any) => 
+              a.action_type === 'purchase' || a.action_type === 'mobile_app_purchase' || a.action_type === 'omni_purchase'
+            )
+            if (purchaseAction) {
+              revenue = parseFloat(purchaseAction.value) || 0
             }
           }
 
