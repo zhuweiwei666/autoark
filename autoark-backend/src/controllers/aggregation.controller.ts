@@ -23,7 +23,6 @@ import {
   AggAccount,
   AggCampaign,
   AggOptimizer,
-  AggMaterial,
 } from '../models/Aggregation'
 
 const router = Router()
