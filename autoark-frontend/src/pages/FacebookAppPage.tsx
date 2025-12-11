@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import Loading from '../components/Loading'
+import { useAuth } from '../contexts/AuthContext'
 
 const API_BASE = '/api'
 
@@ -49,6 +50,7 @@ interface AppStats {
 }
 
 export default function FacebookAppPage() {
+  const { token } = useAuth()
   const [apps, setApps] = useState<FacebookApp[]>([])
   const [stats, setStats] = useState<AppStats | null>(null)
   const [loading, setLoading] = useState(false)
@@ -67,11 +69,22 @@ export default function FacebookAppPage() {
     priority: 1,
   })
 
+  // 带认证的 fetch
+  const authFetch = (url: string, options: RequestInit = {}) => {
+    return fetch(url, {
+      ...options,
+      headers: {
+        ...options.headers,
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    })
+  }
+
   // 加载 Apps 列表
   const loadApps = async () => {
     setLoading(true)
     try {
-      const response = await fetch(`${API_BASE}/facebook-apps`)
+      const response = await authFetch(`${API_BASE}/facebook-apps`)
       const data = await response.json()
       if (data.success) {
         setApps(data.data)
@@ -88,7 +101,7 @@ export default function FacebookAppPage() {
   // 加载统计
   const loadStats = async () => {
     try {
-      const response = await fetch(`${API_BASE}/facebook-apps/stats`)
+      const response = await authFetch(`${API_BASE}/facebook-apps/stats`)
       const data = await response.json()
       if (data.success) {
         setStats(data.data)
@@ -113,7 +126,7 @@ export default function FacebookAppPage() {
 
     setLoading(true)
     try {
-      const response = await fetch(`${API_BASE}/facebook-apps`, {
+      const response = await authFetch(`${API_BASE}/facebook-apps`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -152,7 +165,7 @@ export default function FacebookAppPage() {
 
     setLoading(true)
     try {
-      const response = await fetch(`${API_BASE}/facebook-apps/${editingApp._id}`, {
+      const response = await authFetch(`${API_BASE}/facebook-apps/${editingApp._id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -188,7 +201,7 @@ export default function FacebookAppPage() {
     if (!confirm(`确定要删除 "${app.appName}" 吗？`)) return
 
     try {
-      const response = await fetch(`${API_BASE}/facebook-apps/${app._id}`, {
+      const response = await authFetch(`${API_BASE}/facebook-apps/${app._id}`, {
         method: 'DELETE',
       })
       const data = await response.json()
@@ -208,7 +221,7 @@ export default function FacebookAppPage() {
   // 验证 App
   const handleValidate = async (app: FacebookApp) => {
     try {
-      const response = await fetch(`${API_BASE}/facebook-apps/${app._id}/validate`, {
+      const response = await authFetch(`${API_BASE}/facebook-apps/${app._id}/validate`, {
         method: 'POST',
       })
       const data = await response.json()
@@ -232,7 +245,7 @@ export default function FacebookAppPage() {
   const handleToggleStatus = async (app: FacebookApp) => {
     const newStatus = app.status === 'active' ? 'inactive' : 'active'
     try {
-      const response = await fetch(`${API_BASE}/facebook-apps/${app._id}`, {
+      const response = await authFetch(`${API_BASE}/facebook-apps/${app._id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: newStatus }),
@@ -256,7 +269,7 @@ export default function FacebookAppPage() {
     if (!confirm(`确定要重置 "${app.appName}" 的统计数据吗？`)) return
 
     try {
-      const response = await fetch(`${API_BASE}/facebook-apps/${app._id}/reset-stats`, {
+      const response = await authFetch(`${API_BASE}/facebook-apps/${app._id}/reset-stats`, {
         method: 'POST',
       })
       const data = await response.json()
