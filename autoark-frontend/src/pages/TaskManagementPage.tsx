@@ -33,6 +33,7 @@ interface ReviewStatus {
 
 interface Task {
   _id: string
+  name?: string  // 🆕 任务名称
   taskType: string
   status: string
   platform: string
