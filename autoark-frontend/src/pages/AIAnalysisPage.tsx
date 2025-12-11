@@ -33,7 +33,7 @@ interface ChatMessage {
 }
 
 export default function AIAnalysisPage() {
-  const { token, user } = useAuth()
+  const { token } = useAuth()
   const [activeTab, setActiveTab] = useState<'health' | 'chat' | 'reports'>('chat')
   const [healthData, setHealthData] = useState<HealthData | null>(null)
   const [reports, setReports] = useState<Report[]>([])
