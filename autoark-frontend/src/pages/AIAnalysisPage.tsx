@@ -64,8 +64,14 @@ export default function AIAnalysisPage() {
   useEffect(() => {
     loadHealthData()
     loadReports()
-    loadChatHistory()
   }, [])
+
+  // 当 token 可用时加载聊天历史
+  useEffect(() => {
+    if (token) {
+      loadChatHistory()
+    }
+  }, [token])
 
   // 加载聊天历史（仅当前用户的对话）
   const loadChatHistory = async () => {
@@ -133,6 +139,12 @@ export default function AIAnalysisPage() {
   const sendChat = async () => {
     if (!chatInput.trim()) return
     
+    // 检查是否已登录
+    if (!token) {
+      setChatMessages(prev => [...prev, { role: 'assistant', content: '请先登录后再使用 AI 对话功能。' }])
+      return
+    }
+    
     const userMessage = chatInput.trim()
     setChatInput('')
     setChatMessages(prev => [...prev, { role: 'user', content: userMessage }])
@@ -149,7 +161,8 @@ export default function AIAnalysisPage() {
         setChatMessages(prev => [...prev, { role: 'assistant', content: data.data.response }])
       } else {
         // 显示具体的错误信息
-        setChatMessages(prev => [...prev, { role: 'assistant', content: `抱歉，请求失败：${data.error || '未知错误'}` }])
+        const errorMsg = data.message || data.error || '未知错误'
+        setChatMessages(prev => [...prev, { role: 'assistant', content: `抱歉，请求失败：${errorMsg}` }])
       }
     } catch (error: any) {
       console.error('AI Chat error:', error)
