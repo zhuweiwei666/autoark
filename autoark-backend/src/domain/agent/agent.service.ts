@@ -1832,13 +1832,23 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
         data: {
           materialId,
           materialName: material.materialName,
+          materialType: material.materialType,
+          metrics: {
+            spend: material.spend,
+            revenue: material.purchaseValue || 0,
+            roas: material.roas,
+            ctr: material.ctr,
+            impressions: material.impressions,
+            clicks: material.clicks,
+            daysActive: material.daysActive,
+          },
           scores: {
             overall: material.qualityScore,
             roas: material.roas >= 1 ? 80 : material.roas >= 0.5 ? 50 : 20,
             efficiency: material.ctr >= 1 ? 80 : material.ctr >= 0.5 ? 50 : 30,
           },
-          analysis: `素材 ROAS ${material.roas.toFixed(2)}，消耗 $${material.spend.toFixed(2)}`,
-          recommendation: material.roas >= 1.5 ? '建议扩量' : material.roas < 0.5 ? '建议暂停' : '保持观察',
+          analysis: `素材 ROAS ${material.roas?.toFixed(2) || 0}，消耗 $${material.spend?.toFixed(2) || 0}`,
+          recommendation: material.roas >= 1.5 ? 'SCALE_UP' : material.roas < 0.5 ? 'PAUSE' : 'MAINTAIN',
           aiPowered: false,
         }
       }

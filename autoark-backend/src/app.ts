@@ -1,6 +1,9 @@
+import dotenv from 'dotenv'
+// 🔥 必须在所有其他 import 之前加载环境变量
+dotenv.config()
+
 import express, { Request, Response, NextFunction } from 'express'
 import cors from 'cors'
-import dotenv from 'dotenv'
 import path from 'path'
 import connectDB from './config/db'
 import facebookRoutes from './routes/facebook.routes'
@@ -24,8 +27,6 @@ import initSyncCron from './cron/sync.cron'
 import initCronJobs from './cron'
 import initTokenValidationCron from './cron/tokenValidation.cron'
 import { errorHandler } from './middlewares/errorHandler'
-
-dotenv.config()
 
 // Connect to DB
 connectDB()
