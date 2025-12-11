@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { useAuth } from '../contexts/AuthContext'
+import { authFetch } from '../services/api'
 
 interface User {
   _id: string
@@ -36,7 +37,7 @@ const UserManagementPage: React.FC = () => {
 
   const fetchUsers = async () => {
     try {
-      const response = await fetch('/api/users', {
+      const response = await authFetch('/api/users', {
         headers: {
           'Authorization': `Bearer ${token}`,
         },
@@ -62,7 +63,7 @@ const UserManagementPage: React.FC = () => {
   const fetchOrganizations = async () => {
     if (!isSuperAdmin) return
     try {
-      const response = await fetch('/api/organizations', {
+      const response = await authFetch('/api/organizations', {
         headers: {
           'Authorization': `Bearer ${token}`,
         },
@@ -86,7 +87,7 @@ const UserManagementPage: React.FC = () => {
   const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault()
     try {
-      const response = await fetch('/api/users', {
+      const response = await authFetch('/api/users', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -119,7 +120,7 @@ const UserManagementPage: React.FC = () => {
     if (!confirm('确定要删除此用户吗？')) return
 
     try {
-      const response = await fetch(`/api/users/${userId}`, {
+      const response = await authFetch(`/api/users/${userId}`, {
         method: 'DELETE',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -155,7 +156,7 @@ const UserManagementPage: React.FC = () => {
     if (!editingUser) return
 
     try {
-      const response = await fetch(`/api/users/${editingUser._id}`, {
+      const response = await authFetch(`/api/users/${editingUser._id}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',

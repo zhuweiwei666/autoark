@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { authFetch } from '../services/api'
 
 interface Agent {
   _id: string
@@ -65,7 +66,7 @@ export default function AgentManagementPage() {
 
   const loadAgents = async () => {
     try {
-      const res = await fetch('/api/agent/agents')
+      const res = await authFetch('/api/agent/agents')
       const data = await res.json()
       if (data.success) setAgents(data.data)
     } catch (error) {
@@ -75,7 +76,7 @@ export default function AgentManagementPage() {
 
   const loadOperations = async () => {
     try {
-      const res = await fetch('/api/agent/operations?limit=50')
+      const res = await authFetch('/api/agent/operations?limit=50')
       const data = await res.json()
       if (data.success) setOperations(data.data)
     } catch (error) {
@@ -85,7 +86,7 @@ export default function AgentManagementPage() {
 
   const loadPendingOps = async () => {
     try {
-      const res = await fetch('/api/agent/operations/pending')
+      const res = await authFetch('/api/agent/operations/pending')
       const data = await res.json()
       if (data.success) setPendingOps(data.data)
     } catch (error) {
@@ -99,7 +100,7 @@ export default function AgentManagementPage() {
       const url = editingAgent ? `/api/agent/agents/${editingAgent._id}` : '/api/agent/agents'
       const method = editingAgent ? 'PUT' : 'POST'
       
-      const res = await fetch(url, {
+      const res = await authFetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(formData),
@@ -119,7 +120,7 @@ export default function AgentManagementPage() {
   const deleteAgent = async (id: string) => {
     if (!confirm('确定要删除这个 Agent 吗？')) return
     try {
-      await fetch(`/api/agent/agents/${id}`, { method: 'DELETE' })
+      await authFetch(`/api/agent/agents/${id}`, { method: 'DELETE' })
       loadAgents()
     } catch (error) {
       console.error('Failed to delete agent:', error)
@@ -129,7 +130,7 @@ export default function AgentManagementPage() {
   const runAgent = async (id: string) => {
     setLoading(true)
     try {
-      const res = await fetch(`/api/agent/agents/${id}/run`, { method: 'POST' })
+      const res = await authFetch(`/api/agent/agents/${id}/run`, { method: 'POST' })
       const data = await res.json()
       if (data.success) {
         alert(`Agent 运行完成，产生 ${data.data.operationsCount} 个操作`)
@@ -144,7 +145,7 @@ export default function AgentManagementPage() {
 
   const approveOperation = async (id: string) => {
     try {
-      await fetch(`/api/agent/operations/${id}/approve`, { method: 'POST' })
+      await authFetch(`/api/agent/operations/${id}/approve`, { method: 'POST' })
       loadPendingOps()
       loadOperations()
     } catch (error) {
@@ -154,7 +155,7 @@ export default function AgentManagementPage() {
 
   const rejectOperation = async (id: string) => {
     try {
-      await fetch(`/api/agent/operations/${id}/reject`, { method: 'POST' })
+      await authFetch(`/api/agent/operations/${id}/reject`, { method: 'POST' })
       loadPendingOps()
       loadOperations()
     } catch (error) {

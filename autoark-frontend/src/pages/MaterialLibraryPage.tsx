@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { authFetch } from '../services/api'
 
 const API_BASE = '/api'
 
@@ -159,7 +160,7 @@ export default function MaterialLibraryPage() {
   
   const checkConfig = async () => {
     try {
-      const res = await fetch(`${API_BASE}/materials/config-status`)
+      const res = await authFetch(`${API_BASE}/materials/config-status`)
       const data = await res.json()
       if (data.success) {
         setConfigStatus(data.data)
@@ -171,7 +172,7 @@ export default function MaterialLibraryPage() {
   
   const loadFolders = async () => {
     try {
-      const res = await fetch(`${API_BASE}/materials/folder-tree`)
+      const res = await authFetch(`${API_BASE}/materials/folder-tree`)
       const data = await res.json()
       if (data.success) {
         setFolders(data.data.folders || [])
@@ -193,7 +194,7 @@ export default function MaterialLibraryPage() {
       if (currentPath) params.append('folder', currentPath)
       if (filter.search) params.append('search', filter.search)
       
-      const res = await fetch(`${API_BASE}/materials?${params}`)
+      const res = await authFetch(`${API_BASE}/materials?${params}`)
       const data = await res.json()
       if (data.success) {
         setMaterials(data.data.list || [])
@@ -222,7 +223,7 @@ export default function MaterialLibraryPage() {
     
     try {
       // 1. 批量获取预签名 URL
-      const presignedRes = await fetch(`${API_BASE}/materials/presigned-urls`, {
+      const presignedRes = await authFetch(`${API_BASE}/materials/presigned-urls`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -287,7 +288,7 @@ export default function MaterialLibraryPage() {
       
       // 3. 确认上传完成（在数据库创建记录）
       if (uploadedFiles.length > 0) {
-        const confirmRes = await fetch(`${API_BASE}/materials/confirm-uploads`, {
+        const confirmRes = await authFetch(`${API_BASE}/materials/confirm-uploads`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -325,7 +326,7 @@ export default function MaterialLibraryPage() {
     if (!confirm('确定要删除这个素材吗？')) return
     
     try {
-      const res = await fetch(`${API_BASE}/materials/${id}`, { method: 'DELETE' })
+      const res = await authFetch(`${API_BASE}/materials/${id}`, { method: 'DELETE' })
       const data = await res.json()
       if (data.success) {
         setViewMaterial(null)
@@ -344,7 +345,7 @@ export default function MaterialLibraryPage() {
     if (!confirm(`确定要删除选中的 ${selectedIds.length} 个素材吗？`)) return
     
     try {
-      const res = await fetch(`${API_BASE}/materials/delete-batch`, {
+      const res = await authFetch(`${API_BASE}/materials/delete-batch`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ids: selectedIds }),
@@ -393,7 +394,7 @@ export default function MaterialLibraryPage() {
     }
     
     try {
-      const res = await fetch(`${API_BASE}/materials/create-folder`, {
+      const res = await authFetch(`${API_BASE}/materials/create-folder`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, parentId }),
@@ -426,7 +427,7 @@ export default function MaterialLibraryPage() {
     }
     
     try {
-      const res = await fetch(`${API_BASE}/materials/rename-folder`, {
+      const res = await authFetch(`${API_BASE}/materials/rename-folder`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ folderId, newName }),
@@ -461,7 +462,7 @@ export default function MaterialLibraryPage() {
     if (!confirm(message)) return
     
     try {
-      const res = await fetch(`${API_BASE}/materials/delete-folder`, {
+      const res = await authFetch(`${API_BASE}/materials/delete-folder`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ folderId }),
@@ -485,7 +486,7 @@ export default function MaterialLibraryPage() {
     if (selectedIds.length === 0) return
     
     try {
-      const res = await fetch(`${API_BASE}/materials/move-to-folder`, {
+      const res = await authFetch(`${API_BASE}/materials/move-to-folder`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ids: selectedIds, folder: targetPath }),

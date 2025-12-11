@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useAuth } from '../contexts/AuthContext'
+import { authFetch } from '../services/api'
 
 interface Suggestion {
   _id: string
@@ -88,7 +89,7 @@ export default function AiSuggestionsPage() {
   const generateSuggestions = async () => {
     setGenerating(true)
     try {
-      const res = await fetch('/api/ai-suggestions/generate', {
+      const res = await authFetch('/api/ai-suggestions/generate', {
         method: 'POST',
         headers: getAuthHeaders(),
       })
@@ -106,7 +107,7 @@ export default function AiSuggestionsPage() {
   const executeSuggestion = async (id: string) => {
     setExecuting(id)
     try {
-      const res = await fetch(`/api/ai-suggestions/${id}/execute`, {
+      const res = await authFetch(`/api/ai-suggestions/${id}/execute`, {
         method: 'POST',
         headers: getAuthHeaders(),
       })
@@ -124,7 +125,7 @@ export default function AiSuggestionsPage() {
 
   const rejectSuggestion = async (id: string) => {
     try {
-      const res = await fetch(`/api/ai-suggestions/${id}/reject`, {
+      const res = await authFetch(`/api/ai-suggestions/${id}/reject`, {
         method: 'POST',
         headers: getAuthHeaders(),
       })
@@ -147,7 +148,7 @@ export default function AiSuggestionsPage() {
     
     setExecuting('batch')
     try {
-      const res = await fetch('/api/ai-suggestions/execute-batch', {
+      const res = await authFetch('/api/ai-suggestions/execute-batch', {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({ ids: selectedIds }),

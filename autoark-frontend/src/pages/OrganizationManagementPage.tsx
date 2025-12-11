@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { useAuth } from '../contexts/AuthContext'
+import { authFetch } from '../services/api'
 
 interface Organization {
   _id: string
@@ -36,7 +37,7 @@ const OrganizationManagementPage: React.FC = () => {
 
   const fetchOrganizations = async () => {
     try {
-      const response = await fetch('/api/organizations', {
+      const response = await authFetch('/api/organizations', {
         headers: {
           'Authorization': `Bearer ${token}`,
         },
@@ -70,7 +71,7 @@ const OrganizationManagementPage: React.FC = () => {
   const handleCreateOrganization = async (e: React.FormEvent) => {
     e.preventDefault()
     try {
-      const response = await fetch('/api/organizations', {
+      const response = await authFetch('/api/organizations', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -103,7 +104,7 @@ const OrganizationManagementPage: React.FC = () => {
     if (!confirm('确定要删除此组织吗？组织下不能有任何用户。')) return
 
     try {
-      const response = await fetch(`/api/organizations/${orgId}`, {
+      const response = await authFetch(`/api/organizations/${orgId}`, {
         method: 'DELETE',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -137,7 +138,7 @@ const OrganizationManagementPage: React.FC = () => {
     if (!editingOrg) return
 
     try {
-      const response = await fetch(`/api/organizations/${editingOrg._id}`, {
+      const response = await authFetch(`/api/organizations/${editingOrg._id}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',

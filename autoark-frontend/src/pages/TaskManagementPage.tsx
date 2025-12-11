@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import Loading from '../components/Loading'
+import { authFetch } from '../services/api'
 
 const API_BASE = '/api'
 
@@ -114,7 +115,7 @@ export default function TaskManagementPage() {
   
   const loadTasks = async () => {
     try {
-      const res = await fetch(`${API_BASE}/bulk-ad/tasks`)
+      const res = await authFetch(`${API_BASE}/bulk-ad/tasks`)
       const data = await res.json()
       if (data.success) {
         setTasks(data.data?.list || [])
@@ -129,7 +130,7 @@ export default function TaskManagementPage() {
   const loadTaskDetail = async (taskId: string) => {
     setRefreshing(true)
     try {
-      const res = await fetch(`${API_BASE}/bulk-ad/tasks/${taskId}`)
+      const res = await authFetch(`${API_BASE}/bulk-ad/tasks/${taskId}`)
       const data = await res.json()
       if (data.success) {
         setSelectedTask(data.data)
@@ -148,7 +149,7 @@ export default function TaskManagementPage() {
   const handleCancel = async (taskId: string) => {
     if (!confirm('确定要取消此任务吗？')) return
     try {
-      const res = await fetch(`${API_BASE}/bulk-ad/tasks/${taskId}/cancel`, { method: 'POST' })
+      const res = await authFetch(`${API_BASE}/bulk-ad/tasks/${taskId}/cancel`, { method: 'POST' })
       const data = await res.json()
       if (data.success) {
         loadTasks()
@@ -161,7 +162,7 @@ export default function TaskManagementPage() {
   
   const handleRetry = async (taskId: string) => {
     try {
-      const res = await fetch(`${API_BASE}/bulk-ad/tasks/${taskId}/retry`, { method: 'POST' })
+      const res = await authFetch(`${API_BASE}/bulk-ad/tasks/${taskId}/retry`, { method: 'POST' })
       const data = await res.json()
       if (data.success) {
         loadTasks()
@@ -184,7 +185,7 @@ export default function TaskManagementPage() {
     if (!rerunTaskId) return
     setRerunning(true)
     try {
-      const res = await fetch(`${API_BASE}/bulk-ad/tasks/${rerunTaskId}/rerun`, { 
+      const res = await authFetch(`${API_BASE}/bulk-ad/tasks/${rerunTaskId}/rerun`, { 
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ multiplier: rerunMultiplier })
@@ -212,7 +213,7 @@ export default function TaskManagementPage() {
   const checkReviewStatus = async (taskId: string) => {
     setCheckingReview(true)
     try {
-      const res = await fetch(`${API_BASE}/bulk-ad/tasks/${taskId}/check-review`, { method: 'POST' })
+      const res = await authFetch(`${API_BASE}/bulk-ad/tasks/${taskId}/check-review`, { method: 'POST' })
       const data = await res.json()
       if (data.success) {
         // 重新加载任务详情
@@ -233,7 +234,7 @@ export default function TaskManagementPage() {
   // 加载审核详情
   const loadReviewDetails = async (taskId: string) => {
     try {
-      const res = await fetch(`${API_BASE}/bulk-ad/tasks/${taskId}/review-status`)
+      const res = await authFetch(`${API_BASE}/bulk-ad/tasks/${taskId}/review-status`)
       const data = await res.json()
       if (data.success) {
         setReviewDetails(data.data)

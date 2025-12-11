@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useAuth } from '../contexts/AuthContext'
+import { authFetch } from '../services/api'
 
 interface HealthData {
   healthScore: number
@@ -101,7 +102,7 @@ export default function AIAnalysisPage() {
   const loadHealthData = async () => {
     setLoading(true)
     try {
-      const res = await fetch('/api/agent/analysis/health')
+      const res = await authFetch('/api/agent/analysis/health')
       const data = await res.json()
       if (data.success) setHealthData(data.data)
     } catch (error) {
@@ -112,7 +113,7 @@ export default function AIAnalysisPage() {
 
   const loadReports = async () => {
     try {
-      const res = await fetch('/api/agent/reports?limit=7')
+      const res = await authFetch('/api/agent/reports?limit=7')
       const data = await res.json()
       if (data.success) setReports(data.data)
     } catch (error) {
@@ -124,7 +125,7 @@ export default function AIAnalysisPage() {
     setLoading(true)
     try {
       const today = new Date().toISOString().split('T')[0]
-      await fetch('/api/agent/reports/generate', {
+      await authFetch('/api/agent/reports/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ date: today }),

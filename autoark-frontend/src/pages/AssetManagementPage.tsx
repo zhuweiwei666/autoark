@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useSearchParams, useNavigate } from 'react-router-dom'
+import { authFetch } from '../services/api'
 
 const API_BASE = '/api'
 
@@ -342,7 +343,7 @@ export default function AssetManagementPage() {
   const loadItems = async () => {
     setLoading(true)
     try {
-      const res = await fetch(`${API_BASE}/bulk-ad/${TAB_CONFIG[activeTab].endpoint}`)
+      const res = await authFetch(`${API_BASE}/bulk-ad/${TAB_CONFIG[activeTab].endpoint}`)
       const data = await res.json()
       if (data.success) setItems(data.data?.list || [])
     } catch (err) {
@@ -391,7 +392,7 @@ export default function AssetManagementPage() {
         ? `${API_BASE}/bulk-ad/${TAB_CONFIG[activeTab].endpoint}/${formData._id}`
         : `${API_BASE}/bulk-ad/${TAB_CONFIG[activeTab].endpoint}`
       
-      const res = await fetch(url, {
+      const res = await authFetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(formData),
@@ -414,7 +415,7 @@ export default function AssetManagementPage() {
   const handleDelete = async (id: string) => {
     if (!confirm('确定要删除吗？')) return
     try {
-      const res = await fetch(`${API_BASE}/bulk-ad/${TAB_CONFIG[activeTab].endpoint}/${id}`, { method: 'DELETE' })
+      const res = await authFetch(`${API_BASE}/bulk-ad/${TAB_CONFIG[activeTab].endpoint}/${id}`, { method: 'DELETE' })
       const data = await res.json()
       if (data.success) loadItems()
     } catch (err) {
@@ -436,7 +437,7 @@ export default function AssetManagementPage() {
     
     setSavingProduct(true)
     try {
-      const res = await fetch(`${API_BASE}/bulk-ad/copywriting-packages/${itemId}`, {
+      const res = await authFetch(`${API_BASE}/bulk-ad/copywriting-packages/${itemId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

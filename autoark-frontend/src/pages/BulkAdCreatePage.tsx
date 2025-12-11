@@ -335,7 +335,7 @@ export default function BulkAdCreatePage() {
   // 检查同步状态
   const checkSyncStatus = async () => {
     try {
-      const res = await fetch(`${API_BASE}/bulk-ad/auth/sync-status`)
+      const res = await authFetch(`${API_BASE}/bulk-ad/auth/sync-status`)
       const data = await res.json()
       if (data.success) {
         setSyncStatus(data.data)
@@ -350,7 +350,7 @@ export default function BulkAdCreatePage() {
   // 手动触发重新同步
   const triggerResync = async () => {
     try {
-      await fetch(`${API_BASE}/bulk-ad/auth/resync`, { method: 'POST' })
+      await authFetch(`${API_BASE}/bulk-ad/auth/resync`, { method: 'POST' })
       // 开始轮询状态
       const pollInterval = setInterval(async () => {
         const status = await checkSyncStatus()
@@ -381,7 +381,7 @@ export default function BulkAdCreatePage() {
       for (const account of accounts) {
         const accountId = account.account_id || account.id?.replace('act_', '')
         try {
-          const res = await fetch(`${API_BASE}/bulk-ad/auth/pixels?accountId=${accountId}`)
+          const res = await authFetch(`${API_BASE}/bulk-ad/auth/pixels?accountId=${accountId}`)
           const data = await res.json()
           if (data.success && data.data) {
             for (const pixel of data.data) {
@@ -639,7 +639,7 @@ export default function BulkAdCreatePage() {
         campaign, adset, ad,
         publishStrategy,
       }
-      const createRes = await fetch(`${API_BASE}/bulk-ad/drafts`, {
+      const createRes = await authFetch(`${API_BASE}/bulk-ad/drafts`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(draft),
@@ -648,13 +648,13 @@ export default function BulkAdCreatePage() {
       if (!createData.success) throw new Error(createData.error || '创建草稿失败')
       
       const draftId = createData.data._id
-      const validateRes = await fetch(`${API_BASE}/bulk-ad/drafts/${draftId}/validate`, { method: 'POST' })
+      const validateRes = await authFetch(`${API_BASE}/bulk-ad/drafts/${draftId}/validate`, { method: 'POST' })
       const validateData = await validateRes.json()
       if (!validateData.success || !validateData.data.isValid) {
         throw new Error(`验证失败: ${validateData.data?.errors?.map((e: any) => e.message).join(', ')}`)
       }
       
-      const publishRes = await fetch(`${API_BASE}/bulk-ad/drafts/${draftId}/publish`, { method: 'POST' })
+      const publishRes = await authFetch(`${API_BASE}/bulk-ad/drafts/${draftId}/publish`, { method: 'POST' })
       const publishData = await publishRes.json()
       if (!publishData.success) throw new Error(publishData.error || '发布失败')
       

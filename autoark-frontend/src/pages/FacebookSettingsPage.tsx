@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { getTokens, getPixels, getPixelDetails, getPixelEvents, checkTokenStatus, deleteToken, type FbToken, type FbPixel, type PixelDetails, type PixelEvent } from '../services/api'
+import { getTokens, getPixels, getPixelDetails, getPixelEvents, checkTokenStatus, deleteToken, authFetch, type FbToken, type FbPixel, type PixelDetails, type PixelEvent } from '../services/api'
 
 type TabType = 'tokens' | 'pixels'
 
@@ -82,7 +82,7 @@ export default function FacebookSettingsPage() {
     }
     setBindingToken(true)
     try {
-      const res = await fetch('/api/fb-token', {
+      const res = await authFetch('/api/fb-token', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import Loading from '../components/Loading'
+import { authFetch } from '../services/api'
 
 const API_BASE = '/api'
 
@@ -68,7 +69,7 @@ export default function AdReviewStatusPage() {
 
   const loadData = async () => {
     try {
-      const res = await fetch(`${API_BASE}/bulk-ad/ads/review-overview`)
+      const res = await authFetch(`${API_BASE}/bulk-ad/ads/review-overview`)
       const data = await res.json()
       if (data.success) {
         setCampaigns(data.data.campaigns || [])
@@ -83,7 +84,7 @@ export default function AdReviewStatusPage() {
   const refreshReviewStatus = async () => {
     setRefreshing(true)
     try {
-      const res = await fetch(`${API_BASE}/bulk-ad/ads/refresh-review`, { method: 'POST' })
+      const res = await authFetch(`${API_BASE}/bulk-ad/ads/refresh-review`, { method: 'POST' })
       const data = await res.json()
       if (data.success) {
         await loadData()
@@ -102,7 +103,7 @@ export default function AdReviewStatusPage() {
     const newStatus = currentStatus === 'ACTIVE' ? 'PAUSED' : 'ACTIVE'
     setTogglingCampaign(campaignId)
     try {
-      const res = await fetch(`${API_BASE}/facebook/campaigns/${campaignId}/status`, {
+      const res = await authFetch(`${API_BASE}/facebook/campaigns/${campaignId}/status`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: newStatus })

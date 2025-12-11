@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { useAuth } from '../contexts/AuthContext'
+import { authFetch } from '../services/api'
 
 interface Account {
   _id: string
@@ -42,7 +43,7 @@ const AccountPoolPage: React.FC = () => {
       if (filterOrg) params.append('organizationId', filterOrg)
       if (showUnassignedOnly) params.append('unassigned', 'true')
 
-      const response = await fetch(`/api/account-management/accounts?${params}`, {
+      const response = await authFetch(`/api/account-management/accounts?${params}`, {
         headers: {
           'Authorization': `Bearer ${token}`,
         },
@@ -60,7 +61,7 @@ const AccountPoolPage: React.FC = () => {
 
   const fetchOrganizations = async () => {
     try {
-      const response = await fetch('/api/organizations', {
+      const response = await authFetch('/api/organizations', {
         headers: {
           'Authorization': `Bearer ${token}`,
         },
@@ -104,7 +105,7 @@ const AccountPoolPage: React.FC = () => {
     }
 
     try {
-      const response = await fetch('/api/account-management/assign', {
+      const response = await authFetch('/api/account-management/assign', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -140,7 +141,7 @@ const AccountPoolPage: React.FC = () => {
     if (!confirm(`确定要回收 ${selectedAccounts.length} 个账户到账户池吗？`)) return
 
     try {
-      const response = await fetch('/api/account-management/unassign', {
+      const response = await authFetch('/api/account-management/unassign', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

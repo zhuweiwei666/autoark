@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useAuth } from '../contexts/AuthContext'
+import { authFetch } from '../services/api'
 
 interface Condition {
   metric: string
@@ -79,7 +80,7 @@ export default function RulesPage() {
 
   const loadRules = async () => {
     try {
-      const res = await fetch('/api/rules', { headers: getAuthHeaders() })
+      const res = await authFetch('/api/rules', { headers: getAuthHeaders() })
       const data = await res.json()
       if (data.success) setRules(data.data)
     } catch (error) {
@@ -90,7 +91,7 @@ export default function RulesPage() {
 
   const loadTemplates = async () => {
     try {
-      const res = await fetch('/api/rules/templates', { headers: getAuthHeaders() })
+      const res = await authFetch('/api/rules/templates', { headers: getAuthHeaders() })
       const data = await res.json()
       if (data.success) setTemplates(data.data)
     } catch (error) {
@@ -100,7 +101,7 @@ export default function RulesPage() {
 
   const createFromTemplate = async (template: Template) => {
     try {
-      const res = await fetch('/api/rules', {
+      const res = await authFetch('/api/rules', {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({
@@ -120,7 +121,7 @@ export default function RulesPage() {
 
   const toggleRule = async (ruleId: string) => {
     try {
-      const res = await fetch(`/api/rules/${ruleId}/toggle`, {
+      const res = await authFetch(`/api/rules/${ruleId}/toggle`, {
         method: 'POST',
         headers: getAuthHeaders(),
       })
@@ -136,7 +137,7 @@ export default function RulesPage() {
   const executeRule = async (ruleId: string) => {
     setExecuting(ruleId)
     try {
-      const res = await fetch(`/api/rules/${ruleId}/execute`, {
+      const res = await authFetch(`/api/rules/${ruleId}/execute`, {
         method: 'POST',
         headers: getAuthHeaders(),
       })
@@ -156,7 +157,7 @@ export default function RulesPage() {
   const deleteRule = async (ruleId: string) => {
     if (!confirm('确定删除这条规则吗？')) return
     try {
-      const res = await fetch(`/api/rules/${ruleId}`, {
+      const res = await authFetch(`/api/rules/${ruleId}`, {
         method: 'DELETE',
         headers: getAuthHeaders(),
       })
