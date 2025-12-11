@@ -1,7 +1,7 @@
 import logger from '../utils/logger'
 import mongoose from 'mongoose'
 import Material from '../models/Material'
-import { bulkAdService } from './bulkAd.service'
+import bulkAdService from './bulkAd.service'
 import FbToken from '../models/FbToken'
 import Account from '../models/Account'
 
@@ -95,21 +95,21 @@ class MaterialAutoTestService {
   /**
    * 获取所有自动测试配置
    */
-  async getConfigs(): Promise<AutoTestConfig[]> {
+  async getConfigs(): Promise<any[]> {
     return AutoTestConfig.find().sort({ createdAt: -1 }).lean()
   }
   
   /**
    * 获取单个配置
    */
-  async getConfigById(id: string): Promise<AutoTestConfig | null> {
+  async getConfigById(id: string): Promise<any | null> {
     return AutoTestConfig.findById(id).lean()
   }
   
   /**
    * 创建配置
    */
-  async createConfig(data: Partial<AutoTestConfig>): Promise<AutoTestConfig> {
+  async createConfig(data: Partial<AutoTestConfig>): Promise<any> {
     const config = new AutoTestConfig(data)
     await config.save()
     logger.info(`[MaterialAutoTest] Created config: ${config.name}`)
@@ -119,7 +119,7 @@ class MaterialAutoTestService {
   /**
    * 更新配置
    */
-  async updateConfig(id: string, data: Partial<AutoTestConfig>): Promise<AutoTestConfig | null> {
+  async updateConfig(id: string, data: Partial<AutoTestConfig>): Promise<any | null> {
     return AutoTestConfig.findByIdAndUpdate(id, data, { new: true }).lean()
   }
   
@@ -171,7 +171,7 @@ class MaterialAutoTestService {
     }
     
     // 获取配置
-    let config: AutoTestConfig | null = null
+    let config: any = null
     if (configId) {
       config = await this.getConfigById(configId)
     } else {
