@@ -553,12 +553,19 @@ export const getMaterialRankings = async (options: {
       }).lean()
     }
     
+    // 获取本地素材的存储 URL
+    const localStorageUrl = (localMaterial as any)?.storage?.url || null
+    
     return {
       ...item,
       fingerprint,
       // 优先使用本地素材的信息
       materialName: localMaterial?.name || item.materialName || `素材_${fingerprint?.substring(0, 12) || 'unknown'}`,
-      thumbnailUrl: (localMaterial as any)?.storage?.url || item.thumbnailUrl,
+      // 缩略图优先使用本地存储 URL
+      thumbnailUrl: localStorageUrl || item.thumbnailUrl,
+      // 🎯 添加 localStorageUrl 和 originalUrl 供前端判断下载状态
+      localStorageUrl,
+      originalUrl: item.thumbnailUrl,  // Facebook 原始 URL 作为备用
       localMaterialId: localMaterial?._id?.toString(),
       hasLocalMaterial: !!localMaterial,
     }
