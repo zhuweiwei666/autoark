@@ -221,10 +221,12 @@ router.get('/accounts', async (req: Request, res: Response) => {
       {
         $addFields: {
           roas: { $cond: [{ $gt: ['$spend', 0] }, { $divide: ['$revenue', '$spend'] }, 0] },
-          ctr: { $cond: [{ $gt: ['$impressions', 0] }, { $multiply: [{ $divide: ['$clicks', '$impressions'] }, 100] }, 0] },
+          // 返回小数形式（0.0237），前端 formatPercent 会乘以 100
+          ctr: { $cond: [{ $gt: ['$impressions', 0] }, { $divide: ['$clicks', '$impressions'] }, 0] },
           periodSpend: '$spend',  // 兼容前端字段名
           name: '$accountName',   // 兼容前端字段名
           id: '$accountId',       // 兼容前端字段名
+          purchase_value: '$revenue',  // 兼容前端字段名
         }
       },
       { $sort: { [sortBy === 'periodSpend' ? 'spend' : sortBy]: sortOrder } },
@@ -293,7 +295,11 @@ router.get('/countries', async (req: Request, res: Response) => {
       {
         $addFields: {
           roas: { $cond: [{ $gt: ['$spend', 0] }, { $divide: ['$revenue', '$spend'] }, 0] },
-          ctr: { $cond: [{ $gt: ['$impressions', 0] }, { $multiply: [{ $divide: ['$clicks', '$impressions'] }, 100] }, 0] },
+          // 返回小数形式（0.0237），前端 formatPercent 会乘以 100
+          ctr: { $cond: [{ $gt: ['$impressions', 0] }, { $divide: ['$clicks', '$impressions'] }, 0] },
+          // 兼容前端字段名
+          purchase_value: '$revenue',
+          purchase_roas: { $cond: [{ $gt: ['$spend', 0] }, { $divide: ['$revenue', '$spend'] }, 0] },
         }
       },
       { $sort: { [sortBy]: sortOrder } },
@@ -392,7 +398,8 @@ router.get('/campaigns', async (req: Request, res: Response) => {
       {
         $addFields: {
           roas: { $cond: [{ $gt: ['$spend', 0] }, { $divide: ['$revenue', '$spend'] }, 0] },
-          ctr: { $cond: [{ $gt: ['$impressions', 0] }, { $multiply: [{ $divide: ['$clicks', '$impressions'] }, 100] }, 0] },
+          // 返回小数形式（0.0237），前端 formatPercent 会乘以 100
+          ctr: { $cond: [{ $gt: ['$impressions', 0] }, { $divide: ['$clicks', '$impressions'] }, 0] },
           cpc: { $cond: [{ $gt: ['$clicks', 0] }, { $divide: ['$spend', '$clicks'] }, 0] },
           cpm: { $cond: [{ $gt: ['$impressions', 0] }, { $multiply: [{ $divide: ['$spend', '$impressions'] }, 1000] }, 0] },
           cpi: { $cond: [{ $gt: ['$installs', 0] }, { $divide: ['$spend', '$installs'] }, 0] },
@@ -401,6 +408,7 @@ router.get('/campaigns', async (req: Request, res: Response) => {
           id: '$campaignId',
           account_id: '$accountId',
           purchase_value: '$revenue',
+          purchase_roas: { $cond: [{ $gt: ['$spend', 0] }, { $divide: ['$revenue', '$spend'] }, 0] },
           mobile_app_install: '$installs',
         }
       },
