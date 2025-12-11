@@ -10,8 +10,8 @@ import { UserRole } from '../models/User'
 /**
  * 获取 Token 过滤条件
  * - 超级管理员：看所有
- * - 组织管理员：看本组织
- * - 普通成员：只看自己绑定的
+ * - 组织管理员：看本组织 + 公共数据
+ * - 普通成员：看自己绑定的 + 公共数据
  */
 const getTokenFilter = (req: Request): any => {
   if (!req.user) return { _id: null } // 未认证，返回空结果
@@ -19,13 +19,29 @@ const getTokenFilter = (req: Request): any => {
   // 超级管理员看所有
   if (req.user.role === UserRole.SUPER_ADMIN) return {}
   
-  // 组织管理员看本组织
+  // 组织管理员看本组织 + 公共数据（无 userId 或 userId 为空）
   if (req.user.role === UserRole.ORG_ADMIN && req.user.organizationId) {
-    return { organizationId: req.user.organizationId }
+    return {
+      $or: [
+        { organizationId: req.user.organizationId },
+        { userId: { $exists: false } },
+        { userId: null },
+        { userId: '' },
+        { userId: 'default-user' } // 兼容旧数据
+      ]
+    }
   }
   
-  // 普通成员只看自己绑定的
-  return { userId: req.user.userId }
+  // 普通成员看自己绑定的 + 公共数据（无 userId 或 userId 为空）
+  return {
+    $or: [
+      { userId: req.user.userId },
+      { userId: { $exists: false } },
+      { userId: null },
+      { userId: '' },
+      { userId: 'default-user' } // 兼容旧数据
+    ]
+  }
 }
 
 /**

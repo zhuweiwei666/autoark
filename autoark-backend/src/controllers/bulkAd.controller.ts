@@ -31,23 +31,32 @@ const getAssetFilter = (req: Request): any => {
     return { _id: null } // 未认证，返回空结果
   }
   
-  logger.info(`[BulkAd] User role: ${req.user.role}, userId: ${req.user.userId}`)
-  
   // 超级管理员看所有
   if (req.user.role === UserRole.SUPER_ADMIN) {
-    logger.info('[BulkAd] User is SUPER_ADMIN, returning empty filter')
     return {}
   }
   
-  // 组织管理员看本组织
+  // 组织管理员看本组织 + 公共数据（无 createdBy）
   if (req.user.role === UserRole.ORG_ADMIN && req.user.organizationId) {
-    logger.info(`[BulkAd] User is ORG_ADMIN, filtering by org: ${req.user.organizationId}`)
-    return { organizationId: req.user.organizationId }
+    return {
+      $or: [
+        { organizationId: req.user.organizationId },
+        { createdBy: { $exists: false } },
+        { createdBy: null },
+        { createdBy: '' }
+      ]
+    }
   }
   
-  // 普通成员只看自己创建的
-  logger.info(`[BulkAd] User is MEMBER, filtering by createdBy: ${req.user.userId}`)
-  return { createdBy: req.user.userId }
+  // 普通成员看自己创建的 + 公共数据（无 createdBy）
+  return {
+    $or: [
+      { createdBy: req.user.userId },
+      { createdBy: { $exists: false } },
+      { createdBy: null },
+      { createdBy: '' }
+    ]
+  }
 }
 
 // ==================== 草稿管理 ====================
