@@ -1896,8 +1896,10 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
 }`
 
     try {
+      logger.info(`[AgentService] Calling Gemini API, model exists: ${!!this.model}`)
       const result = await this.model.generateContent(prompt)
       const content = result.response.text()
+      logger.info(`[AgentService] Gemini response length: ${content.length}`)
       const jsonMatch = content.match(/\{[\s\S]*\}/)
       
       if (jsonMatch) {
@@ -1924,19 +1926,34 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
         }
       }
     } catch (error: any) {
-      logger.error('[AgentService] AI analysis failed:', error.message)
-    }
-    
-    // AI 分析失败，返回基础结果
-    return {
-      success: true,
-      data: {
-        materialId,
-        materialName: material.materialName,
-        scores: { overall: material.qualityScore },
-        analysis: 'AI 分析暂时不可用',
-        recommendation: 'MAINTAIN',
-        aiPowered: false,
+      logger.error('[AgentService] AI analysis failed:', error.message || error)
+      logger.error('[AgentService] Error stack:', error.stack)
+      
+      // AI 分析失败，返回带错误信息的基础结果
+      return {
+        success: true,
+        data: {
+          materialId,
+          materialName: material.materialName,
+          materialType: material.materialType,
+          metrics: {
+            spend: material.spend,
+            revenue: material.purchaseValue || 0,
+            roas: material.roas,
+            ctr: material.ctr,
+            impressions: material.impressions,
+            clicks: material.clicks,
+            daysActive: material.daysActive,
+          },
+          scores: { 
+            overall: material.qualityScore,
+            roas: material.roas >= 1 ? 80 : material.roas >= 0.5 ? 50 : 20,
+          },
+          analysis: `基础分析：ROAS ${material.roas?.toFixed(2) || 0}，消耗 $${material.spend?.toFixed(2) || 0}（AI 模型调用失败，使用规则分析）`,
+          recommendation: material.roas >= 1.5 ? 'SCALE_UP' : material.roas < 0.5 ? 'PAUSE' : 'MAINTAIN',
+          aiPowered: false,
+          aiError: error.message || 'Unknown error',
+        }
       }
     }
   }
