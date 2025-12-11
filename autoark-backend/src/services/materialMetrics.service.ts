@@ -415,6 +415,10 @@ export const aggregateMaterialMetrics = async (date: string): Promise<{
 
 /**
  * 获取素材排行榜
+ * 
+ * 🌍 国家筛选逻辑：
+ * - 无国家筛选：从预聚合的 MaterialMetrics 表查询（快速）
+ * - 有国家筛选：从 MetricsDaily 实时聚合，通过 AdMaterialMapping 关联素材（准确）
  */
 export const getMaterialRankings = async (options: {
   dateRange: { start: string; end: string }
@@ -425,14 +429,18 @@ export const getMaterialRankings = async (options: {
 }) => {
   const { dateRange, sortBy = 'roas', limit = 20, materialType, country } = options
   
+  // 🌍 如果指定了国家，使用实时聚合
+  if (country) {
+    return getMaterialRankingsByCountry({ dateRange, sortBy, limit, materialType, country })
+  }
+  
+  // 无国家筛选，使用预聚合数据（快速）
   const match: any = {
     date: { $gte: dateRange.start, $lte: dateRange.end },
     spend: { $gt: 0 },
     materialId: { $exists: true, $ne: null }  // 🎯 只显示有素材库关联的素材
   }
   if (materialType) match.materialType = materialType
-  // 🌍 国家筛选：如果指定了国家，只查询该国家的数据
-  if (country) match.country = country
   
   const results = await MaterialMetrics.aggregate([
     { $match: match },
@@ -980,6 +988,179 @@ export const getDecliningMaterials = async (options: {
       comparisonPeriod: '最近3天 vs 前4天',
     },
   }
+}
+
+/**
+ * 🌍 按国家筛选素材排行榜（实时聚合）
+ * 从 MetricsDaily 实时聚合，通过 AdMaterialMapping 关联素材
+ */
+const getMaterialRankingsByCountry = async (options: {
+  dateRange: { start: string; end: string }
+  sortBy?: 'roas' | 'spend' | 'qualityScore' | 'impressions'
+  limit?: number
+  materialType?: 'image' | 'video'
+  country: string
+}) => {
+  const { dateRange, sortBy = 'roas', limit = 20, materialType, country } = options
+  
+  logger.info(`[MaterialMetrics] Getting rankings by country: ${country}, ${dateRange.start} - ${dateRange.end}`)
+  
+  // 1. 获取所有 AdMaterialMapping（广告-素材映射）
+  const mappings = await AdMaterialMapping.find({ status: 'active' }).lean()
+  const adIdToMaterialId = new Map<string, string>()
+  for (const m of mappings) {
+    if ((m as any).adId && (m as any).materialId) {
+      adIdToMaterialId.set((m as any).adId, (m as any).materialId.toString())
+    }
+  }
+  logger.info(`[MaterialMetrics] Loaded ${adIdToMaterialId.size} ad-material mappings`)
+  
+  if (adIdToMaterialId.size === 0) {
+    return []
+  }
+  
+  // 2. 从 MetricsDaily 查询指定国家的 campaign 级别数据
+  // 注意：国家数据通常在 campaign 级别，不在 ad 级别
+  const countryMetrics = await MetricsDaily.find({
+    date: { $gte: dateRange.start, $lte: dateRange.end },
+    country: country,
+    spendUsd: { $gt: 0 },
+    campaignId: { $exists: true, $ne: null }
+  }).lean()
+  
+  logger.info(`[MaterialMetrics] Found ${countryMetrics.length} metrics for country ${country}`)
+  
+  if (countryMetrics.length === 0) {
+    return []
+  }
+  
+  // 3. 获取这些 campaign 下的所有广告
+  const campaignIds = [...new Set(countryMetrics.map((m: any) => m.campaignId))]
+  const ads = await Ad.find({ campaignId: { $in: campaignIds } }).lean()
+  
+  // 4. 构建 campaign -> 素材列表的映射
+  const campaignToMaterials = new Map<string, Set<string>>()
+  for (const ad of ads) {
+    const materialId = adIdToMaterialId.get((ad as any).adId)
+    if (materialId) {
+      if (!campaignToMaterials.has((ad as any).campaignId)) {
+        campaignToMaterials.set((ad as any).campaignId, new Set())
+      }
+      campaignToMaterials.get((ad as any).campaignId)!.add(materialId)
+    }
+  }
+  
+  // 5. 按素材聚合数据（将 campaign 指标按比例分配给素材）
+  const materialAgg = new Map<string, any>()
+  
+  for (const metric of countryMetrics) {
+    const m = metric as any
+    const materialsInCampaign = campaignToMaterials.get(m.campaignId)
+    if (!materialsInCampaign || materialsInCampaign.size === 0) continue
+    
+    // 将 campaign 的指标按比例分配给每个素材
+    const materialCount = materialsInCampaign.size
+    const spendPerMaterial = (m.spendUsd || 0) / materialCount
+    const impressionsPerMaterial = (m.impressions || 0) / materialCount
+    const clicksPerMaterial = (m.clicks || 0) / materialCount
+    const purchaseValue = m.purchase_value || 0
+    const purchaseValuePerMaterial = purchaseValue / materialCount
+    
+    for (const materialId of materialsInCampaign) {
+      if (!materialAgg.has(materialId)) {
+        materialAgg.set(materialId, {
+          materialId,
+          spend: 0,
+          impressions: 0,
+          clicks: 0,
+          purchaseValue: 0,
+          installs: 0,
+          purchases: 0,
+          campaignIds: new Set(),
+          dates: new Set(),
+        })
+      }
+      
+      const agg = materialAgg.get(materialId)
+      agg.spend += spendPerMaterial
+      agg.impressions += impressionsPerMaterial
+      agg.clicks += clicksPerMaterial
+      agg.purchaseValue += purchaseValuePerMaterial
+      agg.campaignIds.add(m.campaignId)
+      agg.dates.add(m.date)
+    }
+  }
+  
+  logger.info(`[MaterialMetrics] Aggregated ${materialAgg.size} materials for country ${country}`)
+  
+  // 6. 获取素材信息并格式化结果
+  const results: any[] = []
+  
+  for (const [materialId, agg] of materialAgg) {
+    const material = await Material.findById(materialId).lean()
+    if (!material) continue
+    
+    const mat = material as any
+    
+    // 素材类型筛选
+    if (materialType && mat.type !== materialType) continue
+    
+    const roas = agg.spend > 0 ? agg.purchaseValue / agg.spend : 0
+    const ctr = agg.impressions > 0 ? (agg.clicks / agg.impressions) * 100 : 0
+    const cpi = agg.installs > 0 ? agg.spend / agg.installs : 0
+    
+    // 计算质量分
+    let qualityScore = 50
+    if (roas >= 3) qualityScore += 30
+    else if (roas >= 2) qualityScore += 25
+    else if (roas >= 1.5) qualityScore += 20
+    else if (roas >= 1) qualityScore += 10
+    else if (roas < 0.5) qualityScore -= 10
+    if (ctr >= 2) qualityScore += 10
+    else if (ctr >= 1) qualityScore += 5
+    else if (ctr < 0.5) qualityScore -= 5
+    qualityScore = Math.max(0, Math.min(100, qualityScore))
+    
+    results.push({
+      materialKey: materialId,
+      materialId,
+      materialType: mat.type || 'video',
+      materialName: mat.name,
+      thumbnailUrl: mat.storage?.url,
+      localStorageUrl: mat.storage?.url,
+      originalUrl: mat.storage?.url,
+      imageHash: mat.facebook?.imageHash,
+      videoId: mat.facebook?.videoId,
+      fingerprint: mat.fingerprintKey,
+      hasLocalMaterial: true,
+      localMaterialId: materialId,
+      
+      spend: Math.round(agg.spend * 100) / 100,
+      impressions: Math.round(agg.impressions),
+      clicks: Math.round(agg.clicks),
+      purchaseValue: Math.round(agg.purchaseValue * 100) / 100,
+      installs: agg.installs,
+      purchases: agg.purchases,
+      
+      roas: Math.round(roas * 100) / 100,
+      ctr: Math.round(ctr * 100) / 100,
+      cpi: Math.round(cpi * 100) / 100,
+      qualityScore,
+      
+      daysActive: agg.dates.size,
+      uniqueAdsCount: 0, // 这个无法准确计算
+      uniqueCampaignsCount: agg.campaignIds.size,
+      optimizers: [],
+    })
+  }
+  
+  // 7. 排序
+  const sortKey = sortBy === 'qualityScore' ? 'qualityScore' : 
+                  sortBy === 'spend' ? 'spend' : 
+                  sortBy === 'impressions' ? 'impressions' : 'roas'
+  results.sort((a, b) => b[sortKey] - a[sortKey])
+  
+  return results.slice(0, limit)
 }
 
 export default {
