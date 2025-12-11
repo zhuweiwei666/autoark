@@ -1,5 +1,6 @@
 import { Router } from 'express'
 import * as bulkAdController from '../controllers/bulkAd.controller'
+import { authenticate } from '../middlewares/auth'
 
 const router = Router()
 
@@ -8,7 +9,7 @@ router.get('/auth/apps', bulkAdController.getAvailableApps) // 获取可用的 F
 router.get('/auth/login-url', bulkAdController.getAuthLoginUrl)
 router.get('/auth/callback', bulkAdController.handleAuthCallback)
 router.get('/auth/status', bulkAdController.getAuthStatus)
-router.get('/auth/ad-accounts', bulkAdController.getAuthAdAccounts)
+router.get('/auth/ad-accounts', authenticate, bulkAdController.getAuthAdAccounts) // 需要认证
 router.get('/auth/pages', bulkAdController.getAuthPages)
 router.get('/auth/pixels', bulkAdController.getAuthPixels)
 router.get('/auth/cached-pixels', bulkAdController.getCachedPixels) // 预加载的 Pixels

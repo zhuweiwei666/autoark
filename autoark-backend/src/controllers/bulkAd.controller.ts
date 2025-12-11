@@ -17,6 +17,7 @@ import * as oauthService from '../services/facebook.oauth.service'
 import { facebookClient } from '../integration/facebook/facebookClient'
 import { parseProductUrl } from '../services/productMapping.service'
 import { getOrgFilter } from '../middlewares/auth'
+import { UserRole } from '../models/User'
 
 // ==================== 草稿管理 ====================
 
@@ -866,31 +867,63 @@ export const getAuthStatus = async (req: Request, res: Response) => {
 /**
  * 获取当前授权用户的广告账户列表
  * GET /api/bulk-ad/auth/ad-accounts
+ * 需要认证，并根据用户组织进行权限过滤
  */
 export const getAuthAdAccounts = async (req: Request, res: Response) => {
   try {
-    const fbToken: any = await FbToken.findOne({ status: 'active' }).sort({ updatedAt: -1 })
+    // 检查用户认证
+    if (!req.user) {
+      return res.status(401).json({ success: false, error: '未认证' })
+    }
+
+    // 构建 token 查询条件（根据组织隔离）
+    const tokenQuery: any = { status: 'active' }
+    // 如果不是超级管理员，只查询本组织的 token
+    if (req.user.role !== UserRole.SUPER_ADMIN && req.user.organizationId) {
+      tokenQuery.organizationId = req.user.organizationId
+    }
+
+    // 查找符合条件的 token
+    const fbToken: any = await FbToken.findOne(tokenQuery).sort({ updatedAt: -1 })
     if (!fbToken) {
-      return res.status(401).json({ success: false, error: '未授权 Facebook 账号' })
+      return res.status(401).json({ success: false, error: '未找到可用的 Facebook 授权账号' })
     }
     
-    // 获取用户的广告账户
+    // 获取该 token 对应的所有广告账户
     const result = await facebookClient.get('/me/adaccounts', {
       access_token: fbToken.token,
       fields: 'id,account_id,name,account_status,currency,timezone_name,amount_spent,balance',
       limit: 100,
     })
     
-    const accounts = (result.data || []).map((acc: any) => ({
-      id: acc.id,
-      account_id: acc.account_id,
-      name: acc.name,
-      account_status: acc.account_status,
-      currency: acc.currency,
-      timezone_name: acc.timezone_name,
-      amount_spent: acc.amount_spent,
-      balance: acc.balance,
-    }))
+    // 获取所有账户ID
+    const accountIds = (result.data || []).map((acc: any) => acc.account_id)
+    
+    // 根据 Account 模型中的 organizationId 进行过滤
+    // 如果不是超级管理员，只返回本组织的账户
+    let allowedAccountIds: string[] = accountIds
+    if (req.user.role !== UserRole.SUPER_ADMIN && req.user.organizationId) {
+      const Account = require('../models/Account').default
+      const allowedAccounts = await Account.find({
+        accountId: { $in: accountIds },
+        organizationId: req.user.organizationId,
+      }).select('accountId').lean()
+      allowedAccountIds = allowedAccounts.map((acc: any) => acc.accountId)
+    }
+    
+    // 过滤并返回账户列表
+    const accounts = (result.data || [])
+      .filter((acc: any) => allowedAccountIds.includes(acc.account_id))
+      .map((acc: any) => ({
+        id: acc.id,
+        account_id: acc.account_id,
+        name: acc.name,
+        account_status: acc.account_status,
+        currency: acc.currency,
+        timezone_name: acc.timezone_name,
+        amount_spent: acc.amount_spent,
+        balance: acc.balance,
+      }))
     
     res.json({ success: true, data: accounts })
   } catch (error: any) {

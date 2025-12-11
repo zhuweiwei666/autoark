@@ -232,7 +232,10 @@ export default function FacebookAccountsPage() {
               </select>
             </div>
             <button
-              onClick={() => loadAccounts(1)}
+              onClick={() => {
+                setPage(1)
+                queryClient.invalidateQueries({ queryKey: ['accounts'] })
+              }}
               className="w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 rounded-2xl text-sm font-semibold text-white transition-all shadow-md hover:shadow-lg active:scale-95"
             >
               搜索
