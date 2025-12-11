@@ -11,6 +11,15 @@ import dayjs from 'dayjs'
 import { fetchInsights } from '../../integration/facebook/insights.api'
 import { getMaterialRankings } from '../../services/materialMetrics.service'
 import { getCoreMetrics } from '../../services/dashboard.service'
+// 🔥 使用统一的预聚合数据表
+import { 
+  AggDaily, 
+  AggCountry, 
+  AggAccount, 
+  AggCampaign, 
+  AggOptimizer 
+} from '../../models/Aggregation'
+import { refreshRecentDays } from '../../services/aggregation.service'
 
 const LLM_API_KEY = process.env.LLM_API_KEY
 const LLM_MODEL = process.env.LLM_MODEL || 'gemini-2.0-flash'
@@ -298,7 +307,62 @@ ${data.needsAttention.map((c: any) => `- ${c.entityName || c.entityId}: ${c.issu
   // ==================== AI 对话问答 ====================
 
   /**
-   * AI 对话 - 增强版，获取所有投放数据
+   * 🔥 从预聚合表获取数据（简洁高效）
+   * 最近3天实时刷新，历史数据从数据库读取
+   */
+  private async getAggregatedData(): Promise<any> {
+    const today = dayjs().format('YYYY-MM-DD')
+    const yesterday = dayjs().subtract(1, 'day').format('YYYY-MM-DD')
+    const sevenDaysAgo = dayjs().subtract(7, 'day').format('YYYY-MM-DD')
+
+    // 刷新最近3天的数据
+    logger.info('[AgentService] Refreshing recent data from Aggregation tables...')
+    await refreshRecentDays()
+
+    // 并行获取所有预聚合数据
+    const [
+      todaySummary,
+      yesterdaySummary,
+      weekTrend,
+      countries,
+      accounts,
+      campaigns,
+      optimizers,
+    ] = await Promise.all([
+      AggDaily.findOne({ date: today }).lean(),
+      AggDaily.findOne({ date: yesterday }).lean(),
+      AggDaily.find({ date: { $gte: sevenDaysAgo } }).sort({ date: 1 }).lean(),
+      AggCountry.find({ date: today }).sort({ spend: -1 }).limit(20).lean(),
+      AggAccount.find({ date: today }).sort({ spend: -1 }).lean(),
+      AggCampaign.find({ date: today, spend: { $gt: 1 } }).sort({ spend: -1 }).limit(50).lean(),
+      AggOptimizer.find({ date: today }).sort({ spend: -1 }).lean(),
+    ])
+
+    // 获取素材数据
+    const materialMetrics = await getMaterialRankings({
+      dateRange: { start: sevenDaysAgo, end: today },
+      limit: 20,
+    })
+
+    return {
+      dataTime: dayjs().format('YYYY-MM-DD HH:mm:ss'),
+      dateRange: { today, yesterday, sevenDaysAgo },
+      todaySummary: todaySummary || { spend: 0, revenue: 0, roas: 0 },
+      yesterdaySummary: yesterdaySummary || { spend: 0, revenue: 0, roas: 0 },
+      weekTrend,
+      countries,
+      accounts,
+      campaigns,
+      optimizers,
+      materialMetrics: {
+        topMaterials: materialMetrics.filter((m: any) => m.roas >= 1).slice(0, 10),
+        losingMaterials: materialMetrics.filter((m: any) => m.roas < 0.5 && m.spend > 20).slice(0, 10),
+      },
+    }
+  }
+
+  /**
+   * AI 对话 - 使用预聚合数据，响应更快更准确
    */
   async chat(userId: string, message: string, context?: any): Promise<string> {
     if (!this.model) {
@@ -320,78 +384,49 @@ ${data.needsAttention.map((c: any) => `- ${c.entityName || c.entityId}: ${c.issu
       })
     }
 
-    // 获取完整的投放数据
-    const allData = await this.getAllAdvertisingData()
+    // 🔥 使用预聚合数据（更快更准确）
+    const allData = await this.getAggregatedData()
 
-    // 构建专业的广告优化师 prompt - 增强版，包含完整数据
+    // 🔥 使用预聚合数据构建简洁的 prompt
     const systemPrompt = `你是 AutoArk 的 AI 广告投放优化顾问，专门服务于 Facebook/Meta 广告投放团队。
 
 ## 你的身份和能力
 - 你是一位经验丰富的广告优化师，精通 Facebook 广告投放、数据分析和优化策略
-- 你可以访问团队所有的投放数据，包括：实时数据、历史数据（30天）、分投手数据、分国家数据、分广告组数据
-- 🎨 **素材级别分析**: 你可以分析每个素材（图片/视频）的表现，识别爆款素材和亏损素材
-- 你可以进行跨时间区域分析，对比不同时期的表现
+- 你可以访问团队所有的投放数据（来自预聚合表，数据准确）
 - 你可以分析广告表现，识别问题，给出优化建议
 
 ## 数据说明
-- 投手识别规则：广告系列名称的第一个下划线前的字符串是投手名称（如 "yux_fb_xxx" 中的 "yux" 是投手）
 - ROAS > 1 表示盈利，ROAS < 1 表示亏损
-- CTR（点击率）、CPC（单次点击成本）、CPM（千次曝光成本）、CPI（单次安装成本）是重要的效率指标
+- 投手识别规则：广告系列名称的第一个下划线前的字符串是投手名称
 - 数据更新时间：${allData.dataTime}
 
-## 完整数据快照
-
-### 📊 今日实时数据（${allData.dateRange?.today || dayjs().format('YYYY-MM-DD')}）
+## 📊 今日数据（${allData.dateRange?.today}）
 ${JSON.stringify(allData.todaySummary, null, 2)}
 
-### 📊 昨日数据对比
+## 📊 昨日数据（${allData.dateRange?.yesterday}）
 ${JSON.stringify(allData.yesterdaySummary, null, 2)}
 
-### 📅 本周 vs 上周对比
-${JSON.stringify(allData.periodComparison, null, 2)}
+## 📈 最近7天趋势
+${JSON.stringify(allData.weekTrend, null, 2)}
 
-### 📈 最近7天每日趋势
-${JSON.stringify(allData.last7DaysTrend, null, 2)}
+## 🌍 分国家数据（今日）
+${JSON.stringify(allData.countries, null, 2)}
 
-### 📈 最近30天每日趋势
-${JSON.stringify(allData.last30DaysTrend, null, 2)}
+## 💰 分账户数据（今日）
+${JSON.stringify(allData.accounts, null, 2)}
 
-### 👥 分投手数据（今日）
-${JSON.stringify(allData.optimizerData, null, 2)}
+## 📋 广告系列数据（今日消耗 > $1）
+${JSON.stringify(allData.campaigns?.slice(0, 30), null, 2)}
 
-### 👥 分投手历史趋势（最近7天每日数据）
-${JSON.stringify(allData.optimizerHistoricalTrend, null, 2)}
+## 👥 分投手数据（今日）
+${JSON.stringify(allData.optimizers, null, 2)}
 
-### 🌍 分国家数据（今日 Top 15）
-${JSON.stringify(allData.countryData, null, 2)}
+## 🎨 素材数据（最近7天）
 
-### 🌍 分国家历史趋势（最近7天每日数据）
-${JSON.stringify(allData.countryHistoricalTrend, null, 2)}
-
-### 🏆 表现最佳的广告系列（今日 Top 10，按 ROAS 排序）
-${JSON.stringify(allData.topCampaigns, null, 2)}
-
-### ⚠️ 需要关注的广告系列（ROAS < 0.5 且消耗 > $20）
-${JSON.stringify(allData.losingCampaigns, null, 2)}
-
-### 📋 所有广告系列详细数据（今日消耗 > $1，共 ${allData.totalCampaigns || 0} 个）
-${JSON.stringify(allData.allCampaignsToday?.slice(0, 50), null, 2)}
-
-### 📦 广告组(AdSet)级别数据（今日 Top 20）
-${JSON.stringify(allData.adsetDataToday, null, 2)}
-
-### 📈 广告系列7天趋势（消耗 > $50，含每日数据）
-${JSON.stringify(allData.campaignTrends?.slice(0, 15), null, 2)}
-
-### 📱 所有账户概况
-${JSON.stringify(allData.accountsSummary, null, 2)}
-
-### 🎨 素材级别数据（最近7天）
-
-#### 表现最佳的素材（按ROAS排序）
+### 表现最佳的素材
 ${JSON.stringify(allData.materialMetrics?.topMaterials || [], null, 2)}
 
-#### 需要关注的素材（高消耗低ROAS）
+### 需要关注的素材（高消耗低ROAS）
 ${JSON.stringify(allData.materialMetrics?.losingMaterials || [], null, 2)}
 
 #### 素材类型统计（图片 vs 视频）
