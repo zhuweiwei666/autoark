@@ -179,6 +179,7 @@ const aggCampaignSchema = new Schema<IAggCampaign>({
 aggCampaignSchema.index({ date: 1, campaignId: 1 }, { unique: true })
 aggCampaignSchema.index({ date: 1, optimizer: 1 })
 aggCampaignSchema.index({ date: 1, accountId: 1 })
+aggCampaignSchema.index({ date: 1, status: 1 }) // 🚀 性能优化：按状态筛选索引
 
 export const AggCampaign = mongoose.model<IAggCampaign>('AggCampaign', aggCampaignSchema)
 
@@ -218,53 +219,6 @@ aggOptimizerSchema.index({ date: 1, optimizer: 1 }, { unique: true })
 export const AggOptimizer = mongoose.model<IAggOptimizer>('AggOptimizer', aggOptimizerSchema)
 
 
-// ==================== 6. 分素材表 (素材数据页面) ====================
-export interface IAggMaterial extends Document {
-  date: string
-  materialId: string              // 素材库 ID
-  materialName: string
-  materialType: 'image' | 'video'
-  thumbnailUrl: string
-  spend: number
-  revenue: number
-  roas: number
-  impressions: number
-  clicks: number
-  installs: number
-  ctr: number
-  cpi: number
-  qualityScore: number            // 质量评分 (0-100)
-  adsCount: number                // 使用的广告数
-  campaignsCount: number          // 使用的广告系列数
-  updatedAt: Date
-}
-
-const aggMaterialSchema = new Schema<IAggMaterial>({
-  date: { type: String, required: true, index: true },
-  materialId: { type: String, required: true, index: true },
-  materialName: { type: String, default: '' },
-  materialType: { type: String, enum: ['image', 'video'], default: 'video' },
-  thumbnailUrl: { type: String, default: '' },
-  spend: { type: Number, default: 0 },
-  revenue: { type: Number, default: 0 },
-  roas: { type: Number, default: 0 },
-  impressions: { type: Number, default: 0 },
-  clicks: { type: Number, default: 0 },
-  installs: { type: Number, default: 0 },
-  ctr: { type: Number, default: 0 },
-  cpi: { type: Number, default: 0 },
-  qualityScore: { type: Number, default: 50 },
-  adsCount: { type: Number, default: 0 },
-  campaignsCount: { type: Number, default: 0 },
-}, { timestamps: true })
-
-aggMaterialSchema.index({ date: 1, materialId: 1 }, { unique: true })
-aggMaterialSchema.index({ date: 1, qualityScore: -1 })
-aggMaterialSchema.index({ date: 1, roas: -1 })
-
-export const AggMaterial = mongoose.model<IAggMaterial>('AggMaterial', aggMaterialSchema)
-
-
 // ==================== 导出所有模型 ====================
 export default {
   AggDaily,
@@ -272,5 +226,4 @@ export default {
   AggAccount,
   AggCampaign,
   AggOptimizer,
-  AggMaterial,
 }

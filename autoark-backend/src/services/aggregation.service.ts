@@ -4,6 +4,10 @@
  * 核心逻辑：
  * - 最近 3 天：从 Facebook API 实时获取 → 更新到数据库
  * - 超过 3 天：直接从数据库读取
+ * 
+ * 性能优化：
+ * - 并发处理：使用 Promise.all + 分批控制（并发度 10）
+ * - 错误隔离：单个账户失败不影响整体
  */
 
 import logger from '../utils/logger'
@@ -14,7 +18,6 @@ import {
   AggAccount, 
   AggCampaign, 
   AggOptimizer, 
-  AggMaterial,
   isRecentDate 
 } from '../models/Aggregation'
 import Account from '../models/Account'
@@ -80,147 +83,162 @@ export async function refreshAggregation(date: string, forceRefresh = false): Pr
     }
     logger.info(`[Aggregation] Loaded ${campaignNameMap.size} campaign names`)
 
-    // 收集所有数据
+    // 收集所有数据（线程安全，无需锁，因为 JS 是单线程的）
     const dailyData = { spend: 0, revenue: 0, impressions: 0, clicks: 0, installs: 0 }
     const countryMap = new Map<string, any>()
     const accountMap = new Map<string, any>()
     const campaignMap = new Map<string, any>()
     const optimizerMap = new Map<string, any>()
 
-    // 遍历每个账户获取数据
-    for (const account of accounts) {
-      try {
-        // 使用账户关联的 token，如果没有则使用默认 token
-        const accountToken = (account as any).token || defaultToken
-        if (!accountToken) {
-          logger.warn(`[Aggregation] No token for account ${account.accountId}, skipping`)
-          continue
-        }
-        
-        // 获取 campaign 级别数据（含国家维度）
-        const insights = await fetchInsights(
-          `act_${account.accountId}`,
-          'campaign',
-          undefined,
-          accountToken,
-          ['country'],
-          { since: date, until: date }
-        )
+    // === 并发处理逻辑 ===
+    const CONCURRENCY_LIMIT = 10
+    const chunks = []
+    for (let i = 0; i < accounts.length; i += CONCURRENCY_LIMIT) {
+      chunks.push(accounts.slice(i, i + CONCURRENCY_LIMIT))
+    }
 
-        let accountSpend = 0
-        let accountRevenue = 0
-        let accountImpressions = 0
-        let accountClicks = 0
-        let accountInstalls = 0
-        const accountCampaigns = new Set<string>()
+    let processedCount = 0
+    let errorCount = 0
 
-        for (const insight of insights) {
-          const spend = parseFloat(insight.spend || '0')
-          const impressions = parseInt(insight.impressions || '0', 10)
-          const clicks = parseInt(insight.clicks || '0', 10)
-          let revenue = 0
-          let installs = 0
-
-          // 提取 purchase value - 只取第一个匹配的，避免重复计算
-          if (insight.action_values && Array.isArray(insight.action_values)) {
-            const purchaseAction = insight.action_values.find((a: any) => 
-              a.action_type === 'purchase' || a.action_type === 'mobile_app_purchase' || a.action_type === 'omni_purchase'
-            )
-            if (purchaseAction) {
-              revenue = parseFloat(purchaseAction.value) || 0
-            }
+    for (const chunk of chunks) {
+      await Promise.all(chunk.map(async (account) => {
+        try {
+          // 使用账户关联的 token，如果没有则使用默认 token
+          const accountToken = (account as any).token || defaultToken
+          if (!accountToken) {
+            logger.warn(`[Aggregation] No token for account ${account.accountId}, skipping`)
+            return
           }
+          
+          // 获取 campaign 级别数据（含国家维度）
+          const insights = await fetchInsights(
+            `act_${account.accountId}`,
+            'campaign',
+            undefined,
+            accountToken,
+            ['country'],
+            { since: date, until: date }
+          )
 
-          // 提取 installs
-          if (insight.actions) {
-            for (const action of insight.actions) {
-              if (action.action_type === 'mobile_app_install') {
-                installs += parseInt(action.value || '0', 10)
+          let accountSpend = 0
+          let accountRevenue = 0
+          let accountImpressions = 0
+          let accountClicks = 0
+          let accountInstalls = 0
+          const accountCampaigns = new Set<string>()
+
+          for (const insight of insights) {
+            const spend = parseFloat(insight.spend || '0')
+            const impressions = parseInt(insight.impressions || '0', 10)
+            const clicks = parseInt(insight.clicks || '0', 10)
+            let revenue = 0
+            let installs = 0
+
+            // 提取 purchase value
+            if (insight.action_values && Array.isArray(insight.action_values)) {
+              const purchaseAction = insight.action_values.find((a: any) => 
+                a.action_type === 'purchase' || a.action_type === 'mobile_app_purchase' || a.action_type === 'omni_purchase'
+              )
+              if (purchaseAction) {
+                revenue = parseFloat(purchaseAction.value) || 0
               }
             }
-          }
 
-          // 累加到日汇总
-          dailyData.spend += spend
-          dailyData.revenue += revenue
-          dailyData.impressions += impressions
-          dailyData.clicks += clicks
-          dailyData.installs += installs
+            // 提取 installs
+            if (insight.actions) {
+              for (const action of insight.actions) {
+                if (action.action_type === 'mobile_app_install') {
+                  installs += parseInt(action.value || '0', 10)
+                }
+              }
+            }
 
-          // 累加到账户
-          accountSpend += spend
-          accountRevenue += revenue
-          accountImpressions += impressions
-          accountClicks += clicks
-          accountInstalls += installs
+            // 累加到日汇总
+            dailyData.spend += spend
+            dailyData.revenue += revenue
+            dailyData.impressions += impressions
+            dailyData.clicks += clicks
+            dailyData.installs += installs
 
-          // 记录 Campaign
-          if (insight.campaign_id) {
-            accountCampaigns.add(insight.campaign_id)
-            
-            const campaignKey = insight.campaign_id
-            if (!campaignMap.has(campaignKey)) {
-              // 优先使用预加载的名称，其次用 API 返回的
-              const campaignName = campaignNameMap.get(insight.campaign_id) || insight.campaign_name || ''
-              // 从名称提取投手
-              const optimizer = campaignName.split('_')[0] || 'unknown'
+            // 累加到账户
+            accountSpend += spend
+            accountRevenue += revenue
+            accountImpressions += impressions
+            accountClicks += clicks
+            accountInstalls += installs
+
+            // 记录 Campaign
+            if (insight.campaign_id) {
+              accountCampaigns.add(insight.campaign_id)
               
-              campaignMap.set(campaignKey, {
-                campaignId: insight.campaign_id,
-                campaignName,
-                accountId: account.accountId,
-                accountName: account.name || '',
-                optimizer,
-                spend: 0, revenue: 0, impressions: 0, clicks: 0, installs: 0,
-                status: insight.campaign_status || 'ACTIVE',
-                objective: insight.objective || '',
-              })
+              const campaignKey = insight.campaign_id
+              if (!campaignMap.has(campaignKey)) {
+                // 优先使用预加载的名称，其次用 API 返回的
+                const campaignName = campaignNameMap.get(insight.campaign_id) || insight.campaign_name || ''
+                // 从名称提取投手
+                const optimizer = campaignName.split('_')[0] || 'unknown'
+                
+                campaignMap.set(campaignKey, {
+                  campaignId: insight.campaign_id,
+                  campaignName,
+                  accountId: account.accountId,
+                  accountName: account.name || '',
+                  optimizer,
+                  spend: 0, revenue: 0, impressions: 0, clicks: 0, installs: 0,
+                  status: insight.campaign_status || 'ACTIVE',
+                  objective: insight.objective || '',
+                })
+              }
+              const c = campaignMap.get(campaignKey)
+              c.spend += spend
+              c.revenue += revenue
+              c.impressions += impressions
+              c.clicks += clicks
+              c.installs += installs
             }
-            const c = campaignMap.get(campaignKey)
-            c.spend += spend
-            c.revenue += revenue
-            c.impressions += impressions
-            c.clicks += clicks
-            c.installs += installs
+
+            // 记录国家
+            if (insight.country) {
+              const countryKey = insight.country
+              if (!countryMap.has(countryKey)) {
+                countryMap.set(countryKey, {
+                  country: countryKey,
+                  countryName: COUNTRY_NAMES[countryKey] || countryKey,
+                  spend: 0, revenue: 0, impressions: 0, clicks: 0, installs: 0,
+                  campaigns: new Set(),
+                })
+              }
+              const cn = countryMap.get(countryKey)
+              cn.spend += spend
+              cn.revenue += revenue
+              cn.impressions += impressions
+              cn.clicks += clicks
+              cn.installs += installs
+              if (insight.campaign_id) cn.campaigns.add(insight.campaign_id)
+            }
           }
 
-          // 记录国家
-          if (insight.country) {
-            const countryKey = insight.country
-            if (!countryMap.has(countryKey)) {
-              countryMap.set(countryKey, {
-                country: countryKey,
-                countryName: COUNTRY_NAMES[countryKey] || countryKey,
-                spend: 0, revenue: 0, impressions: 0, clicks: 0, installs: 0,
-                campaigns: new Set(),
-              })
-            }
-            const cn = countryMap.get(countryKey)
-            cn.spend += spend
-            cn.revenue += revenue
-            cn.impressions += impressions
-            cn.clicks += clicks
-            cn.installs += installs
-            if (insight.campaign_id) cn.campaigns.add(insight.campaign_id)
-          }
+          // 保存账户数据
+          accountMap.set(account.accountId, {
+            accountId: account.accountId,
+            accountName: account.name || '',
+            spend: accountSpend,
+            revenue: accountRevenue,
+            impressions: accountImpressions,
+            clicks: accountClicks,
+            installs: accountInstalls,
+            campaigns: accountCampaigns.size,
+            status: account.status || 'active',
+          })
+          
+          processedCount++
+
+        } catch (error: any) {
+          errorCount++
+          // 仅记录警告，不中断整体流程
+          // logger.warn(`[Aggregation] Failed to fetch account ${account.accountId}: ${error.message}`)
         }
-
-        // 保存账户数据
-        accountMap.set(account.accountId, {
-          accountId: account.accountId,
-          accountName: account.name || '',
-          spend: accountSpend,
-          revenue: accountRevenue,
-          impressions: accountImpressions,
-          clicks: accountClicks,
-          installs: accountInstalls,
-          campaigns: accountCampaigns.size,
-          status: account.status || 'active',
-        })
-
-      } catch (error: any) {
-        logger.warn(`[Aggregation] Failed to fetch account ${account.accountId}: ${error.message}`)
-      }
+      }))
     }
 
     // 聚合投手数据（从 Campaign 汇总）
@@ -270,11 +288,11 @@ export async function refreshAggregation(date: string, forceRefresh = false): Pr
       { upsert: true }
     )
 
-    // 2. 保存国家数据
-    for (const [, country] of countryMap) {
-      await AggCountry.findOneAndUpdate(
-        { date, country: country.country },
-        {
+    // 2. 保存国家数据 (批量写入优化)
+    const countryOps = Array.from(countryMap.values()).map(country => ({
+      updateOne: {
+        filter: { date, country: country.country },
+        update: {
           date,
           country: country.country,
           countryName: country.countryName,
@@ -287,15 +305,16 @@ export async function refreshAggregation(date: string, forceRefresh = false): Pr
           ctr: country.impressions > 0 ? Math.round((country.clicks / country.impressions) * 10000) / 100 : 0,
           campaigns: country.campaigns.size,
         },
-        { upsert: true }
-      )
-    }
+        upsert: true
+      }
+    }))
+    if (countryOps.length > 0) await AggCountry.bulkWrite(countryOps)
 
-    // 3. 保存账户数据
-    for (const [, account] of accountMap) {
-      await AggAccount.findOneAndUpdate(
-        { date, accountId: account.accountId },
-        {
+    // 3. 保存账户数据 (批量写入优化)
+    const accountOps = Array.from(accountMap.values()).map(account => ({
+      updateOne: {
+        filter: { date, accountId: account.accountId },
+        update: {
           date,
           accountId: account.accountId,
           accountName: account.accountName,
@@ -309,15 +328,16 @@ export async function refreshAggregation(date: string, forceRefresh = false): Pr
           campaigns: account.campaigns,
           status: account.status,
         },
-        { upsert: true }
-      )
-    }
+        upsert: true
+      }
+    }))
+    if (accountOps.length > 0) await AggAccount.bulkWrite(accountOps)
 
-    // 4. 保存广告系列数据
-    for (const [, campaign] of campaignMap) {
-      await AggCampaign.findOneAndUpdate(
-        { date, campaignId: campaign.campaignId },
-        {
+    // 4. 保存广告系列数据 (批量写入优化)
+    const campaignOps = Array.from(campaignMap.values()).map(campaign => ({
+      updateOne: {
+        filter: { date, campaignId: campaign.campaignId },
+        update: {
           date,
           campaignId: campaign.campaignId,
           campaignName: campaign.campaignName,
@@ -336,15 +356,16 @@ export async function refreshAggregation(date: string, forceRefresh = false): Pr
           status: campaign.status,
           objective: campaign.objective,
         },
-        { upsert: true }
-      )
-    }
+        upsert: true
+      }
+    }))
+    if (campaignOps.length > 0) await AggCampaign.bulkWrite(campaignOps)
 
-    // 5. 保存投手数据
-    for (const [, optimizer] of optimizerMap) {
-      await AggOptimizer.findOneAndUpdate(
-        { date, optimizer: optimizer.optimizer },
-        {
+    // 5. 保存投手数据 (批量写入优化)
+    const optimizerOps = Array.from(optimizerMap.values()).map(optimizer => ({
+      updateOne: {
+        filter: { date, optimizer: optimizer.optimizer },
+        update: {
           date,
           optimizer: optimizer.optimizer,
           spend: Math.round(optimizer.spend * 100) / 100,
@@ -357,12 +378,13 @@ export async function refreshAggregation(date: string, forceRefresh = false): Pr
           campaigns: optimizer.campaigns.size,
           accounts: optimizer.accounts.size,
         },
-        { upsert: true }
-      )
-    }
+        upsert: true
+      }
+    }))
+    if (optimizerOps.length > 0) await AggOptimizer.bulkWrite(optimizerOps)
 
     const duration = Date.now() - startTime
-    logger.info(`[Aggregation] Refreshed ${date} in ${duration}ms: ${activeCampaigns} campaigns, ${activeAccounts} accounts, ${countryMap.size} countries`)
+    logger.info(`[Aggregation] Refreshed ${date} in ${duration}ms: ${processedCount} accounts processed, ${activeCampaigns} campaigns, ${errorCount} errors`)
 
   } catch (error: any) {
     logger.error(`[Aggregation] Failed to refresh ${date}:`, error.message)
@@ -440,12 +462,10 @@ export async function getOptimizerData(date: string) {
 }
 
 /**
- * 🎨 获取素材数据
+ * 🎨 获取素材数据 (已废弃，请使用 summary.controller.ts 中的 MaterialMetrics 查询)
  */
 export async function getMaterialData(date: string) {
-  return AggMaterial.find({ date })
-    .sort({ spend: -1 })
-    .lean()
+  return []
 }
 
 export default {
