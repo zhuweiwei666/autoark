@@ -139,7 +139,7 @@ if [ "$SKIP_PUSH" = false ]; then
     fi
     
     # 检查是否有未推送的提交
-    LOCAL_COMMITS=$(git log ${GITHUB_BRANCH}..${GITHUB_REPO}/${GITHUB_BRANCH} 2>/dev/null | wc -l || echo "0")
+    LOCAL_COMMITS=$(git log ${GITHUB_REPO}/${GITHUB_BRANCH}..${GITHUB_BRANCH} 2>/dev/null | wc -l || echo "0")
     if [ "$LOCAL_COMMITS" -gt 0 ] || [ -n "$(git status --porcelain)" ]; then
         echo ""
         echo -e "${YELLOW}推送到 GitHub (${GITHUB_REPO}/${GITHUB_BRANCH})...${NC}"
