@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { useAuth } from '../contexts/AuthContext'
 
 interface HealthData {
   healthScore: number
@@ -32,6 +33,7 @@ interface ChatMessage {
 }
 
 export default function AIAnalysisPage() {
+  const { token, user } = useAuth()
   const [activeTab, setActiveTab] = useState<'health' | 'chat' | 'reports'>('chat')
   const [healthData, setHealthData] = useState<HealthData | null>(null)
   const [reports, setReports] = useState<Report[]>([])
@@ -40,6 +42,12 @@ export default function AIAnalysisPage() {
   const [loading, setLoading] = useState(false)
   const [chatLoading, setChatLoading] = useState(false)
   const chatContainerRef = useRef<HTMLDivElement>(null)
+  
+  // 获取认证 headers
+  const getAuthHeaders = () => ({
+    'Content-Type': 'application/json',
+    ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+  })
 
   // 自动滚动到底部
   const scrollToBottom = () => {
@@ -59,10 +67,12 @@ export default function AIAnalysisPage() {
     loadChatHistory()
   }, [])
 
-  // 加载聊天历史
+  // 加载聊天历史（仅当前用户的对话）
   const loadChatHistory = async () => {
     try {
-      const res = await fetch('/api/agent/chat/history?limit=1')
+      const res = await fetch('/api/agent/chat/history?limit=1', {
+        headers: getAuthHeaders()
+      })
       const data = await res.json()
       if (data.success && data.data.length > 0) {
         // 获取最近的会话消息
@@ -131,7 +141,7 @@ export default function AIAnalysisPage() {
     try {
       const res = await fetch('/api/agent/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(),
         body: JSON.stringify({ message: userMessage }),
       })
       const data = await res.json()

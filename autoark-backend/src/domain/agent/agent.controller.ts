@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express'
 import { agentService } from './agent.service'
 import { AgentConfig, AgentOperation, DailyReport, AiConversation } from './agent.model'
 import logger from '../../utils/logger'
+import { authenticate } from '../../middlewares/auth'
 
 const router = Router()
 
@@ -192,15 +193,17 @@ router.get('/reports/latest', async (req: Request, res: Response) => {
 
 // ==================== AI 对话 ====================
 
-// 发送消息
-router.post('/chat', async (req: Request, res: Response) => {
+// 发送消息（需要认证，每个用户独立对话历史）
+router.post('/chat', authenticate, async (req: Request, res: Response) => {
   try {
     const { message, context } = req.body
     if (!message) {
       return res.status(400).json({ success: false, error: 'Message is required' })
     }
     
-    const response = await agentService.chat('default-user', message, context)
+    // 使用当前登录用户的 ID
+    const userId = req.user?.userId || 'default-user'
+    const response = await agentService.chat(userId, message, context)
     res.json({ success: true, data: { response } })
   } catch (error: any) {
     logger.error('[AgentController] Chat failed:', error)
@@ -208,11 +211,13 @@ router.post('/chat', async (req: Request, res: Response) => {
   }
 })
 
-// 获取对话历史
-router.get('/chat/history', async (req: Request, res: Response) => {
+// 获取对话历史（需要认证，只返回当前用户的对话）
+router.get('/chat/history', authenticate, async (req: Request, res: Response) => {
   try {
     const { limit = 10 } = req.query
-    const conversations = await AiConversation.find({ userId: 'default-user' })
+    const userId = req.user?.userId || 'default-user'
+    
+    const conversations = await AiConversation.find({ userId })
       .sort({ createdAt: -1 })
       .limit(Number(limit))
     res.json({ success: true, data: conversations })
@@ -221,11 +226,13 @@ router.get('/chat/history', async (req: Request, res: Response) => {
   }
 })
 
-// 清除对话
-router.delete('/chat/clear', async (req: Request, res: Response) => {
+// 清除对话（需要认证，只清除当前用户的对话）
+router.delete('/chat/clear', authenticate, async (req: Request, res: Response) => {
   try {
+    const userId = req.user?.userId || 'default-user'
+    
     await AiConversation.updateMany(
-      { userId: 'default-user', status: 'active' },
+      { userId, status: 'active' },
       { status: 'closed' }
     )
     res.json({ success: true })
