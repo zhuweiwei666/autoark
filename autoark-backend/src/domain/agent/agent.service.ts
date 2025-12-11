@@ -1793,25 +1793,254 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
     }
   }
 
-  // ==================== 素材评分 ====================
+  // ==================== 素材 AI 智能评分 ====================
 
   /**
-   * 计算素材评分
+   * 🤖 AI 分析单个素材表现并给出评分和建议
    */
-  async scoreCreatives(creativeGroupId?: string): Promise<any[]> {
-    // 获取素材表现数据
-    const match: any = {}
-    if (creativeGroupId) match.creativeGroupId = creativeGroupId
-
-    // TODO: 实现素材到广告表现的关联
-    // 这需要在广告创建时记录使用的素材信息
-
-    const scores: any[] = []
+  async analyzeMaterialWithAI(materialId: string): Promise<any> {
+    logger.info(`[AgentService] Analyzing material with AI: ${materialId}`)
     
-    // 简化实现：基于已有数据生成评分
-    // 实际生产中需要关联 Ad -> Creative -> Material
+    // 1. 获取素材表现数据
+    const endDate = dayjs().format('YYYY-MM-DD')
+    const startDate = dayjs().subtract(7, 'day').format('YYYY-MM-DD')
     
-    return scores
+    const rankings = await getMaterialRankings({
+      dateRange: { start: startDate, end: endDate },
+      limit: 100,
+    })
+    
+    const material = rankings.find((m: any) => 
+      m.materialId === materialId || m.localMaterialId === materialId
+    )
+    
+    if (!material) {
+      return {
+        success: false,
+        error: '未找到素材数据，可能该素材还没有投放数据',
+      }
+    }
+    
+    // 2. 获取素材详情
+    const Material = require('../../models/Material').default
+    const materialDoc = await Material.findById(materialId).lean()
+    
+    // 3. 如果没有 AI 模型，返回基础评分
+    if (!this.model) {
+      return {
+        success: true,
+        data: {
+          materialId,
+          materialName: material.materialName,
+          scores: {
+            overall: material.qualityScore,
+            roas: material.roas >= 1 ? 80 : material.roas >= 0.5 ? 50 : 20,
+            efficiency: material.ctr >= 1 ? 80 : material.ctr >= 0.5 ? 50 : 30,
+          },
+          analysis: `素材 ROAS ${material.roas.toFixed(2)}，消耗 $${material.spend.toFixed(2)}`,
+          recommendation: material.roas >= 1.5 ? '建议扩量' : material.roas < 0.5 ? '建议暂停' : '保持观察',
+          aiPowered: false,
+        }
+      }
+    }
+    
+    // 4. 构建 AI 分析 Prompt
+    const prompt = `作为一位资深 Facebook 广告投放优化师，请分析以下素材的表现数据：
+
+## 素材信息
+- 素材名称: ${material.materialName}
+- 素材类型: ${material.materialType === 'video' ? '视频' : '图片'}
+- 活跃天数: ${material.daysActive} 天
+- 使用广告数: ${material.uniqueAdsCount || 0}
+
+## 表现数据（最近7天）
+- 总消耗: $${material.spend.toFixed(2)}
+- 总收入: $${(material.purchaseValue || 0).toFixed(2)}
+- ROAS: ${material.roas.toFixed(2)}
+- 展示量: ${material.impressions?.toLocaleString() || 0}
+- 点击量: ${material.clicks?.toLocaleString() || 0}
+- CTR: ${material.ctr?.toFixed(2) || 0}%
+- 安装数: ${material.installs || 0}
+- CPI: $${material.cpi?.toFixed(2) || 0}
+
+## 评判标准
+- ROAS > 2: 优秀（可扩量）
+- ROAS 1-2: 良好（可保持）
+- ROAS 0.5-1: 一般（需优化）
+- ROAS < 0.5: 较差（考虑暂停）
+
+请给出详细分析，返回以下 JSON 格式（不要 Markdown 代码块）：
+{
+  "scores": {
+    "overall": 0-100,
+    "roas": 0-100,
+    "efficiency": 0-100,
+    "stability": 0-100
+  },
+  "analysis": "2-3句话的核心分析（中文）",
+  "strengths": ["优势1", "优势2"],
+  "weaknesses": ["劣势1"],
+  "recommendation": "SCALE_UP | MAINTAIN | OPTIMIZE | PAUSE",
+  "actionItems": ["具体建议1", "具体建议2"],
+  "predictedTrend": "UP | STABLE | DOWN"
+}`
+
+    try {
+      const result = await this.model.generateContent(prompt)
+      const content = result.response.text()
+      const jsonMatch = content.match(/\{[\s\S]*\}/)
+      
+      if (jsonMatch) {
+        const aiResult = JSON.parse(jsonMatch[0])
+        return {
+          success: true,
+          data: {
+            materialId,
+            materialName: material.materialName,
+            materialType: material.materialType,
+            metrics: {
+              spend: material.spend,
+              revenue: material.purchaseValue,
+              roas: material.roas,
+              ctr: material.ctr,
+              impressions: material.impressions,
+              clicks: material.clicks,
+              daysActive: material.daysActive,
+            },
+            ...aiResult,
+            aiPowered: true,
+            analyzedAt: new Date().toISOString(),
+          }
+        }
+      }
+    } catch (error: any) {
+      logger.error('[AgentService] AI analysis failed:', error.message)
+    }
+    
+    // AI 分析失败，返回基础结果
+    return {
+      success: true,
+      data: {
+        materialId,
+        materialName: material.materialName,
+        scores: { overall: material.qualityScore },
+        analysis: 'AI 分析暂时不可用',
+        recommendation: 'MAINTAIN',
+        aiPowered: false,
+      }
+    }
+  }
+
+  /**
+   * 🤖 批量分析多个素材
+   */
+  async batchAnalyzeMaterials(materialIds: string[]): Promise<any[]> {
+    const results = []
+    for (const id of materialIds.slice(0, 10)) { // 限制最多10个
+      const result = await this.analyzeMaterialWithAI(id)
+      results.push(result)
+    }
+    return results
+  }
+
+  /**
+   * 🤖 获取 AI 推荐的素材操作（自动化决策）
+   */
+  async getAIRecommendedActions(): Promise<any> {
+    logger.info('[AgentService] Getting AI recommended actions')
+    
+    // 获取最近7天素材表现
+    const endDate = dayjs().format('YYYY-MM-DD')
+    const startDate = dayjs().subtract(7, 'day').format('YYYY-MM-DD')
+    
+    const rankings = await getMaterialRankings({
+      dateRange: { start: startDate, end: endDate },
+      sortBy: 'spend',
+      limit: 50,
+    })
+    
+    // 分类素材
+    const toScale = rankings.filter((m: any) => m.roas >= 2 && m.spend >= 50)
+    const toPause = rankings.filter((m: any) => m.roas < 0.3 && m.spend >= 30)
+    const toWatch = rankings.filter((m: any) => m.roas >= 0.5 && m.roas < 1 && m.spend >= 20)
+    
+    if (!this.model) {
+      return {
+        success: true,
+        data: {
+          toScale: toScale.map((m: any) => ({
+            materialId: m.materialId,
+            materialName: m.materialName,
+            roas: m.roas,
+            spend: m.spend,
+            reason: `ROAS ${m.roas.toFixed(2)} 表现优秀`,
+          })),
+          toPause: toPause.map((m: any) => ({
+            materialId: m.materialId,
+            materialName: m.materialName,
+            roas: m.roas,
+            spend: m.spend,
+            reason: `ROAS ${m.roas.toFixed(2)} 持续亏损`,
+          })),
+          toWatch: toWatch.map((m: any) => ({
+            materialId: m.materialId,
+            materialName: m.materialName,
+            roas: m.roas,
+            spend: m.spend,
+          })),
+          aiPowered: false,
+        }
+      }
+    }
+    
+    // 使用 AI 生成更智能的建议
+    const prompt = `作为广告优化师，分析以下素材数据，给出操作建议：
+
+## 高效素材（ROAS > 2）
+${toScale.map((m: any) => `- ${m.materialName}: ROAS ${m.roas.toFixed(2)}, 消耗 $${m.spend.toFixed(2)}`).join('\n') || '无'}
+
+## 低效素材（ROAS < 0.3）
+${toPause.map((m: any) => `- ${m.materialName}: ROAS ${m.roas.toFixed(2)}, 消耗 $${m.spend.toFixed(2)}`).join('\n') || '无'}
+
+## 观察素材（0.5 < ROAS < 1）
+${toWatch.map((m: any) => `- ${m.materialName}: ROAS ${m.roas.toFixed(2)}, 消耗 $${m.spend.toFixed(2)}`).join('\n') || '无'}
+
+请返回 JSON（不要代码块）：
+{
+  "summary": "一句话总结当前素材表现",
+  "urgentActions": ["最紧急需要做的1-2件事"],
+  "scaleRecommendations": ["扩量建议"],
+  "pauseRecommendations": ["暂停建议"],
+  "optimizationTips": ["优化小贴士"]
+}`
+
+    try {
+      const result = await this.model.generateContent(prompt)
+      const content = result.response.text()
+      const jsonMatch = content.match(/\{[\s\S]*\}/)
+      
+      if (jsonMatch) {
+        const aiResult = JSON.parse(jsonMatch[0])
+        return {
+          success: true,
+          data: {
+            ...aiResult,
+            toScale,
+            toPause,
+            toWatch,
+            aiPowered: true,
+            analyzedAt: new Date().toISOString(),
+          }
+        }
+      }
+    } catch (error: any) {
+      logger.error('[AgentService] AI recommendations failed:', error.message)
+    }
+    
+    return {
+      success: true,
+      data: { toScale, toPause, toWatch, aiPowered: false }
+    }
   }
 
   // ==================== 告警通知 ====================

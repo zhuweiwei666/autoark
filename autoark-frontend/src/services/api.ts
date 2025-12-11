@@ -1289,3 +1289,96 @@ export async function refreshSummary(params?: {
   if (!response.ok) throw new Error('Failed to refresh summary')
   return response.json()
 }
+
+// ==================== AI 分析 API ====================
+
+// 🤖 AI 分析单个素材
+export async function analyzeMaterialWithAI(materialId: string): Promise<{
+  success: boolean
+  data?: {
+    materialId: string
+    materialName: string
+    materialType: string
+    metrics?: {
+      spend: number
+      revenue: number
+      roas: number
+      ctr: number
+      impressions: number
+      clicks: number
+      daysActive: number
+    }
+    scores: {
+      overall: number
+      roas?: number
+      efficiency?: number
+      stability?: number
+    }
+    analysis: string
+    strengths?: string[]
+    weaknesses?: string[]
+    recommendation: string
+    actionItems?: string[]
+    predictedTrend?: string
+    aiPowered: boolean
+    analyzedAt?: string
+  }
+  error?: string
+}> {
+  const response = await fetch(`${API_BASE_URL}/api/ai/materials/${materialId}/analyze`)
+  if (!response.ok) throw new Error('Failed to analyze material')
+  return response.json()
+}
+
+// 🤖 获取 AI 推荐的素材操作
+export async function getAIMaterialRecommendations(): Promise<{
+  success: boolean
+  data?: {
+    summary?: string
+    urgentActions?: string[]
+    toScale: Array<{
+      materialId: string
+      materialName: string
+      roas: number
+      spend: number
+      reason?: string
+    }>
+    toPause: Array<{
+      materialId: string
+      materialName: string
+      roas: number
+      spend: number
+      reason?: string
+    }>
+    toWatch: Array<{
+      materialId: string
+      materialName: string
+      roas: number
+      spend: number
+    }>
+    scaleRecommendations?: string[]
+    pauseRecommendations?: string[]
+    optimizationTips?: string[]
+    aiPowered: boolean
+    analyzedAt?: string
+  }
+}> {
+  const response = await fetch(`${API_BASE_URL}/api/ai/materials/recommendations`)
+  if (!response.ok) throw new Error('Failed to get AI recommendations')
+  return response.json()
+}
+
+// 🤖 AI 对话
+export async function chatWithAI(message: string, context?: any): Promise<{
+  success: boolean
+  data?: { response: string }
+  error?: string
+}> {
+  const response = await fetch(`${API_BASE_URL}/api/ai/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message, context }),
+  })
+  if (!response.ok) throw new Error('Failed to chat with AI')
+  return response.json()
+}

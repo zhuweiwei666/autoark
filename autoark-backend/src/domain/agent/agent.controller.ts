@@ -334,5 +334,44 @@ router.post('/analysis/suggest', async (req: Request, res: Response) => {
   }
 })
 
+// ==================== 素材 AI 分析 ====================
+
+// 🤖 AI 分析单个素材
+router.get('/materials/:id/analyze', async (req: Request, res: Response) => {
+  try {
+    const result = await agentService.analyzeMaterialWithAI(req.params.id)
+    res.json(result)
+  } catch (error: any) {
+    logger.error('[AgentController] Material AI analysis failed:', error)
+    res.status(500).json({ success: false, error: error.message })
+  }
+})
+
+// 🤖 批量 AI 分析素材
+router.post('/materials/analyze-batch', async (req: Request, res: Response) => {
+  try {
+    const { materialIds } = req.body
+    if (!materialIds || !Array.isArray(materialIds)) {
+      return res.status(400).json({ success: false, error: 'materialIds array is required' })
+    }
+    const results = await agentService.batchAnalyzeMaterials(materialIds)
+    res.json({ success: true, data: results })
+  } catch (error: any) {
+    logger.error('[AgentController] Batch material analysis failed:', error)
+    res.status(500).json({ success: false, error: error.message })
+  }
+})
+
+// 🤖 获取 AI 推荐的素材操作
+router.get('/materials/recommendations', async (req: Request, res: Response) => {
+  try {
+    const result = await agentService.getAIRecommendedActions()
+    res.json(result)
+  } catch (error: any) {
+    logger.error('[AgentController] Get AI recommendations failed:', error)
+    res.status(500).json({ success: false, error: error.message })
+  }
+})
+
 export default router
 

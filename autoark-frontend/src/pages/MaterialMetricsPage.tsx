@@ -6,6 +6,8 @@ import {
   getMaterialRecommendations,
   getDecliningMaterials,
   getCountriesSummary,
+  analyzeMaterialWithAI,
+  getAIMaterialRecommendations,
   type MaterialMetric,
 } from '../services/api'
 
@@ -132,7 +134,7 @@ const getRoasColor = (roas: number) => {
 }
 
 // Tab 类型
-type TabType = 'rankings' | 'recommendations' | 'declining'
+type TabType = 'rankings' | 'recommendations' | 'declining' | 'ai-insights'
 
 export default function MaterialMetricsPage() {
   const [loading, setLoading] = useState(false)
@@ -145,6 +147,12 @@ export default function MaterialMetricsPage() {
   const [recommendations, setRecommendations] = useState<MaterialMetric[]>([])
   const [decliningMaterials, setDecliningMaterials] = useState<any[]>([])
   const [countries, setCountries] = useState<Array<{ country: string; countryName: string }>>([])
+  
+  // 🤖 AI 分析状态
+  const [aiAnalyzing, setAiAnalyzing] = useState<string | null>(null) // 正在分析的素材 ID
+  const [aiAnalysisResult, setAiAnalysisResult] = useState<any>(null) // AI 分析结果
+  const [aiRecommendations, setAiRecommendations] = useState<any>(null) // AI 推荐
+  const [aiLoading, setAiLoading] = useState(false)
 
   // 筛选条件
   const [filters, setFilters] = useState({
@@ -237,6 +245,32 @@ export default function MaterialMetricsPage() {
       setSyncing(false)
     }
   }
+  
+  // 🤖 AI 分析单个素材
+  const handleAIAnalyze = async (materialId: string) => {
+    setAiAnalyzing(materialId)
+    try {
+      const result = await analyzeMaterialWithAI(materialId)
+      setAiAnalysisResult(result)
+    } catch (error: any) {
+      setMessage({ type: 'error', text: error.message || 'AI 分析失败' })
+    } finally {
+      setAiAnalyzing(null)
+    }
+  }
+  
+  // 🤖 加载 AI 推荐
+  const loadAIRecommendations = async () => {
+    setAiLoading(true)
+    try {
+      const result = await getAIMaterialRecommendations()
+      setAiRecommendations(result.data)
+    } catch (error: any) {
+      setMessage({ type: 'error', text: error.message || '获取 AI 推荐失败' })
+    } finally {
+      setAiLoading(false)
+    }
+  }
 
   // 加载国家列表（组件挂载时和日期变化时）
   useEffect(() => {
@@ -255,6 +289,8 @@ export default function MaterialMetricsPage() {
       loadRecommendations()
     } else if (activeTab === 'declining') {
       loadDeclining()
+    } else if (activeTab === 'ai-insights') {
+      loadAIRecommendations()
     }
   }, [activeTab, filters.startDate, filters.endDate, filters.sortBy, filters.type, filters.country])
 
@@ -263,6 +299,7 @@ export default function MaterialMetricsPage() {
     { key: 'rankings' as TabType, label: '素材排行', icon: '🏆' },
     { key: 'recommendations' as TabType, label: '推荐素材', icon: '💡' },
     { key: 'declining' as TabType, label: '下滑预警', icon: '⚠️' },
+    { key: 'ai-insights' as TabType, label: 'AI 洞察', icon: '🤖' },
   ]
 
   return (
@@ -478,6 +515,7 @@ export default function MaterialMetricsPage() {
                       <th className="px-4 py-4 text-right text-xs font-bold text-slate-600 uppercase tracking-wider">质量分</th>
                       <th className="px-4 py-4 text-right text-xs font-bold text-slate-600 uppercase tracking-wider">活跃天数</th>
                       <th className="px-4 py-4 text-right text-xs font-bold text-slate-600 uppercase tracking-wider">广告数</th>
+                      <th className="px-4 py-4 text-center text-xs font-bold text-slate-600 uppercase tracking-wider">AI</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -608,6 +646,20 @@ export default function MaterialMetricsPage() {
                           </td>
                           <td className="px-4 py-4 text-right text-sm text-slate-600">
                             {m.uniqueAdsCount}
+                          </td>
+                          <td className="px-4 py-4 text-center">
+                            <button
+                              onClick={() => handleAIAnalyze(m.materialId || m.localMaterialId || '')}
+                              disabled={aiAnalyzing === (m.materialId || m.localMaterialId)}
+                              className="p-1.5 rounded-lg hover:bg-purple-50 text-purple-600 transition-colors disabled:opacity-50"
+                              title="AI 分析"
+                            >
+                              {aiAnalyzing === (m.materialId || m.localMaterialId) ? (
+                                <div className="w-4 h-4 border-2 border-purple-400 border-t-transparent rounded-full animate-spin"></div>
+                              ) : (
+                                <span className="text-base">🤖</span>
+                              )}
+                            </button>
                           </td>
                         </tr>
                       ))
@@ -784,10 +836,246 @@ export default function MaterialMetricsPage() {
                 </div>
               </div>
             )}
+
+            {/* 🤖 AI 洞察 Tab */}
+            {activeTab === 'ai-insights' && (
+              <div className="p-6">
+                {aiLoading ? (
+                  <Loading.Overlay message="AI 正在分析素材数据..." size="md" />
+                ) : aiRecommendations ? (
+                  <div className="space-y-6">
+                    {/* AI 摘要 */}
+                    {aiRecommendations.summary && (
+                      <div className="p-4 bg-gradient-to-r from-purple-50 to-blue-50 rounded-2xl border border-purple-200">
+                        <div className="flex items-center gap-2 text-purple-800 mb-2">
+                          <span className="text-xl">🤖</span>
+                          <span className="font-bold">AI 分析摘要</span>
+                          {aiRecommendations.aiPowered && (
+                            <span className="text-xs px-2 py-0.5 bg-purple-100 text-purple-600 rounded-full">Gemini 驱动</span>
+                          )}
+                        </div>
+                        <p className="text-slate-700">{aiRecommendations.summary}</p>
+                      </div>
+                    )}
+
+                    {/* 紧急操作 */}
+                    {aiRecommendations.urgentActions?.length > 0 && (
+                      <div className="p-4 bg-red-50 rounded-2xl border border-red-200">
+                        <h4 className="font-bold text-red-800 mb-2 flex items-center gap-2">
+                          <span>🚨</span> 紧急操作建议
+                        </h4>
+                        <ul className="space-y-1">
+                          {aiRecommendations.urgentActions.map((action: string, i: number) => (
+                            <li key={i} className="text-sm text-red-700 flex items-start gap-2">
+                              <span className="mt-1">•</span>
+                              <span>{action}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {/* 扩量推荐 */}
+                    {aiRecommendations.toScale?.length > 0 && (
+                      <div>
+                        <h4 className="font-bold text-emerald-800 mb-3 flex items-center gap-2">
+                          <span>📈</span> 建议扩量 ({aiRecommendations.toScale.length})
+                        </h4>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          {aiRecommendations.toScale.map((m: any) => (
+                            <div key={m.materialId} className="p-3 bg-emerald-50 rounded-xl border border-emerald-200">
+                              <div className="font-medium text-emerald-800 truncate">{m.materialName}</div>
+                              <div className="flex items-center gap-4 mt-1 text-sm">
+                                <span className="text-emerald-600">ROAS: {m.roas?.toFixed(2)}</span>
+                                <span className="text-slate-600">消耗: ${m.spend?.toFixed(0)}</span>
+                              </div>
+                              {m.reason && <div className="text-xs text-emerald-500 mt-1">{m.reason}</div>}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* 暂停建议 */}
+                    {aiRecommendations.toPause?.length > 0 && (
+                      <div>
+                        <h4 className="font-bold text-red-800 mb-3 flex items-center gap-2">
+                          <span>⏸️</span> 建议暂停 ({aiRecommendations.toPause.length})
+                        </h4>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          {aiRecommendations.toPause.map((m: any) => (
+                            <div key={m.materialId} className="p-3 bg-red-50 rounded-xl border border-red-200">
+                              <div className="font-medium text-red-800 truncate">{m.materialName}</div>
+                              <div className="flex items-center gap-4 mt-1 text-sm">
+                                <span className="text-red-600">ROAS: {m.roas?.toFixed(2)}</span>
+                                <span className="text-slate-600">消耗: ${m.spend?.toFixed(0)}</span>
+                              </div>
+                              {m.reason && <div className="text-xs text-red-500 mt-1">{m.reason}</div>}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* 优化小贴士 */}
+                    {aiRecommendations.optimizationTips?.length > 0 && (
+                      <div className="p-4 bg-blue-50 rounded-2xl border border-blue-200">
+                        <h4 className="font-bold text-blue-800 mb-2 flex items-center gap-2">
+                          <span>💡</span> 优化小贴士
+                        </h4>
+                        <ul className="space-y-1">
+                          {aiRecommendations.optimizationTips.map((tip: string, i: number) => (
+                            <li key={i} className="text-sm text-blue-700 flex items-start gap-2">
+                              <span className="mt-1">•</span>
+                              <span>{tip}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {/* 刷新按钮 */}
+                    <div className="text-center pt-4">
+                      <button
+                        onClick={loadAIRecommendations}
+                        className="px-6 py-2 bg-purple-600 text-white rounded-xl hover:bg-purple-700 transition-colors"
+                      >
+                        🔄 重新分析
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-center py-12 text-slate-500">
+                    <span className="text-4xl block mb-2">🤖</span>
+                    <span>点击上方刷新按钮获取 AI 分析</span>
+                  </div>
+                )}
+              </div>
+            )}
           </>
         )}
         </section>
       </div>
+
+      {/* 🤖 AI 分析结果弹窗 */}
+      {aiAnalysisResult && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full max-h-[80vh] overflow-y-auto">
+            <div className="p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+                  <span>🤖</span> AI 素材分析
+                  {aiAnalysisResult.data?.aiPowered && (
+                    <span className="text-xs px-2 py-0.5 bg-purple-100 text-purple-600 rounded-full">Gemini</span>
+                  )}
+                </h3>
+                <button
+                  onClick={() => setAiAnalysisResult(null)}
+                  className="p-2 hover:bg-slate-100 rounded-lg transition-colors"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {aiAnalysisResult.success && aiAnalysisResult.data ? (
+                <div className="space-y-4">
+                  {/* 素材信息 */}
+                  <div className="p-3 bg-slate-50 rounded-xl">
+                    <div className="font-medium text-slate-800">{aiAnalysisResult.data.materialName}</div>
+                    <div className="text-sm text-slate-500">{aiAnalysisResult.data.materialType === 'video' ? '视频' : '图片'}</div>
+                  </div>
+
+                  {/* 评分 */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="p-3 bg-gradient-to-r from-purple-50 to-blue-50 rounded-xl text-center">
+                      <div className="text-3xl font-bold text-purple-600">{aiAnalysisResult.data.scores?.overall}</div>
+                      <div className="text-xs text-slate-500">综合评分</div>
+                    </div>
+                    <div className="p-3 bg-emerald-50 rounded-xl text-center">
+                      <div className="text-3xl font-bold text-emerald-600">{aiAnalysisResult.data.metrics?.roas?.toFixed(2) || '-'}</div>
+                      <div className="text-xs text-slate-500">ROAS</div>
+                    </div>
+                  </div>
+
+                  {/* 分析 */}
+                  <div>
+                    <h4 className="font-medium text-slate-800 mb-2">📊 分析</h4>
+                    <p className="text-sm text-slate-600">{aiAnalysisResult.data.analysis}</p>
+                  </div>
+
+                  {/* 优势 */}
+                  {aiAnalysisResult.data.strengths?.length > 0 && (
+                    <div>
+                      <h4 className="font-medium text-emerald-700 mb-2">✅ 优势</h4>
+                      <ul className="space-y-1">
+                        {aiAnalysisResult.data.strengths.map((s: string, i: number) => (
+                          <li key={i} className="text-sm text-slate-600 flex items-start gap-2">
+                            <span className="text-emerald-500">•</span>
+                            <span>{s}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {/* 劣势 */}
+                  {aiAnalysisResult.data.weaknesses?.length > 0 && (
+                    <div>
+                      <h4 className="font-medium text-red-700 mb-2">⚠️ 需改进</h4>
+                      <ul className="space-y-1">
+                        {aiAnalysisResult.data.weaknesses.map((w: string, i: number) => (
+                          <li key={i} className="text-sm text-slate-600 flex items-start gap-2">
+                            <span className="text-red-500">•</span>
+                            <span>{w}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {/* 建议 */}
+                  <div className="p-3 bg-blue-50 rounded-xl">
+                    <h4 className="font-medium text-blue-700 mb-2">💡 建议操作</h4>
+                    <div className="flex items-center gap-2">
+                      <span className={`px-3 py-1 rounded-full text-sm font-medium ${
+                        aiAnalysisResult.data.recommendation === 'SCALE_UP' ? 'bg-emerald-100 text-emerald-700' :
+                        aiAnalysisResult.data.recommendation === 'PAUSE' ? 'bg-red-100 text-red-700' :
+                        aiAnalysisResult.data.recommendation === 'OPTIMIZE' ? 'bg-amber-100 text-amber-700' :
+                        'bg-slate-100 text-slate-700'
+                      }`}>
+                        {aiAnalysisResult.data.recommendation === 'SCALE_UP' ? '📈 扩量' :
+                         aiAnalysisResult.data.recommendation === 'PAUSE' ? '⏸️ 暂停' :
+                         aiAnalysisResult.data.recommendation === 'OPTIMIZE' ? '🔧 优化' :
+                         '👀 观察'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* 具体建议 */}
+                  {aiAnalysisResult.data.actionItems?.length > 0 && (
+                    <div>
+                      <h4 className="font-medium text-slate-800 mb-2">📋 具体步骤</h4>
+                      <ol className="space-y-1">
+                        {aiAnalysisResult.data.actionItems.map((item: string, i: number) => (
+                          <li key={i} className="text-sm text-slate-600 flex items-start gap-2">
+                            <span className="text-blue-500 font-medium">{i + 1}.</span>
+                            <span>{item}</span>
+                          </li>
+                        ))}
+                      </ol>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="text-center py-8 text-slate-500">
+                  <span className="text-4xl block mb-2">❌</span>
+                  <span>{aiAnalysisResult.error || '分析失败'}</span>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
