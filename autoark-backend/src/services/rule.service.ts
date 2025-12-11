@@ -367,14 +367,27 @@ class RuleService {
           
         case 'budget_up':
         case 'budget_down':
-          // TODO: 实现预算调整
-          result.error = 'Budget adjustment not implemented yet'
+          const budgetResult = await this.adjustBudget(
+            rule.entityLevel,
+            entity.id,
+            token,
+            rule.action,
+            metrics
+          )
+          result.oldValue = budgetResult.oldBudget
+          result.newValue = budgetResult.newBudget
+          result.success = budgetResult.success
+          result.error = budgetResult.error
+          if (result.success) {
+            logger.info(`[RuleService] Budget ${rule.action.type === 'budget_up' ? 'increased' : 'decreased'} for ${entity.name}: $${budgetResult.oldBudget} -> $${budgetResult.newBudget} (ROAS: ${metrics.roas.toFixed(2)})`)
+          }
           break
           
         case 'alert':
-          // TODO: 发送通知
-          logger.info(`[RuleService] Alert: ${entity.name} - ROAS: ${metrics.roas.toFixed(2)}, Spend: $${metrics.spend.toFixed(2)}`)
+          // 发送 Webhook 通知
+          await this.sendAlert(rule, entity, metrics)
           result.success = true
+          logger.info(`[RuleService] Alert sent for ${entity.name} - ROAS: ${metrics.roas.toFixed(2)}, Spend: $${metrics.spend.toFixed(2)}`)
           break
           
         default:
@@ -426,6 +439,127 @@ class RuleService {
         await updateAd({ token, adId: entityId, status: 'ACTIVE' })
         await Ad.updateOne({ adId: entityId }, { status: 'ACTIVE' })
         break
+    }
+  }
+  
+  /**
+   * 调整预算
+   */
+  private async adjustBudget(
+    level: string,
+    entityId: string,
+    token: string,
+    action: IAutoRule['action'],
+    metrics: Record<MetricType, number>
+  ): Promise<{ success: boolean; oldBudget?: number; newBudget?: number; error?: string }> {
+    try {
+      // 获取当前预算
+      let currentBudget = 0
+      
+      if (level === 'campaign') {
+        const campaign = await Campaign.findOne({ campaignId: entityId })
+        currentBudget = (campaign?.raw as any)?.daily_budget / 100 || 0
+      } else if (level === 'adset') {
+        const adset = await AdSet.findOne({ adsetId: entityId })
+        currentBudget = adset?.budget || (adset?.raw as any)?.daily_budget / 100 || 0
+      } else {
+        return { success: false, error: 'Budget adjustment only supports campaign and adset' }
+      }
+      
+      if (currentBudget <= 0) {
+        return { success: false, error: 'Current budget is 0 or not found' }
+      }
+      
+      // 计算新预算
+      let newBudget = currentBudget
+      
+      if (action.budgetChangePercent) {
+        // 按百分比调整
+        const multiplier = action.type === 'budget_up' 
+          ? (1 + action.budgetChangePercent / 100)
+          : (1 - action.budgetChangePercent / 100)
+        newBudget = currentBudget * multiplier
+      } else if (action.budgetChange) {
+        // 按固定金额调整
+        newBudget = action.type === 'budget_up'
+          ? currentBudget + action.budgetChange
+          : currentBudget - action.budgetChange
+      } else {
+        // 默认调整 20%
+        const multiplier = action.type === 'budget_up' ? 1.2 : 0.8
+        newBudget = currentBudget * multiplier
+      }
+      
+      // 应用预算限制
+      if (action.maxBudget && newBudget > action.maxBudget) {
+        newBudget = action.maxBudget
+      }
+      if (action.minBudget && newBudget < action.minBudget) {
+        newBudget = action.minBudget
+      }
+      
+      // 确保预算至少 $1
+      newBudget = Math.max(1, Math.round(newBudget * 100) / 100)
+      
+      // 如果预算没有变化，跳过
+      if (Math.abs(newBudget - currentBudget) < 0.01) {
+        return { success: false, error: 'Budget already at limit' }
+      }
+      
+      // 更新预算
+      if (level === 'campaign') {
+        await updateCampaign({ token, campaignId: entityId, dailyBudget: newBudget })
+      } else if (level === 'adset') {
+        await updateAdSet({ token, adsetId: entityId, dailyBudget: newBudget })
+        await AdSet.updateOne({ adsetId: entityId }, { budget: newBudget })
+      }
+      
+      return { success: true, oldBudget: currentBudget, newBudget }
+    } catch (error: any) {
+      return { success: false, error: error.message }
+    }
+  }
+  
+  /**
+   * 发送预警通知
+   */
+  private async sendAlert(
+    rule: IAutoRule,
+    entity: { id: string; name: string; accountId: string },
+    metrics: Record<MetricType, number>
+  ): Promise<void> {
+    const message = {
+      rule: rule.name,
+      entity: entity.name,
+      entityId: entity.id,
+      metrics: {
+        roas: metrics.roas.toFixed(2),
+        spend: `$${metrics.spend.toFixed(2)}`,
+        ctr: `${metrics.ctr.toFixed(2)}%`,
+      },
+      time: new Date().toISOString(),
+    }
+    
+    // 如果配置了 Webhook，发送通知
+    if (rule.action.notifyWebhook) {
+      try {
+        await fetch(rule.action.notifyWebhook, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            type: 'autoark_alert',
+            ...message,
+          }),
+        })
+        logger.info(`[RuleService] Webhook sent to ${rule.action.notifyWebhook}`)
+      } catch (error: any) {
+        logger.error(`[RuleService] Webhook failed: ${error.message}`)
+      }
+    }
+    
+    // TODO: 邮件通知
+    if (rule.action.notifyEmail) {
+      logger.info(`[RuleService] Email notification to ${rule.action.notifyEmail} (not implemented)`)
     }
   }
   
@@ -486,6 +620,38 @@ class RuleService {
         action: { type: 'alert' },
         schedule: { type: 'daily' },
         limits: { maxEntitiesPerExecution: 50 },
+      },
+      {
+        name: '高 ROAS 自动扩量',
+        description: 'ROAS > 2 且消耗 > $50 的广告组自动提升 20% 预算',
+        entityLevel: 'adset',
+        conditions: [
+          { metric: 'roas', operator: 'gt', value: 2, timeRange: 'last_3_days' },
+          { metric: 'spend', operator: 'gt', value: 50, timeRange: 'last_3_days' },
+        ],
+        action: { 
+          type: 'budget_up',
+          budgetChangePercent: 20,
+          maxBudget: 500,  // 最高预算限制 $500
+        },
+        schedule: { type: 'daily' },
+        limits: { maxEntitiesPerExecution: 10, cooldownMinutes: 1440 },
+      },
+      {
+        name: '低 ROAS 自动降预算',
+        description: 'ROAS < 0.8 且消耗 > $30 的广告组自动降低 30% 预算',
+        entityLevel: 'adset',
+        conditions: [
+          { metric: 'roas', operator: 'lt', value: 0.8, timeRange: 'last_3_days' },
+          { metric: 'spend', operator: 'gt', value: 30, timeRange: 'last_3_days' },
+        ],
+        action: { 
+          type: 'budget_down',
+          budgetChangePercent: 30,
+          minBudget: 10,  // 最低预算限制 $10
+        },
+        schedule: { type: 'daily' },
+        limits: { maxEntitiesPerExecution: 20, cooldownMinutes: 1440 },
       },
     ]
   }

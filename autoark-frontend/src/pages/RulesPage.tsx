@@ -183,12 +183,16 @@ export default function RulesPage() {
     }
   }
 
-  const getActionTypeName = (type: string) => {
+  const getActionTypeName = (type: string, action?: any) => {
     switch (type) {
       case 'auto_pause': return '🛑 自动暂停'
       case 'auto_enable': return '▶️ 自动启用'
-      case 'budget_up': return '📈 提升预算'
-      case 'budget_down': return '📉 降低预算'
+      case 'budget_up': 
+        if (action?.budgetChangePercent) return `📈 提升 ${action.budgetChangePercent}% 预算`
+        return '📈 提升预算'
+      case 'budget_down': 
+        if (action?.budgetChangePercent) return `📉 降低 ${action.budgetChangePercent}% 预算`
+        return '📉 降低预算'
       case 'alert': return '🔔 发送预警'
       default: return type
     }
