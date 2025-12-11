@@ -63,6 +63,14 @@ export async function refreshAggregation(date: string, forceRefresh = false): Pr
     const accounts = await Account.find({ status: 'active' }).lean()
     logger.info(`[Aggregation] Found ${accounts.length} active accounts`)
 
+    // 预先查询所有 Campaign 名称（Facebook API 可能不返回名称）
+    const allCampaigns = await Campaign.find({}).select('campaignId name').lean()
+    const campaignNameMap = new Map<string, string>()
+    for (const c of allCampaigns) {
+      campaignNameMap.set(c.campaignId, c.name || '')
+    }
+    logger.info(`[Aggregation] Loaded ${campaignNameMap.size} campaign names`)
+
     // 收集所有数据
     const dailyData = { spend: 0, revenue: 0, impressions: 0, clicks: 0, installs: 0 }
     const countryMap = new Map<string, any>()
@@ -136,8 +144,9 @@ export async function refreshAggregation(date: string, forceRefresh = false): Pr
             
             const campaignKey = insight.campaign_id
             if (!campaignMap.has(campaignKey)) {
+              // 优先使用预加载的名称，其次用 API 返回的
+              const campaignName = campaignNameMap.get(insight.campaign_id) || insight.campaign_name || ''
               // 从名称提取投手
-              const campaignName = insight.campaign_name || ''
               const optimizer = campaignName.split('_')[0] || 'unknown'
               
               campaignMap.set(campaignKey, {
