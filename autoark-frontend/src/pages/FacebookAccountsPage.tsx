@@ -261,7 +261,7 @@ export default function FacebookAccountsPage() {
           <div className="overflow-x-auto">
             <table className="w-full text-sm text-left">
               <thead>
-                <tr className="border-b border-white/5 bg-white/5">
+                <tr className="border-b border-slate-200 bg-slate-50">
                   <th 
                     className="px-6 py-5 font-semibold text-slate-900 cursor-pointer hover:bg-slate-100 transition-colors select-none"
                     onClick={() => {
@@ -379,48 +379,46 @@ export default function FacebookAccountsPage() {
                   <tr><td colSpan={7} className="px-6 py-12 text-center text-slate-500">暂无数据</td></tr>
                 ) : (
                   accounts.map((account) => (
-                    <tr key={account.id} className="group hover:bg-white/[0.02] transition-colors">
+                    <tr key={account.id} className="group hover:bg-slate-50 transition-colors border-b border-slate-100">
                       <td className="px-6 py-4">
                         <div>
-                          <div className="font-medium text-slate-200 group-hover:text-indigo-300 transition-colors">{account.name}</div>
-                          <div className="text-xs text-slate-500 font-mono mt-1 opacity-70">ID: {account.accountId}</div>
+                          <div className="font-semibold text-slate-900 group-hover:text-slate-950 transition-colors">{account.name}</div>
+                          <div className="text-xs text-slate-500 font-mono mt-1">ID: {account.accountId}</div>
                         </div>
                       </td>
                       <td className="px-6 py-4">
-                        <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium border ${getStatusColor(account.status)}`}>
-                          <span className={`w-1.5 h-1.5 rounded-full mr-1.5 bg-current opacity-70`}></span>
+                        <span className={`inline-flex items-center px-3 py-1.5 rounded-full text-xs font-semibold border ${getStatusColor(account.status)}`}>
+                          <span className={`w-1.5 h-1.5 rounded-full mr-2 bg-current`}></span>
                           {account.status.toUpperCase()}
                         </span>
                       </td>
                       <td className="px-6 py-4">
-                        <div className="text-slate-300 text-xs">
-                          {account.periodSpend !== undefined && account.periodSpend > 0 ? (
-                            <span className="text-slate-400 font-mono">${account.periodSpend.toFixed(2)}</span>
-                          ) : (
-                            <span className="text-slate-500">$0.00</span>
-                          )}
-                        </div>
+                        <span className="text-slate-900 font-mono">
+                          {account.periodSpend !== undefined && account.periodSpend > 0 
+                            ? `$${account.periodSpend.toFixed(2)}`
+                            : '$0.00'
+                          }
+                        </span>
                       </td>
                       <td className="px-6 py-4">
-                        <div className="text-slate-300 text-xs">
-                          {account.calculatedBalance !== undefined ? (
-                            <span className="text-emerald-400 font-mono">${account.calculatedBalance.toFixed(2)}</span>
-                          ) : (
-                            <span className="text-slate-500">-</span>
-                          )}
-                        </div>
+                        <span className={`font-mono ${account.calculatedBalance !== undefined ? 'text-emerald-600' : 'text-slate-400'}`}>
+                          {account.calculatedBalance !== undefined 
+                            ? `$${account.calculatedBalance.toFixed(2)}`
+                            : '-'
+                          }
+                        </span>
                       </td>
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-2">
-                          <div className="w-6 h-6 rounded-full bg-gradient-to-br from-slate-700 to-slate-800 flex items-center justify-center text-[10px] font-bold text-slate-400 border border-white/5">
+                          <div className="w-7 h-7 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-[10px] font-bold text-white shadow-sm">
                             {(account.operator || '?').charAt(0).toUpperCase()}
                           </div>
-                          <span className="text-slate-300">{account.operator || '-'}</span>
+                          <span className="text-slate-700 font-medium">{account.operator || '-'}</span>
                         </div>
                       </td>
                       <td className="px-6 py-4 text-right">
-                        <button className="text-slate-400 hover:text-indigo-400 transition-colors">
-                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" /></svg>
+                        <button className="opacity-60 hover:opacity-100 p-2 hover:bg-slate-100 rounded-xl transition-all active:scale-95">
+                          <svg className="w-5 h-5 text-slate-700" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" /></svg>
                         </button>
                       </td>
                     </tr>
