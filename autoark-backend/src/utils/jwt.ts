@@ -16,12 +16,23 @@ export interface JwtPayload {
  * 生成 JWT Token
  */
 export const generateToken = (user: IUser): string => {
+  // organizationId 可能是 ObjectId 或被 populate 后的对象
+  let orgId: string | undefined
+  if (user.organizationId) {
+    // 如果是对象（被 populate），取 _id
+    if (typeof user.organizationId === 'object' && (user.organizationId as any)._id) {
+      orgId = (user.organizationId as any)._id.toString()
+    } else {
+      orgId = user.organizationId.toString()
+    }
+  }
+  
   const payload: JwtPayload = {
     userId: user._id.toString(),
     username: user.username,
     email: user.email,
     role: user.role,
-    organizationId: user.organizationId?.toString(),
+    organizationId: orgId,
   }
 
   return jwt.sign(payload, JWT_SECRET, {
