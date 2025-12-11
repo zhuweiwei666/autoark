@@ -189,8 +189,25 @@ export const publishDraft = async (draftId: string, userId?: string) => {
   const accountCount = draft.accounts?.length || 0
   const creativeGroupCount = draft.ad?.creativeGroupIds?.length || 1
   
+  // 🆕 生成任务名称：autoark{账户名}_{包名}_{日期}
+  const firstAccountName = draft.accounts?.[0]?.accountName?.replace(/[^a-zA-Z0-9\u4e00-\u9fa5-]/g, '') || 'unknown'
+  // 获取文案包名称
+  let packageName = ''
+  if (draft.ad?.copywritingPackageIds?.length > 0) {
+    try {
+      const CopywritingPackage = require('../models/CopywritingPackage').default
+      const pkg = await CopywritingPackage.findById(draft.ad.copywritingPackageIds[0])
+      packageName = pkg?.name?.replace(/[^a-zA-Z0-9\u4e00-\u9fa5-]/g, '') || ''
+    } catch (e) {
+      logger.warn('[BulkAd] Failed to get copywriting package name')
+    }
+  }
+  const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '')
+  const taskName = `autoark${firstAccountName}${packageName ? '_' + packageName : ''}_${dateStr}`
+  
   // 创建任务
   const task: any = new AdTask({
+    name: taskName,  // 🆕 任务名称
     taskType: 'BULK_AD_CREATE',
     status: 'pending',
     platform: 'facebook',

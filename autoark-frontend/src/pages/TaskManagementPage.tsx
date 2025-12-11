@@ -266,7 +266,7 @@ export default function TaskManagementPage() {
                       </span>
                       <span className="text-xs text-slate-400">{formatTime(task.createdAt).split(' ')[0]}</span>
                     </div>
-                    <div className="text-sm font-medium text-slate-700 truncate">任务 #{task._id.slice(-6)}</div>
+                    <div className="text-sm font-medium text-slate-700 truncate">{task.name || `任务 #${task._id.slice(-6)}`}</div>
                     <div className="flex items-center justify-between mt-2 text-xs text-slate-500">
                       <span>{task.progress.totalAccounts} 个账户</span>
                       <span>{task.progress.percentage}%</span>
@@ -286,7 +286,7 @@ export default function TaskManagementPage() {
               <div>
                 <div className="p-4 border-b border-slate-200 flex items-center justify-between">
                   <div>
-                    <h2 className="font-semibold">任务详情</h2>
+                    <h2 className="font-semibold">{selectedTask.name || '任务详情'}</h2>
                     <span className="text-xs text-slate-500">ID: {selectedTask._id}</span>
                   </div>
                   <div className="flex gap-2">

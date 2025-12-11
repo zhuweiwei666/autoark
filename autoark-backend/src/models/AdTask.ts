@@ -66,6 +66,9 @@ const adTaskSchema = new mongoose.Schema(
     // 组织隔离
     organizationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Organization', index: true },
     
+    // 🆕 任务名称（格式：autoark账户名_包名_日期）
+    name: { type: String },
+    
     // 任务类型
     taskType: {
       type: String,
