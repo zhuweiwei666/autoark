@@ -187,13 +187,19 @@ router.get('/accounts', async (req: Request, res: Response) => {
     const limit = parseInt(req.query.limit as string) || 100
     const page = parseInt(req.query.page as string) || 1
     
+    // 提取筛选条件
+    const optimizer = req.query.optimizer as string
+    const status = req.query.status as string
+    const accountId = req.query.accountId as string
+    const name = req.query.name as string
+    
     // 组织隔离：超管可见全部，其他用户只能看本组织
     const organizationId = req.user?.role === UserRole.SUPER_ADMIN ? undefined : req.user?.organizationId
     
     // 直接使用完整的 getAccounts service
     const { getAccounts } = await import('../services/facebook.accounts.service')
     const result = await getAccounts(
-      { startDate, endDate },
+      { startDate, endDate, optimizer, status, accountId, name },
       { page, limit, sortBy, sortOrder },
       organizationId
     )
