@@ -14,29 +14,32 @@ import { aggregateMetricsToMaterials } from '../services/materialTracking.servic
 let cronJob: ScheduledTask | null = null
 
 export const initMaterialMetricsCron = () => {
-  // 每天凌晨 4:00 执行
-  cronJob = cron.schedule('0 4 * * *', async () => {
-    logger.info('[MaterialMetricsCron] Starting daily material metrics aggregation')
+  // 每小时的第 30 分钟执行 (避免与其他整点任务冲突)
+  cronJob = cron.schedule('30 * * * *', async () => {
+    logger.info('[MaterialMetricsCron] Starting hourly material metrics aggregation')
     
     try {
+      const today = dayjs().format('YYYY-MM-DD')
       const yesterday = dayjs().subtract(1, 'day').format('YYYY-MM-DD')
       
-      // 1. 聚合 Facebook 指标到 MaterialMetrics
-      const metricsResult = await aggregateMaterialMetrics(yesterday)
-      logger.info(`[MaterialMetricsCron] MaterialMetrics aggregation for ${yesterday}:`, metricsResult)
+      // 1. 聚合昨天的数据 (确保最终数据一致性)
+      const yesterdayResult = await aggregateMaterialMetrics(yesterday)
+      await aggregateMetricsToMaterials(yesterday)
+      logger.info(`[MaterialMetricsCron] Aggregated yesterday (${yesterday})`)
       
-      // 2. 将指标归因到素材库（Material 表）
-      const attributionResult = await aggregateMetricsToMaterials(yesterday)
-      logger.info(`[MaterialMetricsCron] Material attribution for ${yesterday}:`, attributionResult)
+      // 2. 聚合今天的数据 (实时更新)
+      const todayResult = await aggregateMaterialMetrics(today)
+      await aggregateMetricsToMaterials(today)
+      logger.info(`[MaterialMetricsCron] Aggregated today (${today})`)
       
     } catch (error) {
-      logger.error('[MaterialMetricsCron] Daily aggregation failed:', error)
+      logger.error('[MaterialMetricsCron] Hourly aggregation failed:', error)
     }
   }, {
     timezone: 'Asia/Shanghai'
   })
   
-  logger.info('[MaterialMetricsCron] Material metrics cron initialized (runs at 4:00 AM daily)')
+  logger.info('[MaterialMetricsCron] Material metrics cron initialized (runs hourly at :30)')
 }
 
 export const stopMaterialMetricsCron = () => {

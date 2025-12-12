@@ -8,6 +8,7 @@ import {
   getCountriesSummary,
   analyzeMaterialWithAI,
   getAIMaterialRecommendations,
+  aggregateMaterialMetrics,
   type MaterialMetric,
 } from '../services/api'
 
@@ -233,10 +234,20 @@ export default function MaterialMetricsPage() {
     }
   }
 
-  // 刷新数据（只从服务器获取）
+  // 刷新数据（触发聚合并重新加载）
   const handleSync = async () => {
     setSyncing(true)
     try {
+      // 1. 触发聚合（今天和昨天，确保数据最新）
+      const today = getToday()
+      const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0]
+      
+      await Promise.all([
+        aggregateMaterialMetrics(yesterday),
+        aggregateMaterialMetrics(today)
+      ])
+      
+      // 2. 重新加载排行榜
       await loadRankings()
       setMessage({ type: 'success', text: '数据已刷新' })
     } catch (error: any) {
