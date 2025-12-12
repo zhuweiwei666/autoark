@@ -585,13 +585,13 @@ export const executeTaskForAccount = async (
     const attributionSpec = attributionCfg
       ? [
           {
-            event_type: 'CLICK_THROUGH',
+      event_type: 'CLICK_THROUGH',
             window_days: clickWindow,
           },
           ...(viewWindow > 0
             ? [
                 {
-                  event_type: 'VIEW_THROUGH',
+      event_type: 'VIEW_THROUGH',
                   window_days: viewWindow,
                 },
               ]
@@ -599,7 +599,7 @@ export const executeTaskForAccount = async (
           ...(engagedViewWindow > 0
             ? [
                 {
-                  event_type: 'ENGAGED_VIDEO_VIEW',
+      event_type: 'ENGAGED_VIDEO_VIEW',
                   window_days: engagedViewWindow,
                 },
               ]
@@ -793,79 +793,79 @@ export const executeTaskForAccount = async (
       creativeIndex++
       const creativeName = `${campaignName}_creative_${creativeIndex}`
       
-      const linkData: any = {
-        link: copywriting.links?.websiteUrl || '',
-        message: copywriting.content?.primaryTexts?.[0] || '',
-        name: copywriting.content?.headlines?.[0] || '',
-        description: copywriting.content?.descriptions?.[0] || '',
-        call_to_action: {
-          type: copywriting.callToAction || 'SHOP_NOW',
-          value: { link: copywriting.links?.websiteUrl || '' },
-        },
-      }
-      
-      // 添加显示链接（caption）
-      if (copywriting.links?.displayLink) {
-        linkData.caption = copywriting.links.displayLink
-      }
-      
-      const objectStorySpec: any = {
-        page_id: accountConfig.pageId,
-        link_data: linkData,
-      }
-      
-      if (materialRef.image_hash) {
-        objectStorySpec.link_data.image_hash = materialRef.image_hash
-      } else if (materialRef.image_url) {
-        objectStorySpec.link_data.picture = materialRef.image_url
-      } else if (materialRef.video_id) {
-        // 视频广告：使用 video_data 替代 link_data
-        const link = objectStorySpec.link_data.link
-        const message = objectStorySpec.link_data.message
-        const title = objectStorySpec.link_data.name
-        const description = objectStorySpec.link_data.description
-        const caption = objectStorySpec.link_data.caption
-        
-        // 使用用户选择的 CTA，不做强制转换
-        const ctaType = copywriting.callToAction || 'SHOP_NOW'
-        
-        delete objectStorySpec.link_data
-        const videoData: any = {
-          video_id: materialRef.video_id,
-          image_url: materialRef.thumbnail_url,
-          message: message,
-          link_description: description || title,
+        const linkData: any = {
+          link: copywriting.links?.websiteUrl || '',
+          message: copywriting.content?.primaryTexts?.[0] || '',
+          name: copywriting.content?.headlines?.[0] || '',
+          description: copywriting.content?.descriptions?.[0] || '',
           call_to_action: {
-            type: ctaType,
-            value: { link: link },
+            type: copywriting.callToAction || 'SHOP_NOW',
+            value: { link: copywriting.links?.websiteUrl || '' },
           },
         }
         
-        // 添加显示链接
-        if (caption) {
-          videoData.caption = caption
+        // 添加显示链接（caption）
+        if (copywriting.links?.displayLink) {
+          linkData.caption = copywriting.links.displayLink
         }
         
-        objectStorySpec.video_data = videoData
-        logger.info(`[BulkAd] Video creative with thumbnail: ${materialRef.thumbnail_url}`)
-      }
-      
-      if (accountConfig.instagramAccountId) {
-        objectStorySpec.instagram_actor_id = accountConfig.instagramAccountId
-      }
-      
-      const creativeResult = await createAdCreative({
-        accountId,
-        token,
-        name: creativeName,
-        objectStorySpec,
-      })
-      
-      if (!creativeResult.success) {
-        logger.error(`[BulkAd] Failed to create creative for material ${matIndex + 1}:`, creativeResult.error)
-        continue
-      }
-      
+        const objectStorySpec: any = {
+          page_id: accountConfig.pageId,
+          link_data: linkData,
+        }
+        
+        if (materialRef.image_hash) {
+          objectStorySpec.link_data.image_hash = materialRef.image_hash
+        } else if (materialRef.image_url) {
+          objectStorySpec.link_data.picture = materialRef.image_url
+        } else if (materialRef.video_id) {
+          // 视频广告：使用 video_data 替代 link_data
+          const link = objectStorySpec.link_data.link
+          const message = objectStorySpec.link_data.message
+          const title = objectStorySpec.link_data.name
+          const description = objectStorySpec.link_data.description
+          const caption = objectStorySpec.link_data.caption
+          
+          // 使用用户选择的 CTA，不做强制转换
+          const ctaType = copywriting.callToAction || 'SHOP_NOW'
+          
+          delete objectStorySpec.link_data
+          const videoData: any = {
+            video_id: materialRef.video_id,
+            image_url: materialRef.thumbnail_url,
+            message: message,
+            link_description: description || title,
+            call_to_action: {
+              type: ctaType,
+              value: { link: link },
+            },
+          }
+          
+          // 添加显示链接
+          if (caption) {
+            videoData.caption = caption
+          }
+          
+          objectStorySpec.video_data = videoData
+          logger.info(`[BulkAd] Video creative with thumbnail: ${materialRef.thumbnail_url}`)
+        }
+        
+        if (accountConfig.instagramAccountId) {
+          objectStorySpec.instagram_actor_id = accountConfig.instagramAccountId
+        }
+        
+        const creativeResult = await createAdCreative({
+          accountId,
+          token,
+          name: creativeName,
+          objectStorySpec,
+        })
+        
+        if (!creativeResult.success) {
+          logger.error(`[BulkAd] Failed to create creative for material ${matIndex + 1}:`, creativeResult.error)
+          continue
+        }
+        
       creativeEntries.push({
         cgIndex,
         matIndex,
@@ -875,7 +875,7 @@ export const executeTaskForAccount = async (
         creativeId: creativeResult.id,
       })
     }
-    
+        
     // ===== 2) 为每个广告组创建 Ads（复用 Creative） =====
     for (const { adsetId, adsetName } of adsetsToUse) {
       for (const entry of creativeEntries) {

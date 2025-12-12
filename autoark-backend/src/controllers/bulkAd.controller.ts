@@ -841,21 +841,21 @@ export const getAuthLoginUrl = async (req: Request, res: Response) => {
     
     // 查找用户创建的 App
     const FacebookApp = require('../models/FacebookApp').default
-    const userApp = await FacebookApp.findOne({ 
+    const userApp = await FacebookApp.findOne({
       createdBy: req.user.userId,
-      status: 'active'
+      status: 'active',
+      'validation.isValid': true,
+      'config.enabledForBulkAds': true,
     }).sort({ createdAt: -1 })
     
-    if (!userApp) {
-      return res.status(400).json({
-        success: false,
-        error: '您还没有添加 Facebook App，请先去「App 管理」页面添加您的 App',
-        needsAppSetup: true,
-      })
+    // ⚠️ 兜底：如果用户自己的 App 不可用（未验证/被停用/FB侧临时不可用），使用系统默认 App 生成登录链接
+    // 这样不会影响 token 绑定逻辑（token 仍会绑定到当前 AutoArk 用户），但可以避免“Feature Unavailable”导致无法登录。
+    const appId = userApp?.appId
+    if (userApp) {
+      logger.info(`[BulkAd] Using user's App: ${userApp.appName} (${appId})`)
+    } else {
+      logger.warn(`[BulkAd] No valid user App found for user ${req.user.userId}, falling back to default App pool`)
     }
-    
-    const appId = userApp.appId
-    logger.info(`[BulkAd] Using user's own App: ${userApp.appName} (${appId})`)
     
     // 将 AutoArk 用户 ID 编码到 state 参数中
     // 格式: bulk-ad|userId|organizationId
@@ -867,7 +867,10 @@ export const getAuthLoginUrl = async (req: Request, res: Response) => {
     
     res.json({
       success: true,
-      data: { loginUrl },
+      data: {
+        loginUrl,
+        usingDefaultApp: !userApp,
+      },
     })
   } catch (error: any) {
     logger.error('[BulkAd] Get login URL failed:', error)
