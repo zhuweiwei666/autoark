@@ -1,6 +1,7 @@
 import cron from 'node-cron'
 import { SCHEDULES } from './schedule'
-import fetchFacebookMetrics from './fetchFacebookMetrics'
+// Hourly Metrics 已废弃，由 V2 Queue-based Sync 统一处理
+// import fetchFacebookMetrics from './fetchFacebookMetrics'
 import { runRulesDaily } from '../rules'
 import { runAiOptimizerDaily } from '../ai'
 import { initMaterialMetricsCron } from './materialMetrics.cron'
@@ -12,12 +13,12 @@ import { initAccountSyncCron } from './accountSync.cron'
 import logger from '../utils/logger'
 
 const initCronJobs = () => {
-  // Facebook Data Sync (Hourly)
-  cron.schedule(SCHEDULES.FETCH_FB_HOURLY, () => {
-    fetchFacebookMetrics().catch((err) =>
-      logger.error('Unhandled error in Facebook fetch cron', err),
-    )
-  })
+  // [DEPRECATED] Facebook Data Sync (Hourly) - 已由 V2 Queue-based Sync 替代
+  // cron.schedule(SCHEDULES.FETCH_FB_HOURLY, () => {
+  //   fetchFacebookMetrics().catch((err) =>
+  //     logger.error('Unhandled error in Facebook fetch cron', err),
+  //   )
+  // })
 
   // Rule Engine (Daily at 1 AM)
   cron.schedule('0 1 * * *', () => {

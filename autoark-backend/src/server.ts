@@ -14,7 +14,9 @@ import { initBulkAdWorker } from './queue/bulkAd.worker'
 
 // Cron Jobs
 import initCronJobs from './cron'
-import initSyncCron from './cron/sync.cron'
+// V1 Sync 已废弃，改用 V2 Queue-based Sync
+// import initSyncCron from './cron/sync.cron'
+import initSyncCronV2 from './cron/sync.cron.v2'
 import initPreaggregationCron from './cron/preaggregation.cron'
 import initTokenValidationCron from './cron/tokenValidation.cron'
 
@@ -52,7 +54,8 @@ async function bootstrap() {
 
   // 5) Cron Jobs (start once per process)
   initCronJobs()
-  initSyncCron()
+  // V2 Queue-based Sync（替代 V1 串行同步）
+  initSyncCronV2()
   initPreaggregationCron()
   initTokenValidationCron()
 
