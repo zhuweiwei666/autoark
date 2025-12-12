@@ -137,6 +137,11 @@ export const validateDraft = async (draftId: string) => {
   if (!draft) {
     throw new Error('Draft not found')
   }
+
+  // 兼容历史/前端空字符串导致的 CastError（例如 targetingPackageId: ""）
+  if (draft.adset && draft.adset.targetingPackageId === '') {
+    draft.adset.targetingPackageId = undefined
+  }
   
   // 简化验证逻辑
   const errors: any[] = []

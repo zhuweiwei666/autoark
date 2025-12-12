@@ -90,7 +90,12 @@ const adsetConfigSchema = new mongoose.Schema({
   },
   
   // 定向包引用（或内联定向配置）
-  targetingPackageId: { type: mongoose.Schema.Types.ObjectId, ref: 'TargetingPackage' },
+  // 兼容前端传空字符串：'' -> undefined（避免 CastError）
+  targetingPackageId: { 
+    type: mongoose.Schema.Types.ObjectId, 
+    ref: 'TargetingPackage',
+    set: (v: any) => (v === '' ? undefined : v),
+  },
   inlineTargeting: { type: Object },  // 如果不使用定向包，直接配置
   
 }, { _id: false })
