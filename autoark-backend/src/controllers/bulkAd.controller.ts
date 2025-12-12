@@ -838,6 +838,13 @@ export const getAuthLoginUrl = async (req: Request, res: Response) => {
     if (!req.user) {
       return res.status(401).json({ success: false, error: '未认证' })
     }
+
+    // ⚠️ 登录链接必须每次实时生成：禁止任何缓存/304（浏览器/代理可能会缓存）
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+    res.setHeader('Pragma', 'no-cache')
+    res.setHeader('Expires', '0')
+    // 让 ETag 每次不同，避免命中 If-None-Match -> 304
+    res.setHeader('ETag', `W/"bulkad-login-${Date.now()}-${Math.random().toString(16).slice(2)}"`)
     
     // 批量广告 OAuth：默认使用“系统 App 池”生成登录链接（避免用户自建 App 被 Facebook 临时禁用导致无法登录）
     // 如需强制使用用户自建 App，可传参：?useUserApp=true
@@ -885,6 +892,7 @@ export const getAuthLoginUrl = async (req: Request, res: Response) => {
         loginUrl,
         usingDefaultApp: !appId,
         clientId: clientIdInUrl,
+        serverTime: new Date().toISOString(),
       },
     })
   } catch (error: any) {

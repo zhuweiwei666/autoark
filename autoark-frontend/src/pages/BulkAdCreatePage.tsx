@@ -199,7 +199,8 @@ export default function BulkAdCreatePage() {
     
     try {
       // 获取登录 URL（传递认证信息以绑定到当前用户）
-      const res = await authFetch(`${API_BASE}/bulk-ad/auth/login-url`)
+      // 防止浏览器/代理缓存登录链接导致 304/旧 client_id
+      const res = await authFetch(`${API_BASE}/bulk-ad/auth/login-url?ts=${Date.now()}`, { cache: 'no-store' as any })
       const data = await res.json()
       
       if (!data.success || !data.data.loginUrl) {
