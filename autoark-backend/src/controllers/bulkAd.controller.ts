@@ -983,6 +983,11 @@ export const getAuthStatus = async (req: Request, res: Response) => {
       return res.status(401).json({ success: false, error: '未认证' })
     }
     
+    const orgObjectId =
+      req.user.organizationId && mongoose.Types.ObjectId.isValid(req.user.organizationId)
+        ? new mongoose.Types.ObjectId(req.user.organizationId)
+        : undefined
+    
     // 构建查询条件
     const tokenQuery: any = { status: 'active' }
     
@@ -1028,10 +1033,10 @@ export const getAuthStatus = async (req: Request, res: Response) => {
       // 普通用户：只看到自己绑定的 token
       tokenQuery.userId = req.user.userId
       // 如果有组织，也可以看到同组织的
-      if (req.user.organizationId) {
+      if (orgObjectId) {
         tokenQuery.$or = [
           { userId: req.user.userId },
-          { organizationId: req.user.organizationId }
+          { organizationId: orgObjectId }
         ]
         delete tokenQuery.userId
       }
@@ -1275,11 +1280,16 @@ export const getAuthPixels = async (req: Request, res: Response) => {
  */
 export const getCachedPixels = async (req: Request, res: Response) => {
   try {
+    const orgObjectId =
+      req.user?.organizationId && mongoose.Types.ObjectId.isValid(req.user.organizationId)
+        ? new mongoose.Types.ObjectId(req.user.organizationId)
+        : undefined
+    
     // 构建 token 查询条件（根据组织隔离）
     const tokenQuery: any = { status: 'active' }
     // 如果不是超级管理员，只查询本组织的 token
-    if (req.user?.role !== UserRole.SUPER_ADMIN && req.user?.organizationId) {
-      tokenQuery.organizationId = req.user.organizationId
+    if (req.user?.role !== UserRole.SUPER_ADMIN && orgObjectId) {
+      tokenQuery.organizationId = orgObjectId
     }
     
     const fbTokens: any[] = await FbToken.find(tokenQuery).sort({ updatedAt: -1 })
