@@ -48,22 +48,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           })
           
           if (!response.ok) {
-            // Token 无效，清除登录状态
-            localStorage.removeItem('auth_token')
-            localStorage.removeItem('auth_user')
-            setToken(null)
-            setUser(null)
+            // 只有在明确未授权时才清除（避免服务重启/临时 5xx 导致“看起来像数据丢失”）
+            if (response.status === 401 || response.status === 403) {
+              localStorage.removeItem('auth_token')
+              localStorage.removeItem('auth_user')
+              setToken(null)
+              setUser(null)
+            } else {
+              console.warn('验证用户失败（非 401/403），保留本地登录态以便重试:', response.status)
+            }
           } else {
             const data = await response.json()
             setUser(data.data)
             localStorage.setItem('auth_user', JSON.stringify(data.data))
           }
         } catch (error) {
-          console.error('验证用户失败:', error)
-          localStorage.removeItem('auth_token')
-          localStorage.removeItem('auth_user')
-          setToken(null)
-          setUser(null)
+          // 网络/临时错误：不要清空 token，避免用户被动登出
+          console.error('验证用户失败（网络或临时错误），保留本地登录态:', error)
         }
       }
       
