@@ -839,22 +839,26 @@ export const getAuthLoginUrl = async (req: Request, res: Response) => {
       return res.status(401).json({ success: false, error: '未认证' })
     }
     
-    // 查找用户创建的 App
-    const FacebookApp = require('../models/FacebookApp').default
-    const userApp = await FacebookApp.findOne({
-      createdBy: req.user.userId,
-      status: 'active',
-      'validation.isValid': true,
-      'config.enabledForBulkAds': true,
-    }).sort({ createdAt: -1 })
-    
-    // ⚠️ 兜底：如果用户自己的 App 不可用（未验证/被停用/FB侧临时不可用），使用系统默认 App 生成登录链接
-    // 这样不会影响 token 绑定逻辑（token 仍会绑定到当前 AutoArk 用户），但可以避免“Feature Unavailable”导致无法登录。
-    const appId = userApp?.appId
-    if (userApp) {
-      logger.info(`[BulkAd] Using user's App: ${userApp.appName} (${appId})`)
+    // 批量广告 OAuth：默认使用“系统 App 池”生成登录链接（避免用户自建 App 被 Facebook 临时禁用导致无法登录）
+    // 如需强制使用用户自建 App，可传参：?useUserApp=true
+    let appId: string | undefined
+    const useUserApp = String(req.query.useUserApp || '').toLowerCase() === 'true'
+    if (useUserApp) {
+      const FacebookApp = require('../models/FacebookApp').default
+      const userApp = await FacebookApp.findOne({
+        createdBy: req.user.userId,
+        status: 'active',
+        'validation.isValid': true,
+        'config.enabledForBulkAds': true,
+      }).sort({ createdAt: -1 })
+      if (userApp?.appId) {
+        appId = userApp.appId
+        logger.info(`[BulkAd] OAuth using user's App (forced): ${userApp.appName} (${appId})`)
+      } else {
+        logger.warn(`[BulkAd] OAuth requested user's App but none valid; falling back to default App pool`)
+      }
     } else {
-      logger.warn(`[BulkAd] No valid user App found for user ${req.user.userId}, falling back to default App pool`)
+      logger.info(`[BulkAd] OAuth using default App pool (useUserApp=false)`)
     }
     
     // 将 AutoArk 用户 ID 编码到 state 参数中
@@ -863,13 +867,13 @@ export const getAuthLoginUrl = async (req: Request, res: Response) => {
     const stateData = `bulk-ad|${req.user.userId}|${orgId}`
     const loginUrl = await oauthService.getFacebookLoginUrl(stateData, appId)
     
-    logger.info(`[BulkAd] Generated login URL for user ${req.user.userId}, App: ${appId}`)
+    logger.info(`[BulkAd] Generated login URL for user ${req.user.userId}, App: ${appId || 'default-pool'}`)
     
     res.json({
       success: true,
       data: {
         loginUrl,
-        usingDefaultApp: !userApp,
+        usingDefaultApp: !appId,
       },
     })
   } catch (error: any) {
