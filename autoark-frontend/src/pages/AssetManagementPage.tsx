@@ -353,16 +353,17 @@ export default function AssetManagementPage() {
     }
   }
   
-  const loadMaterials = async () => {
+  const loadMaterials = async (overrideFilter?: { folder: string; type: string }) => {
     setLoadingMaterials(true)
     try {
+      const f = overrideFilter || materialFilter
       const params = new URLSearchParams({ pageSize: '100' })
-      if (materialFilter.folder) params.append('folder', materialFilter.folder)
-      if (materialFilter.type) params.append('type', materialFilter.type)
+      if (f.folder) params.append('folder', f.folder)
+      if (f.type) params.append('type', f.type)
       
       const [matRes, folderRes] = await Promise.all([
-        fetch(`${API_BASE}/materials?${params}`),
-        fetch(`${API_BASE}/materials/folder-tree`)
+        authFetch(`${API_BASE}/materials?${params}`),
+        authFetch(`${API_BASE}/materials/folder-tree`)
       ])
       
       const matData = await matRes.json()
@@ -1073,7 +1074,11 @@ export default function AssetManagementPage() {
               <div className="p-4 border-b border-slate-200 flex gap-4">
                 <select
                   value={materialFilter.folder}
-                  onChange={(e) => { setMaterialFilter(f => ({ ...f, folder: e.target.value })); setTimeout(loadMaterials, 0) }}
+                  onChange={(e) => {
+                    const next = { ...materialFilter, folder: e.target.value }
+                    setMaterialFilter(next)
+                    loadMaterials(next)
+                  }}
                   className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm"
                 >
                   <option value="">全部文件夹</option>
@@ -1083,7 +1088,11 @@ export default function AssetManagementPage() {
                 </select>
                 <select
                   value={materialFilter.type}
-                  onChange={(e) => { setMaterialFilter(f => ({ ...f, type: e.target.value })); setTimeout(loadMaterials, 0) }}
+                  onChange={(e) => {
+                    const next = { ...materialFilter, type: e.target.value }
+                    setMaterialFilter(next)
+                    loadMaterials(next)
+                  }}
                   className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm"
                 >
                   <option value="">全部类型</option>
