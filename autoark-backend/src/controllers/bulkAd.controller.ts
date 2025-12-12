@@ -867,13 +867,24 @@ export const getAuthLoginUrl = async (req: Request, res: Response) => {
     const stateData = `bulk-ad|${req.user.userId}|${orgId}`
     const loginUrl = await oauthService.getFacebookLoginUrl(stateData, appId)
     
-    logger.info(`[BulkAd] Generated login URL for user ${req.user.userId}, App: ${appId || 'default-pool'}`)
+    // 解析 client_id（便于排查 Facebook Login “功能不可用”属于哪个 App）
+    let clientIdInUrl: string | null = null
+    try {
+      clientIdInUrl = new URL(loginUrl).searchParams.get('client_id')
+    } catch {}
+    
+    logger.info(
+      `[BulkAd] Generated login URL for user ${req.user.userId}, App: ${appId || 'default-pool'}, client_id: ${
+        clientIdInUrl || 'unknown'
+      }`,
+    )
     
     res.json({
       success: true,
       data: {
         loginUrl,
         usingDefaultApp: !appId,
+        clientId: clientIdInUrl,
       },
     })
   } catch (error: any) {
