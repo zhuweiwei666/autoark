@@ -16,6 +16,9 @@ export const syncCampaignsFromAdAccountsV2 = async () => {
   }
 
   const startTime = Date.now()
+  // 将 jobId 按“时间桶”去重，避免 cron/手动多次触发导致队列堆积
+  const intervalMinutes = Math.max(1, parseInt(process.env.CRON_SYNC_INTERVAL || '10', 10) || 10)
+  const slot = Math.floor(Date.now() / (intervalMinutes * 60 * 1000))
   
   try {
     // 1. 获取所有有效的广告账户
@@ -36,18 +39,29 @@ export const syncCampaignsFromAdAccountsV2 = async () => {
       }
 
       // 推送到 accountQueue
-      const job = await accountQueue!.add(
-        'sync-account',
-        {
-          accountId: account.accountId,
-          token: account.token,
-        },
-        {
-          priority: 1,
-          jobId: `account-sync-${account.accountId}-${Date.now()}`, // 每次运行生成新 jobId
+      try {
+        const job = await accountQueue!.add(
+          'sync-account',
+          {
+            accountId: account.accountId,
+            token: account.token,
+          },
+          {
+            priority: 1,
+            // 同一账户在同一时间桶内只允许一个任务
+            jobId: `account-sync-${account.accountId}-${slot}`,
+          }
+        )
+        jobs.push(job)
+      } catch (error: any) {
+        // BullMQ: Duplicate jobId -> ignore to keep cron idempotent
+        const msg = error?.message || String(error)
+        if (msg.includes('Job') && msg.includes('already exists')) {
+          logger.debug?.(`[Scheduler] Duplicate job ignored: account=${account.accountId}, slot=${slot}`)
+          continue
         }
-      )
-      jobs.push(job)
+        throw error
+      }
     }
 
     logger.info(`[Scheduler] Queued ${jobs.length} account sync jobs in ${Date.now() - startTime}ms`)
