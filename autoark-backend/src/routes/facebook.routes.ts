@@ -5,8 +5,14 @@ import { authenticate } from '../middlewares/auth'
 
 const router = Router()
 
-// 所有路由都需要认证
-router.use(authenticate)
+// 大部分路由需要认证，但 OAuth callback 必须公开（Facebook 重定向不会带 Authorization header）
+router.use((req, res, next) => {
+  // OAuth 回调不需要认证
+  if (req.path === '/oauth/callback') {
+    return next()
+  }
+  return authenticate(req, res, next)
+})
 
 router.post('/save-token', saveFacebookToken) // New token saving route
 router.get('/accounts', facebookController.getAccounts)

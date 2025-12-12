@@ -11,7 +11,10 @@ export const errorHandler = (
   const message = err.message || 'Internal Server Error'
 
   // Log the error to the error log file
-  logger.error(`[${req.method}] ${req.url} - ${statusCode} - ${message}`, err)
+  logger.error(
+    `[${req.requestId}] [${req.method}] ${req.url} - ${statusCode} - ${message}`,
+    err,
+  )
 
   // 确保设置正确的 Content-Type，避免返回 HTML
   res.setHeader('Content-Type', 'application/json; charset=utf-8')
@@ -19,6 +22,7 @@ export const errorHandler = (
   res.status(statusCode).json({
     success: false,
     message,
+    requestId: req.requestId,
     // Hide stack trace in production
     stack: process.env.NODE_ENV === 'production' ? undefined : err.stack,
   })

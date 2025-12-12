@@ -1,10 +1,7 @@
-// 🔥 必须第一个导入，确保环境变量加载
-import './config/env'
-
 import express, { Request, Response, NextFunction } from 'express'
 import cors from 'cors'
 import path from 'path'
-import connectDB from './config/db'
+import { randomUUID } from 'crypto'
 import facebookRoutes from './routes/facebook.routes'
 import dashboardRoutes from './routes/dashboard.routes'
 import facebookSyncRoutes from './routes/facebook.sync.routes'
@@ -26,44 +23,33 @@ import ruleRoutes from './controllers/rule.controller' // New: 自动化规则�
 import materialAutoTestRoutes from './controllers/materialAutoTest.controller' // New: 素材自动测试
 import aiSuggestionRoutes from './controllers/aiSuggestion.controller' // New: AI 优化建议
 import logger from './utils/logger'
-import initSyncCron from './cron/sync.cron'
-import initCronJobs from './cron'
-import initTokenValidationCron from './cron/tokenValidation.cron'
 import { errorHandler } from './middlewares/errorHandler'
 
-// Connect to DB
-connectDB()
+// NOTE: All infrastructure initialization (DB/Redis/Queues/Crons) is done in `server.ts`.
+// `app.ts` should remain side-effect free so it can be imported safely (tests, scripts, etc.).
 
-// Initialize Redis
-import { initRedis } from './config/redis'
-initRedis()
-
-// Initialize Token Pool
-import { tokenPool } from './services/facebook.token.pool'
-tokenPool.initialize().catch((error) => {
-  logger.error('[App] Failed to initialize token pool:', error)
-})
-
-// Initialize Queues and Workers
-import { initQueues } from './queue/facebook.queue'
-import { initWorkers } from './queue/facebook.worker'
-import { initBulkAdWorker } from './queue/bulkAd.worker'
-initQueues()
-initWorkers()
-initBulkAdWorker() // Initialize bulk ad creation worker
-
-// Initialize Crons
-import initPreaggregationCron from './cron/preaggregation.cron'
-import initAggregationCron from './cron/aggregation.cron'
-initCronJobs()
-initSyncCron()
-initPreaggregationCron()
-initAggregationCron() // 数据聚合定时任务
-initTokenValidationCron() // Token validation cron (每小时检查一次)
+// Extend Express Request type with requestId for logging/tracing
+declare global {
+  namespace Express {
+    interface Request {
+      requestId?: string
+    }
+  }
+}
 
 const app = express()
 app.use(cors())
 app.use(express.json())
+
+// Request ID (Correlation ID)
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const headerId = req.headers['x-request-id']
+  const requestId =
+    typeof headerId === 'string' && headerId.trim().length > 0 ? headerId : randomUUID()
+  req.requestId = requestId
+  res.setHeader('X-Request-Id', requestId)
+  next()
+})
 
 // Request Logger
 app.use((req: Request, res: Response, next: NextFunction) => {
@@ -72,7 +58,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 
   res.on('finish', () => {
     const duration = Date.now() - start
-    logger.info(`[${method}] ${url} ${res.statusCode} - ${duration}ms`)
+    logger.info(`[${req.requestId}] [${method}] ${url} ${res.statusCode} - ${duration}ms`)
   })
 
   next()

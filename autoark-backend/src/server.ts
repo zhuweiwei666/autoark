@@ -1,24 +1,68 @@
+// 🔥 Must be first: load environment variables
+import './config/env'
+
 import app from './app'
-import './cron' // Importing for side-effects if needed, though initCronJobs is explicit below
-import initCronJobs from './cron'
+import connectDB from './config/db'
+import { initRedis } from './config/redis'
 import logger from './utils/logger'
+import { tokenPool } from './services/facebook.token.pool'
+
+// Queues & Workers
+import { initQueues } from './queue/facebook.queue'
+import { initWorkers } from './queue/facebook.worker'
+import { initBulkAdWorker } from './queue/bulkAd.worker'
+
+// Cron Jobs
+import initCronJobs from './cron'
+import initSyncCron from './cron/sync.cron'
+import initPreaggregationCron from './cron/preaggregation.cron'
+import initTokenValidationCron from './cron/tokenValidation.cron'
 
 const PORT = process.env.PORT || 3001
 
 // Handle Uncaught Exceptions
 process.on('uncaughtException', (err) => {
-  logger.error('UNCAUGHT EXCEPTION! 💥 Shutting down...', err)
+  logger.error('UNCAUGHT EXCEPTION! Shutting down...', err)
   process.exit(1)
 })
 
 // Handle Unhandled Rejections
 process.on('unhandledRejection', (err: any) => {
-  logger.error('UNHANDLED REJECTION! 💥 Shutting down...', err)
+  logger.error('UNHANDLED REJECTION! Shutting down...', err)
   // Ideally we should close the server gracefully, but process.exit is acceptable here
   process.exit(1)
 })
 
-// Initialize Cron Jobs
-initCronJobs()
+async function bootstrap() {
+  // 1) DB
+  await connectDB()
 
-app.listen(PORT, () => console.log(`AutoArk backend running on port ${PORT}`))
+  // 2) Redis (optional)
+  initRedis()
+
+  // 3) Token Pool
+  tokenPool.initialize().catch((error) => {
+    logger.error('[Bootstrap] Failed to initialize token pool:', error)
+  })
+
+  // 4) Queues & Workers (only if Redis is configured)
+  initQueues()
+  initWorkers()
+  initBulkAdWorker()
+
+  // 5) Cron Jobs (start once per process)
+  initCronJobs()
+  initSyncCron()
+  initPreaggregationCron()
+  initTokenValidationCron()
+
+  // 6) HTTP Server
+  app.listen(PORT, () => {
+    logger.info(`AutoArk backend running on port ${PORT}`)
+  })
+}
+
+bootstrap().catch((err) => {
+  logger.error('[Bootstrap] Failed to start server:', err)
+  process.exit(1)
+})
