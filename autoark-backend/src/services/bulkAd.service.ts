@@ -191,6 +191,19 @@ export const publishDraft = async (draftId: string, userId?: string) => {
   // 计算预估
   const accountCount = draft.accounts?.length || 0
   const creativeGroupCount = draft.ad?.creativeGroupIds?.length || 1
+  const copywritingCount = draft.ad?.copywritingPackageIds?.length || 1
+  const adsetMultiplier = Math.min(10, Math.max(1, Number(draft.adset?.multiplier || 1)))
+  const estimatedTotalAdsets = accountCount * adsetMultiplier
+  
+  // 估算广告数量（与前端预览一致：按创意组数估算；实际创建会按素材数生成更多广告）
+  const creativeLevel = draft.publishStrategy?.creativeLevel || 'ADSET'
+  let estimatedTotalAds =
+    creativeLevel === 'CAMPAIGN'
+      ? accountCount * creativeGroupCount
+      : estimatedTotalAdsets * creativeGroupCount
+  if ((draft.publishStrategy?.copywritingMode || 'SHARED') === 'SEQUENTIAL') {
+    estimatedTotalAds = estimatedTotalAds * copywritingCount
+  }
   
   // 🆕 生成任务名称：autoark{用户名}_{包名}_{日期时间精确到秒}
   // 获取用户名
@@ -249,8 +262,8 @@ export const publishDraft = async (draftId: string, userId?: string) => {
     progress: {
       totalAccounts: accountCount,
       totalCampaigns: accountCount,
-      totalAdsets: accountCount,
-      totalAds: accountCount * creativeGroupCount,
+      totalAdsets: estimatedTotalAdsets,
+      totalAds: estimatedTotalAds,
     },
     
     publishSettings: {
@@ -538,13 +551,11 @@ export const executeTaskForAccount = async (
     // ==================== 2. 使用已获取的定向配置 ====================
     // (定向配置已在步骤0获取)
     
-    // ==================== 3. 创建 AdSet ====================
-    const adsetName = generateName(config.adset.nameTemplate, {
-      accountName: accountConfig.accountName,
-      campaignName,
-      targetingName,  // 添加定向包名称变量
-      date: new Date().toISOString().slice(0, 10),
-    })
+    // ==================== 3. 创建 AdSet（支持倍率） ====================
+    // 广告组倍率：在一个 campaign 下创建多个 adset
+    const adsetMultiplier = Math.min(10, Math.max(1, Number(config.adset.multiplier || 1)))
+    const allAdsetIds: string[] = []
+    const allAdsetNames: string[] = []
     
     // 计算 AdSet 预算
     // CBO 模式: 预算在 Campaign 级别设置，AdSet 不设置预算
@@ -566,49 +577,85 @@ export const executeTaskForAccount = async (
     // DSA 受益方：使用 Pixel 名称（欧盟合规）
     const dsaBeneficiary = accountConfig.pixelName || accountConfig.pixelId || undefined
     
-    // 构建归因设置
-    const attributionSpec = config.adset.attribution ? [{
-      event_type: 'CLICK_THROUGH',
-      window_days: config.adset.attribution.clickWindow || 1,
-    }, ...(config.adset.attribution.viewWindow > 0 ? [{
-      event_type: 'VIEW_THROUGH',
-      window_days: config.adset.attribution.viewWindow,
-    }] : []), ...(config.adset.attribution.engagedViewWindow > 0 ? [{
-      event_type: 'ENGAGED_VIDEO_VIEW',
-      window_days: config.adset.attribution.engagedViewWindow,
-    }] : [])] : undefined
+    // 构建归因设置（兼容 attribution / attributionSpec）
+    const attributionCfg = config.adset.attribution || config.adset.attributionSpec
+    const clickWindow = Number(attributionCfg?.clickWindow ?? 1)
+    const viewWindow = Number(attributionCfg?.viewWindow ?? 0)
+    const engagedViewWindow = Number((attributionCfg as any)?.engagedViewWindow ?? 0)
+    const attributionSpec = attributionCfg
+      ? [
+          {
+            event_type: 'CLICK_THROUGH',
+            window_days: clickWindow,
+          },
+          ...(viewWindow > 0
+            ? [
+                {
+                  event_type: 'VIEW_THROUGH',
+                  window_days: viewWindow,
+                },
+              ]
+            : []),
+          ...(engagedViewWindow > 0
+            ? [
+                {
+                  event_type: 'ENGAGED_VIDEO_VIEW',
+                  window_days: engagedViewWindow,
+                },
+              ]
+            : []),
+        ]
+      : undefined
 
-    const adsetResult = await createAdSet({
-      accountId,
-      token,
-      campaignId,
-      name: adsetName,
-      status: config.adset.status || 'PAUSED',
-      targeting,
-      optimizationGoal: config.adset.optimizationGoal || 'OFFSITE_CONVERSIONS',
-      billingEvent: config.adset.billingEvent || 'IMPRESSIONS',
-      bidStrategy: config.adset.bidStrategy,
-      bidAmount: config.adset.bidAmount,
-      dailyBudget: adsetBudget,
-      startTime: config.adset.startTime?.toISOString?.(),
-      endTime: config.adset.endTime?.toISOString?.(),
-      promotedObject: accountConfig.pixelId ? {
-        pixel_id: accountConfig.pixelId,
-        custom_event_type: accountConfig.conversionEvent || 'PURCHASE',
-      } : undefined,
-      attribution_spec: attributionSpec,
-      dsa_beneficiary: dsaBeneficiary,
-      dsa_payor: dsaBeneficiary,
-    })
+    logger.info(`[BulkAd] Creating ${adsetMultiplier} adset(s) for campaign ${campaignId}`)
     
-    if (!adsetResult.success) {
-      throw new Error(`AdSet creation failed: ${adsetResult.error?.message}`)
+    for (let adsetIndex = 0; adsetIndex < adsetMultiplier; adsetIndex++) {
+      // 生成广告组名称（倍率>1时添加序号后缀）
+      const hasIndexVar = /\{index\}/i.test(config.adset.nameTemplate || '')
+      const adsetNameSuffix = adsetMultiplier > 1 && !hasIndexVar ? `_${adsetIndex + 1}` : ''
+      const adsetName = generateName(config.adset.nameTemplate, {
+        accountName: accountConfig.accountName,
+        campaignName,
+        targetingName,  // 添加定向包名称变量
+        date: new Date().toISOString().slice(0, 10),
+        index: adsetIndex + 1,
+      }) + adsetNameSuffix
+
+      const adsetResult = await createAdSet({
+        accountId,
+        token,
+        campaignId,
+        name: adsetName,
+        status: config.adset.status || 'PAUSED',
+        targeting,
+        optimizationGoal: config.adset.optimizationGoal || 'OFFSITE_CONVERSIONS',
+        billingEvent: config.adset.billingEvent || 'IMPRESSIONS',
+        bidStrategy: config.adset.bidStrategy,
+        bidAmount: config.adset.bidAmount,
+        dailyBudget: adsetBudget,
+        startTime: config.adset.startTime?.toISOString?.(),
+        endTime: config.adset.endTime?.toISOString?.(),
+        promotedObject: accountConfig.pixelId ? {
+          pixel_id: accountConfig.pixelId,
+          custom_event_type: accountConfig.conversionEvent || 'PURCHASE',
+        } : undefined,
+        attribution_spec: attributionSpec,
+        dsa_beneficiary: dsaBeneficiary,
+        dsa_payor: dsaBeneficiary,
+      })
+      
+      if (!adsetResult.success) {
+        throw new Error(`AdSet ${adsetIndex + 1} creation failed: ${adsetResult.error?.message}`)
+      }
+      
+      allAdsetIds.push(adsetResult.id)
+      allAdsetNames.push(adsetName)
+      logger.info(`[BulkAd] Created adset ${adsetIndex + 1}/${adsetMultiplier}: ${adsetName}`)
     }
     
-    const adsetId = adsetResult.id
     // 原子更新 adset 结果
     await updateTaskItemAtomic(taskId, accountId, {
-      'items.$.result.adsetIds': [adsetId],
+      'items.$.result.adsetIds': allAdsetIds,
     })
     
     // ==================== 4. 获取创意组和文案包 ====================
@@ -628,17 +675,23 @@ export const executeTaskForAccount = async (
     }
     
     // ==================== 5. 创建广告 ====================
-    // 遍历每个创意组的每个素材，为每个素材创建一条广告
+    // 支持“一个 Campaign 下 N 个广告组”：会在每个广告组下各创建一套广告
     const adIds: string[] = []
     const adsDetails: Array<{
       adId: string
       adName: string
       adsetId: string
+      adsetName: string
       creativeId: string
       materialId?: string
       effectiveStatus?: string
     }> = []
     let globalAdIndex = 0
+    
+    const adsetsToUse = allAdsetIds.map((id, idx) => ({
+      adsetId: id,
+      adsetName: allAdsetNames[idx] || `adset_${idx + 1}`,
+    }))
     
     // ===== 优化：先并行上传所有视频 =====
     const allMaterials: Array<{ cgIndex: number; matIndex: number; material: any; copywriting: any }> = []
@@ -692,10 +745,19 @@ export const executeTaskForAccount = async (
       logger.info(`[BulkAd] All videos uploaded: ${videoUploadResults.size}/${videosToUpload.length} success`)
     }
     
-    // 创建广告
+    // ===== 1) 为每个素材创建一次 Creative（可复用到多个广告组） =====
+    const creativeEntries: Array<{
+      cgIndex: number
+      matIndex: number
+      creativeGroup: any
+      material: any
+      copywriting: any
+      creativeId: string
+    }> = []
+    
+    let creativeIndex = 0
     for (const { cgIndex, matIndex, material, copywriting } of allMaterials) {
       const creativeGroup = creativeGroups[cgIndex]
-      globalAdIndex++
       
       // 处理素材引用
       let materialRef: any = {}
@@ -728,84 +790,100 @@ export const executeTaskForAccount = async (
         continue
       }
       
-      // 创建 Ad Creative
-        const creativeName = `${adsetName}_creative_${globalAdIndex}`
-        const linkData: any = {
-          link: copywriting.links?.websiteUrl || '',
-          message: copywriting.content?.primaryTexts?.[0] || '',
-          name: copywriting.content?.headlines?.[0] || '',
-          description: copywriting.content?.descriptions?.[0] || '',
+      creativeIndex++
+      const creativeName = `${campaignName}_creative_${creativeIndex}`
+      
+      const linkData: any = {
+        link: copywriting.links?.websiteUrl || '',
+        message: copywriting.content?.primaryTexts?.[0] || '',
+        name: copywriting.content?.headlines?.[0] || '',
+        description: copywriting.content?.descriptions?.[0] || '',
+        call_to_action: {
+          type: copywriting.callToAction || 'SHOP_NOW',
+          value: { link: copywriting.links?.websiteUrl || '' },
+        },
+      }
+      
+      // 添加显示链接（caption）
+      if (copywriting.links?.displayLink) {
+        linkData.caption = copywriting.links.displayLink
+      }
+      
+      const objectStorySpec: any = {
+        page_id: accountConfig.pageId,
+        link_data: linkData,
+      }
+      
+      if (materialRef.image_hash) {
+        objectStorySpec.link_data.image_hash = materialRef.image_hash
+      } else if (materialRef.image_url) {
+        objectStorySpec.link_data.picture = materialRef.image_url
+      } else if (materialRef.video_id) {
+        // 视频广告：使用 video_data 替代 link_data
+        const link = objectStorySpec.link_data.link
+        const message = objectStorySpec.link_data.message
+        const title = objectStorySpec.link_data.name
+        const description = objectStorySpec.link_data.description
+        const caption = objectStorySpec.link_data.caption
+        
+        // 使用用户选择的 CTA，不做强制转换
+        const ctaType = copywriting.callToAction || 'SHOP_NOW'
+        
+        delete objectStorySpec.link_data
+        const videoData: any = {
+          video_id: materialRef.video_id,
+          image_url: materialRef.thumbnail_url,
+          message: message,
+          link_description: description || title,
           call_to_action: {
-            type: copywriting.callToAction || 'SHOP_NOW',
-            value: { link: copywriting.links?.websiteUrl || '' },
+            type: ctaType,
+            value: { link: link },
           },
         }
         
-        // 添加显示链接（caption）
-        if (copywriting.links?.displayLink) {
-          linkData.caption = copywriting.links.displayLink
+        // 添加显示链接
+        if (caption) {
+          videoData.caption = caption
         }
         
-        const objectStorySpec: any = {
-          page_id: accountConfig.pageId,
-          link_data: linkData,
-        }
+        objectStorySpec.video_data = videoData
+        logger.info(`[BulkAd] Video creative with thumbnail: ${materialRef.thumbnail_url}`)
+      }
+      
+      if (accountConfig.instagramAccountId) {
+        objectStorySpec.instagram_actor_id = accountConfig.instagramAccountId
+      }
+      
+      const creativeResult = await createAdCreative({
+        accountId,
+        token,
+        name: creativeName,
+        objectStorySpec,
+      })
+      
+      if (!creativeResult.success) {
+        logger.error(`[BulkAd] Failed to create creative for material ${matIndex + 1}:`, creativeResult.error)
+        continue
+      }
+      
+      creativeEntries.push({
+        cgIndex,
+        matIndex,
+        creativeGroup,
+        material,
+        copywriting,
+        creativeId: creativeResult.id,
+      })
+    }
+    
+    // ===== 2) 为每个广告组创建 Ads（复用 Creative） =====
+    for (const { adsetId, adsetName } of adsetsToUse) {
+      for (const entry of creativeEntries) {
+        const creativeGroup = entry.creativeGroup
+        const material = entry.material
         
-        if (materialRef.image_hash) {
-          objectStorySpec.link_data.image_hash = materialRef.image_hash
-        } else if (materialRef.image_url) {
-          objectStorySpec.link_data.picture = materialRef.image_url
-        } else if (materialRef.video_id) {
-          // 视频广告：使用 video_data 替代 link_data
-          const link = objectStorySpec.link_data.link
-          const message = objectStorySpec.link_data.message
-          const title = objectStorySpec.link_data.name
-          const description = objectStorySpec.link_data.description
-          const caption = objectStorySpec.link_data.caption
-          
-          // 使用用户选择的 CTA，不做强制转换
-          const ctaType = copywriting.callToAction || 'SHOP_NOW'
-          
-          delete objectStorySpec.link_data
-          const videoData: any = {
-            video_id: materialRef.video_id,
-            image_url: materialRef.thumbnail_url,
-            message: message,
-            link_description: description || title,
-            call_to_action: {
-              type: ctaType,
-              value: { link: link },
-            },
-          }
-          
-          // 添加显示链接
-          if (caption) {
-            videoData.caption = caption
-          }
-          
-          objectStorySpec.video_data = videoData
-          logger.info(`[BulkAd] Video creative with thumbnail: ${materialRef.thumbnail_url}`)
-        }
+        globalAdIndex++
         
-        if (accountConfig.instagramAccountId) {
-          objectStorySpec.instagram_actor_id = accountConfig.instagramAccountId
-        }
-        
-        const creativeResult = await createAdCreative({
-          accountId,
-          token,
-          name: creativeName,
-          objectStorySpec,
-        })
-        
-        if (!creativeResult.success) {
-          logger.error(`[BulkAd] Failed to create creative for material ${matIndex + 1}:`, creativeResult.error)
-          continue
-        }
-        
-        const creativeId = creativeResult.id
-        
-        // 创建 Ad
         // 生成精确到分钟的时间戳
         const now = new Date()
         const datetime = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`
@@ -815,24 +893,24 @@ export const executeTaskForAccount = async (
           campaignName,
           adsetName,
           creativeGroupName: creativeGroup.name,
-          materialName: material.name || `素材${matIndex + 1}`,
+          materialName: material.name || `素材${entry.matIndex + 1}`,
           index: globalAdIndex,
           date: now.toISOString().slice(0, 10),
-          datetime,  // 精确到分钟: 20251211_1430
+          datetime, // 精确到分钟: 20251211_1430
         })
         
         const adResult = await createAd({
           accountId,
           token,
           adsetId,
-          creativeId,
+          creativeId: entry.creativeId,
           name: adName,
           status: config.ad.status || 'PAUSED',
           urlTags: config.ad.tracking?.urlTags,
         })
         
         if (!adResult.success) {
-          logger.error(`[BulkAd] Failed to create ad for material ${matIndex + 1}:`, adResult.error)
+          logger.error(`[BulkAd] Failed to create ad for material ${entry.matIndex + 1}:`, adResult.error)
           continue
         }
         
@@ -843,12 +921,14 @@ export const executeTaskForAccount = async (
           adId: adResult.id,
           adName,
           adsetId,
-          creativeId,
+          adsetName,
+          creativeId: entry.creativeId,
           materialId: material._id?.toString(),
           effectiveStatus: 'PENDING_REVIEW', // 新创建的广告默认为审核中
         })
         
         logger.info(`[BulkAd] Created ad ${globalAdIndex}: ${adName}`)
+      }
     }
     
     // ==================== 6. 完成任务 ====================
@@ -885,7 +965,7 @@ export const executeTaskForAccount = async (
               adId: adDetail.adId,
               name: adDetail.adName,
               adsetId: adDetail.adsetId,
-              adsetName,
+              adsetName: (adDetail as any).adsetName,
               campaignId,
               campaignName,
               accountId,
@@ -931,7 +1011,7 @@ export const executeTaskForAccount = async (
     return {
       success: true,
       campaignId,
-      adsetIds: [adsetId],
+      adsetIds: allAdsetIds,
       adIds,
     }
     

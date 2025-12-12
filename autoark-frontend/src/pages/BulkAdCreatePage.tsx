@@ -99,6 +99,7 @@ export default function BulkAdCreatePage() {
     billingEvent: 'IMPRESSIONS',
     placementType: 'AUTOMATIC',
     budget: 50, // AdSet 级别预算（非 CBO 模式时使用）
+    multiplier: 1, // 广告组倍率：每个 campaign 下创建的广告组数量
     // 归因设置
     attribution: {
       clickWindow: 1,      // 点击后归因窗口（天）: 1, 7, 28
@@ -670,8 +671,8 @@ export default function BulkAdCreatePage() {
   const estimates = {
     totalAccounts: selectedAccounts.length,
     totalCampaigns: selectedAccounts.length,
-    totalAdsets: selectedAccounts.length,
-    totalAds: selectedAccounts.length * Math.max(1, ad.creativeGroupIds.length) * 
+    totalAdsets: selectedAccounts.length * adset.multiplier,
+    totalAds: selectedAccounts.length * adset.multiplier * Math.max(1, ad.creativeGroupIds.length) * 
       (publishStrategy.copywritingMode === 'SEQUENTIAL' ? Math.max(1, ad.copywritingPackageIds.length) : 1),
     dailyBudget: campaign.budget * selectedAccounts.length,
   }
@@ -1300,6 +1301,15 @@ export default function BulkAdCreatePage() {
                     <option value="">选择定向包</option>{targetingPackages.map((pkg: any) => <option key={pkg._id} value={pkg._id}>{pkg.name}</option>)}
                   </select>
                   <button onClick={() => navigate('/bulk-ad/assets?tab=targeting')} className="text-xs text-blue-500 mt-1 hover:underline">+ 新建定向包</button></div>
+                <div>
+                  <label className="block text-sm text-slate-600 mb-1">广告组倍率</label>
+                  <select value={adset.multiplier} onChange={(e) => setAdset({...adset, multiplier: Number(e.target.value)})} className="w-full px-3 py-2 border rounded-lg">
+                    {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(n => (
+                      <option key={n} value={n}>{n}x（每个系列 {n} 个广告组）</option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-slate-400 mt-1">在同一个 Campaign 下创建多个相同配置的广告组</p>
+                </div>
               </div>
               
               {/* 从定向包读取的配置（只读显示） */}
