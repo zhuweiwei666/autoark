@@ -153,15 +153,18 @@ export const getUserAccountIds = async (req: Request): Promise<string[] | null> 
     tokenQuery.userId = req.user.userId
   }
   
-  const tokens = await FbToken.find(tokenQuery).select('fbUserId').lean()
+  // 旧实现依赖 Account.fbUserId 字段，但当前 Account 模型并未保证该字段存在。
+  // 为了与现有数据结构兼容，这里改为通过 Account.token（同步账户时已写入）进行关联。
+  const tokens = await FbToken.find(tokenQuery).select('token').lean()
   if (!tokens || tokens.length === 0) return []
   
-  const fbUserIds = tokens.map((t: any) => t.fbUserId).filter(Boolean)
-  if (fbUserIds.length === 0) return []
+  const tokenValues = tokens.map((t: any) => t.token).filter(Boolean)
+  if (tokenValues.length === 0) return []
   
-  // 查找这些 Token 关联的账户
-  const accounts = await Account.find({ fbUserId: { $in: fbUserIds } }).select('accountId').lean()
-  return accounts.map((a: any) => a.accountId)
+  const accounts = await Account.find({ token: { $in: tokenValues } }).select('accountId').lean()
+  const accountIds = accounts.map((a: any) => a.accountId).filter(Boolean)
+  // 去重
+  return Array.from(new Set(accountIds))
 }
 
 /**

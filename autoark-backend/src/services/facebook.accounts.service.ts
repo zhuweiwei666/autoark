@@ -155,17 +155,25 @@ export const getAccounts = async (filters: any = {}, pagination: { page: number,
         datePreset = ''
     }
     
-    // 获取有效 token
-    const tokenDoc = await FbToken.findOne({ status: 'active' })
-    const token = tokenDoc?.token
+    // 为每个账户使用其关联的 token（更准确，避免用“任意一个 active token”导致无权限/数据不更新）
+    const accountTokenMap: Record<string, string> = {}
+    for (const acc of allAccounts as any[]) {
+        if (acc?.accountId && acc?.token) {
+            accountTokenMap[acc.accountId] = acc.token
+        }
+    }
     
-    if (token && accountIds.length > 0) {
+    if (accountIds.length > 0) {
         // 并发获取所有账户的 insights（限制并发数）
         const batchSize = 10
         for (let i = 0; i < accountIds.length; i += batchSize) {
             const batch = accountIds.slice(i, i + batchSize)
             const promises = batch.map(async (accountId) => {
                 try {
+                    const token = accountTokenMap[accountId]
+                    if (!token) {
+                        return { accountId, spend: 0 }
+                    }
                     const accountIdForApi = normalizeForApi(accountId)
                     const insights = await fetchInsights(
                         accountIdForApi,
