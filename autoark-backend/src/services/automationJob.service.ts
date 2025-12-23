@@ -2,10 +2,6 @@ import crypto from 'crypto'
 import logger from '../utils/logger'
 import AutomationJob from '../models/AutomationJob'
 import { addAutomationJob } from '../queue/automation.queue'
-import { agentService } from '../domain/agent/agent.service'
-import bulkAdService from './bulkAd.service'
-import * as fbSyncService from './facebook.sync.service'
-import { syncFacebookUserAssets } from './facebookUser.service'
 import FbToken from '../models/FbToken'
 
 export const buildIdempotencyKey = (type: string, payload: any, agentId?: string) => {
@@ -74,6 +70,12 @@ export async function executeAutomationJobInline(automationJobId: string) {
   try {
     const payload = doc.payload || {}
     let result: any
+
+    // 使用动态导入打破循环依赖
+    const { agentService } = await import('../domain/agent/agent.service')
+    const bulkAdService = (await import('./bulkAd.service')).default
+    const fbSyncService = await import('./facebook.sync.service')
+    const { syncFacebookUserAssets } = await import('./facebookUser.service')
 
     switch (doc.type) {
       case 'RUN_AGENT': {

@@ -2,10 +2,6 @@ import { Worker, Job, WorkerOptions } from 'bullmq'
 import { getRedisClient } from '../config/redis'
 import logger from '../utils/logger'
 import AutomationJob from '../models/AutomationJob'
-import { agentService } from '../domain/agent/agent.service'
-import bulkAdService from '../services/bulkAd.service'
-import * as fbSyncService from '../services/facebook.sync.service'
-import { syncFacebookUserAssets } from '../services/facebookUser.service'
 import FbToken from '../models/FbToken'
 
 let automationWorker: Worker | null = null
@@ -53,6 +49,12 @@ export const initAutomationWorker = () => {
       try {
         let result: any
         const payload = doc.payload || {}
+
+        // 使用动态导入打破循环依赖
+        const { agentService } = await import('../domain/agent/agent.service')
+        const bulkAdService = (await import('../services/bulkAd.service')).default
+        const fbSyncService = await import('../services/facebook.sync.service')
+        const { syncFacebookUserAssets } = await import('../services/facebookUser.service')
 
         switch (doc.type) {
           case 'RUN_AGENT': {

@@ -95,7 +95,7 @@ router.post('/agents/:id/run', async (req: Request, res: Response) => {
 // 运行 Agent（Planner/Executor）：生成 operations 并创建 AutomationJobs 执行
 router.post('/agents/:id/run-jobs', async (req: Request, res: Response) => {
   try {
-    const { createAutomationJob } = require('../../services/automationJob.service')
+    const { createAutomationJob } = await import('../../services/automationJob.service')
     const agentId = req.params.id
     
     // 创建一个即时运行的 Job (手动触发增加时间戳，确保不被幂等拦截)

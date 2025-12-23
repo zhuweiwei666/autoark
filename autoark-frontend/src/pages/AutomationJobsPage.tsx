@@ -95,6 +95,13 @@ export default function AutomationJobsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, filterStatus, filterType])
 
+  // auto refresh list every 10 seconds to ensure new jobs appear
+  useEffect(() => {
+    const t = setInterval(() => loadJobs({ silent: true }), 10000)
+    return () => clearInterval(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, filterStatus, filterType])
+
   // auto refresh for running
   useEffect(() => {
     const hasRunning = jobs.some((j) => j.status === 'queued' || j.status === 'running')
