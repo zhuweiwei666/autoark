@@ -233,19 +233,31 @@ export default function AgentManagementPage() {
       const url = editingAgent ? `/api/agent/agents/${editingAgent._id}` : '/api/agent/agents'
       const method = editingAgent ? 'PUT' : 'POST'
       
-      const res = await authFetch(url, {
+      // 显式序列化，确保嵌套对象 scope 正确传递
+      const response = await authFetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formData),
+        body: JSON.stringify({
+          ...formData,
+          // 确保 adAccountIds 是最新的
+          scope: {
+            ...formData.scope,
+            adAccountIds: formData.scope.adAccountIds
+          }
+        }),
       })
       
-      if ((await res.json()).success) {
+      const resData = await response.json()
+      if (resData.success) {
         setShowModal(false)
         loadAgents()
         resetForm()
+      } else {
+        alert(resData.error || '保存失败')
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to save agent:', error)
+      alert(error.message || '保存过程中发生错误')
     }
     setLoading(false)
   }
