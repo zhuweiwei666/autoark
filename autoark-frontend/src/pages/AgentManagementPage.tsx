@@ -20,6 +20,12 @@ interface Agent {
   description: string
   status: 'active' | 'paused' | 'disabled'
   mode: 'observe' | 'suggest' | 'auto'
+  organizationId?: string
+  scope: {
+    adAccountIds: string[]
+    fbTokenIds: string[]
+    facebookAppIds: string[]
+  }
   objectives: {
     targetRoas: number
     maxCpa?: number
@@ -90,12 +96,20 @@ export default function AgentManagementPage() {
   const [activeTab, setActiveTab] = useState<'agents' | 'pending' | 'history'>('agents')
   const [showSnapshotModal, setShowSnapshotModal] = useState(false)
   const [selectedOp, setSelectedOp] = useState<Operation | null>(null)
+  const [availableAccounts, setAvailableAccounts] = useState<any[]>([])
+  const [accountsLoading, setAccountsLoading] = useState(false)
 
   const [formData, setFormData] = useState({
     name: '',
     description: '',
     status: 'paused',
     mode: 'observe',
+    organizationId: '',
+    scope: {
+      adAccountIds: [] as string[],
+      fbTokenIds: [] as string[],
+      facebookAppIds: [] as string[],
+    },
     objectives: { targetRoas: 1.5, maxCpa: 20, dailyBudgetLimit: 500 },
     rules: {
       autoStop: { enabled: true, roasThreshold: 0.5, minDays: 3, minSpend: 50 },
@@ -139,7 +153,23 @@ export default function AgentManagementPage() {
     loadAgents()
     loadOperations()
     loadPendingOps()
+    loadAvailableAccounts()
   }, [])
+
+  const loadAvailableAccounts = async () => {
+    setAccountsLoading(true)
+    try {
+      const res = await authFetch('/api/bulk-ad/auth/ad-accounts')
+      const data = await res.json()
+      if (data.success) {
+        setAvailableAccounts(data.data || [])
+      }
+    } catch (error) {
+      console.error('Failed to load accounts:', error)
+    } finally {
+      setAccountsLoading(false)
+    }
+  }
 
   const loadAgents = async () => {
     try {
@@ -273,6 +303,12 @@ export default function AgentManagementPage() {
       description: '',
       status: 'paused',
       mode: 'observe',
+      organizationId: '',
+      scope: {
+        adAccountIds: [],
+        fbTokenIds: [],
+        facebookAppIds: [],
+      },
       objectives: { targetRoas: 1.5, maxCpa: 20, dailyBudgetLimit: 500 },
       rules: {
         autoStop: { enabled: true, roasThreshold: 0.5, minDays: 3, minSpend: 50 },
@@ -320,6 +356,12 @@ export default function AgentManagementPage() {
       description: agent.description || '',
       status: agent.status,
       mode: agent.mode,
+      organizationId: agent.organizationId || '',
+      scope: {
+        adAccountIds: agent.scope?.adAccountIds || [],
+        fbTokenIds: agent.scope?.fbTokenIds || [],
+        facebookAppIds: agent.scope?.facebookAppIds || [],
+      },
       objectives: {
         targetRoas: agent.objectives?.targetRoas || 1.5,
         maxCpa: agent.objectives?.maxCpa || 20,
@@ -654,13 +696,64 @@ export default function AgentManagementPage() {
                 </div>
 
                 <div>
-                  <label className="block text-sm text-slate-600 mb-2">描述</label>
+                  <label className="block text-sm text-slate-600 mb-2 font-bold">描述</label>
                   <textarea
                     value={formData.description}
                     onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-slate-900 h-20 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     placeholder="描述这个 Agent 的用途..."
                   />
+                </div>
+
+                {/* 账户分配 (Account Scope) */}
+                <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
+                  <div className="flex items-center justify-between mb-4">
+                    <label className="text-sm font-bold text-slate-800 flex items-center gap-2">
+                      <span className="text-lg">🎯</span>
+                      管辖账户 (Account Scope)
+                    </label>
+                    <span className="text-[10px] bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-full font-bold uppercase">
+                      已选 {formData.scope.adAccountIds.length}
+                    </span>
+                  </div>
+                  
+                  {accountsLoading ? (
+                    <div className="text-center py-4 text-xs text-slate-400">正在同步可用账户...</div>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto p-1 scrollbar-thin">
+                      {availableAccounts.map(acc => {
+                        const accountId = acc.account_id || acc.id?.replace('act_', '')
+                        const isSelected = formData.scope.adAccountIds.includes(accountId)
+                        return (
+                          <div
+                            key={accountId}
+                            onClick={() => {
+                              const nextIds = isSelected
+                                ? formData.scope.adAccountIds.filter(id => id !== accountId)
+                                : [...formData.scope.adAccountIds, accountId]
+                              setFormData({ ...formData, scope: { ...formData.scope, adAccountIds: nextIds } })
+                            }}
+                            className={`flex items-center gap-3 p-3 rounded-xl border-2 cursor-pointer transition-all ${
+                              isSelected
+                                ? 'border-indigo-500 bg-indigo-50 shadow-sm'
+                                : 'border-slate-100 bg-slate-50 hover:border-slate-200'
+                            }`}
+                          >
+                            <div className={`w-4 h-4 rounded-md border-2 flex items-center justify-center transition-all ${
+                              isSelected ? 'bg-indigo-600 border-indigo-600' : 'bg-white border-slate-300'
+                            }`}>
+                              {isSelected && <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" /></svg>}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="text-[11px] font-bold text-slate-800 truncate leading-tight">{acc.name || accountId}</div>
+                              <div className="text-[9px] text-slate-400 font-mono mt-0.5">{accountId}</div>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                  <p className="text-[10px] text-slate-400 mt-3 italic">* 只有分配给该 Agent 的账户，AI 才会进行评分和自动调控。</p>
                 </div>
 
                 {/* 运行模式 */}
