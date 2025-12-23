@@ -98,14 +98,15 @@ router.post('/agents/:id/run-jobs', async (req: Request, res: Response) => {
     const { createAutomationJob } = require('../../services/automationJob.service')
     const agentId = req.params.id
     
-    // 创建一个即时运行的 Job
+    // 创建一个即时运行的 Job (手动触发增加时间戳，确保不被幂等拦截)
     const job = await createAutomationJob({
       type: 'RUN_AGENT_AS_JOBS',
-      payload: { agentId },
+      payload: { agentId, manual: true, triggeredAt: new Date().toISOString() },
       agentId,
       organizationId: req.user?.organizationId,
       createdBy: req.user?.userId,
       priority: 10, // 高优先级
+      idempotencyKey: `manual:agent:${agentId}:${Date.now()}`,
     })
 
     res.json({ 
