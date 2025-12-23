@@ -227,6 +227,27 @@ const agentConfigSchema = new mongoose.Schema({
       atcRate: { type: Number, default: 0.05 },  // 🆕 5% ATC Rate 为基准
     },
   },
+
+  /**
+   * 评分-操作映射阈值 (Score-to-Action Mappings)
+   */
+  actionThresholds: {
+    aggressiveScale: { 
+      minScore: { type: Number, default: 85 },
+      changePercent: { type: Number, default: 30 }
+    },
+    moderateScale: {
+      minScore: { type: Number, default: 70 },
+      changePercent: { type: Number, default: 15 }
+    },
+    stopLoss: {
+      maxScore: { type: Number, default: 30 },
+      changePercent: { type: Number, default: -20 }
+    },
+    kill: {
+      maxScore: { type: Number, default: 15 }
+    }
+  },
   
   createdBy: { type: String },
 }, { timestamps: true })

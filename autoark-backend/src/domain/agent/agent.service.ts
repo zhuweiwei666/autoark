@@ -1791,28 +1791,33 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
         const scoreResult = await scoringService.evaluate(currentMetrics, sequence, agent)
         const { finalScore, stage } = scoreResult
 
-        // 根据分数决定动作
+        // 根据配置的阈值决定动作
         let action: 'pause' | 'budget_increase' | 'budget_decrease' | null = null
         let reason = `[Stage: ${stage}] Score: ${finalScore.toFixed(1)}. `
         let changePercent = 0
-        let afterValue: any = null
-        let beforeValue: any = null
+        
+        const thresholds = agent.actionThresholds || {
+          aggressiveScale: { minScore: 85, changePercent: 30 },
+          moderateScale: { minScore: 70, changePercent: 15 },
+          stopLoss: { maxScore: 30, changePercent: -20 },
+          kill: { maxScore: 15 }
+        }
 
-        if (finalScore >= 85) {
+        if (finalScore >= thresholds.aggressiveScale.minScore) {
           action = 'budget_increase'
-          changePercent = 30
+          changePercent = thresholds.aggressiveScale.changePercent
           reason += `High momentum & performance. Aggressive scale.`
-        } else if (finalScore >= 70) {
+        } else if (finalScore >= thresholds.moderateScale.minScore) {
           action = 'budget_increase'
-          changePercent = 15
+          changePercent = thresholds.moderateScale.changePercent
           reason += `Good trend. Moderate scale.`
-        } else if (finalScore < 15) {
+        } else if (finalScore < thresholds.kill.maxScore) {
           action = 'pause'
-          reason += `Critical underperformance in current stage.`
-        } else if (finalScore < 30) {
+          reason += `Critical underperformance. Entity killed.`
+        } else if (finalScore < thresholds.stopLoss.maxScore) {
           action = 'budget_decrease'
-          changePercent = -20
-          reason += `Declining trend or poor metrics. Stop loss.`
+          changePercent = thresholds.stopLoss.changePercent
+          reason += `Declining trend. Stop loss applied.`
         }
 
         if (action) {

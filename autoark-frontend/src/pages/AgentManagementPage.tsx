@@ -60,7 +60,13 @@ interface Agent {
         atcRate: number
       }
     }
-  createdAt: string
+    actionThresholds: {
+      aggressiveScale: { minScore: number; changePercent: number }
+      moderateScale: { minScore: number; changePercent: number }
+      stopLoss: { maxScore: number; changePercent: number }
+      kill: { maxScore: number }
+    }
+    createdAt: string
 }
 
 interface Operation {
@@ -146,6 +152,12 @@ export default function AgentManagementPage() {
       ],
       momentumSensitivity: 0.1,
       baselines: { cpm: 20, ctr: 0.01, cpc: 1, hookRate: 0.25, atcRate: 0.05 },
+    },
+    actionThresholds: {
+      aggressiveScale: { minScore: 85, changePercent: 30 },
+      moderateScale: { minScore: 70, changePercent: 15 },
+      stopLoss: { maxScore: 30, changePercent: -20 },
+      kill: { maxScore: 15 },
     },
   })
 
@@ -346,6 +358,12 @@ export default function AgentManagementPage() {
         momentumSensitivity: 0.1,
         baselines: { cpm: 20, ctr: 0.01, cpc: 1, hookRate: 0.25, atcRate: 0.05 },
       },
+      actionThresholds: {
+        aggressiveScale: { minScore: 85, changePercent: 30 },
+        moderateScale: { minScore: 70, changePercent: 15 },
+        stopLoss: { maxScore: 30, changePercent: -20 },
+        kill: { maxScore: 15 },
+      },
     })
   }
 
@@ -388,6 +406,7 @@ export default function AgentManagementPage() {
       },
       aiConfig: (agent as any).aiConfig || formData.aiConfig,
       scoringConfig: agent.scoringConfig || formData.scoringConfig,
+      actionThresholds: agent.actionThresholds || formData.actionThresholds,
     })
     setShowModal(true)
   }
@@ -1006,6 +1025,150 @@ export default function AgentManagementPage() {
                         })}
                         className="w-20 bg-white border border-indigo-200 rounded-xl px-3 py-2 text-sm text-center font-bold text-indigo-700"
                       />
+                    </div>
+                  </div>
+                </div>
+
+                {/* 评分-操作映射阈值 (Action Thresholds) */}
+                <div className="border-t border-slate-100 pt-6">
+                  <div className="flex items-center gap-2 mb-4">
+                    <span className="text-lg">⚡</span>
+                    <h3 className="text-lg font-bold text-slate-800">评分-操作映射 (Score-to-Action)</h3>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    {/* 扩量设置 */}
+                    <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-100 space-y-4">
+                      <h4 className="text-xs font-bold text-emerald-700 uppercase tracking-wider">激进扩量 (Aggressive)</h4>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-[10px] text-emerald-600 mb-1 font-bold">触发分值 ≥</label>
+                          <input
+                            type="number"
+                            value={formData.actionThresholds.aggressiveScale.minScore}
+                            onChange={(e) => setFormData({
+                              ...formData,
+                              actionThresholds: {
+                                ...formData.actionThresholds,
+                                aggressiveScale: { ...formData.actionThresholds.aggressiveScale, minScore: parseInt(e.target.value) || 0 }
+                              }
+                            })}
+                            className="w-full bg-white border border-emerald-200 rounded-xl px-3 py-1.5 text-sm font-bold text-emerald-700"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] text-emerald-600 mb-1 font-bold">加价幅度 %</label>
+                          <input
+                            type="number"
+                            value={formData.actionThresholds.aggressiveScale.changePercent}
+                            onChange={(e) => setFormData({
+                              ...formData,
+                              actionThresholds: {
+                                ...formData.actionThresholds,
+                                aggressiveScale: { ...formData.actionThresholds.aggressiveScale, changePercent: parseInt(e.target.value) || 0 }
+                              }
+                            })}
+                            className="w-full bg-white border border-emerald-200 rounded-xl px-3 py-1.5 text-sm font-bold text-emerald-700"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="p-4 bg-blue-50 rounded-2xl border border-blue-100 space-y-4">
+                      <h4 className="text-xs font-bold text-blue-700 uppercase tracking-wider">稳健扩量 (Moderate)</h4>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-[10px] text-blue-600 mb-1 font-bold">触发分值 ≥</label>
+                          <input
+                            type="number"
+                            value={formData.actionThresholds.moderateScale.minScore}
+                            onChange={(e) => setFormData({
+                              ...formData,
+                              actionThresholds: {
+                                ...formData.actionThresholds,
+                                moderateScale: { ...formData.actionThresholds.moderateScale, minScore: parseInt(e.target.value) || 0 }
+                              }
+                            })}
+                            className="w-full bg-white border border-blue-200 rounded-xl px-3 py-1.5 text-sm font-bold text-blue-700"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] text-blue-600 mb-1 font-bold">加价幅度 %</label>
+                          <input
+                            type="number"
+                            value={formData.actionThresholds.moderateScale.changePercent}
+                            onChange={(e) => setFormData({
+                              ...formData,
+                              actionThresholds: {
+                                ...formData.actionThresholds,
+                                moderateScale: { ...formData.actionThresholds.moderateScale, changePercent: parseInt(e.target.value) || 0 }
+                              }
+                            })}
+                            className="w-full bg-white border border-blue-200 rounded-xl px-3 py-1.5 text-sm font-bold text-blue-700"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* 止损与关停 */}
+                    <div className="p-4 bg-amber-50 rounded-2xl border border-amber-100 space-y-4">
+                      <h4 className="text-xs font-bold text-amber-700 uppercase tracking-wider">减速止损 (Stop Loss)</h4>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-[10px] text-amber-600 mb-1 font-bold">触发分值 {'<'}</label>
+                          <input
+                            type="number"
+                            value={formData.actionThresholds.stopLoss.maxScore}
+                            onChange={(e) => setFormData({
+                              ...formData,
+                              actionThresholds: {
+                                ...formData.actionThresholds,
+                                stopLoss: { ...formData.actionThresholds.stopLoss, maxScore: parseInt(e.target.value) || 0 }
+                              }
+                            })}
+                            className="w-full bg-white border border-amber-200 rounded-xl px-3 py-1.5 text-sm font-bold text-amber-700"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] text-amber-600 mb-1 font-bold">降价幅度 %</label>
+                          <input
+                            type="number"
+                            value={formData.actionThresholds.stopLoss.changePercent}
+                            onChange={(e) => setFormData({
+                              ...formData,
+                              actionThresholds: {
+                                ...formData.actionThresholds,
+                                stopLoss: { ...formData.actionThresholds.stopLoss, changePercent: parseInt(e.target.value) || 0 }
+                              }
+                            })}
+                            className="w-full bg-white border border-amber-200 rounded-xl px-3 py-1.5 text-sm font-bold text-amber-700"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="p-4 bg-rose-50 rounded-2xl border border-rose-100 space-y-4">
+                      <h4 className="text-xs font-bold text-rose-700 uppercase tracking-wider">立即关停 (Kill)</h4>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-[10px] text-rose-600 mb-1 font-bold">触发分值 {'<'}</label>
+                          <input
+                            type="number"
+                            value={formData.actionThresholds.kill.maxScore}
+                            onChange={(e) => setFormData({
+                              ...formData,
+                              actionThresholds: {
+                                ...formData.actionThresholds,
+                                kill: { ...formData.actionThresholds.kill, maxScore: parseInt(e.target.value) || 0 }
+                              }
+                            })}
+                            className="w-full bg-white border border-rose-200 rounded-xl px-3 py-1.5 text-sm font-bold text-rose-700"
+                          />
+                        </div>
+                        <div className="flex items-end pb-1.5">
+                          <span className="text-[10px] text-rose-400 italic">自动执行 PAUSE</span>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
