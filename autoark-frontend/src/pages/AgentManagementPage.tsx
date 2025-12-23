@@ -66,6 +66,13 @@ interface Agent {
       stopLoss: { maxScore: number; changePercent: number }
       kill: { maxScore: number }
     }
+    feishuConfig?: {
+      enabled: boolean
+      appId: string
+      appSecret: string
+      receiveId: string
+      receiveIdType: 'open_id' | 'chat_id' | 'user_id' | 'email'
+    }
     createdAt: string
 }
 
@@ -364,6 +371,13 @@ export default function AgentManagementPage() {
         stopLoss: { maxScore: 30, changePercent: -20 },
         kill: { maxScore: 15 },
       },
+      feishuConfig: {
+        enabled: false,
+        appId: '',
+        appSecret: '',
+        receiveId: '',
+        receiveIdType: 'chat_id' as any,
+      },
     })
   }
 
@@ -407,6 +421,13 @@ export default function AgentManagementPage() {
       aiConfig: (agent as any).aiConfig || formData.aiConfig,
       scoringConfig: agent.scoringConfig || formData.scoringConfig,
       actionThresholds: agent.actionThresholds || formData.actionThresholds,
+      feishuConfig: agent.feishuConfig || {
+        enabled: false,
+        appId: '',
+        appSecret: '',
+        receiveId: '',
+        receiveIdType: 'chat_id' as any,
+      },
     })
     setShowModal(true)
   }
@@ -1171,6 +1192,101 @@ export default function AgentManagementPage() {
                       </div>
                     </div>
                   </div>
+                </div>
+
+                {/* 飞书集成 (Feishu Integration) */}
+                <div className="border-t border-slate-100 pt-6">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-2">
+                      <span className="text-lg">💬</span>
+                      <h3 className="text-lg font-bold text-slate-800">飞书审批集成 (Feishu Loop)</h3>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setFormData({
+                          ...formData,
+                          feishuConfig: { ...formData.feishuConfig, enabled: !formData.feishuConfig.enabled }
+                        })}
+                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${formData.feishuConfig.enabled ? 'bg-blue-600' : 'bg-slate-200'}`}
+                      >
+                        <span className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform ${formData.feishuConfig.enabled ? 'translate-x-5' : 'translate-x-0.5'}`} />
+                      </button>
+                      <span className="text-sm font-medium text-slate-700">{formData.feishuConfig.enabled ? '已启用' : '已禁用'}</span>
+                    </div>
+                  </div>
+
+                  {formData.feishuConfig.enabled && (
+                    <div className="bg-slate-50 rounded-2xl p-5 border border-slate-200 space-y-4">
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-xs text-slate-500 mb-1 font-bold">App ID</label>
+                          <input
+                            type="text"
+                            value={formData.feishuConfig.appId}
+                            onChange={(e) => setFormData({
+                              ...formData,
+                              feishuConfig: { ...formData.feishuConfig, appId: e.target.value }
+                            })}
+                            className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-sm"
+                            placeholder="cli_xxxxxxxx"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-slate-500 mb-1 font-bold">App Secret</label>
+                          <input
+                            type="password"
+                            value={formData.feishuConfig.appSecret}
+                            onChange={(e) => setFormData({
+                              ...formData,
+                              feishuConfig: { ...formData.feishuConfig, appSecret: e.target.value }
+                            })}
+                            className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-sm"
+                            placeholder="••••••••"
+                          />
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-xs text-slate-500 mb-1 font-bold">接收 ID (Receive ID)</label>
+                          <input
+                            type="text"
+                            value={formData.feishuConfig.receiveId}
+                            onChange={(e) => setFormData({
+                              ...formData,
+                              feishuConfig: { ...formData.feishuConfig, receiveId: e.target.value }
+                            })}
+                            className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-sm"
+                            placeholder="oc_xxxxxxxx 或 open_id"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-slate-500 mb-1 font-bold">ID 类型</label>
+                          <select
+                            value={formData.feishuConfig.receiveIdType}
+                            onChange={(e) => setFormData({
+                              ...formData,
+                              feishuConfig: { ...formData.feishuConfig, receiveIdType: e.target.value as any }
+                            })}
+                            className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-sm"
+                          >
+                            <option value="chat_id">群 ID (chat_id)</option>
+                            <option value="open_id">个人 ID (open_id)</option>
+                            <option value="user_id">用户 ID (user_id)</option>
+                            <option value="email">邮箱 (email)</option>
+                          </select>
+                        </div>
+                      </div>
+                      <div className="text-[10px] text-blue-600 bg-blue-50 p-3 rounded-xl border border-blue-100">
+                        <strong>💡 配置说明：</strong>
+                        <ul className="list-disc list-inside mt-1 space-y-1">
+                          <li>请在飞书后台创建“企业自建应用”，开启机器人能力并发布。</li>
+                          <li>审批回调地址：<code className="bg-white px-1 rounded">https://app.autoark.work/api/webhooks/feishu/interaction</code></li>
+                          <li>确保机器人已加入对应的接收群组。</li>
+                        </ul>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
 

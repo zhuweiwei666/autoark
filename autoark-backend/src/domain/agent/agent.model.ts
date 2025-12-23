@@ -249,6 +249,17 @@ const agentConfigSchema = new mongoose.Schema({
     }
   },
   
+  /**
+   * 飞书审批配置
+   */
+  feishuConfig: {
+    enabled: { type: Boolean, default: false },
+    appId: { type: String },
+    appSecret: { type: String },
+    receiveId: { type: String }, // 接收消息的群 ID 或用户 ID
+    receiveIdType: { type: String, enum: ['open_id', 'chat_id', 'user_id', 'email'], default: 'chat_id' },
+  },
+  
   createdBy: { type: String },
 }, { timestamps: true })
 
@@ -294,6 +305,9 @@ const agentOperationSchema = new mongoose.Schema({
   // 执行结果
   result: mongoose.Schema.Types.Mixed,
   error: { type: String },
+  
+  // 飞书消息 ID (用于更新卡片状态)
+  feishuMessageId: { type: String },
   
 }, { timestamps: true })
 

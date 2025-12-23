@@ -20,6 +20,7 @@ import organizationRoutes from './routes/organization.routes' // New: 组织管�
 import accountManagementRoutes from './routes/account.management.routes' // New: 账户管理路由
 import aggregationRoutes from './controllers/aggregation.controller' // New: 预聚合数据 API
 import automationJobRoutes from './routes/automationJob.routes' // New: 自动化 Job 编排
+import { handleFeishuInteraction } from './controllers/feishu.webhook.controller'
 import logger from './utils/logger'
 import { errorHandler } from './middlewares/errorHandler'
 
@@ -84,6 +85,9 @@ app.use('/api/product-mapping', productMappingRoutes) // New: 产品关系映射
 app.use('/api/facebook-apps', facebookAppRoutes) // New: Facebook App 管理（多App负载均衡）
 app.use('/api/agg', aggregationRoutes) // New: 统一预聚合数据 API（前端+AI 共用）
 app.use('/api/automation-jobs', automationJobRoutes) // New: AI Planner/Executor jobs
+
+// 飞书 Webhook 交互回调
+app.post('/api/webhooks/feishu/interaction', handleFeishuInteraction)
 
 // Dashboard UI 已迁移到 React 前端，不再需要后端路由
 // app.use('/dashboard', dashboardRoutes) // 已禁用，让前端 React Router 处理

@@ -15,6 +15,7 @@ import { createAutomationJob } from '../../services/automationJob.service'
 import { getMaterialRankings } from '../../services/materialMetrics.service'
 import { getCoreMetrics } from '../../services/dashboard.service'
 import { facebookClient } from '../../integration/facebook/facebookClient'
+import { feishuService } from '../../services/feishu.service'
 import { momentumService } from './executor/momentum.service'
 // 🔥 使用统一的预聚合数据表
 import { 
@@ -1879,13 +1880,26 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
 
       // auto 模式下仍可要求审批
       if (agent.mode === 'auto' && agent.aiConfig?.requireApproval && this.needsApproval(op, agent)) {
-        await new AgentOperation({ ...op, status: 'pending' }).save()
+        const saved = await new AgentOperation({ ...op, status: 'pending' }).save()
+        // 发送飞书卡片
+        if (agent.feishuConfig?.enabled) {
+          const msgId = await feishuService.sendApprovalCard(saved, agent)
+          if (msgId) {
+            await AgentOperation.findByIdAndUpdate(saved._id, { feishuMessageId: msgId })
+          }
+        }
         continue
       }
 
-      // observe/suggest：只记录
+      // observe/suggest：只记录并尝试发飞书
       if (agent.mode !== 'auto') {
-        await new AgentOperation({ ...op, status: 'pending' }).save()
+        const saved = await new AgentOperation({ ...op, status: 'pending' }).save()
+        if (agent.feishuConfig?.enabled) {
+          const msgId = await feishuService.sendApprovalCard(saved, agent)
+          if (msgId) {
+            await AgentOperation.findByIdAndUpdate(saved._id, { feishuMessageId: msgId })
+          }
+        }
         continue
       }
 
@@ -2493,12 +2507,28 @@ ${toWatch.map((m: any) => `- ${m.materialName}: ROAS ${m.roas.toFixed(2)}, 消�
     
     operation.status = 'approved'
     await operation.save()
+
+    // 如果是通过非飞书渠道审批的，尝试同步更新飞书卡片状态
+    if (operation.feishuMessageId && !userId.startsWith('feishu:')) {
+      const agent = await AgentConfig.findById(operation.agentId)
+      if (agent) {
+        feishuService.updateApprovalCard(operation.feishuMessageId, 'approved', userId, agent).catch(() => {})
+      }
+    }
     
     // 执行操作
-    return this.executeOperation(operationId)
+    return this.executeOperation(operationId, await AgentConfig.findById(operation.agentId))
   }
 
   async rejectOperation(operationId: string, userId: string, reason?: string): Promise<any> {
+    const operation: any = await AgentOperation.findById(operationId)
+    if (operation?.feishuMessageId && !userId.startsWith('feishu:')) {
+      const agent = await AgentConfig.findById(operation.agentId)
+      if (agent) {
+        feishuService.updateApprovalCard(operation.feishuMessageId, 'rejected', userId, agent).catch(() => {})
+      }
+    }
+
     return AgentOperation.findByIdAndUpdate(operationId, {
       status: 'rejected',
       executedBy: userId,
