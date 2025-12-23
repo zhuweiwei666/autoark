@@ -166,6 +166,13 @@ export default function AgentManagementPage() {
       stopLoss: { maxScore: 30, changePercent: -20 },
       kill: { maxScore: 15 },
     },
+    feishuConfig: {
+      enabled: false,
+      appId: '',
+      appSecret: '',
+      receiveId: '',
+      receiveIdType: 'chat_id' as 'open_id' | 'chat_id' | 'user_id' | 'email',
+    },
   })
 
   useEffect(() => {
@@ -426,7 +433,7 @@ export default function AgentManagementPage() {
         appId: '',
         appSecret: '',
         receiveId: '',
-        receiveIdType: 'chat_id' as any,
+        receiveIdType: 'chat_id' as 'open_id' | 'chat_id' | 'user_id' | 'email',
       },
     })
     setShowModal(true)
