@@ -1600,7 +1600,6 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
       sequence.hookRate.push(hookRate)
 
       // ATC Rate = add_to_cart / clicks
-      const actions = d.actions || []
       const atcAction = Array.isArray(actions) ? actions.find((a: any) => a.action_type === 'add_to_cart') : null
       const atcCount = atcAction ? parseFloat(atcAction.value) : 0
       const atcRate = d.clicks > 0 ? atcCount / d.clicks : 0

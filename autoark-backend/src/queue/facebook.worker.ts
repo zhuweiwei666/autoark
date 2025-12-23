@@ -297,6 +297,9 @@ export const initWorkers = () => {
             const video3s = video3sAction ? parseFloat(video3sAction.value) : (insight.video_3sec_views || 0)
             const hookRate = insight.impressions > 0 ? video3s / insight.impressions : 0
 
+            const purchaseValue = extractPurchaseValue(insight.action_values)
+            const mobileAppInstall = getActionCount(insight.actions, 'mobile_app_install')
+
             await upsertService.upsertRawInsights({
               date: actualDate,
               datePreset: preset,
