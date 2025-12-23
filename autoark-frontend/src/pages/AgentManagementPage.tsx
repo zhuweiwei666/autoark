@@ -30,6 +30,26 @@ interface Agent {
     autoScale: { enabled: boolean; roasThreshold: number; minDays?: number; budgetIncrease: number }
     budgetAdjust: { enabled: boolean; maxAdjustPercent: number; minAdjustPercent?: number }
   }
+  scoringConfig: {
+    stages: Array<{
+      name: string
+      minSpend: number
+      maxSpend: number
+      weights: {
+        cpm: number
+        ctr: number
+        cpc: number
+        cpa: number
+        roas: number
+      }
+    }>
+    momentumSensitivity: number
+    baselines: {
+      cpm: number
+      ctr: number
+      cpc: number
+    }
+  }
   createdAt: string
 }
 
@@ -72,13 +92,43 @@ export default function AgentManagementPage() {
     description: '',
     status: 'paused',
     mode: 'observe',
-    objectives: { targetRoas: 1.5, maxCpa: 0, dailyBudgetLimit: 0 },
+    objectives: { targetRoas: 1.5, maxCpa: 20, dailyBudgetLimit: 500 },
     rules: {
       autoStop: { enabled: true, roasThreshold: 0.5, minDays: 3, minSpend: 50 },
       autoScale: { enabled: true, roasThreshold: 2.0, minDays: 3, budgetIncrease: 0.2 },
       budgetAdjust: { enabled: true, minAdjustPercent: 0.1, maxAdjustPercent: 0.3 },
     },
     aiConfig: { useAiDecision: true, requireApproval: true, approvalThreshold: 100 },
+    scoringConfig: {
+      stages: [
+        {
+          name: 'Cold Start',
+          minSpend: 0,
+          maxSpend: 5,
+          weights: { cpm: 0.4, ctr: 0.4, cpc: 0.2, cpa: 0, roas: 0 },
+        },
+        {
+          name: 'Exploration',
+          minSpend: 5,
+          maxSpend: 30,
+          weights: { cpm: 0.1, ctr: 0.1, cpc: 0.1, cpa: 0.5, roas: 0.2 },
+        },
+        {
+          name: 'Scaling',
+          minSpend: 30,
+          maxSpend: 200,
+          weights: { cpm: 0, ctr: 0.1, cpc: 0, cpa: 0.2, roas: 0.7 },
+        },
+        {
+          name: 'Maturity',
+          minSpend: 200,
+          maxSpend: 999999,
+          weights: { cpm: 0.1, ctr: 0.1, cpc: 0, cpa: 0.2, roas: 0.6 },
+        },
+      ],
+      momentumSensitivity: 0.1,
+      baselines: { cpm: 20, ctr: 0.01, cpc: 1 },
+    },
   })
 
   useEffect(() => {
@@ -219,13 +269,43 @@ export default function AgentManagementPage() {
       description: '',
       status: 'paused',
       mode: 'observe',
-      objectives: { targetRoas: 1.5, maxCpa: 0, dailyBudgetLimit: 0 },
+      objectives: { targetRoas: 1.5, maxCpa: 20, dailyBudgetLimit: 500 },
       rules: {
         autoStop: { enabled: true, roasThreshold: 0.5, minDays: 3, minSpend: 50 },
         autoScale: { enabled: true, roasThreshold: 2.0, minDays: 3, budgetIncrease: 0.2 },
         budgetAdjust: { enabled: true, minAdjustPercent: 0.1, maxAdjustPercent: 0.3 },
       },
       aiConfig: { useAiDecision: true, requireApproval: true, approvalThreshold: 100 },
+      scoringConfig: {
+        stages: [
+          {
+            name: 'Cold Start',
+            minSpend: 0,
+            maxSpend: 5,
+            weights: { cpm: 0.4, ctr: 0.4, cpc: 0.2, cpa: 0, roas: 0 },
+          },
+          {
+            name: 'Exploration',
+            minSpend: 5,
+            maxSpend: 30,
+            weights: { cpm: 0.1, ctr: 0.1, cpc: 0.1, cpa: 0.5, roas: 0.2 },
+          },
+          {
+            name: 'Scaling',
+            minSpend: 30,
+            maxSpend: 200,
+            weights: { cpm: 0, ctr: 0.1, cpc: 0, cpa: 0.2, roas: 0.7 },
+          },
+          {
+            name: 'Maturity',
+            minSpend: 200,
+            maxSpend: 999999,
+            weights: { cpm: 0.1, ctr: 0.1, cpc: 0, cpa: 0.2, roas: 0.6 },
+          },
+        ],
+        momentumSensitivity: 0.1,
+        baselines: { cpm: 20, ctr: 0.01, cpc: 1 },
+      },
     })
   }
 
@@ -238,29 +318,12 @@ export default function AgentManagementPage() {
       mode: agent.mode,
       objectives: {
         targetRoas: agent.objectives?.targetRoas || 1.5,
-        maxCpa: agent.objectives?.maxCpa || 0,
-        dailyBudgetLimit: agent.objectives?.dailyBudgetLimit || 0,
+        maxCpa: agent.objectives?.maxCpa || 20,
+        dailyBudgetLimit: agent.objectives?.dailyBudgetLimit || 500,
       },
-      rules: {
-        autoStop: {
-          enabled: agent.rules?.autoStop?.enabled ?? true,
-          roasThreshold: agent.rules?.autoStop?.roasThreshold || 0.5,
-          minDays: agent.rules?.autoStop?.minDays || 3,
-          minSpend: agent.rules?.autoStop?.minSpend || 50,
-        },
-        autoScale: {
-          enabled: agent.rules?.autoScale?.enabled ?? true,
-          roasThreshold: agent.rules?.autoScale?.roasThreshold || 2.0,
-          minDays: agent.rules?.autoScale?.minDays || 3,
-          budgetIncrease: agent.rules?.autoScale?.budgetIncrease || 0.2,
-        },
-        budgetAdjust: {
-          enabled: agent.rules?.budgetAdjust?.enabled ?? true,
-          minAdjustPercent: agent.rules?.budgetAdjust?.minAdjustPercent || 0.1,
-          maxAdjustPercent: agent.rules?.budgetAdjust?.maxAdjustPercent || 0.3,
-        },
-      },
-      aiConfig: formData.aiConfig,
+      rules: agent.rules || formData.rules,
+      aiConfig: (agent as any).aiConfig || formData.aiConfig,
+      scoringConfig: agent.scoringConfig || formData.scoringConfig,
     })
     setShowModal(true)
   }
@@ -650,127 +713,152 @@ export default function AgentManagementPage() {
                 </div>
 
                 {/* 自动化规则 */}
-                <div>
-                  <label className="block text-sm text-slate-600 mb-2">自动化规则</label>
-                  <div className="space-y-3">
-                    {/* 自动关停 */}
-                    <div className="bg-slate-50 rounded-xl p-4 border border-slate-200">
-                      <label className="flex items-center justify-between">
+                <div className="border-t border-slate-100 pt-6">
+                  <div className="flex items-center gap-2 mb-4">
+                    <span className="text-lg">📈</span>
+                    <h3 className="text-lg font-bold text-slate-800">生命周期动量评分配置 (LCWTS)</h3>
+                  </div>
+                  
+                  <div className="space-y-6">
+                    {/* 基准值配置 */}
+                    <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200">
+                      <h4 className="text-sm font-bold text-slate-700 mb-3 flex items-center gap-2">
+                        <span className="w-1 h-3 bg-slate-400 rounded-full"></span>
+                        评分基准 (Baselines)
+                      </h4>
+                      <div className="grid grid-cols-3 gap-4">
                         <div>
-                          <div className="text-slate-900 font-medium">自动关停</div>
-                          <div className="text-xs text-slate-400">ROAS 过低时自动暂停广告</div>
+                          <label className="block text-xs text-slate-500 mb-1">CPM 基准 ($)</label>
+                          <input
+                            type="number"
+                            value={formData.scoringConfig.baselines.cpm}
+                            onChange={(e) => setFormData({
+                              ...formData,
+                              scoringConfig: {
+                                ...formData.scoringConfig,
+                                baselines: { ...formData.scoringConfig.baselines, cpm: parseFloat(e.target.value) || 0 }
+                              }
+                            })}
+                            className="w-full bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-sm"
+                          />
                         </div>
-                        <input
-                          type="checkbox"
-                          checked={formData.rules.autoStop.enabled}
-                          onChange={(e) => setFormData({
-                            ...formData,
-                            rules: { ...formData.rules, autoStop: { ...formData.rules.autoStop, enabled: e.target.checked } }
-                          })}
-                          className="w-5 h-5 rounded text-indigo-600"
-                        />
-                      </label>
-                      {formData.rules.autoStop.enabled && (
-                        <div className="grid grid-cols-3 gap-2 mt-3">
-                          <div>
-                            <label className="text-xs text-slate-400">ROAS 阈值</label>
-                            <input
-                              type="number"
-                              step="0.1"
-                              value={formData.rules.autoStop.roasThreshold}
-                              onChange={(e) => setFormData({
-                                ...formData,
-                                rules: { ...formData.rules, autoStop: { ...formData.rules.autoStop, roasThreshold: parseFloat(e.target.value) } }
-                              })}
-                              className="w-full bg-white border border-slate-200 rounded px-2 py-1 text-slate-900 text-sm"
-                            />
-                          </div>
-                          <div>
-                            <label className="text-xs text-slate-400">连续天数</label>
-                            <input
-                              type="number"
-                              value={formData.rules.autoStop.minDays}
-                              onChange={(e) => setFormData({
-                                ...formData,
-                                rules: { ...formData.rules, autoStop: { ...formData.rules.autoStop, minDays: parseInt(e.target.value) } }
-                              })}
-                              className="w-full bg-white border border-slate-200 rounded px-2 py-1 text-slate-900 text-sm"
-                            />
-                          </div>
-                          <div>
-                            <label className="text-xs text-slate-400">最小消耗 $</label>
-                            <input
-                              type="number"
-                              value={formData.rules.autoStop.minSpend}
-                              onChange={(e) => setFormData({
-                                ...formData,
-                                rules: { ...formData.rules, autoStop: { ...formData.rules.autoStop, minSpend: parseFloat(e.target.value) } }
-                              })}
-                              className="w-full bg-white border border-slate-200 rounded px-2 py-1 text-slate-900 text-sm"
-                            />
-                          </div>
+                        <div>
+                          <label className="block text-xs text-slate-500 mb-1">CTR 基准 (%)</label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            value={formData.scoringConfig.baselines.ctr * 100}
+                            onChange={(e) => setFormData({
+                              ...formData,
+                              scoringConfig: {
+                                ...formData.scoringConfig,
+                                baselines: { ...formData.scoringConfig.baselines, ctr: (parseFloat(e.target.value) || 0) / 100 }
+                              }
+                            })}
+                            className="w-full bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-sm"
+                          />
                         </div>
-                      )}
+                        <div>
+                          <label className="block text-xs text-slate-500 mb-1">CPC 基准 ($)</label>
+                          <input
+                            type="number"
+                            step="0.1"
+                            value={formData.scoringConfig.baselines.cpc}
+                            onChange={(e) => setFormData({
+                              ...formData,
+                              scoringConfig: {
+                                ...formData.scoringConfig,
+                                baselines: { ...formData.scoringConfig.baselines, cpc: parseFloat(e.target.value) || 0 }
+                              }
+                            })}
+                            className="w-full bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-sm"
+                          />
+                        </div>
+                      </div>
                     </div>
 
-                    {/* 自动扩量 */}
-                    <div className="bg-slate-50 rounded-xl p-4 border border-slate-200">
-                      <label className="flex items-center justify-between">
-                        <div>
-                          <div className="text-slate-900 font-medium">自动扩量</div>
-                          <div className="text-xs text-slate-400">ROAS 优秀时自动提升预算</div>
+                    {/* 生命周期各阶段权重 */}
+                    <div className="space-y-4">
+                      {formData.scoringConfig.stages.map((stage, sIdx) => (
+                        <div key={stage.name} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm hover:shadow-md transition-all">
+                          <div className="flex items-center justify-between mb-4">
+                            <div className="flex items-center gap-2">
+                              <span className="w-6 h-6 rounded-full bg-indigo-600 text-white text-[10px] flex items-center justify-center font-bold">
+                                {sIdx + 1}
+                              </span>
+                              <h4 className="font-bold text-slate-800">{stage.name}</h4>
+                            </div>
+                            <div className="flex items-center gap-2 text-xs">
+                              <span className="text-slate-400">消耗区间:</span>
+                              <input
+                                type="number"
+                                value={stage.minSpend}
+                                onChange={(e) => {
+                                  const next = { ...formData.scoringConfig }
+                                  next.stages[sIdx].minSpend = parseFloat(e.target.value) || 0
+                                  setFormData({ ...formData, scoringConfig: next })
+                                }}
+                                className="w-16 px-1 py-0.5 border rounded text-center font-mono"
+                              />
+                              <span className="text-slate-300">-</span>
+                              <input
+                                type="number"
+                                value={stage.maxSpend}
+                                onChange={(e) => {
+                                  const next = { ...formData.scoringConfig }
+                                  next.stages[sIdx].maxSpend = parseFloat(e.target.value) || 0
+                                  setFormData({ ...formData, scoringConfig: next })
+                                }}
+                                className="w-16 px-1 py-0.5 border rounded text-center font-mono"
+                              />
+                              <span className="text-slate-400">$</span>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-5 gap-2">
+                            {Object.entries(stage.weights).map(([key, weight]) => (
+                              <div key={key}>
+                                <label className="block text-[10px] text-slate-400 uppercase mb-1 text-center font-bold tracking-tighter">{key}</label>
+                                <input
+                                  type="number"
+                                  step="0.1"
+                                  min="0"
+                                  max="1"
+                                  value={weight as number}
+                                  onChange={(e) => {
+                                    const next = { ...formData.scoringConfig }
+                                    ;(next.stages[sIdx].weights as any)[key] = parseFloat(e.target.value) || 0
+                                    setFormData({ ...formData, scoringConfig: next })
+                                  }}
+                                  className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 text-xs text-center focus:ring-1 focus:ring-indigo-500"
+                                />
+                              </div>
+                            ))}
+                          </div>
                         </div>
-                        <input
-                          type="checkbox"
-                          checked={formData.rules.autoScale.enabled}
-                          onChange={(e) => setFormData({
-                            ...formData,
-                            rules: { ...formData.rules, autoScale: { ...formData.rules.autoScale, enabled: e.target.checked } }
-                          })}
-                          className="w-5 h-5 rounded text-indigo-600"
-                        />
-                      </label>
-                      {formData.rules.autoScale.enabled && (
-                        <div className="grid grid-cols-3 gap-2 mt-3">
-                          <div>
-                            <label className="text-xs text-slate-400">ROAS 阈值</label>
-                            <input
-                              type="number"
-                              step="0.1"
-                              value={formData.rules.autoScale.roasThreshold}
-                              onChange={(e) => setFormData({
-                                ...formData,
-                                rules: { ...formData.rules, autoScale: { ...formData.rules.autoScale, roasThreshold: parseFloat(e.target.value) } }
-                              })}
-                              className="w-full bg-white border border-slate-200 rounded px-2 py-1 text-slate-900 text-sm"
-                            />
-                          </div>
-                          <div>
-                            <label className="text-xs text-slate-400">连续天数</label>
-                            <input
-                              type="number"
-                              value={formData.rules.autoScale.minDays}
-                              onChange={(e) => setFormData({
-                                ...formData,
-                                rules: { ...formData.rules, autoScale: { ...formData.rules.autoScale, minDays: parseInt(e.target.value) } }
-                              })}
-                              className="w-full bg-white border border-slate-200 rounded px-2 py-1 text-slate-900 text-sm"
-                            />
-                          </div>
-                          <div>
-                            <label className="text-xs text-slate-400">提升比例 %</label>
-                            <input
-                              type="number"
-                              value={formData.rules.autoScale.budgetIncrease * 100}
-                              onChange={(e) => setFormData({
-                                ...formData,
-                                rules: { ...formData.rules, autoScale: { ...formData.rules.autoScale, budgetIncrease: parseFloat(e.target.value) / 100 } }
-                              })}
-                              className="w-full bg-white border border-slate-200 rounded px-2 py-1 text-slate-900 text-sm"
-                            />
-                          </div>
+                      ))}
+                    </div>
+
+                    <div className="flex items-center justify-between p-4 bg-indigo-50 rounded-2xl border border-indigo-100">
+                      <div>
+                        <div className="text-sm font-bold text-indigo-900 flex items-center gap-2">
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                          </svg>
+                          趋势动能敏感度
                         </div>
-                      )}
+                        <p className="text-xs text-indigo-600 mt-1 opacity-80">定义指标斜率对分数的加成系数（0.1 = 10% 最高奖金）</p>
+                      </div>
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={formData.scoringConfig.momentumSensitivity}
+                        onChange={(e) => setFormData({
+                          ...formData,
+                          scoringConfig: { ...formData.scoringConfig, momentumSensitivity: parseFloat(e.target.value) || 0 }
+                        })}
+                        className="w-20 bg-white border border-indigo-200 rounded-xl px-3 py-2 text-sm text-center font-bold text-indigo-700"
+                      />
                     </div>
                   </div>
                 </div>
