@@ -95,8 +95,27 @@ router.post('/agents/:id/run', async (req: Request, res: Response) => {
 // 运行 Agent（Planner/Executor）：生成 operations 并创建 AutomationJobs 执行
 router.post('/agents/:id/run-jobs', async (req: Request, res: Response) => {
   try {
-    const result = await agentService.runAgentAsJobs(req.params.id)
-    res.json({ success: true, data: result })
+    const { createAutomationJob } = require('../../services/automationJob.service')
+    const agentId = req.params.id
+    
+    // 创建一个即时运行的 Job
+    const job = await createAutomationJob({
+      type: 'RUN_AGENT_AS_JOBS',
+      payload: { agentId },
+      agentId,
+      organizationId: req.user?.organizationId,
+      createdBy: req.user?.userId,
+      priority: 10, // 高优先级
+    })
+
+    res.json({ 
+      success: true, 
+      data: { 
+        jobId: job._id,
+        status: job.status,
+        message: 'Agent 运行任务已入队，请在“自动化任务”页面查看进度'
+      } 
+    })
   } catch (error: any) {
     logger.error('[AgentController] Run agent as jobs failed:', error)
     res.status(500).json({ success: false, error: error.message })

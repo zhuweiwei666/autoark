@@ -282,9 +282,7 @@ export default function AgentManagementPage() {
       const res = await authFetch(`/api/agent/agents/${id}/run-jobs`, { method: 'POST' })
       const data = await res.json()
       if (data.success) {
-        const ops = data.data?.operationsCount ?? data.data?.operations?.length ?? 0
-        const jobs = data.data?.jobsCreated ?? 0
-        alert(`Planner/Executor 已触发：operations=${ops}，jobsCreated=${jobs}`)
+        alert(data.data?.message || 'Agent 运行任务已入队')
         loadOperations()
         loadPendingOps()
       } else {

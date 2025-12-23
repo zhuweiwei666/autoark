@@ -33,7 +33,6 @@ export const fetchInsights = async (
     'purchase_roas', // Return on Ad Spend
     'cost_per_action_type', // 有效字段
     'video_play_actions',
-    'video_3sec_views', // 🆕 3秒播放量 (用于 Hook Rate)
     'video_30_sec_watched_actions',
     'video_avg_time_watched_actions',
     'video_p100_watched_actions',

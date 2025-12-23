@@ -1593,7 +1593,9 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
       sequence.roas.push(roas)
 
       // Hook Rate = video_3sec_views / impressions
-      const video3s = d.raw?.video_3sec_views || 0
+      const actions = d.actions || []
+      const video3sAction = Array.isArray(actions) ? actions.find((a: any) => a.action_type === 'video_view' || a.action_type === 'video_3sec_views') : null
+      const video3s = video3sAction ? parseFloat(video3sAction.value) : (d.raw?.video_3sec_views || 0)
       const hookRate = d.impressions > 0 ? video3s / d.impressions : 0
       sequence.hookRate.push(hookRate)
 

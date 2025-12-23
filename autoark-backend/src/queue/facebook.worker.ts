@@ -291,8 +291,11 @@ export const initWorkers = () => {
               actualDate = dayjs().format('YYYY-MM-DD')
             }
 
-            const purchaseValue = extractPurchaseValue(insight.action_values)
-            const mobileAppInstall = getActionCount(insight.actions, 'mobile_app_install')
+            // Hook Rate = video_3sec_views / impressions
+            const actions = insight.actions || []
+            const video3sAction = Array.isArray(actions) ? actions.find((a: any) => a.action_type === 'video_view' || a.action_type === 'video_3sec_views') : null
+            const video3s = video3sAction ? parseFloat(video3sAction.value) : (insight.video_3sec_views || 0)
+            const hookRate = insight.impressions > 0 ? video3s / insight.impressions : 0
 
             await upsertService.upsertRawInsights({
               date: actualDate,
