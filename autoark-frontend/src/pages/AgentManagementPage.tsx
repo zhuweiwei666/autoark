@@ -1367,7 +1367,7 @@ export default function AgentManagementPage() {
                   <div className="h-64">
                     <ResponsiveContainer width="100%" height="100%">
                       <RadarChart cx="50%" cy="50%" outerRadius="80%" data={
-                        Object.entries(selectedOp.scoreSnapshot.metricContributions).map(([key, val]) => ({
+                        Object.entries(selectedOp.scoreSnapshot.metricContributions || {}).map(([key, val]) => ({
                           subject: key.toUpperCase(),
                           A: val,
                           fullMark: 100,
@@ -1387,33 +1387,33 @@ export default function AgentManagementPage() {
                     <span className="w-1 h-4 bg-emerald-500 rounded-full"></span>
                     指标动能趋势 (Velocity / Slope)
                   </h3>
-                  <div className="h-64">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={
-                        Object.entries(selectedOp.scoreSnapshot.slopes).map(([key, val]) => ({
-                          name: key.toUpperCase(),
-                          slope: val,
-                        }))
-                      }>
-                        <XAxis dataKey="name" axisLine={false} tickLine={false} />
-                        <YAxis hide />
-                        <Tooltip 
-                          contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
-                          formatter={(value: any) => [value.toFixed(4), 'Slope']}
-                        />
-                        <Bar dataKey="slope" radius={[4, 4, 0, 0]}>
-                          {
-                            Object.entries(selectedOp.scoreSnapshot.slopes).map((entry, index) => {
-                              const val = entry[1]
-                              // CTR 升为正，CPA 降为正（在后端已归一化，这里仅展示原始斜率）
-                              // 我们简单根据正负涂色
-                              return <Cell key={`cell-${index}`} fill={val >= 0 ? '#10b981' : '#f43f5e'} />
-                            })
-                          }
-                        </Bar>
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
+                    <div className="h-64">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={
+                          Object.entries(selectedOp.scoreSnapshot.slopes || {}).map(([key, val]) => ({
+                            name: key.toUpperCase(),
+                            slope: val,
+                          }))
+                        }>
+                          <XAxis dataKey="name" axisLine={false} tickLine={false} />
+                          <YAxis hide />
+                          <Tooltip 
+                            contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
+                            formatter={(value: any) => [value.toFixed(4), 'Slope']}
+                          />
+                          <Bar dataKey="slope" radius={[4, 4, 0, 0]}>
+                            {
+                              Object.entries(selectedOp.scoreSnapshot.slopes || {}).map((entry, index) => {
+                                const val = entry[1]
+                                // CTR 升为正，CPA 降为正（在后端已归一化，这里仅展示原始斜率）
+                                // 我们简单根据正负涂色
+                                return <Cell key={`cell-${index}`} fill={val >= 0 ? '#10b981' : '#f43f5e'} />
+                              })
+                            }
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
                   <div className="mt-4 text-xs text-slate-400 text-center italic">
                     * 正值表示指标正在上升，负值表示指标正在下降
                   </div>
@@ -1430,9 +1430,9 @@ export default function AgentManagementPage() {
                   <p>1. 当前实体处于 <strong>{selectedOp.scoreSnapshot.stage}</strong> 阶段，系统自动启用了该阶段的权重矩阵。</p>
                   <p>2. 根据元指标表现计算出基础分值为 <strong>{selectedOp.scoreSnapshot.baseScore.toFixed(1)}</strong> 分。</p>
                   <p>3. 综合多维度微分趋势，系统检测到 <strong>{
-                    Object.entries(selectedOp.scoreSnapshot.slopes)
-                      .filter(([_, s]) => Math.abs(s) > 0.0001)
-                      .map(([k, s]) => `${k.toUpperCase()}(${s > 0 ? '↗' : '↘'})`)
+                    Object.entries(selectedOp.scoreSnapshot.slopes || {})
+                      .filter(([_, s]) => Math.abs(s as number) > 0.0001)
+                      .map(([k, s]) => `${k.toUpperCase()}(${(s as number) > 0 ? '↗' : '↘'})`)
                       .join(', ') || '指标处于平稳期'
                   }</strong>，提供了 <strong>{(selectedOp.scoreSnapshot.momentumBonus * 100).toFixed(1)}%</strong> 的动能修正。</p>
                   <p className="mt-4 pt-4 border-t border-slate-200 font-medium text-slate-800 italic flex items-center gap-2">
