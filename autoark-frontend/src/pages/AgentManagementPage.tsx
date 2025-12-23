@@ -5,7 +5,6 @@ import {
   RadarChart,
   PolarGrid,
   PolarAngleAxis,
-  PolarRadiusAxis,
   ResponsiveContainer,
   BarChart,
   Bar,
@@ -149,6 +148,22 @@ export default function AgentManagementPage() {
     } catch (error) {
       console.error('Failed to delete agent:', error)
     }
+  }
+
+  const runAgent = async (id: string) => {
+    setLoading(true)
+    try {
+      const res = await authFetch(`/api/agent/agents/${id}/run`, { method: 'POST' })
+      const data = await res.json()
+      if (data.success) {
+        alert(`Agent 运行完成，产生 ${data.data.operationsCount} 个操作`)
+        loadOperations()
+        loadPendingOps()
+      }
+    } catch (error) {
+      console.error('Failed to run agent:', error)
+    }
+    setLoading(false)
   }
 
   const runAgentAsJobs = async (id: string) => {
@@ -865,12 +880,12 @@ export default function AgentManagementPage() {
                         <YAxis hide />
                         <Tooltip 
                           contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
-                          formatter={(value: number) => [value.toFixed(4), 'Slope']}
+                          formatter={(value: any) => [value.toFixed(4), 'Slope']}
                         />
                         <Bar dataKey="slope" radius={[4, 4, 0, 0]}>
                           {
                             Object.entries(selectedOp.scoreSnapshot.slopes).map((entry, index) => {
-                              const [key, val] = entry
+                              const val = entry[1]
                               // CTR 升为正，CPA 降为正（在后端已归一化，这里仅展示原始斜率）
                               // 我们简单根据正负涂色
                               return <Cell key={`cell-${index}`} fill={val >= 0 ? '#10b981' : '#f43f5e'} />
