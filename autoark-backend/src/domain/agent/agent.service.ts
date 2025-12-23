@@ -51,6 +51,10 @@ class AgentService {
   // ==================== Agent 配置管理 ====================
 
   async createAgent(data: any) {
+    // 过滤掉空的 organizationId，防止 Mongoose 转换失败
+    if (data.organizationId === '') {
+      delete data.organizationId
+    }
     const agent = new AgentConfig(data)
     await agent.save()
     logger.info(`[AgentService] Created agent: ${agent.name}`)
@@ -66,6 +70,10 @@ class AgentService {
   }
 
   async updateAgent(id: string, data: any) {
+    // 过滤掉空的 organizationId，防止 Mongoose 转换失败
+    if (data.organizationId === '') {
+      delete data.organizationId
+    }
     return AgentConfig.findByIdAndUpdate(id, data, { new: true })
   }
 

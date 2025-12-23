@@ -234,17 +234,21 @@ export default function AgentManagementPage() {
       const method = editingAgent ? 'PUT' : 'POST'
       
       // 显式序列化，确保嵌套对象 scope 正确传递
+      const payload = {
+        ...formData,
+        // 过滤空字符串 ID
+        organizationId: formData.organizationId || undefined,
+        // 确保 adAccountIds 是最新的
+        scope: {
+          ...formData.scope,
+          adAccountIds: formData.scope.adAccountIds
+        }
+      }
+
       const response = await authFetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...formData,
-          // 确保 adAccountIds 是最新的
-          scope: {
-            ...formData.scope,
-            adAccountIds: formData.scope.adAccountIds
-          }
-        }),
+        body: JSON.stringify(payload),
       })
       
       const resData = await response.json()
