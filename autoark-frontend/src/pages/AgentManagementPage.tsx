@@ -321,7 +321,25 @@ export default function AgentManagementPage() {
         maxCpa: agent.objectives?.maxCpa || 20,
         dailyBudgetLimit: agent.objectives?.dailyBudgetLimit || 500,
       },
-      rules: agent.rules || formData.rules,
+      rules: {
+        autoStop: {
+          enabled: agent.rules?.autoStop?.enabled ?? true,
+          roasThreshold: agent.rules?.autoStop?.roasThreshold || 0.5,
+          minDays: agent.rules?.autoStop?.minDays || 3,
+          minSpend: agent.rules?.autoStop?.minSpend || 50,
+        },
+        autoScale: {
+          enabled: agent.rules?.autoScale?.enabled ?? true,
+          roasThreshold: agent.rules?.autoScale?.roasThreshold || 2.0,
+          minDays: agent.rules?.autoScale?.minDays || 3,
+          budgetIncrease: agent.rules?.autoScale?.budgetIncrease || 0.2,
+        },
+        budgetAdjust: {
+          enabled: agent.rules?.budgetAdjust?.enabled ?? true,
+          minAdjustPercent: agent.rules?.budgetAdjust?.minAdjustPercent || 0.1,
+          maxAdjustPercent: agent.rules?.budgetAdjust?.maxAdjustPercent || 0.3,
+        },
+      },
       aiConfig: (agent as any).aiConfig || formData.aiConfig,
       scoringConfig: agent.scoringConfig || formData.scoringConfig,
     })
