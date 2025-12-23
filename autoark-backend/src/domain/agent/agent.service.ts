@@ -1687,16 +1687,80 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
       const campaignPerformance = await this.getCampaignPerformance(account.accountId, 7)
 
       for (const campaign of campaignPerformance) {
-        // 检查自动关停规则
-        if (agent.rules.autoStop.enabled) {
-          const stopOp = await this.checkAutoStop(agent, campaign)
-          if (stopOp) operations.push(stopOp)
+        // --- 开始生命周期加权评分逻辑 (LCWTS) ---
+        const sequence = await this.getMetricSequence(campaign._id, 'campaign', 7)
+        const currentMetrics: MetricData = {
+          cpm: campaign.dailyData[campaign.dailyData.length - 1]?.spend > 0 ? (campaign.dailyData[campaign.dailyData.length - 1].spend / campaign.dailyData[campaign.dailyData.length - 1].impressions) * 1000 : 0,
+          ctr: campaign.dailyData[campaign.dailyData.length - 1]?.impressions > 0 ? campaign.dailyData[campaign.dailyData.length - 1].clicks / campaign.dailyData[campaign.dailyData.length - 1].impressions : 0,
+          cpc: campaign.dailyData[campaign.dailyData.length - 1]?.clicks > 0 ? campaign.dailyData[campaign.dailyData.length - 1].spend / campaign.dailyData[campaign.dailyData.length - 1].clicks : 0,
+          cpa: campaign.totalRevenue > 0 ? campaign.totalSpend / campaign.totalRevenue : 0, // 简化处理，实际应取具体转化
+          roas: campaign.avgRoas,
+          spend: campaign.totalSpend, // 累计消耗用于识别阶段
+          hookRate: sequence.hookRate[sequence.hookRate.length - 1] || 0,
+          atcRate: sequence.atcRate[sequence.atcRate.length - 1] || 0,
         }
 
-        // 检查自动扩量规则
-        if (agent.rules.autoScale.enabled) {
-          const scaleOp = await this.checkAutoScale(agent, campaign)
-          if (scaleOp) operations.push(scaleOp)
+        // 获取详细评分结果
+        const scoreResult = await scoringService.evaluate(currentMetrics, sequence, agent)
+        const { finalScore, stage } = scoreResult
+
+        // 根据配置的阈值决定动作
+        let action: 'pause' | 'budget_increase' | 'budget_decrease' | null = null
+        let reason = `[Stage: ${stage}] Score: ${finalScore.toFixed(1)}. `
+        let changePercent = 0
+        
+        const thresholds = agent.actionThresholds || {
+          aggressiveScale: { minScore: 85, changePercent: 30 },
+          moderateScale: { minScore: 70, changePercent: 15 },
+          stopLoss: { maxScore: 30, changePercent: -20 },
+          kill: { maxScore: 15 }
+        }
+
+        if (finalScore >= thresholds.aggressiveScale.minScore) {
+          action = 'budget_increase'
+          changePercent = thresholds.aggressiveScale.changePercent
+          reason += `High momentum & performance. Aggressive scale.`
+        } else if (finalScore >= thresholds.moderateScale.minScore) {
+          action = 'budget_increase'
+          changePercent = thresholds.moderateScale.changePercent
+          reason += `Good trend. Moderate scale.`
+        } else if (finalScore < thresholds.kill.maxScore) {
+          action = 'pause'
+          reason += `Critical underperformance. Entity killed.`
+        } else if (finalScore < thresholds.stopLoss.maxScore) {
+          action = 'budget_decrease'
+          changePercent = thresholds.stopLoss.changePercent
+          reason += `Declining trend. Stop loss applied.`
+        }
+
+        if (action) {
+          const op: any = {
+            agentId: agent._id,
+            accountId: account.accountId,
+            entityType: 'campaign',
+            entityId: campaign._id,
+            entityName: campaign.campaignName,
+            action,
+            reason,
+            dataSnapshot: campaign,
+            scoreSnapshot: scoreResult, // 存入详细评分
+          }
+
+          if (action === 'budget_increase' || action === 'budget_decrease') {
+            const campaignDoc = await Campaign.findOne({ campaignId: campaign._id })
+            const currentBudget = parseFloat(campaignDoc?.daily_budget || '0') || 0
+            const multiplier = 1 + (changePercent / 100)
+            const nextBudget = currentBudget * multiplier
+            
+            op.beforeValue = { budget: currentBudget }
+            op.afterValue = { budget: nextBudget }
+            op.changePercent = changePercent
+          } else if (action === 'pause') {
+            op.beforeValue = { status: 'ACTIVE' }
+            op.afterValue = { status: 'PAUSED' }
+          }
+
+          operations.push(op)
         }
       }
     }
@@ -1984,60 +2048,11 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
    * 检查是否需要自动关停
    */
   private async checkAutoStop(agent: any, campaign: any): Promise<any | null> {
-    const rules = agent.rules.autoStop
-    
-    if (campaign.avgRoas < rules.roasThreshold &&
-        campaign.daysCount >= rules.minDays &&
-        campaign.totalSpend >= rules.minSpend) {
-      return {
-        agentId: agent._id,
-        accountId: campaign.accountId,
-        entityType: 'campaign',
-        entityId: campaign._id,
-        entityName: campaign.campaignName,
-        action: 'pause',
-        beforeValue: { status: 'ACTIVE' },
-        afterValue: { status: 'PAUSED' },
-        reason: `ROAS ${campaign.avgRoas.toFixed(2)} < ${rules.roasThreshold}，连续 ${campaign.daysCount} 天，总消耗 $${campaign.totalSpend.toFixed(2)}`,
-        dataSnapshot: campaign,
-      }
-    }
-    return null
+    return null // 逻辑已统一到 evaluate 闭环中
   }
 
-  /**
-   * 检查是否需要自动扩量
-   */
   private async checkAutoScale(agent: any, campaign: any): Promise<any | null> {
-    const rules = agent.rules.autoScale
-    
-    if (campaign.avgRoas > rules.roasThreshold &&
-        campaign.daysCount >= rules.minDays) {
-      // 获取当前预算
-      const campaignDoc = await Campaign.findOne({ campaignId: campaign._id })
-      const currentBudget = parseFloat(campaignDoc?.daily_budget || '0') || 0
-      const newBudget = currentBudget * (1 + rules.budgetIncrease)
-      
-      // 检查最大预算限制
-      if (rules.maxBudget && newBudget > rules.maxBudget) {
-        return null
-      }
-
-      return {
-        agentId: agent._id,
-        accountId: campaign.accountId,
-        entityType: 'campaign',
-        entityId: campaign._id,
-        entityName: campaign.campaignName,
-        action: 'budget_increase',
-        beforeValue: { budget: currentBudget },
-        afterValue: { budget: newBudget },
-        changePercent: rules.budgetIncrease * 100,
-        reason: `ROAS ${campaign.avgRoas.toFixed(2)} > ${rules.roasThreshold}，连续 ${campaign.daysCount} 天表现优秀`,
-        dataSnapshot: campaign,
-      }
-    }
-    return null
+    return null // 逻辑已统一到 evaluate 闭环中
   }
 
   /**
