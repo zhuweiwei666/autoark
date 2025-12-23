@@ -65,7 +65,8 @@ export class FeishuService {
         return null
       }
     } catch (error: any) {
-      logger.error('[Feishu] Send card error:', error.message)
+      const errorData = error.response?.data || error.message
+      logger.error('[Feishu] Send card error:', JSON.stringify(errorData))
       return null
     }
   }
