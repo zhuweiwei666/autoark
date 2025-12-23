@@ -1576,6 +1576,8 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
       cpc: [],
       cpa: [],
       roas: [],
+      hookRate: [], // 🆕
+      atcRate: [],  // 🆕
     }
 
     for (const d of docs) {
@@ -1588,6 +1590,18 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
       // ROAS = revenue / spend
       const roas = d.spendUsd > 0 ? (d.purchase_value || 0) / d.spendUsd : 0
       sequence.roas.push(roas)
+
+      // Hook Rate = video_3sec_views / impressions
+      const video3s = d.raw?.video_3sec_views || 0
+      const hookRate = d.impressions > 0 ? video3s / d.impressions : 0
+      sequence.hookRate.push(hookRate)
+
+      // ATC Rate = add_to_cart / clicks
+      const actions = d.actions || []
+      const atcAction = Array.isArray(actions) ? actions.find((a: any) => a.action_type === 'add_to_cart') : null
+      const atcCount = atcAction ? parseFloat(atcAction.value) : 0
+      const atcRate = d.clicks > 0 ? atcCount / d.clicks : 0
+      sequence.atcRate.push(atcRate)
     }
 
     return sequence
@@ -1769,6 +1783,8 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
           cpa: campaign.totalRevenue > 0 ? campaign.totalSpend / campaign.totalRevenue : 0, // 简化处理，实际应取具体转化
           roas: campaign.avgRoas,
           spend: campaign.totalSpend, // 累计消耗用于识别阶段
+          hookRate: sequence.hookRate[sequence.hookRate.length - 1] || 0, // 🆕
+          atcRate: sequence.atcRate[sequence.atcRate.length - 1] || 0,   // 🆕
         }
 
         // 获取详细评分结果

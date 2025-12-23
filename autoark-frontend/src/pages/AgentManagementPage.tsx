@@ -30,26 +30,30 @@ interface Agent {
     autoScale: { enabled: boolean; roasThreshold: number; minDays?: number; budgetIncrease: number }
     budgetAdjust: { enabled: boolean; maxAdjustPercent: number; minAdjustPercent?: number }
   }
-  scoringConfig: {
-    stages: Array<{
-      name: string
-      minSpend: number
-      maxSpend: number
-      weights: {
+    scoringConfig: {
+      stages: Array<{
+        name: string
+        minSpend: number
+        maxSpend: number
+        weights: {
+          cpm: number
+          ctr: number
+          cpc: number
+          cpa: number
+          roas: number
+          hookRate: number
+          atcRate: number
+        }
+      }>
+      momentumSensitivity: number
+      baselines: {
         cpm: number
         ctr: number
         cpc: number
-        cpa: number
-        roas: number
+        hookRate: number
+        atcRate: number
       }
-    }>
-    momentumSensitivity: number
-    baselines: {
-      cpm: number
-      ctr: number
-      cpc: number
     }
-  }
   createdAt: string
 }
 
@@ -105,29 +109,29 @@ export default function AgentManagementPage() {
           name: 'Cold Start',
           minSpend: 0,
           maxSpend: 5,
-          weights: { cpm: 0.4, ctr: 0.4, cpc: 0.2, cpa: 0, roas: 0 },
+          weights: { cpm: 0.4, ctr: 0.4, hookRate: 0.2, cpc: 0, cpa: 0, roas: 0, atcRate: 0 },
         },
         {
           name: 'Exploration',
           minSpend: 5,
           maxSpend: 30,
-          weights: { cpm: 0.1, ctr: 0.1, cpc: 0.1, cpa: 0.5, roas: 0.2 },
+          weights: { cpm: 0.1, ctr: 0.1, cpc: 0.1, atcRate: 0.3, cpa: 0.3, roas: 0.1, hookRate: 0 },
         },
         {
           name: 'Scaling',
           minSpend: 30,
           maxSpend: 200,
-          weights: { cpm: 0, ctr: 0.1, cpc: 0, cpa: 0.2, roas: 0.7 },
+          weights: { cpm: 0, ctr: 0.1, cpc: 0, atcRate: 0.1, cpa: 0.1, roas: 0.7, hookRate: 0 },
         },
         {
           name: 'Maturity',
           minSpend: 200,
           maxSpend: 999999,
-          weights: { cpm: 0.1, ctr: 0.1, cpc: 0, cpa: 0.2, roas: 0.6 },
+          weights: { cpm: 0.1, ctr: 0.1, cpc: 0, atcRate: 0.1, cpa: 0.1, roas: 0.6, hookRate: 0 },
         },
       ],
       momentumSensitivity: 0.1,
-      baselines: { cpm: 20, ctr: 0.01, cpc: 1 },
+      baselines: { cpm: 20, ctr: 0.01, cpc: 1, hookRate: 0.25, atcRate: 0.05 },
     },
   })
 
@@ -282,29 +286,29 @@ export default function AgentManagementPage() {
             name: 'Cold Start',
             minSpend: 0,
             maxSpend: 5,
-            weights: { cpm: 0.4, ctr: 0.4, cpc: 0.2, cpa: 0, roas: 0 },
+            weights: { cpm: 0.4, ctr: 0.4, hookRate: 0.2, cpc: 0, cpa: 0, roas: 0, atcRate: 0 },
           },
           {
             name: 'Exploration',
             minSpend: 5,
             maxSpend: 30,
-            weights: { cpm: 0.1, ctr: 0.1, cpc: 0.1, cpa: 0.5, roas: 0.2 },
+            weights: { cpm: 0.1, ctr: 0.1, cpc: 0.1, atcRate: 0.3, cpa: 0.3, roas: 0.1, hookRate: 0 },
           },
           {
             name: 'Scaling',
             minSpend: 30,
             maxSpend: 200,
-            weights: { cpm: 0, ctr: 0.1, cpc: 0, cpa: 0.2, roas: 0.7 },
+            weights: { cpm: 0, ctr: 0.1, cpc: 0, atcRate: 0.1, cpa: 0.1, roas: 0.7, hookRate: 0 },
           },
           {
             name: 'Maturity',
             minSpend: 200,
             maxSpend: 999999,
-            weights: { cpm: 0.1, ctr: 0.1, cpc: 0, cpa: 0.2, roas: 0.6 },
+            weights: { cpm: 0.1, ctr: 0.1, cpc: 0, atcRate: 0.1, cpa: 0.1, roas: 0.6, hookRate: 0 },
           },
         ],
         momentumSensitivity: 0.1,
-        baselines: { cpm: 20, ctr: 0.01, cpc: 1 },
+        baselines: { cpm: 20, ctr: 0.01, cpc: 1, hookRate: 0.25, atcRate: 0.05 },
       },
     })
   }
@@ -792,6 +796,38 @@ export default function AgentManagementPage() {
                             className="w-full bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-sm"
                           />
                         </div>
+                        <div>
+                          <label className="block text-xs text-slate-500 mb-1">Hook Rate 基准 (%)</label>
+                          <input
+                            type="number"
+                            step="1"
+                            value={formData.scoringConfig.baselines.hookRate * 100}
+                            onChange={(e) => setFormData({
+                              ...formData,
+                              scoringConfig: {
+                                ...formData.scoringConfig,
+                                baselines: { ...formData.scoringConfig.baselines, hookRate: (parseFloat(e.target.value) || 0) / 100 }
+                              }
+                            })}
+                            className="w-full bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-slate-500 mb-1">ATC Rate 基准 (%)</label>
+                          <input
+                            type="number"
+                            step="1"
+                            value={formData.scoringConfig.baselines.atcRate * 100}
+                            onChange={(e) => setFormData({
+                              ...formData,
+                              scoringConfig: {
+                                ...formData.scoringConfig,
+                                baselines: { ...formData.scoringConfig.baselines, atcRate: (parseFloat(e.target.value) || 0) / 100 }
+                              }
+                            })}
+                            className="w-full bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-sm"
+                          />
+                        </div>
                       </div>
                     </div>
 
@@ -833,10 +869,10 @@ export default function AgentManagementPage() {
                             </div>
                           </div>
 
-                          <div className="grid grid-cols-5 gap-2">
+                          <div className="grid grid-cols-4 md:grid-cols-7 gap-2">
                             {Object.entries(stage.weights).map(([key, weight]) => (
-                              <div key={key}>
-                                <label className="block text-[10px] text-slate-400 uppercase mb-1 text-center font-bold tracking-tighter">{key}</label>
+                              <div key={key} className="bg-slate-50 rounded-xl p-2 border border-slate-100">
+                                <label className="block text-[10px] text-slate-400 uppercase mb-1 text-center font-bold tracking-tight truncate" title={key}>{key}</label>
                                 <input
                                   type="number"
                                   step="0.1"
@@ -848,7 +884,7 @@ export default function AgentManagementPage() {
                                     ;(next.stages[sIdx].weights as any)[key] = parseFloat(e.target.value) || 0
                                     setFormData({ ...formData, scoringConfig: next })
                                   }}
-                                  className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 text-xs text-center focus:ring-1 focus:ring-indigo-500"
+                                  className="w-full bg-white border border-slate-200 rounded-lg px-1 py-1 text-xs text-center focus:ring-1 focus:ring-indigo-500 font-medium"
                                 />
                               </div>
                             ))}

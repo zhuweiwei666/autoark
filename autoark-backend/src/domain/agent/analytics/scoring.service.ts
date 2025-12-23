@@ -8,6 +8,8 @@ export interface MetricData {
   cpa: number
   roas: number
   spend: number
+  hookRate: number // 🆕
+  atcRate: number  // 🆕
 }
 
 export interface MetricSequence {
@@ -16,6 +18,8 @@ export interface MetricSequence {
   cpc: number[]
   cpa: number[]
   roas: number[]
+  hookRate: number[] // 🆕
+  atcRate: number[]  // 🆕
 }
 
 export interface ScoringResult {
@@ -68,6 +72,8 @@ export class ScoringService {
       { key: 'ctr', direction: 1 },
       { key: 'cpa', direction: -1 },
       { key: 'roas', direction: 1 },
+      { key: 'hookRate', direction: 1 }, // 🆕
+      { key: 'atcRate', direction: 1 },  // 🆕
     ]
     
     for (const { key, direction } of trendLookups) {
@@ -131,6 +137,12 @@ export class ScoringService {
       
       // ROAS: 越高越好。以 targetRoas 为 60 分。
       roas: this.normalizeHigherIsBetter(metrics.roas, objectives.targetRoas || 1.5),
+
+      // Hook Rate: 越高越好
+      hookRate: this.normalizeHigherIsBetter(metrics.hookRate, baselines.hookRate || 0.25),
+
+      // ATC Rate: 越高越好
+      atcRate: this.normalizeHigherIsBetter(metrics.atcRate, baselines.atcRate || 0.05),
     }
   }
 

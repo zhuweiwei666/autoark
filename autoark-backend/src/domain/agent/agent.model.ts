@@ -166,9 +166,11 @@ const agentConfigSchema = new mongoose.Schema({
         weights: {
           cpm: { type: Number, default: 0.4 },
           ctr: { type: Number, default: 0.4 },
-          cpc: { type: Number, default: 0.2 },
+          hookRate: { type: Number, default: 0.2 }, // 🆕 冷启动期加入钩子率
+          cpc: { type: Number, default: 0 },
           cpa: { type: Number, default: 0 },
           roas: { type: Number, default: 0 },
+          atcRate: { type: Number, default: 0 },
         },
       },
       {
@@ -179,8 +181,10 @@ const agentConfigSchema = new mongoose.Schema({
           cpm: { type: Number, default: 0.1 },
           ctr: { type: Number, default: 0.1 },
           cpc: { type: Number, default: 0.1 },
-          cpa: { type: Number, default: 0.5 },
-          roas: { type: Number, default: 0.2 },
+          atcRate: { type: Number, default: 0.3 }, // 🆕 探索期加入加购率
+          cpa: { type: Number, default: 0.3 },
+          roas: { type: Number, default: 0.1 },
+          hookRate: { type: Number, default: 0 },
         },
       },
       {
@@ -191,8 +195,10 @@ const agentConfigSchema = new mongoose.Schema({
           cpm: { type: Number, default: 0 },
           ctr: { type: Number, default: 0.1 },
           cpc: { type: Number, default: 0 },
-          cpa: { type: Number, default: 0.2 },
+          atcRate: { type: Number, default: 0.1 },
+          cpa: { type: Number, default: 0.1 },
           roas: { type: Number, default: 0.7 },
+          hookRate: { type: Number, default: 0 },
         },
       },
       {
@@ -203,8 +209,10 @@ const agentConfigSchema = new mongoose.Schema({
           cpm: { type: Number, default: 0.1 },
           ctr: { type: Number, default: 0.1 },
           cpc: { type: Number, default: 0 },
-          cpa: { type: Number, default: 0.2 },
+          atcRate: { type: Number, default: 0.1 },
+          cpa: { type: Number, default: 0.1 },
           roas: { type: Number, default: 0.6 },
+          hookRate: { type: Number, default: 0 },
         },
       },
     ],
@@ -215,6 +223,8 @@ const agentConfigSchema = new mongoose.Schema({
       cpm: { type: Number, default: 20 },   // $20 为基准
       ctr: { type: Number, default: 0.01 }, // 1% 为基准
       cpc: { type: Number, default: 1 },    // $1 为基准
+      hookRate: { type: Number, default: 0.25 }, // 🆕 25% Hook Rate 为基准
+      atcRate: { type: Number, default: 0.05 },  // 🆕 5% ATC Rate 为基准
     },
   },
   
