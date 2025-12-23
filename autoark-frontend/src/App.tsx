@@ -35,13 +35,10 @@ import TaskManagementPage from './pages/TaskManagementPage'
 import AssetManagementPage from './pages/AssetManagementPage'
 import MaterialLibraryPage from './pages/MaterialLibraryPage'
 import OAuthCallbackPage from './pages/OAuthCallbackPage'
-import AIAnalysisPage from './pages/AIAnalysisPage'
 import AgentManagementPage from './pages/AgentManagementPage'
 import MaterialMetricsPage from './pages/MaterialMetricsPage'
 import FacebookAppPage from './pages/FacebookAppPage'
 import AdReviewStatusPage from './pages/AdReviewStatusPage'
-import RulesPage from './pages/RulesPage'
-import AiSuggestionsPage from './pages/AiSuggestionsPage'
 import AutomationJobsPage from './pages/AutomationJobsPage'
 
 function App() {
@@ -81,10 +78,7 @@ function App() {
               <Route path="/bulk-ad/creative" element={<AssetManagementPage />} />
               <Route path="/bulk-ad/materials" element={<MaterialLibraryPage />} />
               {/* AI Agent Routes */}
-              <Route path="/ai/analysis" element={<AIAnalysisPage />} />
               <Route path="/ai/agents" element={<AgentManagementPage />} />
-              <Route path="/ai/rules" element={<RulesPage />} />
-              <Route path="/ai/suggestions" element={<AiSuggestionsPage />} />
               <Route path="/ai/automation-jobs" element={<AutomationJobsPage />} />
                     {/* 用户和组织管理 */}
                     <Route path="/users" element={<UserManagementPage />} />

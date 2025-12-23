@@ -5,7 +5,6 @@ export { default as Campaign } from './Campaign'
 export { default as Creative } from './Creative'
 export { default as MetricsDaily } from './MetricsDaily'
 export { default as OpsLog } from './OpsLog'
-export { default as Rule } from './Rule'
 export { default as SyncLog } from './SyncLog'
 
 // 批量广告创建相关模型
