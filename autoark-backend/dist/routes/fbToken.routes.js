@@ -35,7 +35,10 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const fbTokenController = __importStar(require("../controllers/fbToken.controller"));
+const auth_1 = require("../middlewares/auth");
 const router = (0, express_1.Router)();
+// 所有路由都需要认证
+router.use(auth_1.authenticate);
 // 绑定 token
 router.post('/', fbTokenController.bindToken);
 // 获取 token 列表（支持筛选）

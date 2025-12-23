@@ -36,7 +36,16 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const facebookController = __importStar(require("../controllers/facebook.controller"));
 const facebookToken_controller_1 = require("../controllers/facebookToken.controller");
+const auth_1 = require("../middlewares/auth");
 const router = (0, express_1.Router)();
+// 大部分路由需要认证，但 OAuth callback 必须公开（Facebook 重定向不会带 Authorization header）
+router.use((req, res, next) => {
+    // OAuth 回调不需要认证
+    if (req.path === '/oauth/callback') {
+        return next();
+    }
+    return (0, auth_1.authenticate)(req, res, next);
+});
 router.post('/save-token', facebookToken_controller_1.saveFacebookToken); // New token saving route
 router.get('/accounts', facebookController.getAccounts);
 router.get('/accounts-list', facebookController.getAccountsList); // New: Account management list
@@ -61,11 +70,7 @@ const oauthController = __importStar(require("../controllers/facebook.oauth.cont
 router.get('/oauth/login-url', oauthController.getLoginUrl); // Get Facebook login URL
 router.get('/oauth/callback', oauthController.handleCallback); // OAuth callback handler
 router.get('/oauth/config', oauthController.getOAuthConfig); // Get OAuth config status
-// AI routes
-const aiController = __importStar(require("../controllers/ai.controller"));
-router.post('/campaigns/:campaignId/ai-suggestion', aiController.generateAiSuggestion); // Generate suggestion
-router.get('/ai-suggestions', aiController.getAiSuggestions); // Get history
-router.post('/ai-suggestions/:id/apply', aiController.applyAiSuggestion); // Apply suggestion
+// AI routes 已迁移到 /api/ai-suggestions
 router.get('/accounts/:id/campaigns', facebookController.getCampaigns);
 router.get('/accounts/:id/adsets', facebookController.getAdSets);
 router.get('/accounts/:id/ads', facebookController.getAds);

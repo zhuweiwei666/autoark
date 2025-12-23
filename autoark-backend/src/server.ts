@@ -11,6 +11,7 @@ import { tokenPool } from './services/facebook.token.pool'
 import { initQueues } from './queue/facebook.queue'
 import { initWorkers } from './queue/facebook.worker'
 import { initBulkAdWorker } from './queue/bulkAd.worker'
+import { initAutomationWorker } from './queue/automation.worker'
 
 // Cron Jobs
 import initCronJobs from './cron'
@@ -51,6 +52,7 @@ async function bootstrap() {
   initQueues()
   initWorkers()
   initBulkAdWorker()
+  initAutomationWorker()
 
   // 5) Cron Jobs (start once per process)
   initCronJobs()

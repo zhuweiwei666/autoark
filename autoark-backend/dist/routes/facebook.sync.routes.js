@@ -35,7 +35,12 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const facebookSyncController = __importStar(require("../controllers/facebook.sync.controller"));
+const auth_1 = require("../middlewares/auth");
+const User_1 = require("../models/User");
 const router = (0, express_1.Router)();
+// Protect these endpoints: full sync is expensive and should not be public.
+router.use(auth_1.authenticate);
+router.use((0, auth_1.authorize)(User_1.UserRole.SUPER_ADMIN));
 router.get('/sync/run', facebookSyncController.runSync);
 router.get('/sync/status', facebookSyncController.getStatus);
 exports.default = router;

@@ -30,14 +30,34 @@ const getActiveAppConfig = async (appId) => {
                 };
             }
         }
-        // 否则查找负载最低的活跃 App
-        const app = await FacebookApp_1.default.findOne({
+        // 1. 优先查找默认 App（且满足公开 OAuth 准入）
+        let app = await FacebookApp_1.default.findOne({
             status: 'active',
+            isDefault: true,
             'validation.isValid': true,
-        }).sort({
-            'currentLoad.activeTasks': 1,
-            'config.priority': -1,
+            'compliance.publicOauthReady': true,
         });
+        // 2. 如果没有默认 App，查找负载最低的活跃 App（且满足公开 OAuth 准入）
+        if (!app) {
+            app = await FacebookApp_1.default.findOne({
+                status: 'active',
+                'validation.isValid': true,
+                'compliance.publicOauthReady': true,
+            }).sort({
+                'currentLoad.activeTasks': 1,
+                'config.priority': -1,
+            });
+        }
+        // 3. 如果系统中暂时没有任何 publicOauthReady 的 App，降级为“任意可用 App”
+        if (!app) {
+            app = await FacebookApp_1.default.findOne({
+                status: 'active',
+                'validation.isValid': true,
+            }).sort({
+                'currentLoad.activeTasks': 1,
+                'config.priority': -1,
+            });
+        }
         if (app) {
             return {
                 appId: app.appId,

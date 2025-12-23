@@ -3,6 +3,25 @@ import FacebookApp from '../models/FacebookApp'
 import axios from 'axios'
 import logger from '../utils/logger'
 
+// 公开 OAuth 最低需要的权限（用于“任意 FB 号可授权”）
+const PUBLIC_OAUTH_REQUIRED_PERMISSIONS = [
+  'ads_management',
+  'ads_read',
+  'business_management',
+  'pages_show_list',
+  'pages_read_engagement',
+]
+
+const computePublicOauthReady = (app: any): boolean => {
+  const perms = Array.isArray(app?.compliance?.permissions) ? app.compliance.permissions : []
+  const map = new Map<string, any>(perms.map((p: any) => [String(p.name), p]))
+  return PUBLIC_OAUTH_REQUIRED_PERMISSIONS.every((name) => {
+    const p: any = map.get(name)
+    // 这里用“Advanced 且 Approved”作为可对外授权的判定
+    return p && p.access === 'advanced' && p.status === 'approved'
+  })
+}
+
 /**
  * 获取所有 Facebook Apps
  */
@@ -79,7 +98,7 @@ export const createApp = async (req: Request, res: Response) => {
 export const updateApp = async (req: Request, res: Response) => {
   try {
     const { id } = req.params
-    const { appName, appSecret, notes, config, status } = req.body
+    const { appName, appSecret, notes, config, status, compliance } = req.body
 
     const app = await FacebookApp.findById(id)
     if (!app) {
@@ -105,11 +124,64 @@ export const updateApp = async (req: Request, res: Response) => {
     if (config) app.config = { ...app.config, ...config }
     if (status) app.status = status
 
+    // 合规信息允许更新（用于记录 Advanced Access / Business Verification / App Review 状态）
+    if (compliance) {
+      app.compliance = {
+        ...(app.compliance as any),
+        ...compliance,
+        // 如果传入 permissions，覆盖；否则保留原来的
+        ...(compliance.permissions ? { permissions: compliance.permissions } : {}),
+      } as any
+      ;(app.compliance as any).publicOauthReady = computePublicOauthReady(app)
+      ;(app.compliance as any).lastCheckedAt = new Date()
+    }
+
     await app.save()
     logger.info(`更新 Facebook App: ${app.appName}`)
     res.json({ success: true, data: app })
   } catch (error: any) {
     logger.error('更新 Facebook App 失败:', error)
+    res.status(500).json({ success: false, error: error.message })
+  }
+}
+
+/**
+ * 返回平台“公开 OAuth”权限要求（用于前端展示/自检）
+ */
+export const getPublicOAuthRequirements = async (req: Request, res: Response) => {
+  res.json({
+    success: true,
+    data: {
+      requiredPermissions: PUBLIC_OAUTH_REQUIRED_PERMISSIONS,
+      rule: 'All required permissions must be Advanced + Approved, and app must be valid + active.',
+    },
+  })
+}
+
+/**
+ * 快速更新某个 App 的合规信息（只写 compliance）
+ * PUT /api/facebook-apps/:id/compliance
+ */
+export const updateCompliance = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params
+    const app: any = await FacebookApp.findById(id)
+    if (!app) {
+      return res.status(404).json({ success: false, error: 'App 不存在' })
+    }
+
+    app.compliance = {
+      ...(app.compliance || {}),
+      ...(req.body || {}),
+      ...(req.body?.permissions ? { permissions: req.body.permissions } : {}),
+    }
+    app.compliance.publicOauthReady = computePublicOauthReady(app)
+    app.compliance.lastCheckedAt = new Date()
+
+    await app.save()
+    res.json({ success: true, data: app })
+  } catch (error: any) {
+    logger.error('更新 App 合规信息失败:', error)
     res.status(500).json({ success: false, error: error.message })
   }
 }

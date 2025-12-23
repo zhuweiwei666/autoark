@@ -36,7 +36,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.refreshAdsReviewStatus = exports.getAdsReviewOverview = exports.checkTaskReviewStatus = exports.getTaskReviewStatus = exports.resyncFacebookAssets = exports.getPixelSyncStatus = exports.getCachedPixels = exports.getAuthPixels = exports.getAuthPages = exports.getAuthAdAccounts = exports.getAuthStatus = exports.handleAuthCallback = exports.getAuthLoginUrl = exports.getAvailableApps = exports.getFacebookCustomConversions = exports.getFacebookPixels = exports.getFacebookInstagramAccounts = exports.getFacebookPages = exports.searchLocations = exports.searchInterests = exports.removeMaterial = exports.addMaterial = exports.deleteCreativeGroup = exports.getCreativeGroupList = exports.updateCreativeGroup = exports.createCreativeGroup = exports.parseAllCopywritingProducts = exports.deleteCopywritingPackage = exports.getCopywritingPackageList = exports.updateCopywritingPackage = exports.createCopywritingPackage = exports.deleteTargetingPackage = exports.getTargetingPackageList = exports.updateTargetingPackage = exports.createTargetingPackage = exports.rerunTask = exports.retryTask = exports.cancelTask = exports.getTaskList = exports.getTask = exports.publishDraft = exports.validateDraft = exports.deleteDraft = exports.getDraftList = exports.getDraft = exports.updateDraft = exports.createDraft = void 0;
+exports.refreshAdsReviewStatus = exports.getAdsReviewOverview = exports.checkTaskReviewStatus = exports.getTaskReviewStatus = exports.resyncFacebookAssets = exports.getPixelSyncStatus = exports.getCachedCatalogs = exports.getCachedPixels = exports.getAuthPixels = exports.getAuthPages = exports.getAuthAdAccounts = exports.getAuthStatus = exports.handleAuthCallback = exports.getAuthLoginUrl = exports.getAvailableApps = exports.getFacebookCustomConversions = exports.getFacebookPixels = exports.getFacebookInstagramAccounts = exports.getFacebookPages = exports.searchLocations = exports.searchInterests = exports.removeMaterial = exports.addMaterial = exports.deleteCreativeGroup = exports.getCreativeGroupList = exports.updateCreativeGroup = exports.createCreativeGroup = exports.parseAllCopywritingProducts = exports.deleteCopywritingPackage = exports.getCopywritingPackageList = exports.updateCopywritingPackage = exports.createCopywritingPackage = exports.deleteTargetingPackage = exports.getTargetingPackageList = exports.updateTargetingPackage = exports.createTargetingPackage = exports.rerunTask = exports.retryTask = exports.cancelTask = exports.getTaskList = exports.getTask = exports.publishDraft = exports.validateDraft = exports.deleteDraft = exports.getDraftList = exports.getDraft = exports.updateDraft = exports.createDraft = void 0;
 const bulkAd_service_1 = __importDefault(require("../services/bulkAd.service"));
 const TargetingPackage_1 = __importDefault(require("../models/TargetingPackage"));
 const CopywritingPackage_1 = __importDefault(require("../models/CopywritingPackage"));
@@ -47,7 +47,52 @@ const logger_1 = __importDefault(require("../utils/logger"));
 const oauthService = __importStar(require("../services/facebook.oauth.service"));
 const facebookClient_1 = require("../integration/facebook/facebookClient");
 const productMapping_service_1 = require("../services/productMapping.service");
-const auth_1 = require("../middlewares/auth");
+const User_1 = require("../models/User");
+const mongoose_1 = __importDefault(require("mongoose"));
+/**
+ * 获取资产过滤条件（文案包/定向包/创意组等）
+ * - 超级管理员：看所有
+ * - 组织管理员：看本组织 + 公共数据
+ * - 普通成员：看自己创建的 + 公共数据
+ */
+const getAssetFilter = (req) => {
+    if (!req.user) {
+        logger_1.default.warn('[BulkAd] No user in request, returning null filter');
+        return { _id: null }; // 未认证，返回空结果
+    }
+    // 超级管理员看所有
+    if (req.user.role === User_1.UserRole.SUPER_ADMIN) {
+        return {};
+    }
+    // 将 userId 转换为 ObjectId（如果是有效的 ObjectId 字符串）
+    // 这样可以同时匹配字符串类型和 ObjectId 类型的 createdBy
+    const userIdConditions = [{ createdBy: req.user.userId }];
+    if (mongoose_1.default.Types.ObjectId.isValid(req.user.userId)) {
+        userIdConditions.push({ createdBy: new mongoose_1.default.Types.ObjectId(req.user.userId) });
+    }
+    // 公共数据条件（无 createdBy）
+    const publicDataConditions = [
+        { createdBy: { $exists: false } },
+        { createdBy: null },
+        { createdBy: '' }
+    ];
+    // 组织管理员看本组织 + 公共数据
+    if (req.user.role === User_1.UserRole.ORG_ADMIN && req.user.organizationId) {
+        return {
+            $or: [
+                { organizationId: req.user.organizationId },
+                ...publicDataConditions
+            ]
+        };
+    }
+    // 普通成员看自己创建的 + 公共数据
+    return {
+        $or: [
+            ...userIdConditions,
+            ...publicDataConditions
+        ]
+    };
+};
 // ==================== 草稿管理 ====================
 /**
  * 创建广告草稿
@@ -61,7 +106,13 @@ const createDraft = async (req, res) => {
             pixelId: a.pixelId,
             pixelName: a.pixelName
         }))));
-        const draft = await bulkAd_service_1.default.createDraft(req.body);
+        // 添加创建者信息
+        const draftData = {
+            ...req.body,
+            createdBy: req.user?.userId,
+            organizationId: req.user?.organizationId,
+        };
+        const draft = await bulkAd_service_1.default.createDraft(draftData);
         res.json({ success: true, data: draft });
     }
     catch (error) {
@@ -106,7 +157,9 @@ exports.getDraft = getDraft;
  */
 const getDraftList = async (req, res) => {
     try {
-        const result = await bulkAd_service_1.default.getDraftList(req.query);
+        // 传递用户过滤条件
+        const userFilter = getAssetFilter(req);
+        const result = await bulkAd_service_1.default.getDraftList(req.query, userFilter);
         res.json({ success: true, data: result });
     }
     catch (error) {
@@ -182,7 +235,9 @@ exports.getTask = getTask;
  */
 const getTaskList = async (req, res) => {
     try {
-        const result = await bulkAd_service_1.default.getTaskList(req.query);
+        // 传递用户过滤条件
+        const userFilter = getAssetFilter(req);
+        const result = await bulkAd_service_1.default.getTaskList(req.query, userFilter);
         res.json({ success: true, data: result });
     }
     catch (error) {
@@ -224,11 +279,14 @@ exports.retryTask = retryTask;
 /**
  * 重新执行任务（基于原任务配置创建新任务）
  * POST /api/bulk-ad/tasks/:id/rerun
+ * @body multiplier 执行倍率（可选，默认1，最大20）
  */
 const rerunTask = async (req, res) => {
     try {
-        const newTask = await bulkAd_service_1.default.rerunTask(req.params.id);
-        res.json({ success: true, data: newTask });
+        const multiplier = parseInt(req.body.multiplier) || 1;
+        const userId = req.user?.userId;
+        const newTasks = await bulkAd_service_1.default.rerunTask(req.params.id, multiplier, userId);
+        res.json({ success: true, data: newTasks });
     }
     catch (error) {
         logger_1.default.error('[BulkAd] Rerun task failed:', error);
@@ -243,7 +301,11 @@ exports.rerunTask = rerunTask;
  */
 const createTargetingPackage = async (req, res) => {
     try {
-        const data = { ...req.body, organizationId: req.user?.organizationId };
+        const data = {
+            ...req.body,
+            organizationId: req.user?.organizationId,
+            createdBy: req.user?.userId, // 记录创建者
+        };
         const pkg = new TargetingPackage_1.default(data);
         await pkg.save();
         res.json({ success: true, data: pkg });
@@ -279,7 +341,8 @@ exports.updateTargetingPackage = updateTargetingPackage;
 const getTargetingPackageList = async (req, res) => {
     try {
         const { accountId, platform, page = 1, pageSize = 20 } = req.query;
-        const filter = { ...(0, auth_1.getOrgFilter)(req) };
+        // 使用更严格的用户级别过滤
+        const filter = { ...getAssetFilter(req) };
         if (accountId)
             filter.accountId = accountId;
         if (platform)
@@ -322,7 +385,11 @@ exports.deleteTargetingPackage = deleteTargetingPackage;
  */
 const createCopywritingPackage = async (req, res) => {
     try {
-        const data = { ...req.body, organizationId: req.user?.organizationId };
+        const data = {
+            ...req.body,
+            organizationId: req.user?.organizationId,
+            createdBy: req.user?.userId, // 记录创建者
+        };
         // 自动从 websiteUrl 提取产品信息
         if (data.links?.websiteUrl && !data.product?.name) {
             const parsed = (0, productMapping_service_1.parseProductUrl)(data.links.websiteUrl);
@@ -390,7 +457,8 @@ exports.updateCopywritingPackage = updateCopywritingPackage;
 const getCopywritingPackageList = async (req, res) => {
     try {
         const { accountId, platform, page = 1, pageSize = 20 } = req.query;
-        const filter = { ...(0, auth_1.getOrgFilter)(req) };
+        // 使用更严格的用户级别过滤
+        const filter = { ...getAssetFilter(req) };
         if (accountId)
             filter.accountId = accountId;
         if (platform)
@@ -489,7 +557,11 @@ exports.parseAllCopywritingProducts = parseAllCopywritingProducts;
  */
 const createCreativeGroup = async (req, res) => {
     try {
-        const data = { ...req.body, organizationId: req.user?.organizationId };
+        const data = {
+            ...req.body,
+            organizationId: req.user?.organizationId,
+            createdBy: req.user?.userId, // 记录创建者
+        };
         const group = new CreativeGroup_1.default(data);
         await group.save();
         res.json({ success: true, data: group });
@@ -525,7 +597,8 @@ exports.updateCreativeGroup = updateCreativeGroup;
 const getCreativeGroupList = async (req, res) => {
     try {
         const { accountId, platform, page = 1, pageSize = 20 } = req.query;
-        const filter = { ...(0, auth_1.getOrgFilter)(req) };
+        // 使用更严格的用户级别过滤
+        const filter = { ...getAssetFilter(req) };
         if (accountId)
             filter.accountId = accountId;
         if (platform)
@@ -761,27 +834,66 @@ const getAvailableApps = async (req, res) => {
 };
 exports.getAvailableApps = getAvailableApps;
 /**
- * 获取 Facebook 登录 URL（批量广告专用，支持选择 App）
+ * 获取 Facebook 登录 URL（批量广告专用）
  * GET /api/bulk-ad/auth/login-url
+ *
+ * 用户隔离：用户创建的 App 就是他要用的 App
+ * 如果用户没有创建过 App，提示去 App 管理页面添加
  */
 const getAuthLoginUrl = async (req, res) => {
     try {
-        const { appId } = req.query; // 可选，指定使用哪个 App
-        const config = await oauthService.validateOAuthConfig();
-        if (!config.valid) {
-            return res.status(500).json({
-                success: false,
-                error: config.hasDbApps
-                    ? `OAuth 配置不完整，缺少: ${config.missing.join(', ')}`
-                    : '未配置 Facebook App，请在 App 管理页面添加',
-                needsAppSetup: !config.hasDbApps,
-            });
+        if (!req.user) {
+            return res.status(401).json({ success: false, error: '未认证' });
         }
-        // 使用特殊 state 标记来自批量广告模块
-        const loginUrl = await oauthService.getFacebookLoginUrl('bulk-ad', appId);
+        // ⚠️ 登录链接必须每次实时生成：禁止任何缓存/304（浏览器/代理可能会缓存）
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
+        // 让 ETag 每次不同，避免命中 If-None-Match -> 304
+        res.setHeader('ETag', `W/"bulkad-login-${Date.now()}-${Math.random().toString(16).slice(2)}"`);
+        // 批量广告 OAuth：默认使用“系统 App 池”生成登录链接（避免用户自建 App 被 Facebook 临时禁用导致无法登录）
+        // 如需强制使用用户自建 App，可传参：?useUserApp=true
+        let appId;
+        const useUserApp = String(req.query.useUserApp || '').toLowerCase() === 'true';
+        if (useUserApp) {
+            const FacebookApp = require('../models/FacebookApp').default;
+            const userApp = await FacebookApp.findOne({
+                createdBy: req.user.userId,
+                status: 'active',
+                'validation.isValid': true,
+                'config.enabledForBulkAds': true,
+            }).sort({ createdAt: -1 });
+            if (userApp?.appId) {
+                appId = userApp.appId;
+                logger_1.default.info(`[BulkAd] OAuth using user's App (forced): ${userApp.appName} (${appId})`);
+            }
+            else {
+                logger_1.default.warn(`[BulkAd] OAuth requested user's App but none valid; falling back to default App pool`);
+            }
+        }
+        else {
+            logger_1.default.info(`[BulkAd] OAuth using default App pool (useUserApp=false)`);
+        }
+        // 将 AutoArk 用户 ID 编码到 state 参数中
+        // 格式: bulk-ad|userId|organizationId
+        const orgId = req.user.organizationId ? String(req.user.organizationId) : '';
+        const stateData = `bulk-ad|${req.user.userId}|${orgId}`;
+        const loginUrl = await oauthService.getFacebookLoginUrl(stateData, appId);
+        // 解析 client_id（便于排查 Facebook Login “功能不可用”属于哪个 App）
+        let clientIdInUrl = null;
+        try {
+            clientIdInUrl = new URL(loginUrl).searchParams.get('client_id');
+        }
+        catch { }
+        logger_1.default.info(`[BulkAd] Generated login URL for user ${req.user.userId}, App: ${appId || 'default-pool'}, client_id: ${clientIdInUrl || 'unknown'}`);
         res.json({
             success: true,
-            data: { loginUrl },
+            data: {
+                loginUrl,
+                usingDefaultApp: !appId,
+                clientId: clientIdInUrl,
+                serverTime: new Date().toISOString(),
+            },
         });
     }
     catch (error) {
@@ -793,27 +905,64 @@ exports.getAuthLoginUrl = getAuthLoginUrl;
 /**
  * OAuth 回调处理（批量广告专用）
  * GET /api/bulk-ad/auth/callback
+ *
+ * 用户隔离：从 state 参数解析 AutoArk 用户 ID，并将 token 与该用户关联
  */
 const handleAuthCallback = async (req, res) => {
     try {
         const { code, error, error_description, state } = req.query;
         if (error) {
             logger_1.default.error('[BulkAd OAuth] Facebook returned error:', { error, error_description });
-            // 重定向到专门的 OAuth 回调页面（用于关闭弹窗）
             return res.redirect(`/oauth/callback?oauth_error=${encodeURIComponent(error_description || error)}`);
         }
         if (!code) {
             return res.redirect('/oauth/callback?oauth_error=No authorization code received');
         }
+        // 解析 state 参数获取 AutoArk 用户信息
+        // state 是 base64 编码的 JSON: { originalState: 'bulk-ad|userId|orgId', appId: 'xxx' }
+        // originalState 格式: bulk-ad|userId|organizationId
+        let autoarkUserId;
+        let organizationId;
+        if (state) {
+            try {
+                // 先解码 base64 JSON
+                const decoded = Buffer.from(state, 'base64').toString('utf-8');
+                const stateObj = JSON.parse(decoded);
+                const originalState = stateObj.originalState || '';
+                // 从 originalState 解析 userId
+                const parts = originalState.split('|');
+                if (parts[0] === 'bulk-ad' && parts[1]) {
+                    autoarkUserId = parts[1];
+                    organizationId = parts[2] || undefined;
+                    logger_1.default.info(`[BulkAd OAuth] Binding token to AutoArk user: ${autoarkUserId}`);
+                }
+            }
+            catch (e) {
+                // 旧格式，直接解析
+                const parts = state.split('|');
+                if (parts[0] === 'bulk-ad' && parts[1]) {
+                    autoarkUserId = parts[1];
+                    organizationId = parts[2] || undefined;
+                    logger_1.default.info(`[BulkAd OAuth] Binding token to AutoArk user (legacy): ${autoarkUserId}`);
+                }
+            }
+        }
         // 处理 OAuth 回调（传递 state 以解析使用的 App）
         const result = await oauthService.handleOAuthCallback(code, state);
-        // 异步同步 Facebook 用户资产（Pixels、账户、粉丝页）
-        // 不阻塞用户，后台执行
+        // 更新 Token 的 userId 和 organizationId（关联到 AutoArk 用户）
+        if (autoarkUserId) {
+            await FbToken_1.default.findByIdAndUpdate(result.tokenId, {
+                userId: autoarkUserId,
+                ...(organizationId && { organizationId }),
+            });
+            logger_1.default.info(`[BulkAd OAuth] Token ${result.tokenId} bound to user ${autoarkUserId}`);
+        }
+        // 异步同步 Facebook 用户资产
         const facebookUserService = require('../services/facebookUser.service');
         facebookUserService.syncFacebookUserAssets(result.fbUserId, result.accessToken, result.tokenId).catch((err) => {
             logger_1.default.error('[BulkAd OAuth] Failed to sync Facebook user assets:', err);
         });
-        // 重定向到专门的 OAuth 回调页面（用于关闭弹窗并通知父窗口）
+        // 重定向到专门的 OAuth 回调页面
         const params = new URLSearchParams({
             oauth_success: 'true',
             token_id: result.tokenId,
@@ -829,18 +978,78 @@ const handleAuthCallback = async (req, res) => {
 };
 exports.handleAuthCallback = handleAuthCallback;
 /**
- * 检查授权状态
+ * 检查授权状态（用户隔离）
  * GET /api/bulk-ad/auth/status
+ *
+ * 每个 AutoArk 用户看到自己绑定的 Facebook 账号
+ * 超级管理员可以看到所有 token
  */
 const getAuthStatus = async (req, res) => {
     try {
-        const fbToken = await FbToken_1.default.findOne({ status: 'active' }).sort({ updatedAt: -1 });
+        if (!req.user) {
+            return res.status(401).json({ success: false, error: '未认证' });
+        }
+        const orgObjectId = req.user.organizationId && mongoose_1.default.Types.ObjectId.isValid(req.user.organizationId)
+            ? new mongoose_1.default.Types.ObjectId(req.user.organizationId)
+            : undefined;
+        // 构建查询条件
+        const tokenQuery = { status: 'active' };
+        // 超级管理员看到所有，普通用户只看到自己绑定的或本组织的
+        if (req.user.role === User_1.UserRole.SUPER_ADMIN) {
+            // 超级管理员：获取所有活跃 token，优先显示自己绑定的
+            const userToken = await FbToken_1.default.findOne({
+                status: 'active',
+                userId: req.user.userId
+            }).sort({ updatedAt: -1 });
+            if (userToken) {
+                return res.json({
+                    success: true,
+                    data: {
+                        authorized: true,
+                        tokenId: userToken._id,
+                        fbUserId: userToken.fbUserId,
+                        fbUserName: userToken.fbUserName,
+                        expiresAt: userToken.expiresAt,
+                        isOwnToken: true,
+                    },
+                });
+            }
+            // 如果超级管理员没有绑定自己的 token，显示第一个可用的
+            const anyToken = await FbToken_1.default.findOne({ status: 'active' }).sort({ updatedAt: -1 });
+            if (anyToken) {
+                return res.json({
+                    success: true,
+                    data: {
+                        authorized: true,
+                        tokenId: anyToken._id,
+                        fbUserId: anyToken.fbUserId,
+                        fbUserName: anyToken.fbUserName,
+                        expiresAt: anyToken.expiresAt,
+                        isOwnToken: false,
+                        message: '当前使用的是其他用户的授权，建议绑定自己的 Facebook 账号',
+                    },
+                });
+            }
+        }
+        else {
+            // 普通用户：只看到自己绑定的 token
+            tokenQuery.userId = req.user.userId;
+            // 如果有组织，也可以看到同组织的
+            if (orgObjectId) {
+                tokenQuery.$or = [
+                    { userId: req.user.userId },
+                    { organizationId: orgObjectId }
+                ];
+                delete tokenQuery.userId;
+            }
+        }
+        const fbToken = await FbToken_1.default.findOne(tokenQuery).sort({ updatedAt: -1 });
         if (!fbToken) {
             return res.json({
                 success: true,
                 data: {
                     authorized: false,
-                    message: '未授权 Facebook 账号',
+                    message: '请先绑定您的 Facebook 账号',
                 },
             });
         }
@@ -852,6 +1061,7 @@ const getAuthStatus = async (req, res) => {
                 fbUserId: fbToken.fbUserId,
                 fbUserName: fbToken.fbUserName,
                 expiresAt: fbToken.expiresAt,
+                isOwnToken: fbToken.userId === req.user.userId,
             },
         });
     }
@@ -864,30 +1074,74 @@ exports.getAuthStatus = getAuthStatus;
 /**
  * 获取当前授权用户的广告账户列表
  * GET /api/bulk-ad/auth/ad-accounts
+ * 需要认证，并根据用户组织进行权限过滤
+ *
+ * 超级管理员：获取所有 token 下的所有账户
+ * 普通用户：只获取本组织 token 下的账户
  */
 const getAuthAdAccounts = async (req, res) => {
     try {
-        const fbToken = await FbToken_1.default.findOne({ status: 'active' }).sort({ updatedAt: -1 });
-        if (!fbToken) {
-            return res.status(401).json({ success: false, error: '未授权 Facebook 账号' });
+        // 检查用户认证
+        if (!req.user) {
+            return res.status(401).json({ success: false, error: '未认证' });
         }
-        // 获取用户的广告账户
-        const result = await facebookClient_1.facebookClient.get('/me/adaccounts', {
-            access_token: fbToken.token,
-            fields: 'id,account_id,name,account_status,currency,timezone_name,amount_spent,balance',
-            limit: 100,
-        });
-        const accounts = (result.data || []).map((acc) => ({
-            id: acc.id,
-            account_id: acc.account_id,
-            name: acc.name,
-            account_status: acc.account_status,
-            currency: acc.currency,
-            timezone_name: acc.timezone_name,
-            amount_spent: acc.amount_spent,
-            balance: acc.balance,
-        }));
-        res.json({ success: true, data: accounts });
+        // 构建 token 查询条件（根据组织隔离）
+        const tokenQuery = { status: 'active' };
+        // 如果不是超级管理员，只查询本组织的 token
+        if (req.user.role !== User_1.UserRole.SUPER_ADMIN && req.user.organizationId) {
+            tokenQuery.organizationId = req.user.organizationId;
+        }
+        // 查找所有符合条件的 token（超级管理员看到所有，普通用户只看到本组织）
+        const fbTokens = await FbToken_1.default.find(tokenQuery).sort({ updatedAt: -1 });
+        if (!fbTokens || fbTokens.length === 0) {
+            return res.status(401).json({ success: false, error: '未找到可用的 Facebook 授权账号' });
+        }
+        // 合并所有 token 下的广告账户
+        const allAccounts = [];
+        const seenAccountIds = new Set();
+        for (const fbToken of fbTokens) {
+            try {
+                const result = await facebookClient_1.facebookClient.get('/me/adaccounts', {
+                    access_token: fbToken.token,
+                    fields: 'id,account_id,name,account_status,currency,timezone_name,amount_spent,balance',
+                    limit: 100,
+                });
+                for (const acc of (result.data || [])) {
+                    // 避免重复账户
+                    if (!seenAccountIds.has(acc.account_id)) {
+                        seenAccountIds.add(acc.account_id);
+                        allAccounts.push({
+                            id: acc.id,
+                            account_id: acc.account_id,
+                            name: acc.name,
+                            account_status: acc.account_status,
+                            currency: acc.currency,
+                            timezone_name: acc.timezone_name,
+                            amount_spent: acc.amount_spent,
+                            balance: acc.balance,
+                            // 额外信息：标记来源 token
+                            _tokenOwner: fbToken.fbUserName || fbToken.optimizer || 'unknown',
+                        });
+                    }
+                }
+            }
+            catch (tokenError) {
+                logger_1.default.warn(`[BulkAd] Failed to get accounts for token ${fbToken.fbUserName}: ${tokenError.message}`);
+                // 继续处理其他 token
+            }
+        }
+        // 根据 Account 模型中的 organizationId 进行过滤（仅非超级管理员）
+        let filteredAccounts = allAccounts;
+        if (req.user.role !== User_1.UserRole.SUPER_ADMIN && req.user.organizationId) {
+            const Account = require('../models/Account').default;
+            const allowedAccounts = await Account.find({
+                accountId: { $in: Array.from(seenAccountIds) },
+                organizationId: req.user.organizationId,
+            }).select('accountId').lean();
+            const allowedAccountIds = new Set(allowedAccounts.map((acc) => acc.accountId));
+            filteredAccounts = allAccounts.filter((acc) => allowedAccountIds.has(acc.account_id));
+        }
+        res.json({ success: true, data: filteredAccounts });
     }
     catch (error) {
         logger_1.default.error('[BulkAd] Get ad accounts failed:', error);
@@ -909,11 +1163,31 @@ const getAuthPages = async (req, res) => {
         if (!accountId) {
             return res.status(400).json({ success: false, error: 'accountId is required' });
         }
-        const fbToken = await FbToken_1.default.findOne({ status: 'active' }).sort({ updatedAt: -1 });
-        if (!fbToken) {
-            return res.status(401).json({ success: false, error: '未授权 Facebook 账号' });
+        // 🔧 修复：根据账户 ID 找到正确的 token
+        let fbToken = null;
+        // 1. 尝试找到有权限访问此账户的 token
+        const allTokens = await FbToken_1.default.find({ status: 'active' });
+        for (const t of allTokens) {
+            try {
+                // 验证此 token 是否有权访问该账户
+                const res = await facebookClient_1.facebookClient.get(`/act_${accountId}`, {
+                    access_token: t.token,
+                    fields: 'id,name'
+                });
+                if (res && res.id) {
+                    fbToken = t;
+                    logger_1.default.info(`[BulkAd] Found token for account ${accountId}: ${t.fbUserName}`);
+                    break;
+                }
+            }
+            catch (e) {
+                // 这个 token 没有权限，继续尝试下一个
+            }
         }
-        // 1. 先尝试从广告账户获取 promote_pages
+        if (!fbToken) {
+            return res.status(401).json({ success: false, error: `没有找到可访问账户 ${accountId} 的 Token` });
+        }
+        // 1. 从广告账户获取 promote_pages（BM 分配的主页）
         let pages = [];
         try {
             const promoteResult = await facebookClient_1.facebookClient.get(`/act_${accountId}/promote_pages`, {
@@ -922,26 +1196,35 @@ const getAuthPages = async (req, res) => {
                 limit: 100,
             });
             pages = promoteResult.data || [];
+            logger_1.default.info(`[BulkAd] Found ${pages.length} promote_pages for account ${accountId}`);
         }
         catch (e) {
             logger_1.default.warn(`[BulkAd] Failed to get promote_pages for ${accountId}: ${e.message}`);
         }
-        // 2. 如果没有 promote_pages，获取用户有广告权限的所有主页
+        // 2. 如果没有 promote_pages，回退获取用户管理的主页
         if (pages.length === 0) {
             logger_1.default.info(`[BulkAd] No promote_pages for ${accountId}, falling back to user pages`);
             try {
-                const userPagesResult = await facebookClient_1.facebookClient.get('/me/accounts', {
+                // 使用找到的 token 获取该用户管理的所有主页
+                const userPagesResult = await facebookClient_1.facebookClient.get(`/${fbToken.fbUserId}/accounts`, {
                     access_token: fbToken.token,
-                    fields: 'id,name,picture,tasks',
+                    fields: 'id,name,picture,access_token',
                     limit: 100,
                 });
-                // 只返回有 ADVERTISE 权限的主页
-                pages = (userPagesResult.data || []).filter((page) => page.tasks && page.tasks.includes('ADVERTISE'));
-                logger_1.default.info(`[BulkAd] Found ${pages.length} user pages with ADVERTISE permission`);
+                pages = (userPagesResult.data || []).filter((p) => p.id && p.name);
+                logger_1.default.info(`[BulkAd] Found ${pages.length} user pages for account ${accountId}`);
             }
             catch (e) {
-                logger_1.default.error(`[BulkAd] Failed to get user pages: ${e.message}`);
+                logger_1.default.warn(`[BulkAd] Failed to get user pages: ${e.message}`);
             }
+        }
+        // 如果还是没有主页，返回警告
+        if (pages.length === 0) {
+            return res.json({
+                success: true,
+                data: [],
+                warning: '此账户没有可用的 Facebook 主页。请确保您有主页管理权限。'
+            });
         }
         res.json({ success: true, data: pages });
     }
@@ -981,21 +1264,62 @@ exports.getAuthPixels = getAuthPixels;
 /**
  * 获取缓存的所有 Pixels（预加载，速度快）
  * GET /api/bulk-ad/auth/cached-pixels
+ *
+ * 超级管理员：合并所有 token 的 Pixels
+ * 普通用户：只获取本组织 token 的 Pixels
  */
 const getCachedPixels = async (req, res) => {
     try {
-        const fbToken = await FbToken_1.default.findOne({ status: 'active' }).sort({ updatedAt: -1 });
-        if (!fbToken) {
+        const orgObjectId = req.user?.organizationId && mongoose_1.default.Types.ObjectId.isValid(req.user.organizationId)
+            ? new mongoose_1.default.Types.ObjectId(req.user.organizationId)
+            : undefined;
+        // 构建 token 查询条件（根据组织隔离）
+        const tokenQuery = { status: 'active' };
+        // 如果不是超级管理员，只查询本组织的 token
+        if (req.user?.role !== User_1.UserRole.SUPER_ADMIN && orgObjectId) {
+            tokenQuery.organizationId = orgObjectId;
+        }
+        const fbTokens = await FbToken_1.default.find(tokenQuery).sort({ updatedAt: -1 });
+        if (!fbTokens || fbTokens.length === 0) {
             return res.status(401).json({ success: false, error: '未授权 Facebook 账号' });
         }
         const facebookUserService = require('../services/facebookUser.service');
-        const pixels = await facebookUserService.getCachedPixels(fbToken.fbUserId);
+        // 合并所有 token 的 Pixels
+        const pixelMap = new Map();
+        for (const fbToken of fbTokens) {
+            try {
+                const pixels = await facebookUserService.getCachedPixels(fbToken.fbUserId);
+                for (const p of pixels) {
+                    const existing = pixelMap.get(p.pixelId);
+                    if (existing) {
+                        // 合并账户列表（去重）
+                        const existingAccountIds = new Set(existing.accounts.map((a) => a.accountId));
+                        for (const acc of (p.accounts || [])) {
+                            if (!existingAccountIds.has(acc.accountId)) {
+                                existing.accounts.push(acc);
+                            }
+                        }
+                    }
+                    else {
+                        pixelMap.set(p.pixelId, {
+                            pixelId: p.pixelId,
+                            name: p.name,
+                            accounts: [...(p.accounts || [])],
+                        });
+                    }
+                }
+            }
+            catch (tokenError) {
+                logger_1.default.warn(`[BulkAd] Failed to get pixels for token ${fbToken.fbUserName}:`, tokenError.message);
+            }
+        }
         // 转换格式以兼容前端
-        const formattedPixels = pixels.map((p) => ({
+        const formattedPixels = Array.from(pixelMap.values()).map((p) => ({
             id: p.pixelId,
             name: p.name,
             accounts: p.accounts || [],
         }));
+        logger_1.default.info(`[BulkAd] Merged ${formattedPixels.length} pixels from ${fbTokens.length} tokens`);
         res.json({ success: true, data: formattedPixels });
     }
     catch (error) {
@@ -1004,6 +1328,50 @@ const getCachedPixels = async (req, res) => {
     }
 };
 exports.getCachedPixels = getCachedPixels;
+/**
+ * 获取缓存的 Catalogs（预加载，速度快）
+ * GET /api/bulk-ad/auth/cached-catalogs
+ */
+const getCachedCatalogs = async (req, res) => {
+    try {
+        const orgObjectId = req.user?.organizationId && mongoose_1.default.Types.ObjectId.isValid(req.user.organizationId)
+            ? new mongoose_1.default.Types.ObjectId(req.user.organizationId)
+            : undefined;
+        const tokenQuery = { status: 'active' };
+        if (req.user?.role !== User_1.UserRole.SUPER_ADMIN && orgObjectId) {
+            tokenQuery.organizationId = orgObjectId;
+        }
+        const fbTokens = await FbToken_1.default.find(tokenQuery).sort({ updatedAt: -1 });
+        if (!fbTokens || fbTokens.length === 0) {
+            return res.status(401).json({ success: false, error: '未授权 Facebook 账号' });
+        }
+        const facebookUserService = require('../services/facebookUser.service');
+        const catalogMap = new Map();
+        for (const fbToken of fbTokens) {
+            try {
+                const catalogs = await facebookUserService.getCachedCatalogs(fbToken.fbUserId);
+                for (const c of catalogs) {
+                    if (!catalogMap.has(c.catalogId)) {
+                        catalogMap.set(c.catalogId, {
+                            id: c.catalogId,
+                            name: c.name,
+                            business: c.business,
+                        });
+                    }
+                }
+            }
+            catch (e) {
+                logger_1.default.warn(`[BulkAd] Failed to get catalogs for token ${fbToken.fbUserName}:`, e?.message || e);
+            }
+        }
+        res.json({ success: true, data: Array.from(catalogMap.values()) });
+    }
+    catch (error) {
+        logger_1.default.error('[BulkAd] Get cached catalogs failed:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+};
+exports.getCachedCatalogs = getCachedCatalogs;
 /**
  * 获取 Pixel 同步状态
  * GET /api/bulk-ad/auth/sync-status

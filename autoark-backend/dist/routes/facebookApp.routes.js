@@ -38,14 +38,18 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
 const facebookAppController = __importStar(require("../controllers/facebookApp.controller"));
+const auth_1 = require("../middlewares/auth");
 const router = express_1.default.Router();
-// App 管理
+// App 管理（需要认证）
+router.use(auth_1.authenticate);
 router.get('/', facebookAppController.getApps);
 router.get('/stats', facebookAppController.getAppStats);
 router.get('/available', facebookAppController.getAvailableApps);
+router.get('/requirements/public-oauth', facebookAppController.getPublicOAuthRequirements);
 router.get('/:id', facebookAppController.getApp);
 router.post('/', facebookAppController.createApp);
 router.put('/:id', facebookAppController.updateApp);
+router.put('/:id/compliance', facebookAppController.updateCompliance);
 router.delete('/:id', facebookAppController.deleteApp);
 router.post('/:id/validate', facebookAppController.validateApp);
 router.post('/:id/reset-stats', facebookAppController.resetAppStats);

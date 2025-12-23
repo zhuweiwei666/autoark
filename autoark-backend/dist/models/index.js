@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.FacebookApp = exports.FacebookUser = exports.Product = exports.AdMaterialMapping = exports.MaterialMetrics = exports.Folder = exports.Material = exports.AdTask = exports.AdDraft = exports.CreativeGroup = exports.CopywritingPackage = exports.TargetingPackage = exports.SyncLog = exports.Rule = exports.OpsLog = exports.MetricsDaily = exports.Creative = exports.Campaign = exports.AdSet = exports.Ad = exports.Account = void 0;
+exports.AutomationJob = exports.FacebookApp = exports.FacebookUser = exports.Product = exports.AdMaterialMapping = exports.MaterialMetrics = exports.Folder = exports.Material = exports.AdTask = exports.AdDraft = exports.CreativeGroup = exports.CopywritingPackage = exports.TargetingPackage = exports.SyncLog = exports.Rule = exports.OpsLog = exports.MetricsDaily = exports.Creative = exports.Campaign = exports.AdSet = exports.Ad = exports.Account = void 0;
 var Account_1 = require("./Account");
 Object.defineProperty(exports, "Account", { enumerable: true, get: function () { return __importDefault(Account_1).default; } });
 var Ad_1 = require("./Ad");
@@ -51,3 +51,6 @@ Object.defineProperty(exports, "FacebookUser", { enumerable: true, get: function
 // Facebook App 管理（支持多App负载均衡）
 var FacebookApp_1 = require("./FacebookApp");
 Object.defineProperty(exports, "FacebookApp", { enumerable: true, get: function () { return __importDefault(FacebookApp_1).default; } });
+// 自动化 Job（AI Planner/Executor & 幂等任务编排）
+var AutomationJob_1 = require("./AutomationJob");
+Object.defineProperty(exports, "AutomationJob", { enumerable: true, get: function () { return __importDefault(AutomationJob_1).default; } });

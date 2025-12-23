@@ -9,9 +9,54 @@ const Folder_1 = __importDefault(require("../models/Folder"));
 const r2Storage_service_1 = require("../services/r2Storage.service");
 const materialTracking_service_1 = require("../services/materialTracking.service");
 const logger_1 = __importDefault(require("../utils/logger"));
+const User_1 = require("../models/User");
+const mongoose_1 = __importDefault(require("mongoose"));
 /**
  * 素材管理控制器
  */
+/**
+ * 获取素材过滤条件
+ * - 超级管理员：看所有
+ * - 组织管理员：看本组织 + 公共数据
+ * - 普通成员：看自己上传的 + 公共数据
+ */
+const getMaterialFilter = (req) => {
+    if (!req.user) {
+        logger_1.default.warn('[Material] No user in request, returning null filter');
+        return { _id: null }; // 未认证，返回空结果
+    }
+    // 超级管理员看所有
+    if (req.user.role === User_1.UserRole.SUPER_ADMIN) {
+        return {};
+    }
+    // 将 userId 转换为 ObjectId（如果是有效的 ObjectId 字符串）
+    const userIdConditions = [{ createdBy: req.user.userId }];
+    if (mongoose_1.default.Types.ObjectId.isValid(req.user.userId)) {
+        userIdConditions.push({ createdBy: new mongoose_1.default.Types.ObjectId(req.user.userId) });
+    }
+    // 公共数据条件（无 createdBy）
+    const publicDataConditions = [
+        { createdBy: { $exists: false } },
+        { createdBy: null },
+        { createdBy: '' }
+    ];
+    // 组织管理员看本组织 + 公共数据
+    if (req.user.role === User_1.UserRole.ORG_ADMIN && req.user.organizationId) {
+        return {
+            $or: [
+                { organizationId: req.user.organizationId },
+                ...publicDataConditions
+            ]
+        };
+    }
+    // 普通成员看自己上传的 + 公共数据
+    return {
+        $or: [
+            ...userIdConditions,
+            ...publicDataConditions
+        ]
+    };
+};
 /**
  * 检查 R2 配置状态
  * GET /api/materials/config-status
@@ -135,6 +180,9 @@ const confirmUpload = async (req, res) => {
             tags: tags ? (Array.isArray(tags) ? tags : tags.split(',').map((t) => t.trim())) : [],
             folder: folder || '默认',
             notes,
+            // 记录创建者和组织
+            createdBy: req.user?.userId,
+            organizationId: req.user?.organizationId,
         });
         await material.save();
         logger_1.default.info(`[Material] Direct upload confirmed: ${material._id} - ${material.name}`);
@@ -179,6 +227,9 @@ const confirmUploads = async (req, res) => {
                     },
                     tags: tags ? (Array.isArray(tags) ? tags : tags.split(',').map((t) => t.trim())) : [],
                     folder: folder || '默认',
+                    // 记录创建者和组织
+                    createdBy: req.user?.userId,
+                    organizationId: req.user?.organizationId,
                 });
                 await material.save();
                 results.push(material);
@@ -283,6 +334,9 @@ const uploadMaterial = async (req, res) => {
             tags: tags ? (Array.isArray(tags) ? tags : tags.split(',').map((t) => t.trim())) : [],
             folder: folder || '默认',
             notes,
+            // 记录创建者和组织
+            createdBy: req.user?.userId,
+            organizationId: req.user?.organizationId,
         });
         await material.save();
         logger_1.default.info(`[Material] Uploaded: ${material._id} - ${material.name} (fingerprint: ${fingerprint.fingerprintKey})`);
@@ -342,6 +396,9 @@ const uploadMaterialBatch = async (req, res) => {
                     },
                     tags: tags ? (Array.isArray(tags) ? tags : tags.split(',').map((t) => t.trim())) : [],
                     folder: folder || '默认',
+                    // 记录创建者和组织
+                    createdBy: req.user?.userId,
+                    organizationId: req.user?.organizationId,
                 });
                 await material.save();
                 results.push(material);
@@ -375,7 +432,8 @@ exports.uploadMaterialBatch = uploadMaterialBatch;
 const getMaterialList = async (req, res) => {
     try {
         const { type, folder, tags, status = 'uploaded', search, page = 1, pageSize = 20, sortBy = 'createdAt', sortOrder = 'desc', } = req.query;
-        const filter = { status };
+        // 根据用户权限过滤
+        const filter = { status, ...getMaterialFilter(req) };
         if (type)
             filter.type = type;
         if (folder)
@@ -520,9 +578,12 @@ exports.deleteMaterialBatch = deleteMaterialBatch;
  */
 const getFolders = async (req, res) => {
     try {
-        const folders = await Material_1.default.distinct('folder', { status: 'uploaded' });
+        // 添加用户过滤
+        const userFilter = getMaterialFilter(req);
+        const baseFilter = { status: 'uploaded', ...userFilter };
+        const folders = await Material_1.default.distinct('folder', baseFilter);
         const folderStats = await Material_1.default.aggregate([
-            { $match: { status: 'uploaded' } },
+            { $match: baseFilter },
             { $group: { _id: '$folder', count: { $sum: 1 } } },
             { $sort: { count: -1 } },
         ]);
@@ -597,11 +658,14 @@ exports.moveToFolder = moveToFolder;
  */
 const getFolderTree = async (req, res) => {
     try {
+        // 添加用户过滤
+        const userFilter = getMaterialFilter(req);
+        const baseFilter = { status: 'uploaded', ...userFilter };
         // 获取所有文件夹
         const folders = await Folder_1.default.find().sort({ path: 1 }).lean();
-        // 获取每个文件夹的素材数量
+        // 获取每个文件夹的素材数量（仅统计用户可见的素材）
         const folderStats = await Material_1.default.aggregate([
-            { $match: { status: 'uploaded' } },
+            { $match: baseFilter },
             { $group: { _id: '$folder', count: { $sum: 1 } } },
         ]);
         const countMap = {};

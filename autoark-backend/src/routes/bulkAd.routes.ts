@@ -22,6 +22,7 @@ router.get('/auth/ad-accounts', bulkAdController.getAuthAdAccounts)
 router.get('/auth/pages', bulkAdController.getAuthPages)
 router.get('/auth/pixels', bulkAdController.getAuthPixels)
 router.get('/auth/cached-pixels', bulkAdController.getCachedPixels)
+router.get('/auth/cached-catalogs', bulkAdController.getCachedCatalogs)
 router.get('/auth/sync-status', bulkAdController.getPixelSyncStatus)
 router.post('/auth/resync', bulkAdController.resyncFacebookAssets)
 

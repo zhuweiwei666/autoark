@@ -1365,6 +1365,54 @@ export const getCachedPixels = async (req: Request, res: Response) => {
 }
 
 /**
+ * 获取缓存的 Catalogs（预加载，速度快）
+ * GET /api/bulk-ad/auth/cached-catalogs
+ */
+export const getCachedCatalogs = async (req: Request, res: Response) => {
+  try {
+    const orgObjectId =
+      req.user?.organizationId && mongoose.Types.ObjectId.isValid(req.user.organizationId)
+        ? new mongoose.Types.ObjectId(req.user.organizationId)
+        : undefined
+
+    const tokenQuery: any = { status: 'active' }
+    if (req.user?.role !== UserRole.SUPER_ADMIN && orgObjectId) {
+      tokenQuery.organizationId = orgObjectId
+    }
+
+    const fbTokens: any[] = await FbToken.find(tokenQuery).sort({ updatedAt: -1 })
+    if (!fbTokens || fbTokens.length === 0) {
+      return res.status(401).json({ success: false, error: '未授权 Facebook 账号' })
+    }
+
+    const facebookUserService = require('../services/facebookUser.service')
+    const catalogMap = new Map<string, any>()
+
+    for (const fbToken of fbTokens) {
+      try {
+        const catalogs = await facebookUserService.getCachedCatalogs(fbToken.fbUserId)
+        for (const c of catalogs) {
+          if (!catalogMap.has(c.catalogId)) {
+            catalogMap.set(c.catalogId, {
+              id: c.catalogId,
+              name: c.name,
+              business: c.business,
+            })
+          }
+        }
+      } catch (e: any) {
+        logger.warn(`[BulkAd] Failed to get catalogs for token ${fbToken.fbUserName}:`, e?.message || e)
+      }
+    }
+
+    res.json({ success: true, data: Array.from(catalogMap.values()) })
+  } catch (error: any) {
+    logger.error('[BulkAd] Get cached catalogs failed:', error)
+    res.status(500).json({ success: false, error: error.message })
+  }
+}
+
+/**
  * 获取 Pixel 同步状态
  * GET /api/bulk-ad/auth/sync-status
  */

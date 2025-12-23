@@ -8,9 +8,12 @@ import MaterialMetrics from '../../models/MaterialMetrics'
 import { updateCampaign, updateAdSet } from '../../integration/facebook/bulkCreate.api'
 import FbToken from '../../models/FbToken'
 import dayjs from 'dayjs'
-import { fetchInsights } from '../../integration/facebook/insights.api'
+import { scoringService, MetricData, MetricSequence } from './analytics/scoring.service'
+import { trendService } from './analytics/trend.service'
 import { getMaterialRankings } from '../../services/materialMetrics.service'
 import { getCoreMetrics } from '../../services/dashboard.service'
+import { facebookClient } from '../../integration/facebook/facebookClient'
+import { momentumService } from './executor/momentum.service'
 // 🔥 使用统一的预聚合数据表
 import { 
   AggDaily, 
@@ -30,6 +33,7 @@ const LLM_MODEL = process.env.LLM_MODEL || 'gemini-2.0-flash'
  */
 class AgentService {
   private model: any = null
+  private tokenAccessCache = new Map<string, boolean>()
 
   constructor() {
     if (LLM_API_KEY) {
@@ -1547,6 +1551,47 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
   // ==================== 自动优化执行 ====================
 
   /**
+   * 获取广告系列/广告组的指标序列 (用于趋势分析)
+   */
+  private async getMetricSequence(
+    entityId: string,
+    entityType: 'campaign' | 'adset' | 'ad',
+    days: number = 7
+  ): Promise<MetricSequence> {
+    const startDate = dayjs().subtract(days, 'day').format('YYYY-MM-DD')
+    
+    const query: any = {
+      entityId,
+      level: entityType,
+      date: { $gte: startDate }
+    }
+
+    const docs = await MetricsDaily.find(query).sort({ date: 1 }).lean()
+    
+    const sequence: MetricSequence = {
+      cpm: [],
+      ctr: [],
+      cpc: [],
+      cpa: [],
+      roas: [],
+    }
+
+    for (const d of docs) {
+      sequence.cpm.push(d.cpm || 0)
+      sequence.ctr.push(d.ctr || 0)
+      sequence.cpc.push(d.cpc || 0)
+      // CPA = spend / installs (or conversions)
+      const cpa = d.installs > 0 ? d.spendUsd / d.installs : 0
+      sequence.cpa.push(cpa)
+      // ROAS = revenue / spend
+      const roas = d.spendUsd > 0 ? (d.purchase_value || 0) / d.spendUsd : 0
+      sequence.roas.push(roas)
+    }
+
+    return sequence
+  }
+
+  /**
    * 运行 Agent 检查和优化
    */
   async runAgent(agentId: string): Promise<any> {
@@ -1558,9 +1603,58 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
     logger.info(`[AgentService] Running agent: ${agent.name}`)
 
     const operations: any[] = []
-    const accounts = agent.accountIds?.length > 0
-      ? await Account.find({ accountId: { $in: agent.accountIds } })
-      : await Account.find({ status: 'active' })
+    // 账户范围：优先 scope.adAccountIds，其次旧 accountIds，否则全量 active（并按 organizationId 过滤）
+    const scopedAccountIds: string[] = agent.scope?.adAccountIds?.length
+      ? agent.scope.adAccountIds
+      : (agent.accountIds || [])
+
+    const accountQuery: any = { status: 'active' }
+    if (agent.organizationId) {
+      accountQuery.organizationId = agent.organizationId
+    }
+    if (scopedAccountIds.length > 0) {
+      accountQuery.accountId = { $in: scopedAccountIds }
+    }
+
+    const accounts = await Account.find(accountQuery)
+
+    // ---------- 护栏：异常触发降级（auto -> suggest） ----------
+    let effectiveMode: 'observe' | 'suggest' | 'auto' = agent.mode
+    try {
+      if (agent.alerts?.enabled && agent.mode === 'auto' && accounts.length > 0) {
+        const today = dayjs().format('YYYY-MM-DD')
+        const yesterday = dayjs().subtract(1, 'day').format('YYYY-MM-DD')
+        const accountIds = accounts.map((a: any) => a.accountId)
+
+        const [todayAgg, yesterdayAgg] = await Promise.all([
+          MetricsDaily.aggregate([
+            { $match: { date: today, accountId: { $in: accountIds } } },
+            { $group: { _id: null, spend: { $sum: '$spendUsd' }, revenue: { $sum: { $ifNull: ['$purchase_value', 0] } } } },
+          ]),
+          MetricsDaily.aggregate([
+            { $match: { date: yesterday, accountId: { $in: accountIds } } },
+            { $group: { _id: null, spend: { $sum: '$spendUsd' }, revenue: { $sum: { $ifNull: ['$purchase_value', 0] } } } },
+          ]),
+        ])
+
+        const todaySpend = Number(todayAgg?.[0]?.spend || 0)
+        const yesterdaySpend = Number(yesterdayAgg?.[0]?.spend || 0)
+        const spendChangePct = yesterdaySpend > 0 ? ((todaySpend - yesterdaySpend) / yesterdaySpend) * 100 : 0
+
+        const spikeThreshold = Number(agent.alerts?.thresholds?.spendSpikePercent ?? 50)
+        if (todaySpend > 0 && spendChangePct > spikeThreshold) {
+          effectiveMode = 'suggest'
+          logger.warn(
+            `[AgentService] Degrade to suggest due to spend spike: ${spendChangePct.toFixed(1)}% > ${spikeThreshold}% (today=$${todaySpend.toFixed(
+              2,
+            )}, yesterday=$${yesterdaySpend.toFixed(2)})`,
+          )
+        }
+      }
+    } catch (e: any) {
+      // 降级判定失败不阻塞主流程
+      logger.warn('[AgentService] Degrade check failed:', e?.message || e)
+    }
 
     for (const account of accounts) {
       // 获取该账户的广告系列表现
@@ -1581,28 +1675,46 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
       }
     }
 
-    // 根据模式处理操作
-    if (agent.mode === 'observe') {
+    // 根据模式处理操作（observe/suggest/auto）
+    if (effectiveMode === 'observe') {
       // 仅记录，不执行
       for (const op of operations) {
         op.status = 'pending'
         await new AgentOperation(op).save()
       }
-    } else if (agent.mode === 'suggest') {
+    } else if (effectiveMode === 'suggest') {
       // 记录并通知
       for (const op of operations) {
         op.status = 'pending'
         const saved = await new AgentOperation(op).save()
         // TODO: 发送通知
       }
-    } else if (agent.mode === 'auto') {
+    } else if (effectiveMode === 'auto') {
       // 自动执行
       for (const op of operations) {
+        // RBAC：动作级别开关
+        if (!this.isOperationAllowedByPermissions(op, agent)) {
+          op.status = 'rejected'
+          op.error = 'Operation rejected by agent permissions (RBAC)'
+          await new AgentOperation(op).save()
+          continue
+        }
+
+        // 护栏：预算/幅度/上限（超出则拒绝并记录）
+        const guardrail = this.checkGuardrails(op, agent)
+        if (!guardrail.ok) {
+          op.status = 'rejected'
+          op.error = guardrail.reason
+          await new AgentOperation(op).save()
+          continue
+        }
+
         if (agent.aiConfig.requireApproval && this.needsApproval(op, agent)) {
           op.status = 'pending'
           await new AgentOperation(op).save()
         } else {
-          await this.executeOperation(op)
+          const saved = await new AgentOperation({ ...op, status: 'approved' }).save()
+          await this.executeOperation(saved._id.toString(), agent)
         }
       }
     }
@@ -1610,7 +1722,174 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
     return {
       success: true,
       operationsCount: operations.length,
+      effectiveMode,
       operations: operations.map(o => ({ action: o.action, entityId: o.entityId, reason: o.reason })),
+    }
+  }
+
+  /**
+   * Planner/Executor 形态：只生成计划与执行 jobs，不在当前进程直接执行 Graph 写操作
+   * - Planner：复用 runAgent 的规则生成 operations
+   * - Executor：为每个 operation 创建 AutomationJob（由 Worker 并行执行）
+   */
+  async runAgentAsJobs(agentId: string): Promise<any> {
+    const agent: any = await AgentConfig.findById(agentId)
+    if (!agent || agent.status !== 'active') {
+      return { success: false, message: 'Agent not active' }
+    }
+
+    const operations: any[] = []
+
+    // 账户范围：优先 scope.adAccountIds，其次旧 accountIds，否则全量 active（并按 organizationId 过滤）
+    const scopedAccountIds: string[] = agent.scope?.adAccountIds?.length
+      ? agent.scope.adAccountIds
+      : (agent.accountIds || [])
+
+    const accountQuery: any = { status: 'active' }
+    if (agent.organizationId) {
+      accountQuery.organizationId = agent.organizationId
+    }
+    if (scopedAccountIds.length > 0) {
+      accountQuery.accountId = { $in: scopedAccountIds }
+    }
+
+    const accounts = await Account.find(accountQuery)
+
+    for (const account of accounts) {
+      const campaignPerformance = await this.getCampaignPerformance(account.accountId, 7)
+      for (const campaign of campaignPerformance) {
+        // --- 开始生命周期加权评分逻辑 (LCWTS) ---
+        const sequence = await this.getMetricSequence(campaign._id, 'campaign', 7)
+        const currentMetrics: MetricData = {
+          cpm: campaign.dailyData[campaign.dailyData.length - 1]?.spend > 0 ? (campaign.dailyData[campaign.dailyData.length - 1].spend / campaign.dailyData[campaign.dailyData.length - 1].impressions) * 1000 : 0,
+          ctr: campaign.dailyData[campaign.dailyData.length - 1]?.impressions > 0 ? campaign.dailyData[campaign.dailyData.length - 1].clicks / campaign.dailyData[campaign.dailyData.length - 1].impressions : 0,
+          cpc: campaign.dailyData[campaign.dailyData.length - 1]?.clicks > 0 ? campaign.dailyData[campaign.dailyData.length - 1].spend / campaign.dailyData[campaign.dailyData.length - 1].clicks : 0,
+          cpa: campaign.totalRevenue > 0 ? campaign.totalSpend / campaign.totalRevenue : 0, // 简化处理，实际应取具体转化
+          roas: campaign.avgRoas,
+          spend: campaign.totalSpend, // 累计消耗用于识别阶段
+        }
+
+        // 获取详细评分结果
+        const scoreResult = await scoringService.evaluate(currentMetrics, sequence, agent)
+        const { finalScore, stage } = scoreResult
+
+        // 根据分数决定动作
+        let action: 'pause' | 'budget_increase' | 'budget_decrease' | null = null
+        let reason = `[Stage: ${stage}] Score: ${finalScore.toFixed(1)}. `
+        let changePercent = 0
+        let afterValue: any = null
+        let beforeValue: any = null
+
+        if (finalScore >= 85) {
+          action = 'budget_increase'
+          changePercent = 30
+          reason += `High momentum & performance. Aggressive scale.`
+        } else if (finalScore >= 70) {
+          action = 'budget_increase'
+          changePercent = 15
+          reason += `Good trend. Moderate scale.`
+        } else if (finalScore < 15) {
+          action = 'pause'
+          reason += `Critical underperformance in current stage.`
+        } else if (finalScore < 30) {
+          action = 'budget_decrease'
+          changePercent = -20
+          reason += `Declining trend or poor metrics. Stop loss.`
+        }
+
+        if (action) {
+          const op: any = {
+            agentId: agent._id,
+            accountId: account.accountId,
+            entityType: 'campaign',
+            entityId: campaign._id,
+            entityName: campaign.campaignName,
+            action,
+            reason,
+            dataSnapshot: campaign,
+            scoreSnapshot: scoreResult, // 存入详细评分
+          }
+
+          if (action === 'budget_increase' || action === 'budget_decrease') {
+            const campaignDoc = await Campaign.findOne({ campaignId: campaign._id })
+            const currentBudget = parseFloat(campaignDoc?.daily_budget || '0') || 0
+            const multiplier = 1 + (changePercent / 100)
+            const nextBudget = currentBudget * multiplier
+            
+            op.beforeValue = { budget: currentBudget }
+            op.afterValue = { budget: nextBudget }
+            op.changePercent = changePercent
+          } else if (action === 'pause') {
+            op.beforeValue = { status: 'ACTIVE' }
+            op.afterValue = { status: 'PAUSED' }
+          }
+
+          operations.push(op)
+        }
+      }
+    }
+
+    // 记录计划时间
+    await AgentConfig.updateOne({ _id: agentId }, { $set: { 'runtime.lastPlanAt': new Date() } })
+
+    // 保存操作 + 生成执行 jobs（仅当 agent.mode=auto 且无需审批且通过 RBAC/护栏）
+    const jobs: any[] = []
+    for (const op of operations) {
+      // RBAC：动作级别开关
+      if (!this.isOperationAllowedByPermissions(op, agent)) {
+        await new AgentOperation({ ...op, status: 'rejected', error: 'Operation rejected by agent permissions (RBAC)' }).save()
+        continue
+      }
+
+      const guardrail = this.checkGuardrails(op, agent)
+      if (!guardrail.ok) {
+        await new AgentOperation({ ...op, status: 'rejected', error: guardrail.reason }).save()
+        continue
+      }
+
+      // --- 动量护栏检查 (Momentum Shield) ---
+      const momentum = await momentumService.checkMomentum(op.entityId, op.action)
+      if (!momentum.ok) {
+        await new AgentOperation({ ...op, status: 'rejected', error: momentum.reason }).save()
+        continue
+      }
+
+      // auto 模式下仍可要求审批
+      if (agent.mode === 'auto' && agent.aiConfig?.requireApproval && this.needsApproval(op, agent)) {
+        await new AgentOperation({ ...op, status: 'pending' }).save()
+        continue
+      }
+
+      // observe/suggest：只记录
+      if (agent.mode !== 'auto') {
+        await new AgentOperation({ ...op, status: 'pending' }).save()
+        continue
+      }
+
+      // auto 且不需要审批：写入 approved，并创建执行 job
+      const saved = await new AgentOperation({ ...op, status: 'approved' }).save()
+      const idempotencyKey = `op:${saved._id.toString()}`
+      const job = await createAutomationJob({
+        type: 'EXECUTE_AGENT_OPERATION',
+        payload: { operationId: saved._id.toString(), agentId: agentId },
+        agentId: agentId,
+        organizationId: agent.organizationId,
+        createdBy: agent.createdBy,
+        idempotencyKey,
+        priority: 5,
+      })
+      jobs.push(job)
+    }
+
+    if (agent.mode === 'auto') {
+      await AgentConfig.updateOne({ _id: agentId }, { $set: { 'runtime.lastRunAt': new Date() } })
+    }
+
+    return {
+      success: true,
+      operationsCount: operations.length,
+      jobsCreated: jobs.length,
+      jobs: jobs.map((j) => ({ id: j._id, status: j.status, type: j.type })),
     }
   }
 
@@ -1734,13 +2013,13 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
   /**
    * 执行操作
    */
-  async executeOperation(operationId: string): Promise<any> {
+  async executeOperation(operationId: string, agent?: any): Promise<any> {
     const operation: any = await AgentOperation.findById(operationId)
     if (!operation) {
       return { success: false, error: 'Operation not found' }
     }
 
-    const token = await FbToken.findOne({ status: 'active' })
+    const token = await this.resolveTokenForAccount(operation.accountId, agent)
     if (!token) {
       operation.status = 'failed'
       operation.error = 'No active token'
@@ -1783,6 +2062,80 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
       logger.error(`[AgentService] Operation failed: ${operation._id}`, error)
       return { success: false, error: error.message }
     }
+  }
+
+  /**
+   * 根据 agent scope/org 选择可访问该广告账户的 token
+   */
+  private async resolveTokenForAccount(accountId: string, agent?: any): Promise<any | null> {
+    const tokenQuery: any = { status: 'active' }
+    if (agent?.organizationId) {
+      tokenQuery.organizationId = agent.organizationId
+    }
+    if (agent?.scope?.fbTokenIds?.length) {
+      tokenQuery._id = { $in: agent.scope.fbTokenIds }
+    }
+
+    const tokens: any[] = await FbToken.find(tokenQuery).sort({ updatedAt: -1 }).lean()
+    if (!tokens.length) return null
+
+    // 逐个测试 token 是否有访问权限（带缓存）
+    for (const t of tokens) {
+      const cacheKey = `${t._id}:${accountId}`
+      const cached = this.tokenAccessCache.get(cacheKey)
+      if (cached === true) return t
+      if (cached === false) continue
+
+      try {
+        const r = await facebookClient.get(`/act_${accountId}`, {
+          access_token: t.token,
+          fields: 'id',
+        })
+        if (r?.id) {
+          this.tokenAccessCache.set(cacheKey, true)
+          return t
+        }
+        this.tokenAccessCache.set(cacheKey, false)
+      } catch {
+        this.tokenAccessCache.set(cacheKey, false)
+      }
+    }
+
+    return null
+  }
+
+  private isOperationAllowedByPermissions(operation: any, agent: any): boolean {
+    const perms = agent?.permissions || {}
+    if (operation.action === 'pause') return perms.canPause !== false
+    if (operation.action === 'resume') return perms.canResume !== false
+    if (operation.action === 'budget_increase' || operation.action === 'budget_decrease') return perms.canAdjustBudget !== false
+    if (operation.action === 'bid_adjust') return perms.canAdjustBid === true
+    if (operation.action === 'status_change') return perms.canToggleStatus !== false
+    return true
+  }
+
+  private checkGuardrails(operation: any, agent: any): { ok: boolean; reason?: string } {
+    // 预算上限护栏
+    const limit = agent?.objectives?.dailyBudgetLimit
+    if ((operation.action === 'budget_increase' || operation.action === 'budget_decrease') && limit != null) {
+      const next = Number(operation.afterValue?.budget || 0)
+      if (Number.isFinite(next) && next > Number(limit)) {
+        return { ok: false, reason: `Guardrail: budget ${next} exceeds dailyBudgetLimit ${limit}` }
+      }
+    }
+
+    // 最大调整幅度护栏（按比例）
+    if (operation.action === 'budget_increase' || operation.action === 'budget_decrease') {
+      const maxPct = agent?.rules?.budgetAdjust?.maxAdjustPercent
+      if (maxPct != null && operation.changePercent != null) {
+        const pct = Math.abs(Number(operation.changePercent)) / 100
+        if (Number.isFinite(pct) && pct > Number(maxPct)) {
+          return { ok: false, reason: `Guardrail: changePercent ${operation.changePercent}% exceeds maxAdjustPercent ${(Number(maxPct) * 100).toFixed(0)}%` }
+        }
+      }
+    }
+
+    return { ok: true }
   }
 
   // ==================== 素材 AI 智能评分 ====================

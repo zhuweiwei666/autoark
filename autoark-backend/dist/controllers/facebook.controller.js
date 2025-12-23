@@ -43,6 +43,7 @@ const facebookPurchaseCorrectionService = __importStar(require("../services/face
 const facebook_token_pool_1 = require("../services/facebook.token.pool");
 const facebookCountriesService = __importStar(require("../services/facebook.countries.service"));
 const facebook_sync_service_1 = require("../services/facebook.sync.service");
+const auth_1 = require("../middlewares/auth");
 const User_1 = require("../models/User");
 const syncCampaigns = async (req, res, next) => {
     try {
@@ -162,6 +163,11 @@ const getCampaignsList = async (req, res, next) => {
             startDate: req.query.startDate,
             endDate: req.query.endDate,
         };
+        // 用户隔离：根据用户绑定的 Token 过滤账户
+        const userAccountIds = await (0, auth_1.getUserAccountIds)(req);
+        if (userAccountIds !== null) {
+            filters.accountIds = userAccountIds;
+        }
         const result = await facebookCampaignsService.getCampaigns(filters, { page, limit, sortBy, sortOrder });
         res.json({
             success: true,
@@ -201,7 +207,13 @@ const getAccountsList = async (req, res, next) => {
             startDate: req.query.startDate,
             endDate: req.query.endDate,
         };
-        // 组织隔离：超管可见全部，其他用户只能看本组织
+        // 用户隔离：根据用户绑定的 Token 过滤账户
+        const userAccountIds = await (0, auth_1.getUserAccountIds)(req);
+        if (userAccountIds !== null) {
+            // 非超级管理员，限制只能看到自己关联的账户
+            filters.accountIds = userAccountIds;
+        }
+        // 组织隔离（兼容旧逻辑）
         const organizationId = req.user?.role === User_1.UserRole.SUPER_ADMIN ? undefined : req.user?.organizationId;
         const result = await facebookAccountsService.getAccounts(filters, { page, limit, sortBy, sortOrder }, organizationId);
         res.json({

@@ -22,6 +22,7 @@ import aggregationRoutes from './controllers/aggregation.controller' // New: 预
 import ruleRoutes from './controllers/rule.controller' // New: 自动化规则引擎
 import materialAutoTestRoutes from './controllers/materialAutoTest.controller' // New: 素材自动测试
 import aiSuggestionRoutes from './controllers/aiSuggestion.controller' // New: AI 优化建议
+import automationJobRoutes from './routes/automationJob.routes' // New: 自动化 Job 编排
 import logger from './utils/logger'
 import { errorHandler } from './middlewares/errorHandler'
 
@@ -88,6 +89,7 @@ app.use('/api/agg', aggregationRoutes) // New: 统一预聚合数据 API（前�
 app.use('/api/rules', ruleRoutes) // New: 自动化规则引擎
 app.use('/api/material-auto-test', materialAutoTestRoutes) // New: 素材自动测试
 app.use('/api/ai-suggestions', aiSuggestionRoutes) // New: AI 优化建议
+app.use('/api/automation-jobs', automationJobRoutes) // New: AI Planner/Executor jobs
 
 // Dashboard UI 已迁移到 React 前端，不再需要后端路由
 // app.use('/dashboard', dashboardRoutes) // 已禁用，让前端 React Router 处理

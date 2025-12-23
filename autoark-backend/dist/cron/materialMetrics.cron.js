@@ -17,25 +17,28 @@ const materialTracking_service_1 = require("../services/materialTracking.service
  */
 let cronJob = null;
 const initMaterialMetricsCron = () => {
-    // 每天凌晨 4:00 执行
-    cronJob = node_cron_1.default.schedule('0 4 * * *', async () => {
-        logger_1.default.info('[MaterialMetricsCron] Starting daily material metrics aggregation');
+    // 每小时的第 30 分钟执行 (避免与其他整点任务冲突)
+    cronJob = node_cron_1.default.schedule('30 * * * *', async () => {
+        logger_1.default.info('[MaterialMetricsCron] Starting hourly material metrics aggregation');
         try {
+            const today = (0, dayjs_1.default)().format('YYYY-MM-DD');
             const yesterday = (0, dayjs_1.default)().subtract(1, 'day').format('YYYY-MM-DD');
-            // 1. 聚合 Facebook 指标到 MaterialMetrics
-            const metricsResult = await (0, materialMetrics_service_1.aggregateMaterialMetrics)(yesterday);
-            logger_1.default.info(`[MaterialMetricsCron] MaterialMetrics aggregation for ${yesterday}:`, metricsResult);
-            // 2. 将指标归因到素材库（Material 表）
-            const attributionResult = await (0, materialTracking_service_1.aggregateMetricsToMaterials)(yesterday);
-            logger_1.default.info(`[MaterialMetricsCron] Material attribution for ${yesterday}:`, attributionResult);
+            // 1. 聚合昨天的数据 (确保最终数据一致性)
+            const yesterdayResult = await (0, materialMetrics_service_1.aggregateMaterialMetrics)(yesterday);
+            await (0, materialTracking_service_1.aggregateMetricsToMaterials)(yesterday);
+            logger_1.default.info(`[MaterialMetricsCron] Aggregated yesterday (${yesterday})`);
+            // 2. 聚合今天的数据 (实时更新)
+            const todayResult = await (0, materialMetrics_service_1.aggregateMaterialMetrics)(today);
+            await (0, materialTracking_service_1.aggregateMetricsToMaterials)(today);
+            logger_1.default.info(`[MaterialMetricsCron] Aggregated today (${today})`);
         }
         catch (error) {
-            logger_1.default.error('[MaterialMetricsCron] Daily aggregation failed:', error);
+            logger_1.default.error('[MaterialMetricsCron] Hourly aggregation failed:', error);
         }
     }, {
         timezone: 'Asia/Shanghai'
     });
-    logger_1.default.info('[MaterialMetricsCron] Material metrics cron initialized (runs at 4:00 AM daily)');
+    logger_1.default.info('[MaterialMetricsCron] Material metrics cron initialized (runs hourly at :30)');
 };
 exports.initMaterialMetricsCron = initMaterialMetricsCron;
 const stopMaterialMetricsCron = () => {

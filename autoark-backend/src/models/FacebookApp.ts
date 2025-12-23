@@ -45,6 +45,37 @@ const facebookAppSchema = new mongoose.Schema(
       validatedAt: { type: Date },
       validationError: { type: String },
     },
+
+    /**
+     * 合规 / 权限可用性信息（用于判断是否能“任意 FB 号”完成授权）
+     * 说明：
+     * - Meta 并不会提供一个稳定的 Graph API 来直接告诉你每个 permission 是 Standard 还是 Advanced
+     * - 所以这里按“平台侧可维护的事实”进行存储（由管理员在控制台填写/更新）
+     * - 后续可接入自动诊断（比如用测试号尝试授权、或结合 App Review 状态）作为辅助
+     */
+    compliance: {
+      appMode: { type: String, enum: ['dev', 'live', 'unknown'], default: 'unknown' },
+      businessVerification: { type: String, enum: ['not_started', 'in_review', 'verified', 'rejected', 'unknown'], default: 'unknown' },
+      appReview: { type: String, enum: ['not_started', 'in_review', 'approved', 'rejected', 'unknown'], default: 'unknown' },
+
+      // 权限清单与访问级别（Standard/Advanced）
+      permissions: [
+        new mongoose.Schema(
+          {
+            name: { type: String, required: true }, // e.g. ads_management
+            access: { type: String, enum: ['standard', 'advanced', 'unknown'], default: 'unknown' },
+            status: { type: String, enum: ['requested', 'approved', 'rejected', 'unknown'], default: 'unknown' },
+            notes: { type: String },
+            lastUpdatedAt: { type: Date, default: Date.now },
+          },
+          { _id: false },
+        ),
+      ],
+
+      // 是否满足“公开 OAuth 登录”的最低合规要求（供服务端选 App）
+      publicOauthReady: { type: Boolean, default: false },
+      lastCheckedAt: { type: Date },
+    },
     
     // 备注
     notes: { type: String },
@@ -84,6 +115,11 @@ facebookAppSchema.virtual('isAvailable').get(function(this: any) {
   if (this.status !== 'active') return false
   if (!this.currentLoad) return true
   return this.currentLoad.activeTasks < (this.config?.maxConcurrentTasks || 5)
+})
+
+// 虚拟字段：是否满足公开 OAuth（更严格：需要 validation 通过 + publicOauthReady）
+facebookAppSchema.virtual('isPublicOauthReady').get(function(this: any) {
+  return Boolean(this.validation?.isValid) && Boolean(this.compliance?.publicOauthReady) && this.status === 'active'
 })
 
 // 索引

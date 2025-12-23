@@ -18,6 +18,15 @@ const pixelSchema = new mongoose_1.default.Schema({
         }],
     lastSyncedAt: { type: Date, default: Date.now },
 });
+const catalogSchema = new mongoose_1.default.Schema({
+    catalogId: { type: String, required: true },
+    name: { type: String },
+    business: {
+        id: { type: String },
+        name: { type: String },
+    },
+    lastSyncedAt: { type: Date, default: Date.now },
+});
 const facebookUserSchema = new mongoose_1.default.Schema({
     // Facebook 用户 ID
     fbUserId: { type: String, required: true, unique: true, index: true },
@@ -44,6 +53,8 @@ const facebookUserSchema = new mongoose_1.default.Schema({
                     accountId: { type: String },
                 }],
         }],
+    // 该用户可访问的 Catalogs（Product Catalog）
+    productCatalogs: [catalogSchema],
     // 同步状态
     lastSyncedAt: { type: Date },
     syncStatus: {
@@ -60,5 +71,6 @@ const facebookUserSchema = new mongoose_1.default.Schema({
 // 索引
 facebookUserSchema.index({ 'pixels.pixelId': 1 });
 facebookUserSchema.index({ 'adAccounts.accountId': 1 });
+facebookUserSchema.index({ 'productCatalogs.catalogId': 1 });
 facebookUserSchema.index({ tokenId: 1 });
 exports.default = mongoose_1.default.model('FacebookUser', facebookUserSchema);

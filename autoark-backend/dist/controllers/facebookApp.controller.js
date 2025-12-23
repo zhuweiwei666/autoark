@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.resetAppStats = exports.getAppStats = exports.getAvailableApps = exports.validateApp = exports.deleteApp = exports.updateApp = exports.createApp = exports.getApp = exports.getApps = void 0;
+exports.resetAppStats = exports.getAppStats = exports.getAvailableApps = exports.validateApp = exports.deleteApp = exports.updateCompliance = exports.getPublicOAuthRequirements = exports.updateApp = exports.createApp = exports.getApp = exports.getApps = void 0;
 exports.getNextAvailableApp = getNextAvailableApp;
 exports.incrementAppLoad = incrementAppLoad;
 exports.decrementAppLoad = decrementAppLoad;
@@ -11,6 +11,23 @@ exports.recordAppRequest = recordAppRequest;
 const FacebookApp_1 = __importDefault(require("../models/FacebookApp"));
 const axios_1 = __importDefault(require("axios"));
 const logger_1 = __importDefault(require("../utils/logger"));
+// 公开 OAuth 最低需要的权限（用于“任意 FB 号可授权”）
+const PUBLIC_OAUTH_REQUIRED_PERMISSIONS = [
+    'ads_management',
+    'ads_read',
+    'business_management',
+    'pages_show_list',
+    'pages_read_engagement',
+];
+const computePublicOauthReady = (app) => {
+    const perms = Array.isArray(app?.compliance?.permissions) ? app.compliance.permissions : [];
+    const map = new Map(perms.map((p) => [String(p.name), p]));
+    return PUBLIC_OAUTH_REQUIRED_PERMISSIONS.every((name) => {
+        const p = map.get(name);
+        // 这里用“Advanced 且 Approved”作为可对外授权的判定
+        return p && p.access === 'advanced' && p.status === 'approved';
+    });
+};
 /**
  * 获取所有 Facebook Apps
  */
@@ -68,6 +85,7 @@ const createApp = async (req, res) => {
                 validationError: validationResult.error,
             },
             status: validationResult.isValid ? 'active' : 'inactive',
+            createdBy: req.user?.userId, // 记录创建者
         });
         await app.save();
         logger_1.default.info(`创建 Facebook App: ${appName || appId}`);
@@ -85,7 +103,7 @@ exports.createApp = createApp;
 const updateApp = async (req, res) => {
     try {
         const { id } = req.params;
-        const { appName, appSecret, notes, config, status } = req.body;
+        const { appName, appSecret, notes, config, status, compliance } = req.body;
         const app = await FacebookApp_1.default.findById(id);
         if (!app) {
             return res.status(404).json({ success: false, error: 'App 不存在' });
@@ -111,6 +129,17 @@ const updateApp = async (req, res) => {
             app.config = { ...app.config, ...config };
         if (status)
             app.status = status;
+        // 合规信息允许更新（用于记录 Advanced Access / Business Verification / App Review 状态）
+        if (compliance) {
+            app.compliance = {
+                ...app.compliance,
+                ...compliance,
+                // 如果传入 permissions，覆盖；否则保留原来的
+                ...(compliance.permissions ? { permissions: compliance.permissions } : {}),
+            };
+            app.compliance.publicOauthReady = computePublicOauthReady(app);
+            app.compliance.lastCheckedAt = new Date();
+        }
         await app.save();
         logger_1.default.info(`更新 Facebook App: ${app.appName}`);
         res.json({ success: true, data: app });
@@ -121,6 +150,46 @@ const updateApp = async (req, res) => {
     }
 };
 exports.updateApp = updateApp;
+/**
+ * 返回平台“公开 OAuth”权限要求（用于前端展示/自检）
+ */
+const getPublicOAuthRequirements = async (req, res) => {
+    res.json({
+        success: true,
+        data: {
+            requiredPermissions: PUBLIC_OAUTH_REQUIRED_PERMISSIONS,
+            rule: 'All required permissions must be Advanced + Approved, and app must be valid + active.',
+        },
+    });
+};
+exports.getPublicOAuthRequirements = getPublicOAuthRequirements;
+/**
+ * 快速更新某个 App 的合规信息（只写 compliance）
+ * PUT /api/facebook-apps/:id/compliance
+ */
+const updateCompliance = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const app = await FacebookApp_1.default.findById(id);
+        if (!app) {
+            return res.status(404).json({ success: false, error: 'App 不存在' });
+        }
+        app.compliance = {
+            ...(app.compliance || {}),
+            ...(req.body || {}),
+            ...(req.body?.permissions ? { permissions: req.body.permissions } : {}),
+        };
+        app.compliance.publicOauthReady = computePublicOauthReady(app);
+        app.compliance.lastCheckedAt = new Date();
+        await app.save();
+        res.json({ success: true, data: app });
+    }
+    catch (error) {
+        logger_1.default.error('更新 App 合规信息失败:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+};
+exports.updateCompliance = updateCompliance;
 /**
  * 删除 App
  */

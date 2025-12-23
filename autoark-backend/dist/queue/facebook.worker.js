@@ -15,6 +15,8 @@ const facebook_upsert_service_1 = require("../services/facebook.upsert.service")
 const facebookPurchase_1 = require("../utils/facebookPurchase");
 const Campaign_1 = __importDefault(require("../models/Campaign"));
 const Ad_1 = __importDefault(require("../models/Ad"));
+const AdSet_1 = __importDefault(require("../models/AdSet"));
+const Creative_1 = __importDefault(require("../models/Creative"));
 const dayjs_1 = __importDefault(require("dayjs"));
 // Worker 实例（延迟初始化）
 let accountWorker = null;
@@ -36,6 +38,28 @@ const getActionCount = (actions, actionType) => {
         return undefined;
     const action = actions.find((a) => a.action_type === actionType);
     return action ? parseFloat(action.value) : undefined;
+};
+// 辅助函数：从 object_story_spec 中提取 image_hash
+const extractImageHashFromSpec = (spec) => {
+    if (!spec)
+        return undefined;
+    if (spec.link_data?.image_hash)
+        return spec.link_data.image_hash;
+    if (spec.photo_data?.image_hash)
+        return spec.photo_data.image_hash;
+    if (spec.video_data?.image_hash)
+        return spec.video_data.image_hash;
+    return undefined;
+};
+// 辅助函数：从 object_story_spec 中提取 video_id
+const extractVideoIdFromSpec = (spec) => {
+    if (!spec)
+        return undefined;
+    if (spec.video_data?.video_id)
+        return spec.video_data.video_id;
+    if (spec.link_data?.video_id)
+        return spec.link_data.video_id;
+    return undefined;
 };
 // 初始化 Workers（延迟调用，确保 Redis 已连接）
 const initWorkers = () => {
@@ -103,14 +127,47 @@ const initWorkers = () => {
         const { accountId, campaignId, token } = job.data;
         try {
             const { facebookClient } = require('../integration/facebook/facebookClient');
+            // 2.1 同步该 Campaign 下的 AdSets
+            try {
+                const adsetsRes = await facebookClient.get(`/${campaignId}/adsets`, {
+                    access_token: token,
+                    fields: 'id,name,status,optimization_goal,daily_budget,lifetime_budget,bid_amount,billing_event,targeting,created_time,updated_time',
+                    limit: 500,
+                });
+                const adsets = adsetsRes.data || [];
+                logger_1.default.info(`[CampaignWorker] Syncing ${adsets.length} adsets for campaign ${campaignId}`);
+                for (const adset of adsets) {
+                    await AdSet_1.default.findOneAndUpdate({ adsetId: adset.id }, {
+                        adsetId: adset.id,
+                        accountId: (0, accountId_1.normalizeForStorage)(accountId),
+                        campaignId: campaignId,
+                        channel: 'facebook',
+                        name: adset.name,
+                        status: adset.status,
+                        optimizationGoal: adset.optimization_goal,
+                        budget: adset.daily_budget ? parseInt(adset.daily_budget) : (adset.lifetime_budget ? parseInt(adset.lifetime_budget) : 0),
+                        created_time: adset.created_time,
+                        updated_time: adset.updated_time,
+                        raw: adset,
+                    }, { upsert: true });
+                }
+            }
+            catch (adsetError) {
+                logger_1.default.warn(`[CampaignWorker] Failed to sync adsets for campaign ${campaignId}: ${adsetError.message}`);
+                // 不阻塞后续同步
+            }
+            // 2.2 同步该 Campaign 下的 Ads
             const res = await facebookClient.get(`/${campaignId}/ads`, {
                 access_token: token,
-                fields: 'id,name,status,adset_id,campaign_id,creative{id},created_time,updated_time',
+                fields: 'id,name,status,adset_id,campaign_id,creative{id,name,status,image_hash,video_id,image_url,thumbnail_url,object_story_spec},created_time,updated_time',
                 limit: 500,
             });
             const campaignAds = res.data || [];
             const jobs = [];
             for (const ad of campaignAds) {
+                // 提取 creative 信息
+                const creative = ad.creative || {};
+                const creativeId = creative.id;
                 await Ad_1.default.findOneAndUpdate({ adId: ad.id }, {
                     adId: ad.id,
                     adsetId: ad.adset_id,
@@ -118,15 +175,49 @@ const initWorkers = () => {
                     accountId: (0, accountId_1.normalizeForStorage)(accountId),
                     name: ad.name,
                     status: ad.status,
-                    creativeId: ad.creative?.id,
+                    creativeId: creativeId,
                     raw: ad,
                 }, { upsert: true });
+                // 2.3 同步 Creative（如果存在）
+                if (creativeId) {
+                    try {
+                        // 从 ad.creative 中提取素材标识
+                        const imageHash = creative.image_hash || extractImageHashFromSpec(creative.object_story_spec);
+                        const videoId = creative.video_id || extractVideoIdFromSpec(creative.object_story_spec);
+                        let creativeType = 'unknown';
+                        if (videoId)
+                            creativeType = 'video';
+                        else if (imageHash)
+                            creativeType = 'image';
+                        else if (creative.object_story_spec?.link_data?.child_attachments)
+                            creativeType = 'carousel';
+                        await Creative_1.default.findOneAndUpdate({ creativeId: creativeId }, {
+                            creativeId: creativeId,
+                            channel: 'facebook',
+                            accountId: (0, accountId_1.normalizeForStorage)(accountId),
+                            name: creative.name,
+                            status: creative.status,
+                            type: creativeType,
+                            imageHash: imageHash,
+                            videoId: videoId,
+                            hash: imageHash, // 兼容旧字段
+                            imageUrl: creative.image_url,
+                            thumbnailUrl: creative.thumbnail_url,
+                            storageUrl: creative.image_url || creative.thumbnail_url,
+                            raw: creative,
+                        }, { upsert: true });
+                    }
+                    catch (creativeError) {
+                        logger_1.default.warn(`[CampaignWorker] Failed to sync creative ${creativeId}: ${creativeError.message}`);
+                    }
+                }
                 if (facebook_queue_1.adQueue) {
                     jobs.push(facebook_queue_1.adQueue.add('sync-ad', {
                         accountId,
                         campaignId,
                         adId: ad.id,
                         adsetId: ad.adset_id,
+                        creativeId: creativeId,
                         token,
                     }, {
                         jobId: `ad-sync-${ad.id}-${(0, dayjs_1.default)().format('YYYY-MM-DD-HH')}`,

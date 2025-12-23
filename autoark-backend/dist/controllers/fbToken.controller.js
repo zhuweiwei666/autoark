@@ -7,7 +7,42 @@ exports.deleteToken = exports.updateToken = exports.checkTokenStatus = exports.g
 const FbToken_1 = __importDefault(require("../models/FbToken"));
 const fbToken_validation_service_1 = require("../services/fbToken.validation.service");
 const logger_1 = __importDefault(require("../utils/logger"));
-const auth_1 = require("../middlewares/auth");
+const User_1 = require("../models/User");
+/**
+ * 获取 Token 过滤条件
+ * - 超级管理员：看所有
+ * - 组织管理员：看本组织 + 公共数据
+ * - 普通成员：看自己绑定的 + 公共数据
+ */
+const getTokenFilter = (req) => {
+    if (!req.user)
+        return { _id: null }; // 未认证，返回空结果
+    // 超级管理员看所有
+    if (req.user.role === User_1.UserRole.SUPER_ADMIN)
+        return {};
+    // 组织管理员看本组织 + 公共数据（无 userId 或 userId 为空）
+    if (req.user.role === User_1.UserRole.ORG_ADMIN && req.user.organizationId) {
+        return {
+            $or: [
+                { organizationId: req.user.organizationId },
+                { userId: { $exists: false } },
+                { userId: null },
+                { userId: '' },
+                { userId: 'default-user' } // 兼容旧数据
+            ]
+        };
+    }
+    // 普通成员看自己绑定的 + 公共数据（无 userId 或 userId 为空）
+    return {
+        $or: [
+            { userId: req.user.userId },
+            { userId: { $exists: false } },
+            { userId: null },
+            { userId: '' },
+            { userId: 'default-user' } // 兼容旧数据
+        ]
+    };
+};
 /**
  * 绑定/保存 Facebook token
  * POST /api/fb-token
@@ -16,7 +51,8 @@ const auth_1 = require("../middlewares/auth");
 const bindToken = async (req, res, next) => {
     try {
         const { token, optimizer } = req.body;
-        const userId = req.body.userId || 'default-user'; // 暂时使用 default-user
+        // 使用当前登录用户的 ID
+        const userId = req.user?.userId || 'default-user';
         if (!token) {
             return res.status(400).json({
                 success: false,
@@ -88,8 +124,8 @@ exports.bindToken = bindToken;
 const getTokens = async (req, res, next) => {
     try {
         const { optimizer, startDate, endDate, status } = req.query;
-        // 构建查询条件 - 添加组织过滤
-        const query = { ...(0, auth_1.getOrgFilter)(req) };
+        // 构建查询条件 - 根据用户角色过滤
+        const query = { ...getTokenFilter(req) };
         if (optimizer) {
             query.optimizer = optimizer;
         }

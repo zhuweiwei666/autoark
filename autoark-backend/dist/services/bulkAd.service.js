@@ -46,6 +46,7 @@ const FbToken_1 = __importDefault(require("../models/FbToken"));
 const AdMaterialMapping_1 = __importDefault(require("../models/AdMaterialMapping"));
 const logger_1 = __importDefault(require("../utils/logger"));
 const bulkCreate_api_1 = require("../integration/facebook/bulkCreate.api");
+const facebookClient_1 = require("../integration/facebook/facebookClient");
 /**
  * 批量广告创建服务
  * 处理广告草稿的创建、验证、发布和任务管理
@@ -109,14 +110,15 @@ const getDraft = async (draftId) => {
 exports.getDraft = getDraft;
 /**
  * 获取草稿列表
+ * @param query 查询参数
+ * @param userFilter 用户过滤条件（来自 getAssetFilter）
  */
-const getDraftList = async (query = {}) => {
-    const { status, createdBy, page = 1, pageSize = 20 } = query;
-    const filter = {};
+const getDraftList = async (query = {}, userFilter = {}) => {
+    const { status, page = 1, pageSize = 20 } = query;
+    // 合并用户过滤条件
+    const filter = { ...userFilter };
     if (status)
         filter.status = status;
-    if (createdBy)
-        filter.createdBy = createdBy;
     const [list, total] = await Promise.all([
         AdDraft_1.default.find(filter)
             .sort({ createdAt: -1 })
@@ -151,6 +153,10 @@ const validateDraft = async (draftId) => {
     const draft = await AdDraft_1.default.findById(draftId);
     if (!draft) {
         throw new Error('Draft not found');
+    }
+    // 兼容历史/前端空字符串导致的 CastError（例如 targetingPackageId: ""）
+    if (draft.adset && draft.adset.targetingPackageId === '') {
+        draft.adset.targetingPackageId = undefined;
     }
     // 简化验证逻辑
     const errors = [];
@@ -198,8 +204,49 @@ const publishDraft = async (draftId, userId) => {
     // 计算预估
     const accountCount = draft.accounts?.length || 0;
     const creativeGroupCount = draft.ad?.creativeGroupIds?.length || 1;
+    const copywritingCount = draft.ad?.copywritingPackageIds?.length || 1;
+    const adsetMultiplier = Math.min(10, Math.max(1, Number(draft.adset?.multiplier || 1)));
+    const estimatedTotalAdsets = accountCount * adsetMultiplier;
+    // 估算广告数量（与前端预览一致：按创意组数估算；实际创建会按素材数生成更多广告）
+    const creativeLevel = draft.publishStrategy?.creativeLevel || 'ADSET';
+    let estimatedTotalAds = creativeLevel === 'CAMPAIGN'
+        ? accountCount * creativeGroupCount
+        : estimatedTotalAdsets * creativeGroupCount;
+    if ((draft.publishStrategy?.copywritingMode || 'SHARED') === 'SEQUENTIAL') {
+        estimatedTotalAds = estimatedTotalAds * copywritingCount;
+    }
+    // 🆕 生成任务名称：autoark{用户名}_{包名}_{日期时间精确到秒}
+    // 获取用户名
+    let userName = 'unknown';
+    if (userId) {
+        try {
+            const User = require('../models/User').default;
+            const user = await User.findById(userId).lean();
+            userName = user?.username?.replace(/[^a-zA-Z0-9\u4e00-\u9fa5-]/g, '') || 'unknown';
+        }
+        catch (e) {
+            logger_1.default.warn('[BulkAd] Failed to get username');
+        }
+    }
+    // 获取文案包名称
+    let packageName = '';
+    if (draft.ad?.copywritingPackageIds?.length > 0) {
+        try {
+            const CopywritingPackage = require('../models/CopywritingPackage').default;
+            const pkg = await CopywritingPackage.findById(draft.ad.copywritingPackageIds[0]);
+            packageName = pkg?.name?.replace(/[^a-zA-Z0-9\u4e00-\u9fa5-]/g, '') || '';
+        }
+        catch (e) {
+            logger_1.default.warn('[BulkAd] Failed to get copywriting package name');
+        }
+    }
+    // 日期时间精确到秒: YYYYMMDD_HHMMSS
+    const now = new Date();
+    const dateTimeStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
+    const taskName = `autoark${userName}${packageName ? '_' + packageName : ''}_${dateTimeStr}`;
     // 创建任务
     const task = new AdTask_1.default({
+        name: taskName, // 🆕 任务名称
         taskType: 'BULK_AD_CREATE',
         status: 'pending',
         platform: 'facebook',
@@ -223,8 +270,8 @@ const publishDraft = async (draftId, userId) => {
         progress: {
             totalAccounts: accountCount,
             totalCampaigns: accountCount,
-            totalAdsets: accountCount,
-            totalAds: accountCount * creativeGroupCount,
+            totalAdsets: estimatedTotalAdsets,
+            totalAds: estimatedTotalAds,
         },
         publishSettings: {
             schedule: draft.publishStrategy?.schedule || 'IMMEDIATE',
@@ -291,7 +338,7 @@ const executeTaskSynchronously = async (taskId) => {
             item.status = 'processing';
             await task.save();
             await (0, exports.executeTaskForAccount)(taskId, item.accountId);
-            item.status = 'completed';
+            item.status = 'success';
             successCount++;
             logger_1.default.info(`[BulkAd] Account ${item.accountId} completed`);
         }
@@ -302,12 +349,12 @@ const executeTaskSynchronously = async (taskId) => {
             logger_1.default.error(`[BulkAd] Account ${item.accountId} failed:`, error);
         }
         // 更新进度
-        const completedCount = task.items.filter((i) => i.status === 'completed' || i.status === 'failed').length;
+        const completedCount = task.items.filter((i) => i.status === 'success' || i.status === 'failed').length;
         task.progress.percentage = Math.round((completedCount / task.items.length) * 100);
         await task.save();
     }
     // 任务完成
-    task.status = failCount === 0 ? 'completed' : (successCount === 0 ? 'failed' : 'partial');
+    task.status = failCount === 0 ? 'success' : (successCount === 0 ? 'failed' : 'partial_success');
     task.completedAt = new Date();
     task.results = {
         totalAccounts: task.items.length,
@@ -340,8 +387,8 @@ async function updateTaskProgressAtomic(taskId) {
     const totalAds = items.reduce((sum, i) => sum + (i.result?.createdCount || 0), 0);
     const percentage = items.length > 0 ? Math.round(((successCount + failedCount) / items.length) * 100) : 0;
     const allDone = successCount + failedCount === items.length;
-    // 使用 'completed' 作为成功状态，与前端 STATUS_MAP 保持一致
-    const status = allDone ? (failedCount === items.length ? 'failed' : successCount === items.length ? 'completed' : 'partial') : 'running';
+    // 使用 'success' 作为成功状态，与 Schema 保持一致
+    const status = allDone ? (failedCount === items.length ? 'failed' : successCount === items.length ? 'success' : 'partial_success') : 'processing';
     await AdTask_1.default.findByIdAndUpdate(taskId, {
         $set: {
             'progress.successAccounts': successCount,
@@ -362,10 +409,48 @@ const executeTaskForAccount = async (taskId, accountId) => {
     if (!item) {
         throw new Error('Task item not found');
     }
-    // 获取 Token
-    const fbToken = await FbToken_1.default.findOne({ status: 'active' });
+    // 获取 Token - 根据账户 ID 找到正确的 token
+    // 1. 优先查找明确绑定了该账户的 token
+    let fbToken = await FbToken_1.default.findOne({
+        status: 'active',
+        'accounts.accountId': accountId
+    });
+    // 2. 如果没有绑定关系，尝试从 Account 模型获取 fbUserId
     if (!fbToken) {
-        throw new Error('No active Facebook token found');
+        const Account = require('../models/Account').default;
+        const account = await Account.findOne({ accountId }).lean();
+        if (account?.fbUserId) {
+            fbToken = await FbToken_1.default.findOne({
+                status: 'active',
+                fbUserId: account.fbUserId
+            });
+        }
+    }
+    // 3. 如果还没找到，查找所有 active token 并验证权限
+    if (!fbToken) {
+        const allTokens = await FbToken_1.default.find({ status: 'active' });
+        for (const t of allTokens) {
+            try {
+                // 验证此 token 是否有权访问该账户
+                const res = await facebookClient_1.facebookClient.get(`/act_${accountId}`, {
+                    access_token: t.token,
+                    fields: 'id,name'
+                });
+                if (res && res.id) {
+                    fbToken = t;
+                    // 可选：缓存这个绑定关系
+                    logger_1.default.info(`[BulkAd] Found token for account ${accountId}: ${t.fbUserName}`);
+                    break;
+                }
+            }
+            catch (e) {
+                // 这个 token 没有权限，继续尝试下一个
+                logger_1.default.debug(`[BulkAd] Token ${t.fbUserName} has no access to account ${accountId}`);
+            }
+        }
+    }
+    if (!fbToken) {
+        throw new Error(`没有找到可访问账户 ${accountId} 的 Facebook Token，请检查授权`);
     }
     const token = fbToken.token;
     const config = task.configSnapshot;
@@ -383,9 +468,25 @@ const executeTaskForAccount = async (taskId, accountId) => {
         'items.$.startedAt': new Date(),
     });
     try {
+        // ==================== 0. 获取定向配置（先获取，用于名称生成） ====================
+        let targeting = {};
+        let targetingName = ''; // 定向包名称，用于名称模板
+        if (config.adset.targetingPackageId) {
+            const targetingPackage = await TargetingPackage_1.default.findById(config.adset.targetingPackageId);
+            if (targetingPackage) {
+                targetingName = targetingPackage.name || '';
+                if (targetingPackage.toFacebookTargeting) {
+                    targeting = targetingPackage.toFacebookTargeting();
+                }
+            }
+        }
+        else if (config.adset.inlineTargeting) {
+            targeting = config.adset.inlineTargeting;
+        }
         // ==================== 1. 创建 Campaign ====================
         const campaignName = generateName(config.campaign.nameTemplate, {
             accountName: accountConfig.accountName,
+            targetingName, // 添加定向包名称变量
             date: new Date().toISOString().slice(0, 10),
         });
         const campaignResult = await (0, bulkCreate_api_1.createCampaign)({
@@ -410,23 +511,13 @@ const executeTaskForAccount = async (taskId, accountId) => {
             'items.$.result.campaignId': campaignId,
             'items.$.result.campaignName': campaignName,
         });
-        // ==================== 2. 获取定向配置 ====================
-        let targeting = {};
-        if (config.adset.targetingPackageId) {
-            const targetingPackage = await TargetingPackage_1.default.findById(config.adset.targetingPackageId);
-            if (targetingPackage && targetingPackage.toFacebookTargeting) {
-                targeting = targetingPackage.toFacebookTargeting();
-            }
-        }
-        else if (config.adset.inlineTargeting) {
-            targeting = config.adset.inlineTargeting;
-        }
-        // ==================== 3. 创建 AdSet ====================
-        const adsetName = generateName(config.adset.nameTemplate, {
-            accountName: accountConfig.accountName,
-            campaignName,
-            date: new Date().toISOString().slice(0, 10),
-        });
+        // ==================== 2. 使用已获取的定向配置 ====================
+        // (定向配置已在步骤0获取)
+        // ==================== 3. 创建 AdSet（支持倍率） ====================
+        // 广告组倍率：在一个 campaign 下创建多个 adset
+        const adsetMultiplier = Math.min(10, Math.max(1, Number(config.adset.multiplier || 1)));
+        const allAdsetIds = [];
+        const allAdsetNames = [];
         // 计算 AdSet 预算
         // CBO 模式: 预算在 Campaign 级别设置，AdSet 不设置预算
         // 非 CBO 模式: 每个 AdSet 必须单独设置预算
@@ -446,46 +537,79 @@ const executeTaskForAccount = async (taskId, accountId) => {
         }
         // DSA 受益方：使用 Pixel 名称（欧盟合规）
         const dsaBeneficiary = accountConfig.pixelName || accountConfig.pixelId || undefined;
-        // 构建归因设置
-        const attributionSpec = config.adset.attribution ? [{
-                event_type: 'CLICK_THROUGH',
-                window_days: config.adset.attribution.clickWindow || 1,
-            }, ...(config.adset.attribution.viewWindow > 0 ? [{
-                    event_type: 'VIEW_THROUGH',
-                    window_days: config.adset.attribution.viewWindow,
-                }] : []), ...(config.adset.attribution.engagedViewWindow > 0 ? [{
-                    event_type: 'ENGAGED_VIDEO_VIEW',
-                    window_days: config.adset.attribution.engagedViewWindow,
-                }] : [])] : undefined;
-        const adsetResult = await (0, bulkCreate_api_1.createAdSet)({
-            accountId,
-            token,
-            campaignId,
-            name: adsetName,
-            status: config.adset.status || 'PAUSED',
-            targeting,
-            optimizationGoal: config.adset.optimizationGoal || 'OFFSITE_CONVERSIONS',
-            billingEvent: config.adset.billingEvent || 'IMPRESSIONS',
-            bidStrategy: config.adset.bidStrategy,
-            bidAmount: config.adset.bidAmount,
-            dailyBudget: adsetBudget,
-            startTime: config.adset.startTime?.toISOString?.(),
-            endTime: config.adset.endTime?.toISOString?.(),
-            promotedObject: accountConfig.pixelId ? {
-                pixel_id: accountConfig.pixelId,
-                custom_event_type: accountConfig.conversionEvent || 'PURCHASE',
-            } : undefined,
-            attribution_spec: attributionSpec,
-            dsa_beneficiary: dsaBeneficiary,
-            dsa_payor: dsaBeneficiary,
-        });
-        if (!adsetResult.success) {
-            throw new Error(`AdSet creation failed: ${adsetResult.error?.message}`);
+        // 构建归因设置（兼容 attribution / attributionSpec）
+        const attributionCfg = config.adset.attribution || config.adset.attributionSpec;
+        const clickWindow = Number(attributionCfg?.clickWindow ?? 1);
+        const viewWindow = Number(attributionCfg?.viewWindow ?? 0);
+        const engagedViewWindow = Number(attributionCfg?.engagedViewWindow ?? 0);
+        const attributionSpec = attributionCfg
+            ? [
+                {
+                    event_type: 'CLICK_THROUGH',
+                    window_days: clickWindow,
+                },
+                ...(viewWindow > 0
+                    ? [
+                        {
+                            event_type: 'VIEW_THROUGH',
+                            window_days: viewWindow,
+                        },
+                    ]
+                    : []),
+                ...(engagedViewWindow > 0
+                    ? [
+                        {
+                            event_type: 'ENGAGED_VIDEO_VIEW',
+                            window_days: engagedViewWindow,
+                        },
+                    ]
+                    : []),
+            ]
+            : undefined;
+        logger_1.default.info(`[BulkAd] Creating ${adsetMultiplier} adset(s) for campaign ${campaignId}`);
+        for (let adsetIndex = 0; adsetIndex < adsetMultiplier; adsetIndex++) {
+            // 生成广告组名称（倍率>1时添加序号后缀）
+            const hasIndexVar = /\{index\}/i.test(config.adset.nameTemplate || '');
+            const adsetNameSuffix = adsetMultiplier > 1 && !hasIndexVar ? `_${adsetIndex + 1}` : '';
+            const adsetName = generateName(config.adset.nameTemplate, {
+                accountName: accountConfig.accountName,
+                campaignName,
+                targetingName, // 添加定向包名称变量
+                date: new Date().toISOString().slice(0, 10),
+                index: adsetIndex + 1,
+            }) + adsetNameSuffix;
+            const adsetResult = await (0, bulkCreate_api_1.createAdSet)({
+                accountId,
+                token,
+                campaignId,
+                name: adsetName,
+                status: config.adset.status || 'PAUSED',
+                targeting,
+                optimizationGoal: config.adset.optimizationGoal || 'OFFSITE_CONVERSIONS',
+                billingEvent: config.adset.billingEvent || 'IMPRESSIONS',
+                bidStrategy: config.adset.bidStrategy,
+                bidAmount: config.adset.bidAmount,
+                dailyBudget: adsetBudget,
+                startTime: config.adset.startTime?.toISOString?.(),
+                endTime: config.adset.endTime?.toISOString?.(),
+                promotedObject: accountConfig.pixelId ? {
+                    pixel_id: accountConfig.pixelId,
+                    custom_event_type: accountConfig.conversionEvent || 'PURCHASE',
+                } : undefined,
+                attribution_spec: attributionSpec,
+                dsa_beneficiary: dsaBeneficiary,
+                dsa_payor: dsaBeneficiary,
+            });
+            if (!adsetResult.success) {
+                throw new Error(`AdSet ${adsetIndex + 1} creation failed: ${adsetResult.error?.message}`);
+            }
+            allAdsetIds.push(adsetResult.id);
+            allAdsetNames.push(adsetName);
+            logger_1.default.info(`[BulkAd] Created adset ${adsetIndex + 1}/${adsetMultiplier}: ${adsetName}`);
         }
-        const adsetId = adsetResult.id;
         // 原子更新 adset 结果
         await updateTaskItemAtomic(taskId, accountId, {
-            'items.$.result.adsetIds': [adsetId],
+            'items.$.result.adsetIds': allAdsetIds,
         });
         // ==================== 4. 获取创意组和文案包 ====================
         const creativeGroups = await CreativeGroup_1.default.find({
@@ -501,10 +625,14 @@ const executeTaskForAccount = async (taskId, accountId) => {
             throw new Error('No copywriting packages found');
         }
         // ==================== 5. 创建广告 ====================
-        // 遍历每个创意组的每个素材，为每个素材创建一条广告
+        // 支持“一个 Campaign 下 N 个广告组”：会在每个广告组下各创建一套广告
         const adIds = [];
         const adsDetails = [];
         let globalAdIndex = 0;
+        const adsetsToUse = allAdsetIds.map((id, idx) => ({
+            adsetId: id,
+            adsetName: allAdsetNames[idx] || `adset_${idx + 1}`,
+        }));
         // ===== 优化：先并行上传所有视频 =====
         const allMaterials = [];
         for (let cgIndex = 0; cgIndex < creativeGroups.length; cgIndex++) {
@@ -553,10 +681,11 @@ const executeTaskForAccount = async (taskId, accountId) => {
             }
             logger_1.default.info(`[BulkAd] All videos uploaded: ${videoUploadResults.size}/${videosToUpload.length} success`);
         }
-        // 创建广告
+        // ===== 1) 为每个素材创建一次 Creative（可复用到多个广告组） =====
+        const creativeEntries = [];
+        let creativeIndex = 0;
         for (const { cgIndex, matIndex, material, copywriting } of allMaterials) {
             const creativeGroup = creativeGroups[cgIndex];
-            globalAdIndex++;
             // 处理素材引用
             let materialRef = {};
             if (material.type === 'image') {
@@ -590,8 +719,8 @@ const executeTaskForAccount = async (taskId, accountId) => {
                 logger_1.default.warn(`[BulkAd] No valid material reference for material: ${material.name}, skipping`);
                 continue;
             }
-            // 创建 Ad Creative
-            const creativeName = `${adsetName}_creative_${globalAdIndex}`;
+            creativeIndex++;
+            const creativeName = `${campaignName}_creative_${creativeIndex}`;
             const linkData = {
                 link: copywriting.links?.websiteUrl || '',
                 message: copywriting.content?.primaryTexts?.[0] || '',
@@ -656,41 +785,60 @@ const executeTaskForAccount = async (taskId, accountId) => {
                 logger_1.default.error(`[BulkAd] Failed to create creative for material ${matIndex + 1}:`, creativeResult.error);
                 continue;
             }
-            const creativeId = creativeResult.id;
-            // 创建 Ad
-            const adName = generateName(config.ad.nameTemplate, {
-                accountName: accountConfig.accountName,
-                campaignName,
-                adsetName,
-                creativeGroupName: creativeGroup.name,
-                materialName: material.name || `素材${matIndex + 1}`,
-                index: globalAdIndex,
-                date: new Date().toISOString().slice(0, 10),
+            creativeEntries.push({
+                cgIndex,
+                matIndex,
+                creativeGroup,
+                material,
+                copywriting,
+                creativeId: creativeResult.id,
             });
-            const adResult = await (0, bulkCreate_api_1.createAd)({
-                accountId,
-                token,
-                adsetId,
-                creativeId,
-                name: adName,
-                status: config.ad.status || 'PAUSED',
-                urlTags: config.ad.tracking?.urlTags,
-            });
-            if (!adResult.success) {
-                logger_1.default.error(`[BulkAd] Failed to create ad for material ${matIndex + 1}:`, adResult.error);
-                continue;
+        }
+        // ===== 2) 为每个广告组创建 Ads（复用 Creative） =====
+        for (const { adsetId, adsetName } of adsetsToUse) {
+            for (const entry of creativeEntries) {
+                const creativeGroup = entry.creativeGroup;
+                const material = entry.material;
+                globalAdIndex++;
+                // 生成精确到分钟的时间戳
+                const now = new Date();
+                const datetime = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`;
+                const adName = generateName(config.ad.nameTemplate, {
+                    accountName: accountConfig.accountName,
+                    campaignName,
+                    adsetName,
+                    creativeGroupName: creativeGroup.name,
+                    materialName: material.name || `素材${entry.matIndex + 1}`,
+                    index: globalAdIndex,
+                    date: now.toISOString().slice(0, 10),
+                    datetime, // 精确到分钟: 20251211_1430
+                });
+                const adResult = await (0, bulkCreate_api_1.createAd)({
+                    accountId,
+                    token,
+                    adsetId,
+                    creativeId: entry.creativeId,
+                    name: adName,
+                    status: config.ad.status || 'PAUSED',
+                    urlTags: config.ad.tracking?.urlTags,
+                });
+                if (!adResult.success) {
+                    logger_1.default.error(`[BulkAd] Failed to create ad for material ${entry.matIndex + 1}:`, adResult.error);
+                    continue;
+                }
+                adIds.push(adResult.id);
+                // 记录广告详情（用于审核状态追踪）
+                adsDetails.push({
+                    adId: adResult.id,
+                    adName,
+                    adsetId,
+                    adsetName,
+                    creativeId: entry.creativeId,
+                    materialId: material._id?.toString(),
+                    effectiveStatus: 'PENDING_REVIEW', // 新创建的广告默认为审核中
+                });
+                logger_1.default.info(`[BulkAd] Created ad ${globalAdIndex}: ${adName}`);
             }
-            adIds.push(adResult.id);
-            // 记录广告详情（用于审核状态追踪）
-            adsDetails.push({
-                adId: adResult.id,
-                adName,
-                adsetId,
-                creativeId,
-                materialId: material._id?.toString(),
-                effectiveStatus: 'PENDING_REVIEW', // 新创建的广告默认为审核中
-            });
-            logger_1.default.info(`[BulkAd] Created ad ${globalAdIndex}: ${adName}`);
         }
         // ==================== 6. 完成任务 ====================
         // 如果没有创建任何广告，标记为失败
@@ -722,7 +870,7 @@ const executeTaskForAccount = async (taskId, accountId) => {
                         adId: adDetail.adId,
                         name: adDetail.adName,
                         adsetId: adDetail.adsetId,
-                        adsetName,
+                        adsetName: adDetail.adsetName,
                         campaignId,
                         campaignName,
                         accountId,
@@ -764,7 +912,7 @@ const executeTaskForAccount = async (taskId, accountId) => {
         return {
             success: true,
             campaignId,
-            adsetIds: [adsetId],
+            adsetIds: allAdsetIds,
             adIds,
         };
     }
@@ -835,18 +983,19 @@ const getTask = async (taskId) => {
 exports.getTask = getTask;
 /**
  * 获取任务列表
+ * @param query 查询参数
+ * @param userFilter 用户过滤条件（来自 getAssetFilter）
  */
-const getTaskList = async (query = {}) => {
-    const { status, taskType, platform, createdBy, page = 1, pageSize = 20 } = query;
-    const filter = {};
+const getTaskList = async (query = {}, userFilter = {}) => {
+    const { status, taskType, platform, page = 1, pageSize = 20 } = query;
+    // 合并用户过滤条件
+    const filter = { ...userFilter };
     if (status)
         filter.status = status;
     if (taskType)
         filter.taskType = taskType;
     if (platform)
         filter.platform = platform;
-    if (createdBy)
-        filter.createdBy = createdBy;
     const [list, total] = await Promise.all([
         AdTask_1.default.find(filter)
             .sort({ createdAt: -1 })
@@ -907,8 +1056,11 @@ const retryFailedItems = async (taskId) => {
 exports.retryFailedItems = retryFailedItems;
 /**
  * 重新执行任务（基于原任务配置创建新任务）
+ * @param taskId 原任务ID
+ * @param multiplier 执行倍率（创建多少个新任务）
+ * @param userId 当前用户ID（用于任务命名）
  */
-const rerunTask = async (taskId) => {
+const rerunTask = async (taskId, multiplier = 1, userId) => {
     const originalTask = await AdTask_1.default.findById(taskId);
     if (!originalTask) {
         throw new Error('Task not found');
@@ -917,31 +1069,64 @@ const rerunTask = async (taskId) => {
         throw new Error('Task config snapshot not found');
     }
     const config = originalTask.configSnapshot;
-    // 创建新任务
-    const newTask = new AdTask_1.default({
-        taskType: originalTask.taskType,
-        status: 'pending',
-        platform: originalTask.platform,
-        draftId: originalTask.draftId,
-        configSnapshot: config,
-        publishSettings: originalTask.publishSettings,
-        notes: `重新执行自任务 ${taskId}`,
-        items: config.accounts.map((acc) => ({
-            accountId: acc.accountId,
-            accountName: acc.accountName || acc.accountId,
+    const safeMultiplier = Math.min(20, Math.max(1, multiplier)); // 限制 1-20
+    // 获取用户名
+    let userName = 'unknown';
+    if (userId) {
+        try {
+            const User = require('../models/User').default;
+            const user = await User.findById(userId).lean();
+            userName = user?.username?.replace(/[^a-zA-Z0-9\u4e00-\u9fa5-]/g, '') || 'unknown';
+        }
+        catch (e) {
+            logger_1.default.warn('[BulkAd] Failed to get username for rerun');
+        }
+    }
+    else if (originalTask.createdBy) {
+        // 如果没有传入 userId，尝试从原任务获取
+        try {
+            const User = require('../models/User').default;
+            const user = await User.findById(originalTask.createdBy).lean();
+            userName = user?.username?.replace(/[^a-zA-Z0-9\u4e00-\u9fa5-]/g, '') || 'unknown';
+        }
+        catch (e) {
+            logger_1.default.warn('[BulkAd] Failed to get username from original task');
+        }
+    }
+    const newTasks = [];
+    for (let i = 0; i < safeMultiplier; i++) {
+        // 生成任务名称：日期时间精确到秒
+        const now = new Date();
+        const dateTimeStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
+        const taskName = `autoark${userName}_${dateTimeStr}${safeMultiplier > 1 ? `_${i + 1}` : ''}`;
+        // 创建新任务
+        const newTask = new AdTask_1.default({
+            name: taskName,
+            taskType: originalTask.taskType,
             status: 'pending',
-            progress: { current: 0, total: 0, percentage: 0 },
-        })),
-        progress: {
-            totalAccounts: config.accounts.length,
-            completedAccounts: 0,
-            successAccounts: 0,
-            failedAccounts: 0,
-            percentage: 0,
-        },
-    });
-    await newTask.save();
-    logger_1.default.info(`[BulkAd] Task rerun created: ${newTask._id} (from ${taskId})`);
+            platform: originalTask.platform,
+            draftId: originalTask.draftId,
+            configSnapshot: config,
+            publishSettings: originalTask.publishSettings,
+            notes: `重新执行自任务 ${taskId}${safeMultiplier > 1 ? ` (${i + 1}/${safeMultiplier})` : ''}`,
+            items: config.accounts.map((acc) => ({
+                accountId: acc.accountId,
+                accountName: acc.accountName || acc.accountId,
+                status: 'pending',
+                progress: { current: 0, total: 0, percentage: 0 },
+            })),
+            progress: {
+                totalAccounts: config.accounts.length,
+                completedAccounts: 0,
+                successAccounts: 0,
+                failedAccounts: 0,
+                percentage: 0,
+            },
+        });
+        await newTask.save();
+        newTasks.push(newTask);
+        logger_1.default.info(`[BulkAd] Task rerun created: ${newTask._id} (from ${taskId}, ${i + 1}/${safeMultiplier})`);
+    }
     // 检查 Redis 是否可用
     const { getRedisClient } = await Promise.resolve().then(() => __importStar(require('../config/redis')));
     const redisAvailable = (() => {
@@ -952,33 +1137,35 @@ const rerunTask = async (taskId) => {
             return false;
         }
     })();
-    if (redisAvailable) {
-        // Redis 可用，使用队列异步执行
-        logger_1.default.info(`[BulkAd] Redis available, adding task to queue`);
-        const { addBulkAdJobsBatch } = await Promise.resolve().then(() => __importStar(require('../queue/bulkAd.queue')));
+    // 为每个新任务启动执行
+    for (const newTask of newTasks) {
         const accountIds = config.accounts.map((acc) => acc.accountId);
-        newTask.status = 'queued';
-        newTask.queuedAt = new Date();
-        await newTask.save();
-        await addBulkAdJobsBatch(newTask._id.toString(), accountIds);
-        logger_1.default.info(`[BulkAd] Task ${newTask._id} queued, ${accountIds.length} accounts`);
-    }
-    else {
-        // Redis 不可用，直接同步执行
-        logger_1.default.info(`[BulkAd] Redis unavailable, executing task synchronously`);
-        newTask.status = 'processing';
-        newTask.startedAt = new Date();
-        await newTask.save();
-        for (const acc of config.accounts) {
-            try {
-                await (0, exports.executeTaskForAccount)(newTask._id.toString(), acc.accountId);
-            }
-            catch (err) {
-                logger_1.default.error(`[BulkAd] Failed for account ${acc.accountId}:`, err.message);
+        if (redisAvailable) {
+            // Redis 可用，使用队列异步执行
+            const { addBulkAdJobsBatch } = await Promise.resolve().then(() => __importStar(require('../queue/bulkAd.queue')));
+            newTask.status = 'queued';
+            newTask.queuedAt = new Date();
+            await newTask.save();
+            await addBulkAdJobsBatch(newTask._id.toString(), accountIds);
+            logger_1.default.info(`[BulkAd] Task ${newTask._id} queued, ${accountIds.length} accounts`);
+        }
+        else {
+            // Redis 不可用，直接同步执行
+            logger_1.default.info(`[BulkAd] Redis unavailable, executing task ${newTask._id} synchronously`);
+            newTask.status = 'processing';
+            newTask.startedAt = new Date();
+            await newTask.save();
+            for (const acc of config.accounts) {
+                try {
+                    await (0, exports.executeTaskForAccount)(newTask._id.toString(), acc.accountId);
+                }
+                catch (err) {
+                    logger_1.default.error(`[BulkAd] Failed for account ${acc.accountId}:`, err.message);
+                }
             }
         }
     }
-    return newTask;
+    return newTasks;
 };
 exports.rerunTask = rerunTask;
 // ==================== 辅助函数 ====================

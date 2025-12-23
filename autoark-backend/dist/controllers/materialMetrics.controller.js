@@ -6,27 +6,32 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const dayjs_1 = __importDefault(require("dayjs"));
 const logger_1 = __importDefault(require("../utils/logger"));
+const auth_1 = require("../middlewares/auth");
 const materialMetrics_service_1 = require("../services/materialMetrics.service");
 const router = (0, express_1.Router)();
+// 所有路由都需要认证
+router.use(auth_1.authenticate);
 // ==================== 素材排行榜 ====================
 /**
  * 获取素材排行榜
  * GET /api/materials/rankings
- * Query: startDate, endDate, sortBy, limit, type
+ * Query: startDate, endDate, sortBy, limit, type, country
  */
 router.get('/rankings', async (req, res) => {
     try {
-        const { startDate = (0, dayjs_1.default)().subtract(7, 'day').format('YYYY-MM-DD'), endDate = (0, dayjs_1.default)().format('YYYY-MM-DD'), sortBy = 'roas', limit = '20', type, } = req.query;
+        const { startDate = (0, dayjs_1.default)().subtract(7, 'day').format('YYYY-MM-DD'), endDate = (0, dayjs_1.default)().format('YYYY-MM-DD'), sortBy = 'roas', limit = '20', type, country, // 🌍 新增：国家筛选
+         } = req.query;
         const rankings = await (0, materialMetrics_service_1.getMaterialRankings)({
             dateRange: { start: startDate, end: endDate },
             sortBy: sortBy,
             limit: parseInt(limit, 10),
             materialType: type,
+            country: country, // 🌍 传递国家参数
         });
         res.json({
             success: true,
             data: rankings,
-            query: { startDate, endDate, sortBy, limit, type },
+            query: { startDate, endDate, sortBy, limit, type, country },
         });
     }
     catch (error) {

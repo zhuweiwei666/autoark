@@ -35,7 +35,10 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const dashboardController = __importStar(require("../controllers/dashboard.controller"));
+const auth_1 = require("../middlewares/auth");
 const router = (0, express_1.Router)();
+// 所有路由都需要认证
+router.use(auth_1.authenticate);
 // Analytics
 router.get('/daily', dashboardController.getDaily);
 router.get('/by-country', dashboardController.getByCountry);

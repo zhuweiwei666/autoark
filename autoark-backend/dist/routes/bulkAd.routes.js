@@ -35,7 +35,16 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const bulkAdController = __importStar(require("../controllers/bulkAd.controller"));
+const auth_1 = require("../middlewares/auth");
 const router = (0, express_1.Router)();
+// 所有路由都需要认证（除了 OAuth 回调）
+router.use((req, res, next) => {
+    // OAuth 回调不需要认证
+    if (req.path === '/auth/callback') {
+        return next();
+    }
+    return (0, auth_1.authenticate)(req, res, next);
+});
 // ==================== 独立 OAuth 授权（批量广告专用）====================
 router.get('/auth/apps', bulkAdController.getAvailableApps); // 获取可用的 Facebook Apps
 router.get('/auth/login-url', bulkAdController.getAuthLoginUrl);
@@ -44,9 +53,10 @@ router.get('/auth/status', bulkAdController.getAuthStatus);
 router.get('/auth/ad-accounts', bulkAdController.getAuthAdAccounts);
 router.get('/auth/pages', bulkAdController.getAuthPages);
 router.get('/auth/pixels', bulkAdController.getAuthPixels);
-router.get('/auth/cached-pixels', bulkAdController.getCachedPixels); // 预加载的 Pixels
-router.get('/auth/sync-status', bulkAdController.getPixelSyncStatus); // 同步状态
-router.post('/auth/resync', bulkAdController.resyncFacebookAssets); // 手动重新同步
+router.get('/auth/cached-pixels', bulkAdController.getCachedPixels);
+router.get('/auth/cached-catalogs', bulkAdController.getCachedCatalogs);
+router.get('/auth/sync-status', bulkAdController.getPixelSyncStatus);
+router.post('/auth/resync', bulkAdController.resyncFacebookAssets);
 // ==================== 草稿管理 ====================
 router.post('/drafts', bulkAdController.createDraft);
 router.get('/drafts', bulkAdController.getDraftList);

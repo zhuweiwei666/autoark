@@ -7,12 +7,25 @@ const express_1 = require("express");
 const agent_service_1 = require("./agent.service");
 const agent_model_1 = require("./agent.model");
 const logger_1 = __importDefault(require("../../utils/logger"));
+const auth_1 = require("../../middlewares/auth");
+const User_1 = require("../../models/User");
 const router = (0, express_1.Router)();
+// 所有 Agent 能力均需要认证（涉及自动调控/审批/对话数据）
+router.use(auth_1.authenticate);
 // ==================== Agent 配置 CRUD ====================
 // 获取所有 Agent
 router.get('/agents', async (req, res) => {
     try {
-        const agents = await agent_service_1.agentService.getAgents();
+        const filter = {};
+        // 超级管理员可看全部；组织内用户默认看本组织
+        if (req.user?.role !== User_1.UserRole.SUPER_ADMIN) {
+            if (req.user?.organizationId)
+                filter.organizationId = req.user.organizationId;
+            // 如果没有组织，则仅看自己创建的
+            else if (req.user?.userId)
+                filter.createdBy = req.user.userId;
+        }
+        const agents = await agent_service_1.agentService.getAgents(filter);
         res.json({ success: true, data: agents });
     }
     catch (error) {
@@ -36,7 +49,13 @@ router.get('/agents/:id', async (req, res) => {
 // 创建 Agent
 router.post('/agents', async (req, res) => {
     try {
-        const agent = await agent_service_1.agentService.createAgent(req.body);
+        const payload = {
+            ...req.body,
+            createdBy: req.user?.userId,
+            // 默认继承组织隔离
+            organizationId: req.body?.organizationId || req.user?.organizationId,
+        };
+        const agent = await agent_service_1.agentService.createAgent(payload);
         res.status(201).json({ success: true, data: agent });
     }
     catch (error) {
@@ -75,6 +94,17 @@ router.post('/agents/:id/run', async (req, res) => {
         res.status(500).json({ success: false, error: error.message });
     }
 });
+// 运行 Agent（Planner/Executor）：生成 operations 并创建 AutomationJobs 执行
+router.post('/agents/:id/run-jobs', async (req, res) => {
+    try {
+        const result = await agent_service_1.agentService.runAgentAsJobs(req.params.id);
+        res.json({ success: true, data: result });
+    }
+    catch (error) {
+        logger_1.default.error('[AgentController] Run agent as jobs failed:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
 // ==================== Agent 操作日志 ====================
 // 获取待审批操作
 router.get('/operations/pending', async (req, res) => {
@@ -109,7 +139,8 @@ router.get('/operations', async (req, res) => {
 // 审批操作
 router.post('/operations/:id/approve', async (req, res) => {
     try {
-        const result = await agent_service_1.agentService.approveOperation(req.params.id, 'user');
+        const userId = req.user?.userId || 'unknown';
+        const result = await agent_service_1.agentService.approveOperation(req.params.id, userId);
         res.json({ success: true, data: result });
     }
     catch (error) {
@@ -119,7 +150,8 @@ router.post('/operations/:id/approve', async (req, res) => {
 // 拒绝操作
 router.post('/operations/:id/reject', async (req, res) => {
     try {
-        const result = await agent_service_1.agentService.rejectOperation(req.params.id, 'user', req.body.reason);
+        const userId = req.user?.userId || 'unknown';
+        const result = await agent_service_1.agentService.rejectOperation(req.params.id, userId, req.body.reason);
         res.json({ success: true, data: result });
     }
     catch (error) {
@@ -193,14 +225,16 @@ router.get('/reports/latest', async (req, res) => {
     }
 });
 // ==================== AI 对话 ====================
-// 发送消息
+// 发送消息（需要认证，每个用户独立对话历史）
 router.post('/chat', async (req, res) => {
     try {
         const { message, context } = req.body;
         if (!message) {
             return res.status(400).json({ success: false, error: 'Message is required' });
         }
-        const response = await agent_service_1.agentService.chat('default-user', message, context);
+        // 使用当前登录用户的 ID
+        const userId = req.user?.userId || 'default-user';
+        const response = await agent_service_1.agentService.chat(userId, message, context);
         res.json({ success: true, data: { response } });
     }
     catch (error) {
@@ -208,11 +242,12 @@ router.post('/chat', async (req, res) => {
         res.status(500).json({ success: false, error: error.message });
     }
 });
-// 获取对话历史
+// 获取对话历史（需要认证，只返回当前用户的对话）
 router.get('/chat/history', async (req, res) => {
     try {
         const { limit = 10 } = req.query;
-        const conversations = await agent_model_1.AiConversation.find({ userId: 'default-user' })
+        const userId = req.user?.userId || 'default-user';
+        const conversations = await agent_model_1.AiConversation.find({ userId })
             .sort({ createdAt: -1 })
             .limit(Number(limit));
         res.json({ success: true, data: conversations });
@@ -221,10 +256,11 @@ router.get('/chat/history', async (req, res) => {
         res.status(500).json({ success: false, error: error.message });
     }
 });
-// 清除对话
+// 清除对话（需要认证，只清除当前用户的对话）
 router.delete('/chat/clear', async (req, res) => {
     try {
-        await agent_model_1.AiConversation.updateMany({ userId: 'default-user', status: 'active' }, { status: 'closed' });
+        const userId = req.user?.userId || 'default-user';
+        await agent_model_1.AiConversation.updateMany({ userId, status: 'active' }, { status: 'closed' });
         res.json({ success: true });
     }
     catch (error) {
@@ -325,6 +361,44 @@ router.post('/analysis/suggest', async (req, res) => {
         res.json({ success: true, data: { response } });
     }
     catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+// ==================== 素材 AI 分析 ====================
+// 🤖 AI 分析单个素材
+router.get('/materials/:id/analyze', async (req, res) => {
+    try {
+        const result = await agent_service_1.agentService.analyzeMaterialWithAI(req.params.id);
+        res.json(result);
+    }
+    catch (error) {
+        logger_1.default.error('[AgentController] Material AI analysis failed:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+// 🤖 批量 AI 分析素材
+router.post('/materials/analyze-batch', async (req, res) => {
+    try {
+        const { materialIds } = req.body;
+        if (!materialIds || !Array.isArray(materialIds)) {
+            return res.status(400).json({ success: false, error: 'materialIds array is required' });
+        }
+        const results = await agent_service_1.agentService.batchAnalyzeMaterials(materialIds);
+        res.json({ success: true, data: results });
+    }
+    catch (error) {
+        logger_1.default.error('[AgentController] Batch material analysis failed:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+// 🤖 获取 AI 推荐的素材操作
+router.get('/materials/recommendations', async (req, res) => {
+    try {
+        const result = await agent_service_1.agentService.getAIRecommendedActions();
+        res.json(result);
+    }
+    catch (error) {
+        logger_1.default.error('[AgentController] Get AI recommendations failed:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });

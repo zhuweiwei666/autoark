@@ -15,6 +15,14 @@ const bulkCreate_api_1 = require("../../integration/facebook/bulkCreate.api");
 const FbToken_1 = __importDefault(require("../../models/FbToken"));
 const dayjs_1 = __importDefault(require("dayjs"));
 const insights_api_1 = require("../../integration/facebook/insights.api");
+const materialMetrics_service_1 = require("../../services/materialMetrics.service");
+const dashboard_service_1 = require("../../services/dashboard.service");
+const facebookClient_1 = require("../../integration/facebook/facebookClient");
+const automationJob_service_1 = require("../../services/automationJob.service");
+// 🔥 使用统一的预聚合数据表
+const Aggregation_1 = require("../../models/Aggregation");
+// 🚫 不再在 AI 对话中刷新数据，由后台 cron 统一刷新
+// import { refreshRecentDays } from '../../services/aggregation.service'
 const LLM_API_KEY = process.env.LLM_API_KEY;
 const LLM_MODEL = process.env.LLM_MODEL || 'gemini-2.0-flash';
 /**
@@ -23,6 +31,7 @@ const LLM_MODEL = process.env.LLM_MODEL || 'gemini-2.0-flash';
 class AgentService {
     constructor() {
         this.model = null;
+        this.tokenAccessCache = new Map();
         if (LLM_API_KEY) {
             const genAI = new generative_ai_1.GoogleGenerativeAI(LLM_API_KEY);
             this.model = genAI.getGenerativeModel({ model: LLM_MODEL });
@@ -266,7 +275,48 @@ ${data.needsAttention.map((c) => `- ${c.entityName || c.entityId}: ${c.issue}`).
     }
     // ==================== AI 对话问答 ====================
     /**
-     * AI 对话 - 增强版，获取所有投放数据
+     * 🔥 从预聚合表获取数据（简洁高效）
+     * 最近3天实时刷新，历史数据从数据库读取
+     */
+    async getAggregatedData() {
+        const today = (0, dayjs_1.default)().format('YYYY-MM-DD');
+        const yesterday = (0, dayjs_1.default)().subtract(1, 'day').format('YYYY-MM-DD');
+        const sevenDaysAgo = (0, dayjs_1.default)().subtract(7, 'day').format('YYYY-MM-DD');
+        // ⚡ 不再实时刷新，直接读取预聚合表（数据由后台 cron 每 10 分钟更新）
+        logger_1.default.info('[AgentService] Reading from Aggregation tables (no refresh)...');
+        // 并行获取所有预聚合数据
+        const [todaySummary, yesterdaySummary, weekTrend, countries, accounts, campaigns, optimizers,] = await Promise.all([
+            Aggregation_1.AggDaily.findOne({ date: today }).lean(),
+            Aggregation_1.AggDaily.findOne({ date: yesterday }).lean(),
+            Aggregation_1.AggDaily.find({ date: { $gte: sevenDaysAgo } }).sort({ date: 1 }).lean(),
+            Aggregation_1.AggCountry.find({ date: today }).sort({ spend: -1 }).limit(20).lean(),
+            Aggregation_1.AggAccount.find({ date: today }).sort({ spend: -1 }).lean(),
+            Aggregation_1.AggCampaign.find({ date: today, spend: { $gt: 1 } }).sort({ spend: -1 }).limit(50).lean(),
+            Aggregation_1.AggOptimizer.find({ date: today }).sort({ spend: -1 }).lean(),
+        ]);
+        // 获取素材数据
+        const materialMetrics = await (0, materialMetrics_service_1.getMaterialRankings)({
+            dateRange: { start: sevenDaysAgo, end: today },
+            limit: 20,
+        });
+        return {
+            dataTime: (0, dayjs_1.default)().format('YYYY-MM-DD HH:mm:ss'),
+            dateRange: { today, yesterday, sevenDaysAgo },
+            todaySummary: todaySummary || { spend: 0, revenue: 0, roas: 0 },
+            yesterdaySummary: yesterdaySummary || { spend: 0, revenue: 0, roas: 0 },
+            weekTrend,
+            countries,
+            accounts,
+            campaigns,
+            optimizers,
+            materialMetrics: {
+                topMaterials: materialMetrics.filter((m) => m.roas >= 1).slice(0, 10),
+                losingMaterials: materialMetrics.filter((m) => m.roas < 0.5 && m.spend > 20).slice(0, 10),
+            },
+        };
+    }
+    /**
+     * AI 对话 - 使用预聚合数据，响应更快更准确
      */
     async chat(userId, message, context) {
         if (!this.model) {
@@ -285,77 +335,48 @@ ${data.needsAttention.map((c) => `- ${c.entityName || c.entityId}: ${c.issue}`).
                 messages: [],
             });
         }
-        // 获取完整的投放数据
-        const allData = await this.getAllAdvertisingData();
-        // 构建专业的广告优化师 prompt - 增强版，包含完整数据
+        // 🔥 使用预聚合数据（更快更准确）
+        const allData = await this.getAggregatedData();
+        // 🔥 使用预聚合数据构建简洁的 prompt
         const systemPrompt = `你是 AutoArk 的 AI 广告投放优化顾问，专门服务于 Facebook/Meta 广告投放团队。
 
 ## 你的身份和能力
 - 你是一位经验丰富的广告优化师，精通 Facebook 广告投放、数据分析和优化策略
-- 你可以访问团队所有的投放数据，包括：实时数据、历史数据（30天）、分投手数据、分国家数据、分广告组数据
-- 🎨 **素材级别分析**: 你可以分析每个素材（图片/视频）的表现，识别爆款素材和亏损素材
-- 你可以进行跨时间区域分析，对比不同时期的表现
+- 你可以访问团队所有的投放数据（来自预聚合表，数据准确）
 - 你可以分析广告表现，识别问题，给出优化建议
 
 ## 数据说明
-- 投手识别规则：广告系列名称的第一个下划线前的字符串是投手名称（如 "yux_fb_xxx" 中的 "yux" 是投手）
 - ROAS > 1 表示盈利，ROAS < 1 表示亏损
-- CTR（点击率）、CPC（单次点击成本）、CPM（千次曝光成本）、CPI（单次安装成本）是重要的效率指标
+- 投手识别规则：广告系列名称的第一个下划线前的字符串是投手名称
 - 数据更新时间：${allData.dataTime}
 
-## 完整数据快照
-
-### 📊 今日实时数据（${allData.dateRange?.today || (0, dayjs_1.default)().format('YYYY-MM-DD')}）
+## 📊 今日数据（${allData.dateRange?.today}）
 ${JSON.stringify(allData.todaySummary, null, 2)}
 
-### 📊 昨日数据对比
+## 📊 昨日数据（${allData.dateRange?.yesterday}）
 ${JSON.stringify(allData.yesterdaySummary, null, 2)}
 
-### 📅 本周 vs 上周对比
-${JSON.stringify(allData.periodComparison, null, 2)}
+## 📈 最近7天趋势
+${JSON.stringify(allData.weekTrend, null, 2)}
 
-### 📈 最近7天每日趋势
-${JSON.stringify(allData.last7DaysTrend, null, 2)}
+## 🌍 分国家数据（今日）
+${JSON.stringify(allData.countries, null, 2)}
 
-### 📈 最近30天每日趋势
-${JSON.stringify(allData.last30DaysTrend, null, 2)}
+## 💰 分账户数据（今日）
+${JSON.stringify(allData.accounts, null, 2)}
 
-### 👥 分投手数据（今日）
-${JSON.stringify(allData.optimizerData, null, 2)}
+## 📋 广告系列数据（今日消耗 > $1）
+${JSON.stringify(allData.campaigns?.slice(0, 30), null, 2)}
 
-### 👥 分投手历史趋势（最近7天每日数据）
-${JSON.stringify(allData.optimizerHistoricalTrend, null, 2)}
+## 👥 分投手数据（今日）
+${JSON.stringify(allData.optimizers, null, 2)}
 
-### 🌍 分国家数据（今日 Top 15）
-${JSON.stringify(allData.countryData, null, 2)}
+## 🎨 素材数据（最近7天）
 
-### 🌍 分国家历史趋势（最近7天每日数据）
-${JSON.stringify(allData.countryHistoricalTrend, null, 2)}
-
-### 🏆 表现最佳的广告系列（今日 Top 10，按 ROAS 排序）
-${JSON.stringify(allData.topCampaigns, null, 2)}
-
-### ⚠️ 需要关注的广告系列（ROAS < 0.5 且消耗 > $20）
-${JSON.stringify(allData.losingCampaigns, null, 2)}
-
-### 📋 所有广告系列详细数据（今日消耗 > $1，共 ${allData.totalCampaigns || 0} 个）
-${JSON.stringify(allData.allCampaignsToday?.slice(0, 50), null, 2)}
-
-### 📦 广告组(AdSet)级别数据（今日 Top 20）
-${JSON.stringify(allData.adsetDataToday, null, 2)}
-
-### 📈 广告系列7天趋势（消耗 > $50，含每日数据）
-${JSON.stringify(allData.campaignTrends?.slice(0, 15), null, 2)}
-
-### 📱 所有账户概况
-${JSON.stringify(allData.accountsSummary, null, 2)}
-
-### 🎨 素材级别数据（最近7天）
-
-#### 表现最佳的素材（按ROAS排序）
+### 表现最佳的素材
 ${JSON.stringify(allData.materialMetrics?.topMaterials || [], null, 2)}
 
-#### 需要关注的素材（高消耗低ROAS）
+### 需要关注的素材（高消耗低ROAS）
 ${JSON.stringify(allData.materialMetrics?.losingMaterials || [], null, 2)}
 
 #### 素材类型统计（图片 vs 视频）
@@ -399,55 +420,55 @@ ${conversation.messages.slice(-6).map((m) => `${m.role === 'user' ? '用户' : '
         const accounts = await Account_1.default.find().lean();
         const tokens = await FbToken_1.default.find({ status: 'active' }).lean();
         const token = tokens[0]?.token;
-        // 1. 今日实时数据 - 从 Facebook API 获取
-        let todaySummary = { spend: 0, impressions: 0, clicks: 0, ctr: 0, cpc: 0, cpm: 0, purchase_value: 0, roas: 0, installs: 0 };
-        if (token) {
-            for (const account of accounts.slice(0, 10)) { // 限制账户数量避免超时
-                try {
-                    const insights = await (0, insights_api_1.fetchInsights)(`act_${account.accountId}`, 'account', undefined, token, undefined, { since: today, until: today });
-                    if (insights.length > 0) {
-                        const data = insights[0];
-                        todaySummary.spend += parseFloat(data.spend || '0');
-                        todaySummary.impressions += parseInt(data.impressions || '0', 10);
-                        todaySummary.clicks += parseInt(data.clicks || '0', 10);
-                        // 提取 purchase value 和 installs
-                        if (data.action_values) {
-                            for (const av of data.action_values) {
-                                if (av.action_type === 'purchase' || av.action_type === 'omni_purchase') {
-                                    todaySummary.purchase_value += parseFloat(av.value || '0');
-                                }
-                            }
-                        }
-                        if (data.actions) {
-                            for (const action of data.actions) {
-                                if (action.action_type === 'mobile_app_install') {
-                                    todaySummary.installs += parseInt(action.value || '0', 10);
-                                }
-                            }
-                        }
-                    }
-                }
-                catch (e) {
-                    // 继续
-                }
-            }
-            // 计算派生指标
-            if (todaySummary.impressions > 0) {
-                todaySummary.ctr = (todaySummary.clicks / todaySummary.impressions * 100).toFixed(2) + '%';
-                todaySummary.cpm = '$' + (todaySummary.spend / todaySummary.impressions * 1000).toFixed(2);
-            }
-            if (todaySummary.clicks > 0) {
-                todaySummary.cpc = '$' + (todaySummary.spend / todaySummary.clicks).toFixed(2);
-            }
-            if (todaySummary.spend > 0) {
-                todaySummary.roas = (todaySummary.purchase_value / todaySummary.spend).toFixed(2);
-            }
-            if (todaySummary.installs > 0) {
-                todaySummary.cpi = '$' + (todaySummary.spend / todaySummary.installs).toFixed(2);
-            }
-            todaySummary.spend = '$' + todaySummary.spend.toFixed(2);
-            todaySummary.purchase_value = '$' + todaySummary.purchase_value.toFixed(2);
+        // 🔥 使用和 Dashboard 相同的数据源，确保数据准确
+        logger_1.default.info('[AgentService] Fetching core metrics from Dashboard API...');
+        let coreMetrics = null;
+        try {
+            coreMetrics = await (0, dashboard_service_1.getCoreMetrics)(sevenDaysAgo, today);
         }
+        catch (e) {
+            logger_1.default.error('[AgentService] Failed to get core metrics:', e.message);
+        }
+        // 1. 今日实时数据 - 使用 Dashboard 的准确数据
+        let todaySummary = {
+            spend: '$' + (coreMetrics?.today?.spend || 0).toFixed(2),
+            impressions: coreMetrics?.today?.impressions || 0,
+            clicks: coreMetrics?.today?.clicks || 0,
+            purchase_value: '$' + (coreMetrics?.today?.purchase_value || 0).toFixed(2),
+            roas: coreMetrics?.today?.spend > 0
+                ? ((coreMetrics?.today?.purchase_value || 0) / coreMetrics?.today?.spend).toFixed(2)
+                : '0',
+            installs: coreMetrics?.today?.installs || 0,
+        };
+        // 计算派生指标
+        const todaySpend = coreMetrics?.today?.spend || 0;
+        const todayImpressions = coreMetrics?.today?.impressions || 0;
+        const todayClicks = coreMetrics?.today?.clicks || 0;
+        if (todayImpressions > 0) {
+            todaySummary.ctr = (todayClicks / todayImpressions * 100).toFixed(2) + '%';
+            todaySummary.cpm = '$' + (todaySpend / todayImpressions * 1000).toFixed(2);
+        }
+        if (todayClicks > 0) {
+            todaySummary.cpc = '$' + (todaySpend / todayClicks).toFixed(2);
+        }
+        // 2. 昨日数据 - 使用 Dashboard 的准确数据
+        const yesterdaySummary = {
+            spend: '$' + (coreMetrics?.yesterday?.spend || 0).toFixed(2),
+            impressions: coreMetrics?.yesterday?.impressions || 0,
+            clicks: coreMetrics?.yesterday?.clicks || 0,
+            purchase_value: '$' + (coreMetrics?.yesterday?.purchase_value || 0).toFixed(2),
+            roas: coreMetrics?.yesterday?.spend > 0
+                ? ((coreMetrics?.yesterday?.purchase_value || 0) / coreMetrics?.yesterday?.spend).toFixed(2)
+                : '0',
+        };
+        // 3. 7日汇总数据
+        const sevenDaysSummary = {
+            totalSpend: '$' + (coreMetrics?.sevenDays?.spend || 0).toFixed(2),
+            totalRevenue: '$' + (coreMetrics?.sevenDays?.purchase_value || 0).toFixed(2),
+            avgRoas: coreMetrics?.sevenDays?.spend > 0
+                ? ((coreMetrics?.sevenDays?.purchase_value || 0) / coreMetrics?.sevenDays?.spend).toFixed(2)
+                : '0',
+        };
         // 辅助函数：从 raw.action_values 中提取 purchase 值
         const extractPurchaseValue = (doc) => {
             if (doc.purchase_value && doc.purchase_value > 0)
@@ -1066,43 +1087,8 @@ ${conversation.messages.slice(-6).map((m) => `${m.role === 'user' ? '用户' : '
                     Math.round(((thisWeekData.revenue / thisWeekData.spend) - (lastWeekData.revenue / lastWeekData.spend)) * 100) / 100 : 0,
             }
         };
-        // 13. 今日 vs 昨日对比 - 提取 purchase_value
-        const yesterdayData = await MetricsDaily_1.default.aggregate([
-            {
-                $match: {
-                    date: yesterday,
-                    spendUsd: { $gt: 0 }
-                }
-            },
-            {
-                $addFields: {
-                    extractedPurchaseValue: {
-                        $reduce: {
-                            input: { $ifNull: ['$raw.action_values', []] },
-                            initialValue: 0,
-                            in: {
-                                $cond: [
-                                    { $in: ['$$this.action_type', ['purchase', 'omni_purchase']] },
-                                    { $add: ['$$value', { $toDouble: { $ifNull: ['$$this.value', '0'] } }] },
-                                    '$$value'
-                                ]
-                            }
-                        }
-                    }
-                }
-            },
-            {
-                $group: {
-                    _id: null,
-                    spend: { $sum: '$spendUsd' },
-                    revenue: { $sum: { $max: [{ $ifNull: ['$purchase_value', 0] }, '$extractedPurchaseValue'] } },
-                    impressions: { $sum: '$impressions' },
-                    clicks: { $sum: '$clicks' },
-                    installs: { $sum: { $ifNull: ['$mobile_app_install_count', 0] } },
-                }
-            }
-        ]);
-        const yesterdaySummary = yesterdayData[0] || { spend: 0, revenue: 0, impressions: 0, clicks: 0, installs: 0 };
+        // 13. 今日 vs 昨日对比 - 现在使用 getCoreMetrics 的数据（更准确）
+        // 已在函数开头通过 yesterdaySummary 变量获取
         // 14. AdSet 级别数据（今日 Top 20）
         const adsetDataToday = await MetricsDaily_1.default.aggregate([
             {
@@ -1158,16 +1144,12 @@ ${conversation.messages.slice(-6).map((m) => `${m.role === 'user' ? '用户' : '
                 last7Days: { from: sevenDaysAgo, to: today },
                 last30Days: { from: thirtyDaysAgo, to: today },
             },
-            // 今日实时概览
+            // 今日实时概览（来自 Dashboard API，数据准确）
             todaySummary,
-            yesterdaySummary: {
-                spend: '$' + yesterdaySummary.spend.toFixed(2),
-                revenue: '$' + yesterdaySummary.revenue.toFixed(2),
-                roas: yesterdaySummary.spend > 0 ? (yesterdaySummary.revenue / yesterdaySummary.spend).toFixed(2) : '0',
-                impressions: yesterdaySummary.impressions,
-                clicks: yesterdaySummary.clicks,
-                installs: yesterdaySummary.installs,
-            },
+            // 昨日数据（来自 Dashboard API，数据准确）
+            yesterdaySummary,
+            // 7日汇总（来自 Dashboard API）
+            sevenDaysSummary,
             // 时间趋势
             last7DaysTrend,
             last30DaysTrend,
@@ -1456,9 +1438,49 @@ ${conversation.messages.slice(-6).map((m) => `${m.role === 'user' ? '用户' : '
         }
         logger_1.default.info(`[AgentService] Running agent: ${agent.name}`);
         const operations = [];
-        const accounts = agent.accountIds?.length > 0
-            ? await Account_1.default.find({ accountId: { $in: agent.accountIds } })
-            : await Account_1.default.find({ status: 'active' });
+        // 账户范围：优先 scope.adAccountIds，其次旧 accountIds，否则全量 active（并按 organizationId 过滤）
+        const scopedAccountIds = agent.scope?.adAccountIds?.length
+            ? agent.scope.adAccountIds
+            : (agent.accountIds || []);
+        const accountQuery = { status: 'active' };
+        if (agent.organizationId) {
+            accountQuery.organizationId = agent.organizationId;
+        }
+        if (scopedAccountIds.length > 0) {
+            accountQuery.accountId = { $in: scopedAccountIds };
+        }
+        const accounts = await Account_1.default.find(accountQuery);
+        // ---------- 护栏：异常触发降级（auto -> suggest） ----------
+        let effectiveMode = agent.mode;
+        try {
+            if (agent.alerts?.enabled && agent.mode === 'auto' && accounts.length > 0) {
+                const today = (0, dayjs_1.default)().format('YYYY-MM-DD');
+                const yesterday = (0, dayjs_1.default)().subtract(1, 'day').format('YYYY-MM-DD');
+                const accountIds = accounts.map((a) => a.accountId);
+                const [todayAgg, yesterdayAgg] = await Promise.all([
+                    MetricsDaily_1.default.aggregate([
+                        { $match: { date: today, accountId: { $in: accountIds } } },
+                        { $group: { _id: null, spend: { $sum: '$spendUsd' }, revenue: { $sum: { $ifNull: ['$purchase_value', 0] } } } },
+                    ]),
+                    MetricsDaily_1.default.aggregate([
+                        { $match: { date: yesterday, accountId: { $in: accountIds } } },
+                        { $group: { _id: null, spend: { $sum: '$spendUsd' }, revenue: { $sum: { $ifNull: ['$purchase_value', 0] } } } },
+                    ]),
+                ]);
+                const todaySpend = Number(todayAgg?.[0]?.spend || 0);
+                const yesterdaySpend = Number(yesterdayAgg?.[0]?.spend || 0);
+                const spendChangePct = yesterdaySpend > 0 ? ((todaySpend - yesterdaySpend) / yesterdaySpend) * 100 : 0;
+                const spikeThreshold = Number(agent.alerts?.thresholds?.spendSpikePercent ?? 50);
+                if (todaySpend > 0 && spendChangePct > spikeThreshold) {
+                    effectiveMode = 'suggest';
+                    logger_1.default.warn(`[AgentService] Degrade to suggest due to spend spike: ${spendChangePct.toFixed(1)}% > ${spikeThreshold}% (today=$${todaySpend.toFixed(2)}, yesterday=$${yesterdaySpend.toFixed(2)})`);
+                }
+            }
+        }
+        catch (e) {
+            // 降级判定失败不阻塞主流程
+            logger_1.default.warn('[AgentService] Degrade check failed:', e?.message || e);
+        }
         for (const account of accounts) {
             // 获取该账户的广告系列表现
             const campaignPerformance = await this.getCampaignPerformance(account.accountId, 7);
@@ -1477,15 +1499,15 @@ ${conversation.messages.slice(-6).map((m) => `${m.role === 'user' ? '用户' : '
                 }
             }
         }
-        // 根据模式处理操作
-        if (agent.mode === 'observe') {
+        // 根据模式处理操作（observe/suggest/auto）
+        if (effectiveMode === 'observe') {
             // 仅记录，不执行
             for (const op of operations) {
                 op.status = 'pending';
                 await new agent_model_1.AgentOperation(op).save();
             }
         }
-        else if (agent.mode === 'suggest') {
+        else if (effectiveMode === 'suggest') {
             // 记录并通知
             for (const op of operations) {
                 op.status = 'pending';
@@ -1493,22 +1515,126 @@ ${conversation.messages.slice(-6).map((m) => `${m.role === 'user' ? '用户' : '
                 // TODO: 发送通知
             }
         }
-        else if (agent.mode === 'auto') {
+        else if (effectiveMode === 'auto') {
             // 自动执行
             for (const op of operations) {
+                // RBAC：动作级别开关
+                if (!this.isOperationAllowedByPermissions(op, agent)) {
+                    op.status = 'rejected';
+                    op.error = 'Operation rejected by agent permissions (RBAC)';
+                    await new agent_model_1.AgentOperation(op).save();
+                    continue;
+                }
+                // 护栏：预算/幅度/上限（超出则拒绝并记录）
+                const guardrail = this.checkGuardrails(op, agent);
+                if (!guardrail.ok) {
+                    op.status = 'rejected';
+                    op.error = guardrail.reason;
+                    await new agent_model_1.AgentOperation(op).save();
+                    continue;
+                }
                 if (agent.aiConfig.requireApproval && this.needsApproval(op, agent)) {
                     op.status = 'pending';
                     await new agent_model_1.AgentOperation(op).save();
                 }
                 else {
-                    await this.executeOperation(op);
+                    const saved = await new agent_model_1.AgentOperation({ ...op, status: 'approved' }).save();
+                    await this.executeOperation(saved._id.toString(), agent);
                 }
             }
         }
         return {
             success: true,
             operationsCount: operations.length,
+            effectiveMode,
             operations: operations.map(o => ({ action: o.action, entityId: o.entityId, reason: o.reason })),
+        };
+    }
+    /**
+     * Planner/Executor 形态：只生成计划与执行 jobs，不在当前进程直接执行 Graph 写操作
+     * - Planner：复用 runAgent 的规则生成 operations
+     * - Executor：为每个 operation 创建 AutomationJob（由 Worker 并行执行）
+     */
+    async runAgentAsJobs(agentId) {
+        const agent = await agent_model_1.AgentConfig.findById(agentId);
+        if (!agent || agent.status !== 'active') {
+            return { success: false, message: 'Agent not active' };
+        }
+        const operations = [];
+        // 账户范围：优先 scope.adAccountIds，其次旧 accountIds，否则全量 active（并按 organizationId 过滤）
+        const scopedAccountIds = agent.scope?.adAccountIds?.length
+            ? agent.scope.adAccountIds
+            : (agent.accountIds || []);
+        const accountQuery = { status: 'active' };
+        if (agent.organizationId) {
+            accountQuery.organizationId = agent.organizationId;
+        }
+        if (scopedAccountIds.length > 0) {
+            accountQuery.accountId = { $in: scopedAccountIds };
+        }
+        const accounts = await Account_1.default.find(accountQuery);
+        for (const account of accounts) {
+            const campaignPerformance = await this.getCampaignPerformance(account.accountId, 7);
+            for (const campaign of campaignPerformance) {
+                if (agent.rules?.autoStop?.enabled) {
+                    const op = await this.checkAutoStop(agent, campaign);
+                    if (op)
+                        operations.push(op);
+                }
+                if (agent.rules?.autoScale?.enabled) {
+                    const op = await this.checkAutoScale(agent, campaign);
+                    if (op)
+                        operations.push(op);
+                }
+            }
+        }
+        // 记录计划时间
+        await agent_model_1.AgentConfig.updateOne({ _id: agentId }, { $set: { 'runtime.lastPlanAt': new Date() } });
+        // 保存操作 + 生成执行 jobs（仅当 agent.mode=auto 且无需审批且通过 RBAC/护栏）
+        const jobs = [];
+        for (const op of operations) {
+            // RBAC：动作级别开关
+            if (!this.isOperationAllowedByPermissions(op, agent)) {
+                await new agent_model_1.AgentOperation({ ...op, status: 'rejected', error: 'Operation rejected by agent permissions (RBAC)' }).save();
+                continue;
+            }
+            const guardrail = this.checkGuardrails(op, agent);
+            if (!guardrail.ok) {
+                await new agent_model_1.AgentOperation({ ...op, status: 'rejected', error: guardrail.reason }).save();
+                continue;
+            }
+            // auto 模式下仍可要求审批
+            if (agent.mode === 'auto' && agent.aiConfig?.requireApproval && this.needsApproval(op, agent)) {
+                await new agent_model_1.AgentOperation({ ...op, status: 'pending' }).save();
+                continue;
+            }
+            // observe/suggest：只记录
+            if (agent.mode !== 'auto') {
+                await new agent_model_1.AgentOperation({ ...op, status: 'pending' }).save();
+                continue;
+            }
+            // auto 且不需要审批：写入 approved，并创建执行 job
+            const saved = await new agent_model_1.AgentOperation({ ...op, status: 'approved' }).save();
+            const idempotencyKey = `op:${saved._id.toString()}`;
+            const job = await (0, automationJob_service_1.createAutomationJob)({
+                type: 'EXECUTE_AGENT_OPERATION',
+                payload: { operationId: saved._id.toString(), agentId: agentId },
+                agentId: agentId,
+                organizationId: agent.organizationId,
+                createdBy: agent.createdBy,
+                idempotencyKey,
+                priority: 5,
+            });
+            jobs.push(job);
+        }
+        if (agent.mode === 'auto') {
+            await agent_model_1.AgentConfig.updateOne({ _id: agentId }, { $set: { 'runtime.lastRunAt': new Date() } });
+        }
+        return {
+            success: true,
+            operationsCount: operations.length,
+            jobsCreated: jobs.length,
+            jobs: jobs.map((j) => ({ id: j._id, status: j.status, type: j.type })),
         };
     }
     /**
@@ -1622,12 +1748,12 @@ ${conversation.messages.slice(-6).map((m) => `${m.role === 'user' ? '用户' : '
     /**
      * 执行操作
      */
-    async executeOperation(operationId) {
+    async executeOperation(operationId, agent) {
         const operation = await agent_model_1.AgentOperation.findById(operationId);
         if (!operation) {
             return { success: false, error: 'Operation not found' };
         }
-        const token = await FbToken_1.default.findOne({ status: 'active' });
+        const token = await this.resolveTokenForAccount(operation.accountId, agent);
         if (!token) {
             operation.status = 'failed';
             operation.error = 'No active token';
@@ -1668,21 +1794,334 @@ ${conversation.messages.slice(-6).map((m) => `${m.role === 'user' ? '用户' : '
             return { success: false, error: error.message };
         }
     }
-    // ==================== 素材评分 ====================
     /**
-     * 计算素材评分
+     * 根据 agent scope/org 选择可访问该广告账户的 token
      */
-    async scoreCreatives(creativeGroupId) {
-        // 获取素材表现数据
-        const match = {};
-        if (creativeGroupId)
-            match.creativeGroupId = creativeGroupId;
-        // TODO: 实现素材到广告表现的关联
-        // 这需要在广告创建时记录使用的素材信息
-        const scores = [];
-        // 简化实现：基于已有数据生成评分
-        // 实际生产中需要关联 Ad -> Creative -> Material
-        return scores;
+    async resolveTokenForAccount(accountId, agent) {
+        const tokenQuery = { status: 'active' };
+        if (agent?.organizationId) {
+            tokenQuery.organizationId = agent.organizationId;
+        }
+        if (agent?.scope?.fbTokenIds?.length) {
+            tokenQuery._id = { $in: agent.scope.fbTokenIds };
+        }
+        const tokens = await FbToken_1.default.find(tokenQuery).sort({ updatedAt: -1 }).lean();
+        if (!tokens.length)
+            return null;
+        // 逐个测试 token 是否有访问权限（带缓存）
+        for (const t of tokens) {
+            const cacheKey = `${t._id}:${accountId}`;
+            const cached = this.tokenAccessCache.get(cacheKey);
+            if (cached === true)
+                return t;
+            if (cached === false)
+                continue;
+            try {
+                const r = await facebookClient_1.facebookClient.get(`/act_${accountId}`, {
+                    access_token: t.token,
+                    fields: 'id',
+                });
+                if (r?.id) {
+                    this.tokenAccessCache.set(cacheKey, true);
+                    return t;
+                }
+                this.tokenAccessCache.set(cacheKey, false);
+            }
+            catch {
+                this.tokenAccessCache.set(cacheKey, false);
+            }
+        }
+        return null;
+    }
+    isOperationAllowedByPermissions(operation, agent) {
+        const perms = agent?.permissions || {};
+        if (operation.action === 'pause')
+            return perms.canPause !== false;
+        if (operation.action === 'resume')
+            return perms.canResume !== false;
+        if (operation.action === 'budget_increase' || operation.action === 'budget_decrease')
+            return perms.canAdjustBudget !== false;
+        if (operation.action === 'bid_adjust')
+            return perms.canAdjustBid === true;
+        if (operation.action === 'status_change')
+            return perms.canToggleStatus !== false;
+        return true;
+    }
+    checkGuardrails(operation, agent) {
+        // 预算上限护栏
+        const limit = agent?.objectives?.dailyBudgetLimit;
+        if ((operation.action === 'budget_increase' || operation.action === 'budget_decrease') && limit != null) {
+            const next = Number(operation.afterValue?.budget || 0);
+            if (Number.isFinite(next) && next > Number(limit)) {
+                return { ok: false, reason: `Guardrail: budget ${next} exceeds dailyBudgetLimit ${limit}` };
+            }
+        }
+        // 最大调整幅度护栏（按比例）
+        if (operation.action === 'budget_increase' || operation.action === 'budget_decrease') {
+            const maxPct = agent?.rules?.budgetAdjust?.maxAdjustPercent;
+            if (maxPct != null && operation.changePercent != null) {
+                const pct = Math.abs(Number(operation.changePercent)) / 100;
+                if (Number.isFinite(pct) && pct > Number(maxPct)) {
+                    return { ok: false, reason: `Guardrail: changePercent ${operation.changePercent}% exceeds maxAdjustPercent ${(Number(maxPct) * 100).toFixed(0)}%` };
+                }
+            }
+        }
+        return { ok: true };
+    }
+    // ==================== 素材 AI 智能评分 ====================
+    /**
+     * 🤖 AI 分析单个素材表现并给出评分和建议
+     */
+    async analyzeMaterialWithAI(materialId) {
+        logger_1.default.info(`[AgentService] Analyzing material with AI: ${materialId}`);
+        // 1. 获取素材表现数据
+        const endDate = (0, dayjs_1.default)().format('YYYY-MM-DD');
+        const startDate = (0, dayjs_1.default)().subtract(7, 'day').format('YYYY-MM-DD');
+        const rankings = await (0, materialMetrics_service_1.getMaterialRankings)({
+            dateRange: { start: startDate, end: endDate },
+            limit: 100,
+        });
+        const material = rankings.find((m) => m.materialId === materialId || m.localMaterialId === materialId);
+        if (!material) {
+            return {
+                success: false,
+                error: '未找到素材数据，可能该素材还没有投放数据',
+            };
+        }
+        // 2. 获取素材详情
+        const Material = require('../../models/Material').default;
+        const materialDoc = await Material.findById(materialId).lean();
+        // 3. 如果没有 AI 模型，返回基础评分
+        if (!this.model) {
+            return {
+                success: true,
+                data: {
+                    materialId,
+                    materialName: material.materialName,
+                    materialType: material.materialType,
+                    metrics: {
+                        spend: material.spend,
+                        revenue: material.purchaseValue || 0,
+                        roas: material.roas,
+                        ctr: material.ctr,
+                        impressions: material.impressions,
+                        clicks: material.clicks,
+                        daysActive: material.daysActive,
+                    },
+                    scores: {
+                        overall: material.qualityScore,
+                        roas: material.roas >= 1 ? 80 : material.roas >= 0.5 ? 50 : 20,
+                        efficiency: material.ctr >= 1 ? 80 : material.ctr >= 0.5 ? 50 : 30,
+                    },
+                    analysis: `素材 ROAS ${material.roas?.toFixed(2) || 0}，消耗 $${material.spend?.toFixed(2) || 0}`,
+                    recommendation: material.roas >= 1.5 ? 'SCALE_UP' : material.roas < 0.5 ? 'PAUSE' : 'MAINTAIN',
+                    aiPowered: false,
+                }
+            };
+        }
+        // 4. 构建 AI 分析 Prompt
+        const prompt = `作为一位资深 Facebook 广告投放优化师，请分析以下素材的表现数据：
+
+## 素材信息
+- 素材名称: ${material.materialName}
+- 素材类型: ${material.materialType === 'video' ? '视频' : '图片'}
+- 活跃天数: ${material.daysActive} 天
+- 使用广告数: ${material.uniqueAdsCount || 0}
+
+## 表现数据（最近7天）
+- 总消耗: $${material.spend.toFixed(2)}
+- 总收入: $${(material.purchaseValue || 0).toFixed(2)}
+- ROAS: ${material.roas.toFixed(2)}
+- 展示量: ${material.impressions?.toLocaleString() || 0}
+- 点击量: ${material.clicks?.toLocaleString() || 0}
+- CTR: ${material.ctr?.toFixed(2) || 0}%
+- 安装数: ${material.installs || 0}
+- CPI: $${material.cpi?.toFixed(2) || 0}
+
+## 评判标准
+- ROAS > 2: 优秀（可扩量）
+- ROAS 1-2: 良好（可保持）
+- ROAS 0.5-1: 一般（需优化）
+- ROAS < 0.5: 较差（考虑暂停）
+
+请给出详细分析，返回以下 JSON 格式（不要 Markdown 代码块）：
+{
+  "scores": {
+    "overall": 0-100,
+    "roas": 0-100,
+    "efficiency": 0-100,
+    "stability": 0-100
+  },
+  "analysis": "2-3句话的核心分析（中文）",
+  "strengths": ["优势1", "优势2"],
+  "weaknesses": ["劣势1"],
+  "recommendation": "SCALE_UP | MAINTAIN | OPTIMIZE | PAUSE",
+  "actionItems": ["具体建议1", "具体建议2"],
+  "predictedTrend": "UP | STABLE | DOWN"
+}`;
+        try {
+            logger_1.default.info(`[AgentService] Calling Gemini API, model exists: ${!!this.model}`);
+            const result = await this.model.generateContent(prompt);
+            const content = result.response.text();
+            logger_1.default.info(`[AgentService] Gemini response length: ${content.length}`);
+            const jsonMatch = content.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+                const aiResult = JSON.parse(jsonMatch[0]);
+                return {
+                    success: true,
+                    data: {
+                        materialId,
+                        materialName: material.materialName,
+                        materialType: material.materialType,
+                        metrics: {
+                            spend: material.spend,
+                            revenue: material.purchaseValue,
+                            roas: material.roas,
+                            ctr: material.ctr,
+                            impressions: material.impressions,
+                            clicks: material.clicks,
+                            daysActive: material.daysActive,
+                        },
+                        ...aiResult,
+                        aiPowered: true,
+                        analyzedAt: new Date().toISOString(),
+                    }
+                };
+            }
+        }
+        catch (error) {
+            logger_1.default.error('[AgentService] AI analysis failed:', error.message || error);
+            logger_1.default.error('[AgentService] Error stack:', error.stack);
+            // AI 分析失败，返回带错误信息的基础结果
+            return {
+                success: true,
+                data: {
+                    materialId,
+                    materialName: material.materialName,
+                    materialType: material.materialType,
+                    metrics: {
+                        spend: material.spend,
+                        revenue: material.purchaseValue || 0,
+                        roas: material.roas,
+                        ctr: material.ctr,
+                        impressions: material.impressions,
+                        clicks: material.clicks,
+                        daysActive: material.daysActive,
+                    },
+                    scores: {
+                        overall: material.qualityScore,
+                        roas: material.roas >= 1 ? 80 : material.roas >= 0.5 ? 50 : 20,
+                    },
+                    analysis: `基础分析：ROAS ${material.roas?.toFixed(2) || 0}，消耗 $${material.spend?.toFixed(2) || 0}（AI 模型调用失败，使用规则分析）`,
+                    recommendation: material.roas >= 1.5 ? 'SCALE_UP' : material.roas < 0.5 ? 'PAUSE' : 'MAINTAIN',
+                    aiPowered: false,
+                    aiError: error.message || 'Unknown error',
+                }
+            };
+        }
+    }
+    /**
+     * 🤖 批量分析多个素材
+     */
+    async batchAnalyzeMaterials(materialIds) {
+        const results = [];
+        for (const id of materialIds.slice(0, 10)) { // 限制最多10个
+            const result = await this.analyzeMaterialWithAI(id);
+            results.push(result);
+        }
+        return results;
+    }
+    /**
+     * 🤖 获取 AI 推荐的素材操作（自动化决策）
+     */
+    async getAIRecommendedActions() {
+        logger_1.default.info('[AgentService] Getting AI recommended actions');
+        // 获取最近7天素材表现
+        const endDate = (0, dayjs_1.default)().format('YYYY-MM-DD');
+        const startDate = (0, dayjs_1.default)().subtract(7, 'day').format('YYYY-MM-DD');
+        const rankings = await (0, materialMetrics_service_1.getMaterialRankings)({
+            dateRange: { start: startDate, end: endDate },
+            sortBy: 'spend',
+            limit: 50,
+        });
+        // 分类素材
+        const toScale = rankings.filter((m) => m.roas >= 2 && m.spend >= 50);
+        const toPause = rankings.filter((m) => m.roas < 0.3 && m.spend >= 30);
+        const toWatch = rankings.filter((m) => m.roas >= 0.5 && m.roas < 1 && m.spend >= 20);
+        if (!this.model) {
+            return {
+                success: true,
+                data: {
+                    toScale: toScale.map((m) => ({
+                        materialId: m.materialId,
+                        materialName: m.materialName,
+                        roas: m.roas,
+                        spend: m.spend,
+                        reason: `ROAS ${m.roas.toFixed(2)} 表现优秀`,
+                    })),
+                    toPause: toPause.map((m) => ({
+                        materialId: m.materialId,
+                        materialName: m.materialName,
+                        roas: m.roas,
+                        spend: m.spend,
+                        reason: `ROAS ${m.roas.toFixed(2)} 持续亏损`,
+                    })),
+                    toWatch: toWatch.map((m) => ({
+                        materialId: m.materialId,
+                        materialName: m.materialName,
+                        roas: m.roas,
+                        spend: m.spend,
+                    })),
+                    aiPowered: false,
+                }
+            };
+        }
+        // 使用 AI 生成更智能的建议
+        const prompt = `作为广告优化师，分析以下素材数据，给出操作建议：
+
+## 高效素材（ROAS > 2）
+${toScale.map((m) => `- ${m.materialName}: ROAS ${m.roas.toFixed(2)}, 消耗 $${m.spend.toFixed(2)}`).join('\n') || '无'}
+
+## 低效素材（ROAS < 0.3）
+${toPause.map((m) => `- ${m.materialName}: ROAS ${m.roas.toFixed(2)}, 消耗 $${m.spend.toFixed(2)}`).join('\n') || '无'}
+
+## 观察素材（0.5 < ROAS < 1）
+${toWatch.map((m) => `- ${m.materialName}: ROAS ${m.roas.toFixed(2)}, 消耗 $${m.spend.toFixed(2)}`).join('\n') || '无'}
+
+请返回 JSON（不要代码块）：
+{
+  "summary": "一句话总结当前素材表现",
+  "urgentActions": ["最紧急需要做的1-2件事"],
+  "scaleRecommendations": ["扩量建议"],
+  "pauseRecommendations": ["暂停建议"],
+  "optimizationTips": ["优化小贴士"]
+}`;
+        try {
+            const result = await this.model.generateContent(prompt);
+            const content = result.response.text();
+            const jsonMatch = content.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+                const aiResult = JSON.parse(jsonMatch[0]);
+                return {
+                    success: true,
+                    data: {
+                        ...aiResult,
+                        toScale,
+                        toPause,
+                        toWatch,
+                        aiPowered: true,
+                        analyzedAt: new Date().toISOString(),
+                    }
+                };
+            }
+        }
+        catch (error) {
+            logger_1.default.error('[AgentService] AI recommendations failed:', error.message);
+        }
+        return {
+            success: true,
+            data: { toScale, toPause, toWatch, aiPowered: false }
+        };
     }
     // ==================== 告警通知 ====================
     /**

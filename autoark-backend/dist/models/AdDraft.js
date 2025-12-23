@@ -38,6 +38,8 @@ const campaignConfigSchema = new mongoose_1.default.Schema({
 const adsetConfigSchema = new mongoose_1.default.Schema({
     nameTemplate: { type: String, required: true },
     status: { type: String, default: 'PAUSED', enum: ['ACTIVE', 'PAUSED'] },
+    // 倍率：每个 Campaign 下创建多少个广告组
+    multiplier: { type: Number, default: 1, min: 1, max: 10 },
     // 预算（如果不使用 CBO）
     budgetType: { type: String, enum: ['DAILY', 'LIFETIME'] },
     budget: { type: Number },
@@ -51,10 +53,16 @@ const adsetConfigSchema = new mongoose_1.default.Schema({
     bidStrategy: { type: String },
     bidAmount: { type: Number },
     costCap: { type: Number },
-    // 归因设置
+    // 归因设置（新版：支持点击/浏览/互动观看）
+    attribution: {
+        clickWindow: { type: Number, default: 1 }, // 点击后归因窗口（天）
+        viewWindow: { type: Number, default: 1 }, // 浏览后归因窗口（天），0 表示不启用
+        engagedViewWindow: { type: Number, default: 1 }, // 互动观看后归因窗口（天），0 表示不启用
+    },
+    // 兼容旧字段（历史草稿可能使用 attributionSpec）
     attributionSpec: {
-        clickWindow: { type: Number, default: 7 }, // 点击归因窗口（天）
-        viewWindow: { type: Number, default: 1 }, // 浏览归因窗口（天）
+        clickWindow: { type: Number },
+        viewWindow: { type: Number },
     },
     // 投放速度
     pacingType: { type: String, default: 'standard', enum: ['standard', 'no_pacing'] },
@@ -74,7 +82,12 @@ const adsetConfigSchema = new mongoose_1.default.Schema({
         wifiOnly: { type: Boolean, default: false },
     },
     // 定向包引用（或内联定向配置）
-    targetingPackageId: { type: mongoose_1.default.Schema.Types.ObjectId, ref: 'TargetingPackage' },
+    // 兼容前端传空字符串：'' -> undefined（避免 CastError）
+    targetingPackageId: {
+        type: mongoose_1.default.Schema.Types.ObjectId,
+        ref: 'TargetingPackage',
+        set: (v) => (v === '' ? undefined : v),
+    },
     inlineTargeting: { type: Object }, // 如果不使用定向包，直接配置
 }, { _id: false });
 // 广告配置 Schema
@@ -169,14 +182,13 @@ adDraftSchema.methods.calculateEstimates = function () {
     const accountCount = this.accounts?.length || 0;
     const creativeGroupCount = this.ad?.creativeGroupIds?.length || 1;
     const copywritingCount = this.ad?.copywritingPackageIds?.length || 1;
+    const adsetMultiplier = Math.min(10, Math.max(1, Number(this.adset?.multiplier || 1)));
     // 根据发布策略计算
     let totalCampaigns = accountCount;
-    let totalAdsets = accountCount;
+    let totalAdsets = accountCount * adsetMultiplier;
     let totalAds = accountCount;
-    if (this.publishStrategy?.targetingLevel === 'ADSET') {
-        // 每个账户一个定向 = 一个广告组
-        totalAdsets = accountCount;
-    }
+    // 说明：目前发布逻辑是“每个账户一个 Campaign”，且每个 Campaign 下可创建 N 个广告组（倍率）
+    // targetingLevel 仅影响未来的分配策略，这里仍按倍率计算广告组数。
     if (this.publishStrategy?.creativeLevel === 'ADSET') {
         // 每个广告组使用所有创意组
         totalAds = totalAdsets * creativeGroupCount;
@@ -195,7 +207,9 @@ adDraftSchema.methods.calculateEstimates = function () {
         totalCampaigns,
         totalAdsets,
         totalAds,
-        dailyBudget: (this.campaign?.budget || 0) * accountCount,
+        dailyBudget: this.campaign?.budgetOptimization
+            ? (this.campaign?.budget || 0) * accountCount
+            : (this.adset?.budget || this.campaign?.budget || 0) * totalAdsets,
     };
     return this.estimates;
 };

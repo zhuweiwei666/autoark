@@ -5,9 +5,8 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
-const dotenv_1 = __importDefault(require("dotenv"));
 const path_1 = __importDefault(require("path"));
-const db_1 = __importDefault(require("./config/db"));
+const crypto_1 = require("crypto");
 const facebook_routes_1 = __importDefault(require("./routes/facebook.routes"));
 const dashboard_routes_1 = __importDefault(require("./routes/dashboard.routes"));
 const facebook_sync_routes_1 = __importDefault(require("./routes/facebook.sync.routes"));
@@ -24,47 +23,31 @@ const auth_routes_1 = __importDefault(require("./routes/auth.routes")); // New: 
 const user_routes_1 = __importDefault(require("./routes/user.routes")); // New: 用户管理路由
 const organization_routes_1 = __importDefault(require("./routes/organization.routes")); // New: 组织管理路由
 const account_management_routes_1 = __importDefault(require("./routes/account.management.routes")); // New: 账户管理路由
+const aggregation_controller_1 = __importDefault(require("./controllers/aggregation.controller")); // New: 预聚合数据 API
+const rule_controller_1 = __importDefault(require("./controllers/rule.controller")); // New: 自动化规则引擎
+const materialAutoTest_controller_1 = __importDefault(require("./controllers/materialAutoTest.controller")); // New: 素材自动测试
+const aiSuggestion_controller_1 = __importDefault(require("./controllers/aiSuggestion.controller")); // New: AI 优化建议
+const automationJob_routes_1 = __importDefault(require("./routes/automationJob.routes")); // New: 自动化 Job 编排
 const logger_1 = __importDefault(require("./utils/logger"));
-const sync_cron_1 = __importDefault(require("./cron/sync.cron"));
-const cron_1 = __importDefault(require("./cron"));
-const tokenValidation_cron_1 = __importDefault(require("./cron/tokenValidation.cron"));
 const errorHandler_1 = require("./middlewares/errorHandler");
-dotenv_1.default.config();
-// Connect to DB
-(0, db_1.default)();
-// Initialize Redis
-const redis_1 = require("./config/redis");
-(0, redis_1.initRedis)();
-// Initialize Token Pool
-const facebook_token_pool_1 = require("./services/facebook.token.pool");
-facebook_token_pool_1.tokenPool.initialize().catch((error) => {
-    logger_1.default.error('[App] Failed to initialize token pool:', error);
-});
-// Initialize Queues and Workers
-const facebook_queue_1 = require("./queue/facebook.queue");
-const facebook_worker_1 = require("./queue/facebook.worker");
-const bulkAd_worker_1 = require("./queue/bulkAd.worker");
-(0, facebook_queue_1.initQueues)();
-(0, facebook_worker_1.initWorkers)();
-(0, bulkAd_worker_1.initBulkAdWorker)(); // Initialize bulk ad creation worker
-// Initialize Crons
-const preaggregation_cron_1 = __importDefault(require("./cron/preaggregation.cron"));
-const aggregation_cron_1 = __importDefault(require("./cron/aggregation.cron"));
-(0, cron_1.default)();
-(0, sync_cron_1.default)();
-(0, preaggregation_cron_1.default)();
-(0, aggregation_cron_1.default)(); // 数据聚合定时任务
-(0, tokenValidation_cron_1.default)(); // Token validation cron (每小时检查一次)
 const app = (0, express_1.default)();
 app.use((0, cors_1.default)());
 app.use(express_1.default.json());
+// Request ID (Correlation ID)
+app.use((req, res, next) => {
+    const headerId = req.headers['x-request-id'];
+    const requestId = typeof headerId === 'string' && headerId.trim().length > 0 ? headerId : (0, crypto_1.randomUUID)();
+    req.requestId = requestId;
+    res.setHeader('X-Request-Id', requestId);
+    next();
+});
 // Request Logger
 app.use((req, res, next) => {
     const start = Date.now();
     const { method, url } = req;
     res.on('finish', () => {
         const duration = Date.now() - start;
-        logger_1.default.info(`[${method}] ${url} ${res.statusCode} - ${duration}ms`);
+        logger_1.default.info(`[${req.requestId}] [${method}] ${url} ${res.statusCode} - ${duration}ms`);
     });
     next();
 });
@@ -88,6 +71,11 @@ app.use('/api/agent', agent_controller_1.default); // New: AI Agent
 app.use('/api/summary', summary_controller_1.default); // New: 预聚合数据快速读取（加速前端页面）
 app.use('/api/product-mapping', productMapping_routes_1.default); // New: 产品关系映射（自动投放核心）
 app.use('/api/facebook-apps', facebookApp_routes_1.default); // New: Facebook App 管理（多App负载均衡）
+app.use('/api/agg', aggregation_controller_1.default); // New: 统一预聚合数据 API（前端+AI 共用）
+app.use('/api/rules', rule_controller_1.default); // New: 自动化规则引擎
+app.use('/api/material-auto-test', materialAutoTest_controller_1.default); // New: 素材自动测试
+app.use('/api/ai-suggestions', aiSuggestion_controller_1.default); // New: AI 优化建议
+app.use('/api/automation-jobs', automationJob_routes_1.default); // New: AI Planner/Executor jobs
 // Dashboard UI 已迁移到 React 前端，不再需要后端路由
 // app.use('/dashboard', dashboardRoutes) // 已禁用，让前端 React Router 处理
 // Serve frontend static files (if dist directory exists)

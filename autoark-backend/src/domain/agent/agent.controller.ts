@@ -3,15 +3,27 @@ import { agentService } from './agent.service'
 import { AgentConfig, AgentOperation, DailyReport, AiConversation } from './agent.model'
 import logger from '../../utils/logger'
 import { authenticate } from '../../middlewares/auth'
+import { UserRole } from '../../models/User'
 
 const router = Router()
+
+// 所有 Agent 能力均需要认证（涉及自动调控/审批/对话数据）
+router.use(authenticate)
 
 // ==================== Agent 配置 CRUD ====================
 
 // 获取所有 Agent
 router.get('/agents', async (req: Request, res: Response) => {
   try {
-    const agents = await agentService.getAgents()
+    const filter: any = {}
+    // 超级管理员可看全部；组织内用户默认看本组织
+    if (req.user?.role !== UserRole.SUPER_ADMIN) {
+      if (req.user?.organizationId) filter.organizationId = req.user.organizationId
+      // 如果没有组织，则仅看自己创建的
+      else if (req.user?.userId) filter.createdBy = req.user.userId
+    }
+
+    const agents = await agentService.getAgents(filter)
     res.json({ success: true, data: agents })
   } catch (error: any) {
     logger.error('[AgentController] Get agents failed:', error)
@@ -35,7 +47,13 @@ router.get('/agents/:id', async (req: Request, res: Response) => {
 // 创建 Agent
 router.post('/agents', async (req: Request, res: Response) => {
   try {
-    const agent = await agentService.createAgent(req.body)
+    const payload = {
+      ...req.body,
+      createdBy: req.user?.userId,
+      // 默认继承组织隔离
+      organizationId: req.body?.organizationId || req.user?.organizationId,
+    }
+    const agent = await agentService.createAgent(payload)
     res.status(201).json({ success: true, data: agent })
   } catch (error: any) {
     logger.error('[AgentController] Create agent failed:', error)
@@ -74,6 +92,17 @@ router.post('/agents/:id/run', async (req: Request, res: Response) => {
   }
 })
 
+// 运行 Agent（Planner/Executor）：生成 operations 并创建 AutomationJobs 执行
+router.post('/agents/:id/run-jobs', async (req: Request, res: Response) => {
+  try {
+    const result = await agentService.runAgentAsJobs(req.params.id)
+    res.json({ success: true, data: result })
+  } catch (error: any) {
+    logger.error('[AgentController] Run agent as jobs failed:', error)
+    res.status(500).json({ success: false, error: error.message })
+  }
+})
+
 // ==================== Agent 操作日志 ====================
 
 // 获取待审批操作
@@ -107,7 +136,8 @@ router.get('/operations', async (req: Request, res: Response) => {
 // 审批操作
 router.post('/operations/:id/approve', async (req: Request, res: Response) => {
   try {
-    const result = await agentService.approveOperation(req.params.id, 'user')
+    const userId = req.user?.userId || 'unknown'
+    const result = await agentService.approveOperation(req.params.id, userId)
     res.json({ success: true, data: result })
   } catch (error: any) {
     res.status(500).json({ success: false, error: error.message })
@@ -117,7 +147,8 @@ router.post('/operations/:id/approve', async (req: Request, res: Response) => {
 // 拒绝操作
 router.post('/operations/:id/reject', async (req: Request, res: Response) => {
   try {
-    const result = await agentService.rejectOperation(req.params.id, 'user', req.body.reason)
+    const userId = req.user?.userId || 'unknown'
+    const result = await agentService.rejectOperation(req.params.id, userId, req.body.reason)
     res.json({ success: true, data: result })
   } catch (error: any) {
     res.status(500).json({ success: false, error: error.message })
@@ -194,7 +225,7 @@ router.get('/reports/latest', async (req: Request, res: Response) => {
 // ==================== AI 对话 ====================
 
 // 发送消息（需要认证，每个用户独立对话历史）
-router.post('/chat', authenticate, async (req: Request, res: Response) => {
+router.post('/chat', async (req: Request, res: Response) => {
   try {
     const { message, context } = req.body
     if (!message) {
@@ -212,7 +243,7 @@ router.post('/chat', authenticate, async (req: Request, res: Response) => {
 })
 
 // 获取对话历史（需要认证，只返回当前用户的对话）
-router.get('/chat/history', authenticate, async (req: Request, res: Response) => {
+router.get('/chat/history', async (req: Request, res: Response) => {
   try {
     const { limit = 10 } = req.query
     const userId = req.user?.userId || 'default-user'
@@ -227,7 +258,7 @@ router.get('/chat/history', authenticate, async (req: Request, res: Response) =>
 })
 
 // 清除对话（需要认证，只清除当前用户的对话）
-router.delete('/chat/clear', authenticate, async (req: Request, res: Response) => {
+router.delete('/chat/clear', async (req: Request, res: Response) => {
   try {
     const userId = req.user?.userId || 'default-user'
     

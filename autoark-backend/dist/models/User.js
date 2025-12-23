@@ -69,6 +69,9 @@ const userSchema = new mongoose_1.default.Schema({
         type: mongoose_1.default.Schema.Types.ObjectId,
         ref: 'User',
     },
+    boundAppId: {
+        type: String, // 用户绑定的 Facebook App ID
+    },
 }, {
     timestamps: true,
     toJSON: {

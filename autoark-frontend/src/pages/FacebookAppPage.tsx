@@ -10,6 +10,21 @@ interface FacebookApp {
   appName: string
   appSecretMasked?: string
   status: 'active' | 'inactive' | 'suspended' | 'rate_limited'
+  compliance?: {
+    appMode?: 'dev' | 'live' | 'unknown'
+    businessVerification?: 'not_started' | 'in_review' | 'verified' | 'rejected' | 'unknown'
+    appReview?: 'not_started' | 'in_review' | 'approved' | 'rejected' | 'unknown'
+    permissions?: Array<{
+      name: string
+      access: 'standard' | 'advanced' | 'unknown'
+      status: 'requested' | 'approved' | 'rejected' | 'unknown'
+      notes?: string
+      lastUpdatedAt?: string
+    }>
+    publicOauthReady?: boolean
+    lastCheckedAt?: string
+  }
+  isPublicOauthReady?: boolean
   stats?: {
     totalRequests?: number
     successRequests?: number
@@ -56,7 +71,10 @@ export default function FacebookAppPage() {
   const [loading, setLoading] = useState(false)
   const [showAddModal, setShowAddModal] = useState(false)
   const [editingApp, setEditingApp] = useState<FacebookApp | null>(null)
+  const [showComplianceModal, setShowComplianceModal] = useState(false)
+  const [complianceApp, setComplianceApp] = useState<FacebookApp | null>(null)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const [publicOAuthRequirements, setPublicOAuthRequirements] = useState<string[]>([])
 
   // 表单状态
   const [formData, setFormData] = useState({
@@ -67,6 +85,23 @@ export default function FacebookAppPage() {
     maxConcurrentTasks: 5,
     requestsPerMinute: 200,
     priority: 1,
+  })
+
+  const [complianceForm, setComplianceForm] = useState<{
+    appMode: 'dev' | 'live' | 'unknown'
+    businessVerification: 'not_started' | 'in_review' | 'verified' | 'rejected' | 'unknown'
+    appReview: 'not_started' | 'in_review' | 'approved' | 'rejected' | 'unknown'
+    permissions: Array<{
+      name: string
+      access: 'standard' | 'advanced' | 'unknown'
+      status: 'requested' | 'approved' | 'rejected' | 'unknown'
+      notes?: string
+    }>
+  }>({
+    appMode: 'unknown',
+    businessVerification: 'unknown',
+    appReview: 'unknown',
+    permissions: [],
   })
 
   // 带认证的 fetch
@@ -115,7 +150,20 @@ export default function FacebookAppPage() {
   useEffect(() => {
     loadApps()
     loadStats()
+    loadPublicOAuthRequirements()
   }, [])
+
+  const loadPublicOAuthRequirements = async () => {
+    try {
+      const response = await authFetch(`${API_BASE}/facebook-apps/requirements/public-oauth`)
+      const data = await response.json()
+      if (data.success) {
+        setPublicOAuthRequirements(data.data?.requiredPermissions || [])
+      }
+    } catch (e) {
+      // ignore
+    }
+  }
 
   // 创建 App
   const handleCreate = async () => {
@@ -313,6 +361,61 @@ export default function FacebookAppPage() {
     })
   }
 
+  const openComplianceEditor = (app: FacebookApp) => {
+    setComplianceApp(app)
+    const existingPerms = app.compliance?.permissions || []
+    const permsMap = new Map(existingPerms.map((p) => [p.name, p]))
+    const required = publicOAuthRequirements.length ? publicOAuthRequirements : []
+    const mergedPermNames = Array.from(new Set([...required, ...existingPerms.map((p) => p.name)]))
+    const mergedPerms = mergedPermNames.map((name) => {
+      const p = permsMap.get(name)
+      return {
+        name,
+        access: (p?.access as any) || 'unknown',
+        status: (p?.status as any) || 'unknown',
+        notes: p?.notes || '',
+      }
+    })
+
+    setComplianceForm({
+      appMode: app.compliance?.appMode || 'unknown',
+      businessVerification: app.compliance?.businessVerification || 'unknown',
+      appReview: app.compliance?.appReview || 'unknown',
+      permissions: mergedPerms,
+    })
+    setShowComplianceModal(true)
+  }
+
+  const saveCompliance = async () => {
+    if (!complianceApp) return
+    setLoading(true)
+    try {
+      const response = await authFetch(`${API_BASE}/facebook-apps/${complianceApp._id}/compliance`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          appMode: complianceForm.appMode,
+          businessVerification: complianceForm.businessVerification,
+          appReview: complianceForm.appReview,
+          permissions: complianceForm.permissions.map((p) => ({
+            ...p,
+            lastUpdatedAt: new Date().toISOString(),
+          })),
+        }),
+      })
+      const data = await response.json()
+      if (!data.success) throw new Error(data.error || '保存失败')
+      setMessage({ type: 'success', text: '合规信息已保存（publicOauthReady 会自动计算）' })
+      setShowComplianceModal(false)
+      setComplianceApp(null)
+      await loadApps()
+    } catch (e: any) {
+      setMessage({ type: 'error', text: e.message || '保存失败' })
+    } finally {
+      setLoading(false)
+    }
+  }
+
   // 格式化日期
   const formatDate = (dateStr?: string) => {
     if (!dateStr) return '-'
@@ -347,6 +450,13 @@ export default function FacebookAppPage() {
       case 'suspended': return '已暂停'
       default: return status
     }
+  }
+
+  const getPublicOauthBadge = (app: FacebookApp) => {
+    const ok = Boolean(app.isPublicOauthReady || app.compliance?.publicOauthReady)
+    return ok
+      ? { text: 'Public OAuth 就绪', cls: 'bg-emerald-50 border-emerald-200 text-emerald-700' }
+      : { text: 'Public OAuth 未就绪', cls: 'bg-amber-50 border-amber-200 text-amber-700' }
   }
 
   return (
@@ -524,6 +634,18 @@ export default function FacebookAppPage() {
                     </div>
                   </div>
 
+                  {/* Public OAuth 就绪度 */}
+                  <div className="mb-4">
+                    <div className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold border ${getPublicOauthBadge(app).cls}`}>
+                      {getPublicOauthBadge(app).text}
+                    </div>
+                    {publicOAuthRequirements.length > 0 && !(app.isPublicOauthReady || app.compliance?.publicOauthReady) && (
+                      <div className="text-xs text-slate-500 mt-2">
+                        公开授权需要：{publicOAuthRequirements.join(', ')}（需 Advanced + Approved）
+                      </div>
+                    )}
+                  </div>
+
                   {/* 配置信息 */}
                   <div className="text-xs text-slate-500 mb-4 space-y-1">
                     <div className="flex justify-between">
@@ -585,6 +707,12 @@ export default function FacebookAppPage() {
                       className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-medium transition-all"
                     >
                       编辑
+                    </button>
+                    <button
+                      onClick={() => openComplianceEditor(app)}
+                      className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-medium transition-all"
+                    >
+                      合规
                     </button>
                     <button
                       onClick={() => handleResetStats(app)}
@@ -775,6 +903,172 @@ export default function FacebookAppPage() {
                   )}
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 合规信息弹窗 */}
+      {showComplianceModal && complianceApp && (
+        <div className="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in">
+          <div className="absolute inset-0" onClick={() => { setShowComplianceModal(false); setComplianceApp(null) }}></div>
+          <div className="bg-white border border-slate-300 rounded-3xl p-6 w-full max-w-3xl shadow-2xl relative z-10 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-xl font-bold text-slate-900">合规 / 权限配置</h2>
+                <div className="text-sm text-slate-500 mt-1">
+                  {complianceApp.appName} <span className="font-mono text-xs ml-2">{complianceApp.appId}</span>
+                </div>
+              </div>
+              <button
+                onClick={() => { setShowComplianceModal(false); setComplianceApp(null) }}
+                className="p-2 rounded-xl hover:bg-slate-100"
+              >
+                <svg className="w-5 h-5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            <div className="mt-6 grid grid-cols-3 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">App Mode</label>
+                <select
+                  value={complianceForm.appMode}
+                  onChange={(e) => setComplianceForm({ ...complianceForm, appMode: e.target.value as any })}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-xl"
+                >
+                  <option value="unknown">unknown</option>
+                  <option value="dev">dev</option>
+                  <option value="live">live</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">Business Verification</label>
+                <select
+                  value={complianceForm.businessVerification}
+                  onChange={(e) => setComplianceForm({ ...complianceForm, businessVerification: e.target.value as any })}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-xl"
+                >
+                  <option value="unknown">unknown</option>
+                  <option value="not_started">not_started</option>
+                  <option value="in_review">in_review</option>
+                  <option value="verified">verified</option>
+                  <option value="rejected">rejected</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">App Review</label>
+                <select
+                  value={complianceForm.appReview}
+                  onChange={(e) => setComplianceForm({ ...complianceForm, appReview: e.target.value as any })}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-xl"
+                >
+                  <option value="unknown">unknown</option>
+                  <option value="not_started">not_started</option>
+                  <option value="in_review">in_review</option>
+                  <option value="approved">approved</option>
+                  <option value="rejected">rejected</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="mt-6">
+              <div className="flex items-center justify-between">
+                <h3 className="font-semibold text-slate-900">Permissions</h3>
+                {publicOAuthRequirements.length > 0 && (
+                  <div className="text-xs text-slate-500">
+                    Public OAuth 必需：{publicOAuthRequirements.join(', ')}
+                  </div>
+                )}
+              </div>
+
+              <div className="mt-3 border border-slate-200 rounded-2xl overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50">
+                    <tr className="text-left">
+                      <th className="px-4 py-3 font-medium text-slate-600">name</th>
+                      <th className="px-4 py-3 font-medium text-slate-600">access</th>
+                      <th className="px-4 py-3 font-medium text-slate-600">status</th>
+                      <th className="px-4 py-3 font-medium text-slate-600">notes</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {complianceForm.permissions.map((p, idx) => (
+                      <tr key={p.name} className="border-t border-slate-100">
+                        <td className="px-4 py-3 font-mono text-xs text-slate-800">
+                          {p.name}
+                          {publicOAuthRequirements.includes(p.name) && (
+                            <span className="ml-2 px-2 py-0.5 rounded-full text-[10px] bg-indigo-50 border border-indigo-200 text-indigo-700">
+                              required
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">
+                          <select
+                            value={p.access}
+                            onChange={(e) => {
+                              const next = [...complianceForm.permissions]
+                              next[idx] = { ...next[idx], access: e.target.value as any }
+                              setComplianceForm({ ...complianceForm, permissions: next })
+                            }}
+                            className="px-2 py-1 border border-slate-300 rounded-lg"
+                          >
+                            <option value="unknown">unknown</option>
+                            <option value="standard">standard</option>
+                            <option value="advanced">advanced</option>
+                          </select>
+                        </td>
+                        <td className="px-4 py-3">
+                          <select
+                            value={p.status}
+                            onChange={(e) => {
+                              const next = [...complianceForm.permissions]
+                              next[idx] = { ...next[idx], status: e.target.value as any }
+                              setComplianceForm({ ...complianceForm, permissions: next })
+                            }}
+                            className="px-2 py-1 border border-slate-300 rounded-lg"
+                          >
+                            <option value="unknown">unknown</option>
+                            <option value="requested">requested</option>
+                            <option value="approved">approved</option>
+                            <option value="rejected">rejected</option>
+                          </select>
+                        </td>
+                        <td className="px-4 py-3">
+                          <input
+                            value={p.notes || ''}
+                            onChange={(e) => {
+                              const next = [...complianceForm.permissions]
+                              next[idx] = { ...next[idx], notes: e.target.value }
+                              setComplianceForm({ ...complianceForm, permissions: next })
+                            }}
+                            className="w-full px-2 py-1 border border-slate-300 rounded-lg"
+                            placeholder="可选备注"
+                          />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                onClick={() => { setShowComplianceModal(false); setComplianceApp(null) }}
+                disabled={loading}
+                className="px-5 py-2.5 bg-white hover:bg-slate-50 border border-slate-300 rounded-2xl text-slate-700 font-semibold disabled:opacity-50"
+              >
+                取消
+              </button>
+              <button
+                onClick={saveCompliance}
+                disabled={loading}
+                className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 rounded-2xl text-white font-semibold disabled:opacity-50"
+              >
+                {loading ? '保存中...' : '保存'}
+              </button>
             </div>
           </div>
         </div>

@@ -8,8 +8,54 @@ const agentConfigSchema = new mongoose.Schema({
   name: { type: String, required: true },
   description: { type: String },
   
-  // 关联的账户 (空表示应用于所有账户)
+  // 归属组织（用于隔离；为空表示全局/仅依赖 accountIds）
+  organizationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Organization' },
+
+  // 关联的账户 (空表示应用于所有账户) - 兼容旧字段
   accountIds: [{ type: String }],
+
+  /**
+   * RBAC / 资产池范围（你描述的“把账户池分配给 AI”）
+   * - adAccountIds：AI 可操作的广告账户（最小授权单元）
+   * - fbTokenIds：AI 可使用哪些 token 执行（可为空：按 organizationId 自动选择）
+   * - facebookAppIds：AI 允许绑定/使用哪些 App（可为空：按系统可用池）
+   * - materials/targeting/copywriting：AI 在 AutoArk 内部可用的素材/定向包/文案包范围
+   */
+  scope: {
+    adAccountIds: [{ type: String }], // account_id（不带 act_）
+    fbTokenIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'FbToken' }],
+    facebookAppIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'FacebookApp' }],
+
+    materials: {
+      allowAll: { type: Boolean, default: true },
+      folderIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Folder' }],
+      materialIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Material' }],
+    },
+
+    targetingPackages: {
+      allowAll: { type: Boolean, default: true },
+      allowCreate: { type: Boolean, default: false },
+      packageIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'TargetingPackage' }],
+    },
+
+    copywritingPackages: {
+      allowAll: { type: Boolean, default: true },
+      allowCreate: { type: Boolean, default: false },
+      packageIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'CopywritingPackage' }],
+    },
+  },
+
+  /**
+   * AI 能做哪些动作（全自动化必须有边界）
+   */
+  permissions: {
+    canPublishAds: { type: Boolean, default: true },
+    canToggleStatus: { type: Boolean, default: true },
+    canAdjustBudget: { type: Boolean, default: true },
+    canAdjustBid: { type: Boolean, default: false },
+    canPause: { type: Boolean, default: true },
+    canResume: { type: Boolean, default: true },
+  },
   
   // Agent 状态
   status: {
@@ -91,6 +137,12 @@ const agentConfigSchema = new mongoose.Schema({
     },
     checkInterval: { type: Number, default: 30 }, // 检查间隔（分钟）
   },
+
+  // 运行状态（用于调度器/避免重复执行）
+  runtime: {
+    lastRunAt: { type: Date },
+    lastPlanAt: { type: Date },
+  },
   
   // AI 配置
   aiConfig: {
@@ -99,6 +151,71 @@ const agentConfigSchema = new mongoose.Schema({
     aiDecisionWeight: { type: Number, default: 0.7 },     // AI 决策权重
     requireApproval: { type: Boolean, default: true },    // 是否需要人工审批
     approvalThreshold: { type: Number, default: 100 },    // 金额超过此值需审批
+  },
+
+  /**
+   * 生命周期评分配置 (Life-Cycle Momentum System)
+   * 定义不同消耗阶段的权重矩阵
+   */
+  scoringConfig: {
+    stages: [
+      {
+        name: { type: String, default: 'Cold Start' },
+        minSpend: { type: Number, default: 0 },
+        maxSpend: { type: Number, default: 5 },
+        weights: {
+          cpm: { type: Number, default: 0.4 },
+          ctr: { type: Number, default: 0.4 },
+          cpc: { type: Number, default: 0.2 },
+          cpa: { type: Number, default: 0 },
+          roas: { type: Number, default: 0 },
+        },
+      },
+      {
+        name: { type: String, default: 'Exploration' },
+        minSpend: { type: Number, default: 5 },
+        maxSpend: { type: Number, default: 30 },
+        weights: {
+          cpm: { type: Number, default: 0.1 },
+          ctr: { type: Number, default: 0.1 },
+          cpc: { type: Number, default: 0.1 },
+          cpa: { type: Number, default: 0.5 },
+          roas: { type: Number, default: 0.2 },
+        },
+      },
+      {
+        name: { type: String, default: 'Scaling' },
+        minSpend: { type: Number, default: 30 },
+        maxSpend: { type: Number, default: 200 },
+        weights: {
+          cpm: { type: Number, default: 0 },
+          ctr: { type: Number, default: 0.1 },
+          cpc: { type: Number, default: 0 },
+          cpa: { type: Number, default: 0.2 },
+          roas: { type: Number, default: 0.7 },
+        },
+      },
+      {
+        name: { type: String, default: 'Maturity' },
+        minSpend: { type: Number, default: 200 },
+        maxSpend: { type: Number, default: 999999 },
+        weights: {
+          cpm: { type: Number, default: 0.1 },
+          ctr: { type: Number, default: 0.1 },
+          cpc: { type: Number, default: 0 },
+          cpa: { type: Number, default: 0.2 },
+          roas: { type: Number, default: 0.6 },
+        },
+      },
+    ],
+    // 动能增益敏感度
+    momentumSensitivity: { type: Number, default: 0.1 },
+    // 归一化基准值 (用于计算 0-100 分)
+    baselines: {
+      cpm: { type: Number, default: 20 },   // $20 为基准
+      ctr: { type: Number, default: 0.01 }, // 1% 为基准
+      cpc: { type: Number, default: 1 },    // $1 为基准
+    },
   },
   
   createdBy: { type: String },
@@ -132,6 +249,7 @@ const agentOperationSchema = new mongoose.Schema({
   reason: { type: String, required: true },
   aiAnalysis: { type: String },        // AI 分析内容
   dataSnapshot: mongoose.Schema.Types.Mixed,  // 决策时的数据快照
+  scoreSnapshot: mongoose.Schema.Types.Mixed, // 详细评分快照 (Life-Cycle Momentum System)
   
   // 执行状态
   status: {

@@ -10,6 +10,8 @@ import { initRuleCron } from './rule.cron'
 import { initMaterialAutoTestCron } from './materialAutoTest.cron'
 import { initAiSuggestionCron } from './aiSuggestion.cron'
 import { initAccountSyncCron } from './accountSync.cron'
+import { initFacebookUserAssetsCron } from './facebookUserAssets.cron'
+import { initAgentAutoRunCron } from './agentAutoRun.cron'
 import logger from '../utils/logger'
 
 const initCronJobs = () => {
@@ -51,6 +53,12 @@ const initCronJobs = () => {
 
   // 📊 账户同步 (Hourly + Startup)
   initAccountSyncCron()
+
+  // 👤 Facebook 用户资产缓存同步（Every 6 hours）
+  initFacebookUserAssetsCron()
+
+  // 🧠 Agent 自动运行（Planner/Executor jobs）
+  initAgentAutoRunCron()
 
   logger.info('Cron jobs initialized')
 }

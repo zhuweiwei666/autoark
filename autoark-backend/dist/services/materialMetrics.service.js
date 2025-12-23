@@ -105,10 +105,11 @@ const aggregateMaterialMetrics = async (date) => {
             }
         }
         logger_1.default.info(`[MaterialMetrics] Loaded ${adIdToMaterialId.size} ad-material mappings`);
-        // 1.3 获取所有 Material（用于 hash 反查）
+        // 1.3 获取所有 Material（用于 hash 反查 + 名称反查）
         const materials = await Material_1.default.find({ status: 'uploaded' }).lean();
         const materialByHash = new Map();
         const materialByVideoId = new Map();
+        const materialByName = new Map(); // 🆕 按名称查找（用于命名解析兜底）
         for (const m of materials) {
             const mat = m;
             // 通过 Facebook 映射查找
@@ -123,15 +124,22 @@ const aggregateMaterialMetrics = async (date) => {
                 if (mapping.videoId)
                     materialByVideoId.set(mapping.videoId, mat);
             }
+            // 🆕 通过名称查找（用于命名解析兜底）
+            if (mat.name) {
+                materialByName.set(mat.name, mat);
+                // 也支持小写匹配
+                materialByName.set(mat.name.toLowerCase(), mat);
+            }
         }
-        logger_1.default.info(`[MaterialMetrics] Built material lookup: ${materialByHash.size} by hash, ${materialByVideoId.size} by videoId`);
+        logger_1.default.info(`[MaterialMetrics] Built material lookup: ${materialByHash.size} by hash, ${materialByVideoId.size} by videoId, ${materialByName.size} by name`);
         // 2. 构建 adId -> 素材信息 的映射
         // 🎯 关键：优先使用 Ad.materialId（直接归因）
         const adCreativeMap = new Map();
         for (const ad of ads) {
             const creativeInfo = extractCreativeInfo(ad);
             const creativeDetail = creativeInfo.creativeId ? creativeInfoMap.get(creativeInfo.creativeId) : null;
-            // 🎯 优先级：AdMaterialMapping > Ad.materialId > Creative.materialId > hash反查
+            // 🎯 只统计通过 AutoArk 发布的广告（有 AdMaterialMapping 记录的）
+            // 优先级：AdMaterialMapping > Ad.materialId > Creative.materialId
             let materialId;
             let matchType = 'none';
             // 1️⃣ 最高优先级：从 AdMaterialMapping 表查找（批量创建时记录的映射）
@@ -149,21 +157,26 @@ const aggregateMaterialMetrics = async (date) => {
                 materialId = creativeDetail.materialId.toString();
                 matchType = 'direct';
             }
-            // 4️⃣ 最后：通过 hash 反查
-            else {
-                const imageHash = creativeInfo.imageHash;
-                const videoId = creativeInfo.videoId;
-                if (imageHash && materialByHash.has(imageHash)) {
-                    materialId = materialByHash.get(imageHash)._id.toString();
+            // 4️⃣ 🆕 兜底：从广告名称解析素材名（混合方案）
+            // 广告命名格式：{materialName}_{datetime} 如 pilipa_20251211_1430
+            else if (ad.name) {
+                const adName = ad.name;
+                // 提取第一个下划线前的部分作为素材名
+                const possibleMaterialName = adName.split('_')[0];
+                if (possibleMaterialName && materialByName.has(possibleMaterialName)) {
+                    const foundMaterial = materialByName.get(possibleMaterialName);
+                    materialId = foundMaterial._id.toString();
                     matchType = 'fallback';
                 }
-                else if (videoId && materialByVideoId.has(videoId)) {
-                    materialId = materialByVideoId.get(videoId)._id.toString();
+                // 也尝试小写匹配
+                else if (possibleMaterialName && materialByName.has(possibleMaterialName.toLowerCase())) {
+                    const foundMaterial = materialByName.get(possibleMaterialName.toLowerCase());
+                    materialId = foundMaterial._id.toString();
                     matchType = 'fallback';
                 }
             }
-            // 只要有素材信息就记录
-            if (creativeInfo.creativeId || materialId) {
+            // 🎯 混合方案：直接映射 + 命名解析兜底
+            if (materialId && (matchType === 'direct' || matchType === 'fallback')) {
                 adCreativeMap.set(ad.adId, {
                     materialId,
                     ...creativeInfo,
@@ -178,25 +191,28 @@ const aggregateMaterialMetrics = async (date) => {
         const directCount = Array.from(adCreativeMap.values()).filter(v => v.matchType === 'direct').length;
         const fallbackCount = Array.from(adCreativeMap.values()).filter(v => v.matchType === 'fallback').length;
         logger_1.default.info(`[MaterialMetrics] Ad-Material mapping: ${directCount} direct, ${fallbackCount} fallback, ${adCreativeMap.size - directCount - fallbackCount} none`);
-        // 3. 获取当天的 ad 级别指标
+        // 3. 获取当天的 ad 级别指标（包含 country 维度）
         const adMetrics = await MetricsDaily_1.default.find({
             date,
             adId: { $exists: true, $ne: null },
             spendUsd: { $gt: 0 }
         }).lean();
         logger_1.default.info(`[MaterialMetrics] Found ${adMetrics.length} ad metrics for ${date}`);
-        // 4. 按素材聚合指标
-        // 🎯 优先使用 materialId 作为 key（精准归因）
-        // 回退使用 creativeId（兼容）
+        // 4. 按素材 + 国家 聚合指标
+        // 🎯 key 格式：materialId_country（支持国家维度分析）
         const materialAggregation = new Map();
         for (const metric of adMetrics) {
             const creativeInfo = adCreativeMap.get(metric.adId);
             if (!creativeInfo)
                 continue;
-            // 🎯 优先使用 materialId（精准归因），其次 creativeId（兼容）
-            const materialKey = creativeInfo.materialId || creativeInfo.creativeId;
-            if (!materialKey)
+            // 🎯 只使用 materialId（只统计 AutoArk 素材库的素材）
+            const materialId = creativeInfo.materialId;
+            if (!materialId)
                 continue;
+            // 获取国家代码，默认为 'ALL'
+            const country = metric.country || 'ALL';
+            // 🎯 key 格式：materialId_country（支持国家维度分析）
+            const materialKey = `${materialId}_${country}`;
             stats.processed++;
             // 统计匹配类型
             if (creativeInfo.matchType === 'direct')
@@ -209,6 +225,7 @@ const aggregateMaterialMetrics = async (date) => {
             if (!materialAggregation.has(materialKey)) {
                 materialAggregation.set(materialKey, {
                     date,
+                    country, // 🌍 添加国家维度
                     // 🎯 精准归因：记录 materialId
                     materialId: creativeInfo.materialId,
                     creativeId: creativeInfo.creativeId,
@@ -273,33 +290,17 @@ const aggregateMaterialMetrics = async (date) => {
         // 5. 保存到数据库
         for (const [materialKey, agg] of materialAggregation) {
             try {
-                // 🎯 优先使用聚合时已确定的 materialId（精准归因）
-                let materialId = agg.materialId;
-                let materialName = agg.creativeName;
-                // 如果没有 materialId，尝试反查（兼容旧数据）
-                if (!materialId) {
-                    let materialDoc = null;
-                    if (agg.imageHash) {
-                        materialDoc = await Material_1.default.findOne({
-                            $or: [
-                                { 'facebook.imageHash': agg.imageHash },
-                                { 'facebookMappings.imageHash': agg.imageHash },
-                            ]
-                        }).lean();
-                    }
-                    else if (agg.videoId) {
-                        materialDoc = await Material_1.default.findOne({
-                            $or: [
-                                { 'facebook.videoId': agg.videoId },
-                                { 'facebookMappings.videoId': agg.videoId },
-                            ]
-                        }).lean();
-                    }
-                    if (materialDoc) {
-                        materialId = materialDoc._id.toString();
-                        materialName = materialName || materialDoc.name;
-                    }
+                // 🎯 使用聚合时已确定的 materialId（精准归因）
+                const materialId = agg.materialId;
+                if (!materialId)
+                    continue; // 没有 materialId 的跳过
+                // 🎯 从素材库获取素材信息（确保名称正确）
+                const materialDoc = await Material_1.default.findById(materialId).lean();
+                if (!materialDoc) {
+                    logger_1.default.warn(`[MaterialMetrics] Material ${materialId} not found in library, skipping`);
+                    continue;
                 }
+                const materialName = materialDoc.name;
                 // 计算派生指标
                 const ctr = agg.impressions > 0 ? (agg.clicks / agg.impressions) * 100 : 0;
                 const cpc = agg.clicks > 0 ? agg.spend / agg.clicks : 0;
@@ -325,23 +326,15 @@ const aggregateMaterialMetrics = async (date) => {
                 else if (ctr < 0.5)
                     qualityScore -= 5;
                 qualityScore = Math.max(0, Math.min(100, qualityScore));
-                // 构建查询条件
-                const filter = { date };
-                // 🎯 优先使用 materialId 作为唯一标识（精准归因）
-                if (materialId) {
-                    filter.materialId = materialId;
-                }
-                else if (agg.creativeId) {
-                    filter.creativeId = agg.creativeId;
-                }
-                else if (agg.imageHash) {
-                    filter.imageHash = agg.imageHash;
-                }
-                else if (agg.videoId) {
-                    filter.videoId = agg.videoId;
-                }
+                // 构建查询条件（包含 country 维度）
+                const filter = {
+                    date,
+                    country: agg.country || 'ALL', // 🌍 添加国家维度
+                    materialId, // 🎯 使用 materialId 作为唯一标识
+                };
                 const result = await MaterialMetrics_1.default.findOneAndUpdate(filter, {
                     date,
+                    country: agg.country || 'ALL', // 🌍 保存国家
                     materialId, // 🎯 精准归因
                     creativeId: agg.creativeId,
                     imageHash: agg.imageHash,
@@ -401,12 +394,22 @@ const aggregateMaterialMetrics = async (date) => {
 exports.aggregateMaterialMetrics = aggregateMaterialMetrics;
 /**
  * 获取素材排行榜
+ *
+ * 🌍 国家筛选逻辑：
+ * - 无国家筛选：从预聚合的 MaterialMetrics 表查询（快速）
+ * - 有国家筛选：从 MetricsDaily 实时聚合，通过 AdMaterialMapping 关联素材（准确）
  */
 const getMaterialRankings = async (options) => {
-    const { dateRange, sortBy = 'roas', limit = 20, materialType } = options;
+    const { dateRange, sortBy = 'roas', limit = 20, materialType, country } = options;
+    // 🌍 如果指定了国家，使用实时聚合
+    if (country) {
+        return getMaterialRankingsByCountry({ dateRange, sortBy, limit, materialType, country });
+    }
+    // 无国家筛选，使用预聚合数据（快速）
     const match = {
         date: { $gte: dateRange.start, $lte: dateRange.end },
-        spend: { $gt: 0 } // 只要有消耗就显示
+        spend: { $gt: 0 },
+        materialId: { $exists: true, $ne: null } // 🎯 只显示有素材库关联的素材
     };
     if (materialType)
         match.materialType = materialType;
@@ -414,7 +417,7 @@ const getMaterialRankings = async (options) => {
         { $match: match },
         {
             $group: {
-                _id: { $ifNull: ['$creativeId', { $ifNull: ['$imageHash', '$videoId'] }] },
+                _id: '$materialId', // 🎯 以素材库素材ID作为聚合键
                 creativeId: { $first: '$creativeId' },
                 materialId: { $first: '$materialId' },
                 materialType: { $first: '$materialType' },
@@ -522,12 +525,18 @@ const getMaterialRankings = async (options) => {
                 ].filter(q => Object.values(q)[0])
             }).lean();
         }
+        // 获取本地素材的存储 URL
+        const localStorageUrl = localMaterial?.storage?.url || null;
         return {
             ...item,
             fingerprint,
             // 优先使用本地素材的信息
             materialName: localMaterial?.name || item.materialName || `素材_${fingerprint?.substring(0, 12) || 'unknown'}`,
-            thumbnailUrl: localMaterial?.storage?.url || item.thumbnailUrl,
+            // 缩略图优先使用本地存储 URL
+            thumbnailUrl: localStorageUrl || item.thumbnailUrl,
+            // 🎯 添加 localStorageUrl 和 originalUrl 供前端判断下载状态
+            localStorageUrl,
+            originalUrl: item.thumbnailUrl, // Facebook 原始 URL 作为备用
             localMaterialId: localMaterial?._id?.toString(),
             hasLocalMaterial: !!localMaterial,
         };
@@ -894,6 +903,157 @@ const getDecliningMaterials = async (options = {}) => {
     };
 };
 exports.getDecliningMaterials = getDecliningMaterials;
+/**
+ * 🌍 按国家筛选素材排行榜（实时聚合）
+ * 从 MetricsDaily 实时聚合，通过 AdMaterialMapping 关联素材
+ */
+const getMaterialRankingsByCountry = async (options) => {
+    const { dateRange, sortBy = 'roas', limit = 20, materialType, country } = options;
+    logger_1.default.info(`[MaterialMetrics] Getting rankings by country: ${country}, ${dateRange.start} - ${dateRange.end}`);
+    // 1. 获取所有 AdMaterialMapping（广告-素材映射）
+    const mappings = await AdMaterialMapping_1.default.find({ status: 'active' }).lean();
+    const adIdToMaterialId = new Map();
+    for (const m of mappings) {
+        if (m.adId && m.materialId) {
+            adIdToMaterialId.set(m.adId, m.materialId.toString());
+        }
+    }
+    logger_1.default.info(`[MaterialMetrics] Loaded ${adIdToMaterialId.size} ad-material mappings`);
+    if (adIdToMaterialId.size === 0) {
+        return [];
+    }
+    // 2. 从 MetricsDaily 查询指定国家的 campaign 级别数据
+    // 注意：国家数据通常在 campaign 级别，不在 ad 级别
+    const countryMetrics = await MetricsDaily_1.default.find({
+        date: { $gte: dateRange.start, $lte: dateRange.end },
+        country: country,
+        spendUsd: { $gt: 0 },
+        campaignId: { $exists: true, $ne: null }
+    }).lean();
+    logger_1.default.info(`[MaterialMetrics] Found ${countryMetrics.length} metrics for country ${country}`);
+    if (countryMetrics.length === 0) {
+        return [];
+    }
+    // 3. 获取这些 campaign 下的所有广告
+    const campaignIds = [...new Set(countryMetrics.map((m) => m.campaignId))];
+    const ads = await Ad_1.default.find({ campaignId: { $in: campaignIds } }).lean();
+    // 4. 构建 campaign -> 素材列表的映射
+    const campaignToMaterials = new Map();
+    for (const ad of ads) {
+        const materialId = adIdToMaterialId.get(ad.adId);
+        if (materialId) {
+            if (!campaignToMaterials.has(ad.campaignId)) {
+                campaignToMaterials.set(ad.campaignId, new Set());
+            }
+            campaignToMaterials.get(ad.campaignId).add(materialId);
+        }
+    }
+    // 5. 按素材聚合数据（将 campaign 指标按比例分配给素材）
+    const materialAgg = new Map();
+    for (const metric of countryMetrics) {
+        const m = metric;
+        const materialsInCampaign = campaignToMaterials.get(m.campaignId);
+        if (!materialsInCampaign || materialsInCampaign.size === 0)
+            continue;
+        // 将 campaign 的指标按比例分配给每个素材
+        const materialCount = materialsInCampaign.size;
+        const spendPerMaterial = (m.spendUsd || 0) / materialCount;
+        const impressionsPerMaterial = (m.impressions || 0) / materialCount;
+        const clicksPerMaterial = (m.clicks || 0) / materialCount;
+        const purchaseValue = m.purchase_value || 0;
+        const purchaseValuePerMaterial = purchaseValue / materialCount;
+        for (const materialId of materialsInCampaign) {
+            if (!materialAgg.has(materialId)) {
+                materialAgg.set(materialId, {
+                    materialId,
+                    spend: 0,
+                    impressions: 0,
+                    clicks: 0,
+                    purchaseValue: 0,
+                    installs: 0,
+                    purchases: 0,
+                    campaignIds: new Set(),
+                    dates: new Set(),
+                });
+            }
+            const agg = materialAgg.get(materialId);
+            agg.spend += spendPerMaterial;
+            agg.impressions += impressionsPerMaterial;
+            agg.clicks += clicksPerMaterial;
+            agg.purchaseValue += purchaseValuePerMaterial;
+            agg.campaignIds.add(m.campaignId);
+            agg.dates.add(m.date);
+        }
+    }
+    logger_1.default.info(`[MaterialMetrics] Aggregated ${materialAgg.size} materials for country ${country}`);
+    // 6. 获取素材信息并格式化结果
+    const results = [];
+    for (const [materialId, agg] of materialAgg) {
+        const material = await Material_1.default.findById(materialId).lean();
+        if (!material)
+            continue;
+        const mat = material;
+        // 素材类型筛选
+        if (materialType && mat.type !== materialType)
+            continue;
+        const roas = agg.spend > 0 ? agg.purchaseValue / agg.spend : 0;
+        const ctr = agg.impressions > 0 ? (agg.clicks / agg.impressions) * 100 : 0;
+        const cpi = agg.installs > 0 ? agg.spend / agg.installs : 0;
+        // 计算质量分
+        let qualityScore = 50;
+        if (roas >= 3)
+            qualityScore += 30;
+        else if (roas >= 2)
+            qualityScore += 25;
+        else if (roas >= 1.5)
+            qualityScore += 20;
+        else if (roas >= 1)
+            qualityScore += 10;
+        else if (roas < 0.5)
+            qualityScore -= 10;
+        if (ctr >= 2)
+            qualityScore += 10;
+        else if (ctr >= 1)
+            qualityScore += 5;
+        else if (ctr < 0.5)
+            qualityScore -= 5;
+        qualityScore = Math.max(0, Math.min(100, qualityScore));
+        results.push({
+            materialKey: materialId,
+            materialId,
+            materialType: mat.type || 'video',
+            materialName: mat.name,
+            thumbnailUrl: mat.storage?.url,
+            localStorageUrl: mat.storage?.url,
+            originalUrl: mat.storage?.url,
+            imageHash: mat.facebook?.imageHash,
+            videoId: mat.facebook?.videoId,
+            fingerprint: mat.fingerprintKey,
+            hasLocalMaterial: true,
+            localMaterialId: materialId,
+            spend: Math.round(agg.spend * 100) / 100,
+            impressions: Math.round(agg.impressions),
+            clicks: Math.round(agg.clicks),
+            purchaseValue: Math.round(agg.purchaseValue * 100) / 100,
+            installs: agg.installs,
+            purchases: agg.purchases,
+            roas: Math.round(roas * 100) / 100,
+            ctr: Math.round(ctr * 100) / 100,
+            cpi: Math.round(cpi * 100) / 100,
+            qualityScore,
+            daysActive: agg.dates.size,
+            uniqueAdsCount: 0, // 这个无法准确计算
+            uniqueCampaignsCount: agg.campaignIds.size,
+            optimizers: [],
+        });
+    }
+    // 7. 排序
+    const sortKey = sortBy === 'qualityScore' ? 'qualityScore' :
+        sortBy === 'spend' ? 'spend' :
+            sortBy === 'impressions' ? 'impressions' : 'roas';
+    results.sort((a, b) => b[sortKey] - a[sortKey]);
+    return results.slice(0, limit);
+};
 exports.default = {
     aggregateMaterialMetrics: exports.aggregateMaterialMetrics,
     getMaterialRankings: exports.getMaterialRankings,

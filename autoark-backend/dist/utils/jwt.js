@@ -11,12 +11,23 @@ const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
  * 生成 JWT Token
  */
 const generateToken = (user) => {
+    // organizationId 可能是 ObjectId 或被 populate 后的对象
+    let orgId;
+    if (user.organizationId) {
+        // 如果是对象（被 populate），取 _id
+        if (typeof user.organizationId === 'object' && user.organizationId._id) {
+            orgId = user.organizationId._id.toString();
+        }
+        else {
+            orgId = user.organizationId.toString();
+        }
+    }
     const payload = {
         userId: user._id.toString(),
         username: user.username,
         email: user.email,
         role: user.role,
-        organizationId: user.organizationId?.toString(),
+        organizationId: orgId,
     };
     return jsonwebtoken_1.default.sign(payload, JWT_SECRET, {
         expiresIn: JWT_EXPIRES_IN,

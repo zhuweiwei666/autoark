@@ -12,8 +12,48 @@ const mongoose_1 = __importDefault(require("mongoose"));
 const agentConfigSchema = new mongoose_1.default.Schema({
     name: { type: String, required: true },
     description: { type: String },
-    // 关联的账户 (空表示应用于所有账户)
+    // 归属组织（用于隔离；为空表示全局/仅依赖 accountIds）
+    organizationId: { type: mongoose_1.default.Schema.Types.ObjectId, ref: 'Organization' },
+    // 关联的账户 (空表示应用于所有账户) - 兼容旧字段
     accountIds: [{ type: String }],
+    /**
+     * RBAC / 资产池范围（你描述的“把账户池分配给 AI”）
+     * - adAccountIds：AI 可操作的广告账户（最小授权单元）
+     * - fbTokenIds：AI 可使用哪些 token 执行（可为空：按 organizationId 自动选择）
+     * - facebookAppIds：AI 允许绑定/使用哪些 App（可为空：按系统可用池）
+     * - materials/targeting/copywriting：AI 在 AutoArk 内部可用的素材/定向包/文案包范围
+     */
+    scope: {
+        adAccountIds: [{ type: String }], // account_id（不带 act_）
+        fbTokenIds: [{ type: mongoose_1.default.Schema.Types.ObjectId, ref: 'FbToken' }],
+        facebookAppIds: [{ type: mongoose_1.default.Schema.Types.ObjectId, ref: 'FacebookApp' }],
+        materials: {
+            allowAll: { type: Boolean, default: true },
+            folderIds: [{ type: mongoose_1.default.Schema.Types.ObjectId, ref: 'Folder' }],
+            materialIds: [{ type: mongoose_1.default.Schema.Types.ObjectId, ref: 'Material' }],
+        },
+        targetingPackages: {
+            allowAll: { type: Boolean, default: true },
+            allowCreate: { type: Boolean, default: false },
+            packageIds: [{ type: mongoose_1.default.Schema.Types.ObjectId, ref: 'TargetingPackage' }],
+        },
+        copywritingPackages: {
+            allowAll: { type: Boolean, default: true },
+            allowCreate: { type: Boolean, default: false },
+            packageIds: [{ type: mongoose_1.default.Schema.Types.ObjectId, ref: 'CopywritingPackage' }],
+        },
+    },
+    /**
+     * AI 能做哪些动作（全自动化必须有边界）
+     */
+    permissions: {
+        canPublishAds: { type: Boolean, default: true },
+        canToggleStatus: { type: Boolean, default: true },
+        canAdjustBudget: { type: Boolean, default: true },
+        canAdjustBid: { type: Boolean, default: false },
+        canPause: { type: Boolean, default: true },
+        canResume: { type: Boolean, default: true },
+    },
     // Agent 状态
     status: {
         type: String,
@@ -85,6 +125,11 @@ const agentConfigSchema = new mongoose_1.default.Schema({
             end: { type: Number, default: 24 },
         },
         checkInterval: { type: Number, default: 30 }, // 检查间隔（分钟）
+    },
+    // 运行状态（用于调度器/避免重复执行）
+    runtime: {
+        lastRunAt: { type: Date },
+        lastPlanAt: { type: Date },
     },
     // AI 配置
     aiConfig: {

@@ -29,3 +29,6 @@ export { default as FacebookUser } from './FacebookUser'
 
 // Facebook App 管理（支持多App负载均衡）
 export { default as FacebookApp } from './FacebookApp'
+
+// 自动化 Job（AI Planner/Executor & 幂等任务编排）
+export { default as AutomationJob } from './AutomationJob'

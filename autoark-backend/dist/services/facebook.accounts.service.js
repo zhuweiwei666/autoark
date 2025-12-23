@@ -90,14 +90,31 @@ const getAccounts = async (filters = {}, pagination, organizationId) => {
     if (organizationId) {
         query.organizationId = organizationId;
     }
+    // 用户隔离：限制只能看到关联的账户
+    if (filters.accountIds && Array.isArray(filters.accountIds)) {
+        if (filters.accountIds.length === 0) {
+            // 用户没有关联任何账户，返回空结果
+            return { data: [], total: 0, page: pagination.page, limit: pagination.limit };
+        }
+        query.accountId = { $in: filters.accountIds };
+    }
     if (filters.optimizer) {
         query.operator = { $regex: filters.optimizer, $options: 'i' };
     }
     if (filters.status) {
         query.status = filters.status;
     }
-    if (filters.accountId) {
+    if (filters.accountId && !filters.accountIds) {
+        // 只有在没有 accountIds 限制时才按关键字搜索
         query.accountId = { $regex: filters.accountId, $options: 'i' };
+    }
+    else if (filters.accountId && filters.accountIds) {
+        // 有 accountIds 限制时，在限制范围内搜索
+        query.$and = [
+            { accountId: { $in: filters.accountIds } },
+            { accountId: { $regex: filters.accountId, $options: 'i' } }
+        ];
+        delete query.accountId;
     }
     if (filters.name) {
         query.name = { $regex: filters.name, $options: 'i' };
@@ -124,16 +141,24 @@ const getAccounts = async (filters = {}, pagination, organizationId) => {
         timeRange = { since: '2020-01-01', until: filters.endDate };
         datePreset = '';
     }
-    // 获取有效 token
-    const tokenDoc = await FbToken_1.default.findOne({ status: 'active' });
-    const token = tokenDoc?.token;
-    if (token && accountIds.length > 0) {
+    // 为每个账户使用其关联的 token（更准确，避免用“任意一个 active token”导致无权限/数据不更新）
+    const accountTokenMap = {};
+    for (const acc of allAccounts) {
+        if (acc?.accountId && acc?.token) {
+            accountTokenMap[acc.accountId] = acc.token;
+        }
+    }
+    if (accountIds.length > 0) {
         // 并发获取所有账户的 insights（限制并发数）
         const batchSize = 10;
         for (let i = 0; i < accountIds.length; i += batchSize) {
             const batch = accountIds.slice(i, i + batchSize);
             const promises = batch.map(async (accountId) => {
                 try {
+                    const token = accountTokenMap[accountId];
+                    if (!token) {
+                        return { accountId, spend: 0 };
+                    }
                     const accountIdForApi = (0, accountId_1.normalizeForApi)(accountId);
                     const insights = await (0, facebook_api_1.fetchInsights)(accountIdForApi, 'account', datePreset || undefined, token, undefined, timeRange);
                     if (insights && insights.length > 0) {

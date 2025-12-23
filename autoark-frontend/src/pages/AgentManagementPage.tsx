@@ -1,5 +1,19 @@
 import { useState, useEffect } from 'react'
 import { authFetch } from '../services/api'
+import {
+  Radar,
+  RadarChart,
+  PolarGrid,
+  PolarAngleAxis,
+  PolarRadiusAxis,
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  Cell,
+} from 'recharts'
 
 interface Agent {
   _id: string
@@ -33,6 +47,14 @@ interface Operation {
   reason: string
   status: string
   createdAt: string
+  scoreSnapshot?: {
+    finalScore: number
+    baseScore: number
+    momentumBonus: number
+    stage: string
+    metricContributions: Record<string, number>
+    slopes: Record<string, number>
+  }
 }
 
 export default function AgentManagementPage() {
@@ -43,6 +65,8 @@ export default function AgentManagementPage() {
   const [editingAgent, setEditingAgent] = useState<Agent | null>(null)
   const [loading, setLoading] = useState(false)
   const [activeTab, setActiveTab] = useState<'agents' | 'pending' | 'history'>('agents')
+  const [showSnapshotModal, setShowSnapshotModal] = useState(false)
+  const [selectedOp, setSelectedOp] = useState<Operation | null>(null)
 
   const [formData, setFormData] = useState({
     name: '',
@@ -127,20 +151,30 @@ export default function AgentManagementPage() {
     }
   }
 
-  const runAgent = async (id: string) => {
+  const runAgentAsJobs = async (id: string) => {
     setLoading(true)
     try {
-      const res = await authFetch(`/api/agent/agents/${id}/run`, { method: 'POST' })
+      const res = await authFetch(`/api/agent/agents/${id}/run-jobs`, { method: 'POST' })
       const data = await res.json()
       if (data.success) {
-        alert(`Agent 运行完成，产生 ${data.data.operationsCount} 个操作`)
+        const ops = data.data?.operationsCount ?? data.data?.operations?.length ?? 0
+        const jobs = data.data?.jobsCreated ?? 0
+        alert(`Planner/Executor 已触发：operations=${ops}，jobsCreated=${jobs}`)
         loadOperations()
         loadPendingOps()
+      } else {
+        alert(data.error || '触发失败')
       }
-    } catch (error) {
-      console.error('Failed to run agent:', error)
+    } catch (error: any) {
+      console.error('Failed to run agent as jobs:', error)
+      alert(error?.message || '触发失败')
     }
     setLoading(false)
+  }
+
+  const openSnapshot = (op: Operation) => {
+    setSelectedOp(op)
+    setShowSnapshotModal(true)
   }
 
   const approveOperation = async (id: string) => {
@@ -343,6 +377,13 @@ export default function AgentManagementPage() {
                         ▶ 立即运行
                       </button>
                       <button
+                        onClick={() => runAgentAsJobs(agent._id)}
+                        disabled={loading}
+                        className="flex-1 px-4 py-2 bg-indigo-100 text-indigo-700 rounded-xl text-sm font-medium hover:bg-indigo-200 transition-colors"
+                      >
+                        ⚙︎ 运行(队列)
+                      </button>
+                      <button
                         onClick={() => editAgent(agent)}
                         className="px-4 py-2 bg-slate-100 text-slate-600 rounded-xl text-sm hover:bg-slate-200 transition-colors"
                       >
@@ -388,6 +429,14 @@ export default function AgentManagementPage() {
                       )}
                     </div>
                     <div className="flex gap-2">
+                      {op.scoreSnapshot && (
+                        <button
+                          onClick={() => openSnapshot(op)}
+                          className="px-4 py-2 bg-indigo-50 text-indigo-600 rounded-xl text-sm font-medium hover:bg-indigo-100 transition-colors"
+                        >
+                          👁 决策快照
+                        </button>
+                      )}
                       <button
                         onClick={() => approveOperation(op._id)}
                         className="px-4 py-2 bg-emerald-600 text-white rounded-xl text-sm font-medium hover:bg-emerald-700 transition-colors"
@@ -436,14 +485,28 @@ export default function AgentManagementPage() {
                       <td className="px-6 py-4 text-sm text-slate-700">{op.entityName || op.entityId}</td>
                       <td className="px-6 py-4 text-sm text-slate-500 max-w-xs truncate">{op.reason}</td>
                       <td className="px-6 py-4">
-                        <span className={`px-2 py-1 rounded text-xs font-medium ${
-                          op.status === 'executed' ? 'bg-emerald-100 text-emerald-700' :
-                          op.status === 'pending' ? 'bg-amber-100 text-amber-700' :
-                          op.status === 'rejected' ? 'bg-red-100 text-red-700' :
-                          'bg-slate-100 text-slate-600'
-                        }`}>
-                          {op.status}
-                        </span>
+                        <div className="flex items-center gap-2">
+                          <span className={`px-2 py-1 rounded text-xs font-medium ${
+                            op.status === 'executed' ? 'bg-emerald-100 text-emerald-700' :
+                            op.status === 'pending' ? 'bg-amber-100 text-amber-700' :
+                            op.status === 'rejected' ? 'bg-red-100 text-red-700' :
+                            'bg-slate-100 text-slate-600'
+                          }`}>
+                            {op.status}
+                          </span>
+                          {op.scoreSnapshot && (
+                            <button
+                              onClick={() => openSnapshot(op)}
+                              className="text-indigo-600 hover:text-indigo-800"
+                              title="查看决策快照"
+                            >
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                              </svg>
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))
@@ -712,6 +775,139 @@ export default function AgentManagementPage() {
                 >
                   {loading ? '保存中...' : '保存'}
                 </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 决策快照 Modal */}
+        {showSnapshotModal && selectedOp && selectedOp.scoreSnapshot && (
+          <div className="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+            <div className="absolute inset-0" onClick={() => setShowSnapshotModal(false)}></div>
+            <div className="bg-white rounded-3xl border border-slate-200 w-full max-w-4xl max-h-[90vh] overflow-y-auto shadow-2xl relative z-10 p-8">
+              <div className="flex items-start justify-between mb-8">
+                <div>
+                  <h2 className="text-2xl font-bold text-slate-900">决策专家报告 (Decision Snapshot)</h2>
+                  <p className="text-sm text-slate-500 mt-1">
+                    {selectedOp.entityName} <span className="font-mono text-xs ml-2">ID: {selectedOp.entityId}</span>
+                  </p>
+                </div>
+                <button onClick={() => setShowSnapshotModal(false)} className="p-2 rounded-xl hover:bg-slate-100 transition-all">
+                  <svg className="w-6 h-6 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              {/* 核心评分概览 */}
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+                <div className="bg-indigo-600 rounded-2xl p-5 text-white shadow-lg shadow-indigo-200">
+                  <div className="text-xs text-indigo-100 mb-1 opacity-80 uppercase tracking-wider">综合评分</div>
+                  <div className="text-4xl font-bold">{selectedOp.scoreSnapshot.finalScore.toFixed(1)}</div>
+                  <div className="mt-2 text-xs text-indigo-100 font-medium">Stage: {selectedOp.scoreSnapshot.stage}</div>
+                </div>
+                <div className="bg-slate-50 rounded-2xl p-5 border border-slate-100">
+                  <div className="text-xs text-slate-400 mb-1 uppercase tracking-wider">基础评分 (Static)</div>
+                  <div className="text-2xl font-bold text-slate-800">{selectedOp.scoreSnapshot.baseScore.toFixed(1)}</div>
+                </div>
+                <div className="bg-slate-50 rounded-2xl p-5 border border-slate-100">
+                  <div className="text-xs text-slate-400 mb-1 uppercase tracking-wider">动能奖金 (Trend)</div>
+                  <div className={`text-2xl font-bold ${selectedOp.scoreSnapshot.momentumBonus >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                    {selectedOp.scoreSnapshot.momentumBonus >= 0 ? '+' : ''}
+                    {(selectedOp.scoreSnapshot.momentumBonus * 100).toFixed(1)}%
+                  </div>
+                </div>
+                <div className="bg-slate-50 rounded-2xl p-5 border border-slate-100">
+                  <div className="text-xs text-slate-400 mb-1 uppercase tracking-wider">决策时间</div>
+                  <div className="text-sm font-medium text-slate-700 mt-2">{new Date(selectedOp.createdAt).toLocaleString()}</div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                {/* 指标贡献权重图 */}
+                <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-sm">
+                  <h3 className="text-sm font-bold text-slate-800 mb-6 flex items-center gap-2">
+                    <span className="w-1 h-4 bg-indigo-500 rounded-full"></span>
+                    各指标分值贡献 (Weighted Contribution)
+                  </h3>
+                  <div className="h-64">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <RadarChart cx="50%" cy="50%" outerRadius="80%" data={
+                        Object.entries(selectedOp.scoreSnapshot.metricContributions).map(([key, val]) => ({
+                          subject: key.toUpperCase(),
+                          A: val,
+                          fullMark: 100,
+                        }))
+                      }>
+                        <PolarGrid />
+                        <PolarAngleAxis dataKey="subject" />
+                        <Radar name="Score" dataKey="A" stroke="#4f46e5" fill="#4f46e5" fillOpacity={0.6} />
+                      </RadarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+
+                {/* 指标动能 (斜率) 柱状图 */}
+                <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-sm">
+                  <h3 className="text-sm font-bold text-slate-800 mb-6 flex items-center gap-2">
+                    <span className="w-1 h-4 bg-emerald-500 rounded-full"></span>
+                    指标动能趋势 (Velocity / Slope)
+                  </h3>
+                  <div className="h-64">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={
+                        Object.entries(selectedOp.scoreSnapshot.slopes).map(([key, val]) => ({
+                          name: key.toUpperCase(),
+                          slope: val,
+                        }))
+                      }>
+                        <XAxis dataKey="name" axisLine={false} tickLine={false} />
+                        <YAxis hide />
+                        <Tooltip 
+                          contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
+                          formatter={(value: number) => [value.toFixed(4), 'Slope']}
+                        />
+                        <Bar dataKey="slope" radius={[4, 4, 0, 0]}>
+                          {
+                            Object.entries(selectedOp.scoreSnapshot.slopes).map((entry, index) => {
+                              const [key, val] = entry
+                              // CTR 升为正，CPA 降为正（在后端已归一化，这里仅展示原始斜率）
+                              // 我们简单根据正负涂色
+                              return <Cell key={`cell-${index}`} fill={val >= 0 ? '#10b981' : '#f43f5e'} />
+                            })
+                          }
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <div className="mt-4 text-xs text-slate-400 text-center italic">
+                    * 正值表示指标正在上升，负值表示指标正在下降
+                  </div>
+                </div>
+              </div>
+
+              {/* 决策逻辑解释 */}
+              <div className="mt-8 p-6 bg-slate-50 rounded-2xl border border-slate-100">
+                <h3 className="text-sm font-bold text-slate-800 mb-3 flex items-center gap-2">
+                  <span className="w-1 h-4 bg-slate-400 rounded-full"></span>
+                  系统决策链摘要
+                </h3>
+                <div className="text-sm text-slate-600 leading-relaxed space-y-2">
+                  <p>1. 当前实体处于 <strong>{selectedOp.scoreSnapshot.stage}</strong> 阶段，系统自动启用了该阶段的权重矩阵。</p>
+                  <p>2. 根据元指标表现计算出基础分值为 <strong>{selectedOp.scoreSnapshot.baseScore.toFixed(1)}</strong> 分。</p>
+                  <p>3. 综合多维度微分趋势，系统检测到 <strong>{
+                    Object.entries(selectedOp.scoreSnapshot.slopes)
+                      .filter(([_, s]) => Math.abs(s) > 0.0001)
+                      .map(([k, s]) => `${k.toUpperCase()}(${s > 0 ? '↗' : '↘'})`)
+                      .join(', ') || '指标处于平稳期'
+                  }</strong>，提供了 <strong>{(selectedOp.scoreSnapshot.momentumBonus * 100).toFixed(1)}%</strong> 的动能修正。</p>
+                  <p className="mt-4 pt-4 border-t border-slate-200 font-medium text-slate-800 italic flex items-center gap-2">
+                    <svg className="w-4 h-4 text-blue-500" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                    </svg>
+                    最终决定执行: <span className="text-indigo-600 underline underline-offset-4">{selectedOp.action.toUpperCase()}</span>
+                  </p>
+                </div>
               </div>
             </div>
           </div>

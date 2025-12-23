@@ -338,7 +338,8 @@ exports.searchTargetingLocations = searchTargetingLocations;
 // ==================== 获取 Pages 和 Instagram ====================
 const getPages = async (accountId, token) => {
     try {
-        // 1. 先尝试从广告账户获取 promote_pages
+        // 从广告账户获取 promote_pages（BM 分配的主页）
+        // 不再回退到用户主页，因为那会导致权限问题
         let pages = [];
         try {
             const promoteRes = await facebookClient_1.facebookClient.get(`/act_${accountId}/promote_pages`, {
@@ -347,21 +348,13 @@ const getPages = async (accountId, token) => {
                 limit: 100,
             });
             pages = promoteRes.data || [];
+            logger_1.default.info(`[BulkCreate] Found ${pages.length} promote_pages for account ${accountId}`);
         }
         catch (e) {
             logger_1.default.warn(`[BulkCreate] Failed to get promote_pages for ${accountId}: ${e.message}`);
         }
-        // 2. 如果没有 promote_pages，获取用户有广告权限的所有主页
         if (pages.length === 0) {
-            logger_1.default.info(`[BulkCreate] No promote_pages for ${accountId}, falling back to user pages`);
-            const userPagesRes = await facebookClient_1.facebookClient.get('/me/accounts', {
-                access_token: token,
-                fields: 'id,name,picture,tasks',
-                limit: 100,
-            });
-            // 只返回有 ADVERTISE 权限的主页
-            pages = (userPagesRes.data || []).filter((page) => page.tasks && page.tasks.includes('ADVERTISE'));
-            logger_1.default.info(`[BulkCreate] Found ${pages.length} user pages with ADVERTISE permission`);
+            logger_1.default.warn(`[BulkCreate] Account ${accountId} has no promote_pages - need BM configuration`);
         }
         return { success: true, data: pages };
     }

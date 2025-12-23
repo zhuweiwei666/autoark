@@ -19,6 +19,7 @@ const FbTokenSchema = new mongoose_1.default.Schema({
     expiresAt: { type: Date }, // token 过期时间
     fbUserId: { type: String }, // Facebook 用户 ID
     fbUserName: { type: String }, // Facebook 用户名称
+    lastAuthAppId: { type: String }, // 上次授权使用的 Facebook App ID
     createdAt: { type: Date, default: Date.now },
     updatedAt: { type: Date, default: Date.now },
 }, {

@@ -135,10 +135,18 @@ const getActionCount = (actions, actionType) => {
 };
 const getCampaigns = async (filters = {}, pagination) => {
     const query = {};
+    // 用户隔离：限制只能看到关联账户的广告系列
+    if (filters.accountIds && Array.isArray(filters.accountIds)) {
+        if (filters.accountIds.length === 0) {
+            // 用户没有关联任何账户，返回空结果
+            return { data: [], total: 0, page: pagination.page, limit: pagination.limit };
+        }
+        query.accountId = { $in: filters.accountIds };
+    }
     if (filters.name) {
         query.name = { $regex: filters.name, $options: 'i' };
     }
-    if (filters.accountId) {
+    if (filters.accountId && !filters.accountIds) {
         query.accountId = filters.accountId;
     }
     if (filters.status) {
