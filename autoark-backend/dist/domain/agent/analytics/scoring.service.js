@@ -21,7 +21,19 @@ class ScoringService {
         // 3. 应用权重矩阵得到阶段基础分
         let baseScore = 0;
         const metricContributions = {};
-        for (const [key, weight] of Object.entries(stage.weights)) {
+        // TikTok 特有的权重微调逻辑 (可以在这里硬编码一些专家建议)
+        const effectiveWeights = { ...stage.weights };
+        if (platform === 'tiktok') {
+            // 专家建议：TikTok 启动期 HookRate 权重提高，成熟期看重完播率（此处简化，后续可在 UI 配置）
+            if (stage.name === 'Cold Start' && effectiveWeights.hookRate != null) {
+                effectiveWeights.hookRate *= 1.2;
+                // 归一化权重以防溢出
+                const sum = Object.values(effectiveWeights).reduce((a, b) => a + b, 0);
+                for (const k in effectiveWeights)
+                    effectiveWeights[k] /= sum;
+            }
+        }
+        for (const [key, weight] of Object.entries(effectiveWeights)) {
             const score = baseScores[key] || 0;
             const contribution = score * weight;
             baseScore += contribution;

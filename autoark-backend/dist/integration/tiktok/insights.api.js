@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.fetchTiktokInsights = void 0;
+exports.fetchTiktokAds = exports.fetchTiktokAdGroups = exports.fetchTiktokCampaigns = exports.fetchTiktokInsights = void 0;
 const tiktokClient_1 = require("./tiktokClient");
 /**
  * TikTok Insights API
@@ -42,3 +42,24 @@ const fetchTiktokInsights = async (advertiserId, level, reportType, params, acce
     return tiktokClient_1.tiktokClient.get('/report/integrated/get/', requestParams, accessToken);
 };
 exports.fetchTiktokInsights = fetchTiktokInsights;
+/**
+ * 获取 TikTok 广告账户下的所有广告系列
+ */
+const fetchTiktokCampaigns = async (advertiserId, accessToken) => {
+    return tiktokClient_1.tiktokClient.get('/campaign/get/', { advertiser_id: advertiserId }, accessToken);
+};
+exports.fetchTiktokCampaigns = fetchTiktokCampaigns;
+/**
+ * 获取 TikTok 广告账户下的所有广告组
+ */
+const fetchTiktokAdGroups = async (advertiserId, accessToken) => {
+    return tiktokClient_1.tiktokClient.get('/adgroup/get/', { advertiser_id: advertiserId }, accessToken);
+};
+exports.fetchTiktokAdGroups = fetchTiktokAdGroups;
+/**
+ * 获取 TikTok 广告账户下的所有广告
+ */
+const fetchTiktokAds = async (advertiserId, accessToken) => {
+    return tiktokClient_1.tiktokClient.get('/ad/get/', { advertiser_id: advertiserId }, accessToken);
+};
+exports.fetchTiktokAds = fetchTiktokAds;

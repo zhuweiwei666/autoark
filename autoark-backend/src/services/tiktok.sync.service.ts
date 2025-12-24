@@ -47,7 +47,93 @@ export const syncTiktokAdvertiser = async (advertiserId: string, token: string) 
   
   const today = dayjs().format('YYYY-MM-DD')
 
-  // 1. 同步报表 (Hourly)
+  // 1. 同步 Campaigns
+  try {
+    const campaignsData = await tiktokApi.fetchTiktokCampaigns(advertiserId, token)
+    const campaigns = campaignsData.list || []
+    logger.info(`[TikTokSync] Syncing ${campaigns.length} campaigns for ${advertiserId}`)
+    for (const c of campaigns) {
+      await writeToMongo(
+        Campaign,
+        { campaignId: c.campaign_id },
+        {
+          campaignId: c.campaign_id,
+          accountId: advertiserId,
+          channel: 'tiktok',
+          platform: 'tiktok',
+          name: c.campaign_name,
+          status: c.operation_status,
+          objective: c.objective_type,
+          daily_budget: c.budget,
+          created_time: c.create_time,
+          updated_time: c.modify_time,
+          raw: c,
+        }
+      )
+    }
+  } catch (err) {
+    logger.error(`[TikTokSync] Failed to sync campaigns for ${advertiserId}`, err)
+  }
+
+  // 2. 同步 AdGroups (映射到 AdSet 模型)
+  try {
+    const adgroupsData = await tiktokApi.fetchTiktokAdGroups(advertiserId, token)
+    const adgroups = adgroupsData.list || []
+    logger.info(`[TikTokSync] Syncing ${adgroups.length} adgroups for ${advertiserId}`)
+    for (const ag of adgroups) {
+      await writeToMongo(
+        AdSet,
+        { adsetId: ag.adgroup_id },
+        {
+          adsetId: ag.adgroup_id,
+          accountId: advertiserId,
+          campaignId: ag.campaign_id,
+          channel: 'tiktok',
+          platform: 'tiktok',
+          name: ag.adgroup_name,
+          status: ag.operation_status,
+          optimizationGoal: ag.optimize_goal,
+          budget: ag.budget,
+          created_time: ag.create_time,
+          updated_time: ag.modify_time,
+          raw: ag,
+        }
+      )
+    }
+  } catch (err) {
+    logger.error(`[TikTokSync] Failed to sync adgroups for ${advertiserId}`, err)
+  }
+
+  // 3. 同步 Ads
+  try {
+    const adsData = await tiktokApi.fetchTiktokAds(advertiserId, token)
+    const ads = adsData.list || []
+    logger.info(`[TikTokSync] Syncing ${ads.length} ads for ${advertiserId}`)
+    for (const a of ads) {
+      await writeToMongo(
+        Ad,
+        { adId: a.ad_id },
+        {
+          adId: a.ad_id,
+          adsetId: a.adgroup_id,
+          campaignId: a.campaign_id,
+          accountId: advertiserId,
+          channel: 'tiktok',
+          platform: 'tiktok',
+          name: a.ad_name,
+          status: a.operation_status,
+          effectiveStatus: a.operation_status === 'ENABLE' ? 'ACTIVE' : 'PAUSED',
+          created_time: a.create_time,
+          updated_time: a.modify_time,
+          raw: a,
+        }
+      )
+    }
+  } catch (err) {
+    logger.error(`[TikTokSync] Failed to sync ads for ${advertiserId}`, err)
+  }
+
+  // 4. 同步报表 (Hourly)
   try {
     const insightsData = await tiktokApi.fetchTiktokInsights(
       advertiserId,

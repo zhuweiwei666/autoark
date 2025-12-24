@@ -10,6 +10,7 @@ const agent_model_1 = require("./agent.model");
 const Account_1 = __importDefault(require("../../models/Account"));
 const MetricsDaily_1 = __importDefault(require("../../models/MetricsDaily"));
 const Campaign_1 = __importDefault(require("../../models/Campaign"));
+const AdSet_1 = __importDefault(require("../../models/AdSet"));
 const MaterialMetrics_1 = __importDefault(require("../../models/MaterialMetrics"));
 const bulkCreate_api_1 = require("../../integration/facebook/bulkCreate.api");
 const management_api_1 = require("../../integration/tiktok/management.api");
@@ -1914,6 +1915,17 @@ ${conversation.messages.slice(-6).map((m) => `${m.role === 'user' ? '用户' : '
             return { success: false, error: 'Account not found' };
         }
         const platform = account.channel === 'tiktok' ? 'tiktok' : 'facebook';
+        // --- 学习期保护 (Learning Phase Protection) ---
+        if (platform === 'tiktok' && operation.action === 'budget_decrease') {
+            const adSet = await AdSet_1.default.findOne({ adsetId: operation.entityId });
+            const secondaryStatus = adSet?.raw?.secondary_status;
+            if (secondaryStatus === 'ADGROUP_STATUS_LEARNING') {
+                operation.status = 'failed';
+                operation.error = 'Momentum: TikTok Learning Phase protection. Budget decrease inhibited during learning.';
+                await operation.save();
+                return { success: false, error: operation.error };
+            }
+        }
         const token = await this.resolveTokenForAccount(operation.accountId, agent, platform);
         if (!token) {
             operation.status = 'failed';

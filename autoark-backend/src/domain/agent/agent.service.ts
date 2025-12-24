@@ -4,6 +4,7 @@ import { AgentConfig, AgentOperation, DailyReport, AiConversation, CreativeScore
 import Account from '../../models/Account'
 import MetricsDaily from '../../models/MetricsDaily'
 import Campaign from '../../models/Campaign'
+import AdSet from '../../models/AdSet'
 import MaterialMetrics from '../../models/MaterialMetrics'
 import { updateCampaign, updateAdSet } from '../../integration/facebook/bulkCreate.api'
 import { updateTiktokCampaign, updateTiktokAdGroup, updateTiktokAd } from '../../integration/tiktok/management.api'
@@ -2095,6 +2096,18 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
     }
 
     const platform = account.channel === 'tiktok' ? 'tiktok' : 'facebook'
+
+    // --- 学习期保护 (Learning Phase Protection) ---
+    if (platform === 'tiktok' && operation.action === 'budget_decrease') {
+      const adSet = await AdSet.findOne({ adsetId: operation.entityId })
+      const secondaryStatus = adSet?.raw?.secondary_status
+      if (secondaryStatus === 'ADGROUP_STATUS_LEARNING') {
+        operation.status = 'failed'
+        operation.error = 'Momentum: TikTok Learning Phase protection. Budget decrease inhibited during learning.'
+        await operation.save()
+        return { success: false, error: operation.error }
+      }
+    }
 
     const token = await this.resolveTokenForAccount(operation.accountId, agent, platform)
     if (!token) {

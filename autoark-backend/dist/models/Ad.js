@@ -23,6 +23,7 @@ const adSchema = new mongoose_1.default.Schema({
     campaignName: String,
     accountId: String,
     channel: { type: String, default: 'facebook' },
+    platform: { type: String, enum: ['facebook', 'tiktok'], default: 'facebook', index: true },
     name: String,
     status: String,
     // ========== 审核状态追踪 ==========

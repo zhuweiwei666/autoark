@@ -112,7 +112,6 @@ export default function AgentManagementPage() {
   const [availableAccounts, setAvailableAccounts] = useState<FbAccount[]>([])
   const [tiktokAccounts, setTiktokAccounts] = useState<any[]>([])
   const [accountsLoading, setAccountsLoading] = useState(false)
-  const [platformTab, setPlatformTab] = useState<'facebook' | 'tiktok'>('facebook')
 
   const [formData, setFormData] = useState({
     name: '',
@@ -132,6 +131,7 @@ export default function AgentManagementPage() {
       budgetAdjust: { enabled: true, minAdjustPercent: 0.1, maxAdjustPercent: 0.3 },
     },
     aiConfig: { useAiDecision: true, requireApproval: true, approvalThreshold: 100 },
+    platform: 'facebook' as 'facebook' | 'tiktok',
     scoringConfig: {
       stages: [
         {
@@ -361,6 +361,7 @@ export default function AgentManagementPage() {
         facebookAppIds: [],
       },
       objectives: { targetRoas: 1.5, maxCpa: 20, dailyBudgetLimit: 500 },
+      platform: 'facebook',
       rules: {
         autoStop: { enabled: true, roasThreshold: 0.5, minDays: 3, minSpend: 50 },
         autoScale: { enabled: true, roasThreshold: 2.0, minDays: 3, budgetIncrease: 0.2 },
@@ -431,6 +432,7 @@ export default function AgentManagementPage() {
         maxCpa: agent.objectives?.maxCpa || 20,
         dailyBudgetLimit: agent.objectives?.dailyBudgetLimit || 500,
       },
+      platform: (agent as any).platform || 'facebook',
       rules: {
         autoStop: {
           enabled: agent.rules?.autoStop?.enabled ?? true,
@@ -754,10 +756,32 @@ export default function AgentManagementPage() {
                     />
                   </div>
                   <div>
+                    <label className="block text-sm text-slate-600 mb-2">所属平台</label>
+                    <select
+                      value={formData.platform}
+                      onChange={(e) => {
+                        const nextPlatform = e.target.value as 'facebook' | 'tiktok'
+                        setFormData({ 
+                          ...formData, 
+                          platform: nextPlatform,
+                          scope: { ...formData.scope, adAccountIds: [] } // 切换平台时清空已选账户
+                        })
+                      }}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    >
+                      <option value="facebook">Facebook</option>
+                      <option value="tiktok">TikTok</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="hidden"> {/* 占位，保持原样逻辑 */} </div>
+                  <div>
                     <label className="block text-sm text-slate-600 mb-2">状态</label>
                     <select
                       value={formData.status}
-                      onChange={(e) => setFormData({ ...formData, status: e.target.value })}
+                      onChange={(e) => setFormData({ ...formData, status: e.target.value as any })}
                       className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     >
                       <option value="paused">暂停</option>
@@ -782,29 +806,15 @@ export default function AgentManagementPage() {
                   <div className="flex items-center justify-between mb-4">
                     <label className="text-sm font-bold text-slate-800 flex items-center gap-2">
                       <span className="text-lg">🎯</span>
-                      管辖账户 (Account Scope)
+                      管辖账户 ({formData.platform.toUpperCase()})
                     </label>
-                    <div className="flex bg-slate-100 p-1 rounded-xl gap-1">
-                      <button
-                        onClick={() => setPlatformTab('facebook')}
-                        className={`px-3 py-1 text-[10px] font-bold rounded-lg transition-all ${platformTab === 'facebook' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500'}`}
-                      >
-                        FACEBOOK
-                      </button>
-                      <button
-                        onClick={() => setPlatformTab('tiktok')}
-                        className={`px-3 py-1 text-[10px] font-bold rounded-lg transition-all ${platformTab === 'tiktok' ? 'bg-white text-pink-600 shadow-sm' : 'text-slate-500'}`}
-                      >
-                        TIKTOK
-                      </button>
-                    </div>
                   </div>
                   
                   {accountsLoading ? (
                     <div className="text-center py-4 text-xs text-slate-400">正在同步可用账户...</div>
                   ) : (
                     <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto p-1 scrollbar-thin">
-                      {platformTab === 'facebook' ? (
+                      {formData.platform === 'facebook' ? (
                         availableAccounts.map(acc => {
                           const accountId = acc.accountId || acc.id?.replace('act_', '')
                           const isSelected = formData.scope.adAccountIds.includes(accountId)

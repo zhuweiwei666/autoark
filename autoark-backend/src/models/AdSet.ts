@@ -6,6 +6,7 @@ const adSetSchema = new mongoose.Schema(
     accountId: String,
     campaignId: String,
     channel: { type: String, default: 'facebook' },
+    platform: { type: String, enum: ['facebook', 'tiktok'], default: 'facebook', index: true },
     name: String,
     status: String,
     optimizationGoal: String,

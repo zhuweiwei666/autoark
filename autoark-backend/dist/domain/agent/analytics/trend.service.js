@@ -65,6 +65,18 @@ class TrendService {
         return Math.max(-0.5, Math.min(0.5, momentum));
     }
     /**
+     * 贝叶斯平滑 (Bayesian Smoothing)
+     * 用于处理小样本量指标（如早期 CTR/CPA）的剧烈波动
+     * @param value 原始指标值
+     * @param prior 预设基准值 (如 0.01 代表 1% CTR)
+     * @param weight 预设基准值的权重 (如 100 次展现)
+     */
+    applyBayesianSmoothing(value, total, prior, weight) {
+        // 平滑后的值 = (观察到的成功数 + 预设成功数) / (总观察数 + 预设观察数)
+        // 简化版：(value * total + prior * weight) / (total + weight)
+        return (value * total + prior * weight) / (total + weight);
+    }
+    /**
      * 计算二阶导数 (加速度)
      * 用于预判衰退：如果斜率在减小，说明动能正在枯竭
      */

@@ -5,6 +5,7 @@ const campaignSchema = new mongoose.Schema(
     campaignId: { type: String, required: true, unique: true },
     accountId: String,
     channel: { type: String, default: 'facebook' },
+    platform: { type: String, enum: ['facebook', 'tiktok'], default: 'facebook', index: true },
     name: String,
     status: String,
     objective: String,

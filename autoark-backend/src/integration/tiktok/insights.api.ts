@@ -55,3 +55,24 @@ export const fetchTiktokInsights = async (
 
   return tiktokClient.get('/report/integrated/get/', requestParams, accessToken)
 }
+
+/**
+ * 获取 TikTok 广告账户下的所有广告系列
+ */
+export const fetchTiktokCampaigns = async (advertiserId: string, accessToken: string) => {
+  return tiktokClient.get('/campaign/get/', { advertiser_id: advertiserId }, accessToken)
+}
+
+/**
+ * 获取 TikTok 广告账户下的所有广告组
+ */
+export const fetchTiktokAdGroups = async (advertiserId: string, accessToken: string) => {
+  return tiktokClient.get('/adgroup/get/', { advertiser_id: advertiserId }, accessToken)
+}
+
+/**
+ * 获取 TikTok 广告账户下的所有广告
+ */
+export const fetchTiktokAds = async (advertiserId: string, accessToken: string) => {
+  return tiktokClient.get('/ad/get/', { advertiser_id: advertiserId }, accessToken)
+}
