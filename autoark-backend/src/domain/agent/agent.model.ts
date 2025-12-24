@@ -24,6 +24,7 @@ const agentConfigSchema = new mongoose.Schema({
   scope: {
     adAccountIds: [{ type: String }], // account_id（不带 act_）
     fbTokenIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'FbToken' }],
+    tiktokTokenIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'TiktokToken' }],
     facebookAppIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'FacebookApp' }],
 
     materials: {

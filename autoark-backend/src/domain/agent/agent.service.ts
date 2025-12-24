@@ -6,7 +6,10 @@ import MetricsDaily from '../../models/MetricsDaily'
 import Campaign from '../../models/Campaign'
 import MaterialMetrics from '../../models/MaterialMetrics'
 import { updateCampaign, updateAdSet } from '../../integration/facebook/bulkCreate.api'
+import { updateTiktokCampaign, updateTiktokAdGroup, updateTiktokAd } from '../../integration/tiktok/management.api'
 import FbToken from '../../models/FbToken'
+import { ITiktokToken } from '../../models/TiktokToken'
+import TiktokTokenModel from '../../models/TiktokToken'
 import dayjs from 'dayjs'
 import { scoringService, MetricData, MetricSequence } from './analytics/scoring.service'
 import { trendService } from './analytics/trend.service'
@@ -1846,7 +1849,9 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
     const accounts = await Account.find(accountQuery)
 
     for (const account of accounts) {
+      const platform: 'facebook' | 'tiktok' = account.channel === 'tiktok' ? 'tiktok' : 'facebook'
       const campaignPerformance = await this.getCampaignPerformance(account.accountId, 7)
+      
       for (const campaign of campaignPerformance) {
         // --- 开始生命周期加权评分逻辑 (LCWTS) ---
         const sequence = await this.getMetricSequence(campaign._id, 'campaign', 7)
@@ -1861,8 +1866,8 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
           atcRate: sequence.atcRate[sequence.atcRate.length - 1] || 0,   // 🆕
         }
 
-        // 获取详细评分结果
-        const scoreResult = await scoringService.evaluate(currentMetrics, sequence, agent)
+        // 获取详细评分结果，传递平台信息
+        const scoreResult = await scoringService.evaluate(currentMetrics, sequence, agent, platform)
         const { finalScore, stage } = scoreResult
 
         // 根据配置的阈值决定动作
@@ -2080,7 +2085,18 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
       return { success: false, error: 'Operation not found' }
     }
 
-    const token = await this.resolveTokenForAccount(operation.accountId, agent)
+    // 获取账户以判断平台
+    const account = await Account.findOne({ accountId: operation.accountId })
+    if (!account) {
+      operation.status = 'failed'
+      operation.error = 'Account not found'
+      await operation.save()
+      return { success: false, error: 'Account not found' }
+    }
+
+    const platform = account.channel === 'tiktok' ? 'tiktok' : 'facebook'
+
+    const token = await this.resolveTokenForAccount(operation.accountId, agent, platform)
     if (!token) {
       operation.status = 'failed'
       operation.error = 'No active token'
@@ -2091,19 +2107,56 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
     try {
       let result
       
-      if (operation.entityType === 'campaign') {
-        if (operation.action === 'pause') {
-          result = await updateCampaign({
-            campaignId: operation.entityId,
-            token: token.token,
-            status: 'PAUSED',
-          })
-        } else if (operation.action === 'budget_increase' || operation.action === 'budget_decrease') {
-          result = await updateCampaign({
-            campaignId: operation.entityId,
-            token: token.token,
-            dailyBudget: operation.afterValue.budget,
-          })
+      if (platform === 'facebook') {
+        if (operation.entityType === 'campaign') {
+          if (operation.action === 'pause') {
+            result = await updateCampaign({
+              campaignId: operation.entityId,
+              token: token.token,
+              status: 'PAUSED',
+            })
+          } else if (operation.action === 'budget_increase' || operation.action === 'budget_decrease') {
+            result = await updateCampaign({
+              campaignId: operation.entityId,
+              token: token.token,
+              dailyBudget: operation.afterValue.budget,
+            })
+          }
+        }
+      } else if (platform === 'tiktok') {
+        if (operation.entityType === 'campaign') {
+          if (operation.action === 'pause' || operation.action === 'resume') {
+            result = await updateTiktokCampaign(
+              operation.accountId,
+              operation.entityId,
+              { operation_status: operation.action === 'pause' ? 'DISABLE' : 'ENABLE' },
+              token.accessToken
+            )
+          } else if (operation.action === 'budget_increase' || operation.action === 'budget_decrease') {
+            result = await updateTiktokCampaign(
+              operation.accountId,
+              operation.entityId,
+              { budget: operation.afterValue.budget },
+              token.accessToken
+            )
+          }
+        } else if (operation.entityType === 'adset') {
+          // TikTok AdGroup
+          if (operation.action === 'pause' || operation.action === 'resume') {
+            result = await updateTiktokAdGroup(
+              operation.accountId,
+              operation.entityId,
+              { operation_status: operation.action === 'pause' ? 'DISABLE' : 'ENABLE' },
+              token.accessToken
+            )
+          } else if (operation.action === 'budget_increase' || operation.action === 'budget_decrease') {
+            result = await updateTiktokAdGroup(
+              operation.accountId,
+              operation.entityId,
+              { budget: operation.afterValue.budget },
+              token.accessToken
+            )
+          }
         }
       }
 
@@ -2113,7 +2166,7 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
       operation.result = result
       await operation.save()
 
-      logger.info(`[AgentService] Operation executed: ${operation._id}`)
+      logger.info(`[AgentService] Operation executed: ${operation._id} (${platform})`)
       return { success: true, result }
     } catch (error: any) {
       operation.status = 'failed'
@@ -2128,37 +2181,54 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
   /**
    * 根据 agent scope/org 选择可访问该广告账户的 token
    */
-  private async resolveTokenForAccount(accountId: string, agent?: any): Promise<any | null> {
+  private async resolveTokenForAccount(accountId: string, agent?: any, platform: 'facebook' | 'tiktok' = 'facebook'): Promise<any | null> {
     const tokenQuery: any = { status: 'active' }
     if (agent?.organizationId) {
       tokenQuery.organizationId = agent.organizationId
     }
-    if (agent?.scope?.fbTokenIds?.length) {
-      tokenQuery._id = { $in: agent.scope.fbTokenIds }
-    }
 
-    const tokens: any[] = await FbToken.find(tokenQuery).sort({ updatedAt: -1 }).lean()
-    if (!tokens.length) return null
+    if (platform === 'facebook') {
+      if (agent?.scope?.fbTokenIds?.length) {
+        tokenQuery._id = { $in: agent.scope.fbTokenIds }
+      }
 
-    // 逐个测试 token 是否有访问权限（带缓存）
-    for (const t of tokens) {
-      const cacheKey = `${t._id}:${accountId}`
-      const cached = this.tokenAccessCache.get(cacheKey)
-      if (cached === true) return t
-      if (cached === false) continue
+      const tokens: any[] = await FbToken.find(tokenQuery).sort({ updatedAt: -1 }).lean()
+      if (!tokens.length) return null
 
-      try {
-        const r = await facebookClient.get(`/act_${accountId}`, {
-          access_token: t.token,
-          fields: 'id',
-        })
-        if (r?.id) {
-          this.tokenAccessCache.set(cacheKey, true)
+      // 逐个测试 token 是否有访问权限（带缓存）
+      for (const t of tokens) {
+        const cacheKey = `fb:${t._id}:${accountId}`
+        const cached = this.tokenAccessCache.get(cacheKey)
+        if (cached === true) return t
+        if (cached === false) continue
+
+        try {
+          const r = await facebookClient.get(`/act_${accountId}`, {
+            access_token: t.token,
+            fields: 'id',
+          })
+          if (r?.id) {
+            this.tokenAccessCache.set(cacheKey, true)
+            return t
+          }
+          this.tokenAccessCache.set(cacheKey, false)
+        } catch {
+          this.tokenAccessCache.set(cacheKey, false)
+        }
+      }
+    } else if (platform === 'tiktok') {
+      if (agent?.scope?.tiktokTokenIds?.length) {
+        tokenQuery._id = { $in: agent.scope.tiktokTokenIds }
+      }
+
+      const tokens: any[] = await TiktokTokenModel.find(tokenQuery).sort({ updatedAt: -1 }).lean()
+      if (!tokens.length) return null
+
+      for (const t of tokens) {
+        // 对于 TikTok，我们检查 advertiserIds 是否包含该账户
+        if (t.advertiserIds.includes(accountId)) {
           return t
         }
-        this.tokenAccessCache.set(cacheKey, false)
-      } catch {
-        this.tokenAccessCache.set(cacheKey, false)
       }
     }
 

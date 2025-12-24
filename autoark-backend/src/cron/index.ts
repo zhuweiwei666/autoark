@@ -3,6 +3,7 @@ import { initAggregationCron } from './aggregation.cron'
 import { initAccountSyncCron } from './accountSync.cron'
 import { initFacebookUserAssetsCron } from './facebookUserAssets.cron'
 import { initAgentAutoRunCron } from './agentAutoRun.cron'
+import { initTiktokSyncCron } from './tiktokSync.cron'
 import logger from '../utils/logger'
 
 const initCronJobs = () => {
@@ -17,6 +18,9 @@ const initCronJobs = () => {
 
   // 🧠 Agent 自动运行（Planner/Executor jobs）
   initAgentAutoRunCron()
+
+  // 📊 TikTok 资产同步 (Hourly + Startup)
+  initTiktokSyncCron()
 
   logger.info('Cron jobs initialized')
 }

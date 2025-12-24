@@ -37,11 +37,13 @@ export class ScoringService {
    * @param metrics 当前最近指标
    * @param sequence 历史指标序列 (用于计算斜率)
    * @param agentConfig Agent 配置
+   * @param platform 平台标识 ('facebook' | 'tiktok')
    */
   async evaluate(
     metrics: MetricData,
     sequence: MetricSequence,
-    agentConfig: any
+    agentConfig: any,
+    platform: 'facebook' | 'tiktok' = 'facebook'
   ): Promise<ScoringResult> {
     const config = agentConfig.scoringConfig
     const objectives = agentConfig.objectives
@@ -50,6 +52,7 @@ export class ScoringService {
     const stage = this.identifyStage(metrics.spend, config.stages)
     
     // 2. 计算各维度基础得分 (归一化到 0-100)
+    // 对于 TikTok，我们可以应用稍微不同的标准化基准（如果未在 config 中指定）
     const baseScores = this.calculateBaseMetricScores(metrics, objectives, config.baselines)
     
     // 3. 应用权重矩阵得到阶段基础分
@@ -76,10 +79,13 @@ export class ScoringService {
       { key: 'atcRate', direction: 1 },  // 🆕
     ]
     
+    // TikTok 的趋势计算可能需要更强的平滑
+    const emaAlpha = platform === 'tiktok' ? 0.2 : 0.3
+
     for (const { key, direction } of trendLookups) {
       const seq = sequence[key]
       if (seq && seq.length >= 2) {
-        const emaSeq = trendService.calculateEMA(seq)
+        const emaSeq = trendService.calculateEMA(seq, emaAlpha)
         const slope = trendService.calculateSlope(emaSeq)
         slopes[key] = slope
         

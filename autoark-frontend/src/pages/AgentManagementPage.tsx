@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { authFetch } from '../services/api'
+import { authFetch, FbAccount } from '../services/api'
 import {
   Radar,
   RadarChart,
@@ -109,8 +109,10 @@ export default function AgentManagementPage() {
   const [activeTab, setActiveTab] = useState<'agents' | 'pending' | 'history'>('agents')
   const [showSnapshotModal, setShowSnapshotModal] = useState(false)
   const [selectedOp, setSelectedOp] = useState<Operation | null>(null)
-  const [availableAccounts, setAvailableAccounts] = useState<any[]>([])
+  const [availableAccounts, setAvailableAccounts] = useState<FbAccount[]>([])
+  const [tiktokAccounts, setTiktokAccounts] = useState<any[]>([])
   const [accountsLoading, setAccountsLoading] = useState(false)
+  const [platformTab, setPlatformTab] = useState<'facebook' | 'tiktok'>('facebook')
 
   const [formData, setFormData] = useState({
     name: '',
@@ -185,10 +187,19 @@ export default function AgentManagementPage() {
   const loadAvailableAccounts = async () => {
     setAccountsLoading(true)
     try {
-      const res = await authFetch('/api/bulk-ad/auth/ad-accounts')
-      const data = await res.json()
-      if (data.success) {
-        setAvailableAccounts(data.data || [])
+      // 同时拉取 FB 和 TikTok 账户
+      const [fbRes, ttRes] = await Promise.all([
+        authFetch('/api/bulk-ad/auth/ad-accounts'),
+        authFetch('/api/account-management/accounts?channel=tiktok&limit=1000')
+      ])
+      const fbData = await fbRes.json()
+      const ttData = await ttRes.json()
+      
+      if (fbData.success) {
+        setAvailableAccounts(fbData.data || [])
+      }
+      if (ttData.success) {
+        setTiktokAccounts(ttData.data?.list || ttData.data || [])
       }
     } catch (error) {
       console.error('Failed to load accounts:', error)
@@ -773,48 +784,91 @@ export default function AgentManagementPage() {
                       <span className="text-lg">🎯</span>
                       管辖账户 (Account Scope)
                     </label>
-                    <span className="text-[10px] bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-full font-bold uppercase">
-                      已选 {formData.scope.adAccountIds.length}
-                    </span>
+                    <div className="flex bg-slate-100 p-1 rounded-xl gap-1">
+                      <button
+                        onClick={() => setPlatformTab('facebook')}
+                        className={`px-3 py-1 text-[10px] font-bold rounded-lg transition-all ${platformTab === 'facebook' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500'}`}
+                      >
+                        FACEBOOK
+                      </button>
+                      <button
+                        onClick={() => setPlatformTab('tiktok')}
+                        className={`px-3 py-1 text-[10px] font-bold rounded-lg transition-all ${platformTab === 'tiktok' ? 'bg-white text-pink-600 shadow-sm' : 'text-slate-500'}`}
+                      >
+                        TIKTOK
+                      </button>
+                    </div>
                   </div>
                   
                   {accountsLoading ? (
                     <div className="text-center py-4 text-xs text-slate-400">正在同步可用账户...</div>
                   ) : (
                     <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto p-1 scrollbar-thin">
-                      {availableAccounts.map(acc => {
-                        const accountId = acc.account_id || acc.id?.replace('act_', '')
-                        const isSelected = formData.scope.adAccountIds.includes(accountId)
-                        return (
-                          <div
-                            key={accountId}
-                            onClick={() => {
-                              const nextIds = isSelected
-                                ? formData.scope.adAccountIds.filter(id => id !== accountId)
-                                : [...formData.scope.adAccountIds, accountId]
-                              setFormData({ ...formData, scope: { ...formData.scope, adAccountIds: nextIds } })
-                            }}
-                            className={`flex items-center gap-3 p-3 rounded-xl border-2 cursor-pointer transition-all ${
-                              isSelected
-                                ? 'border-indigo-500 bg-indigo-50 shadow-sm'
-                                : 'border-slate-100 bg-slate-50 hover:border-slate-200'
-                            }`}
-                          >
-                            <div className={`w-4 h-4 rounded-md border-2 flex items-center justify-center transition-all ${
-                              isSelected ? 'bg-indigo-600 border-indigo-600' : 'bg-white border-slate-300'
-                            }`}>
-                              {isSelected && <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" /></svg>}
+                      {platformTab === 'facebook' ? (
+                        availableAccounts.map(acc => {
+                          const accountId = acc.account_id || acc.id?.replace('act_', '')
+                          const isSelected = formData.scope.adAccountIds.includes(accountId)
+                          return (
+                            <div
+                              key={accountId}
+                              onClick={() => {
+                                const nextIds = isSelected
+                                  ? formData.scope.adAccountIds.filter(id => id !== accountId)
+                                  : [...formData.scope.adAccountIds, accountId]
+                                setFormData({ ...formData, scope: { ...formData.scope, adAccountIds: nextIds } })
+                              }}
+                              className={`flex items-center gap-3 p-3 rounded-xl border-2 cursor-pointer transition-all ${
+                                isSelected ? 'border-blue-500 bg-blue-50' : 'border-slate-100 bg-slate-50'
+                              }`}
+                            >
+                              <div className={`w-4 h-4 rounded-md border-2 flex items-center justify-center ${isSelected ? 'bg-blue-600 border-blue-600' : 'bg-white border-slate-300'}`}>
+                                {isSelected && <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" /></svg>}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="text-[11px] font-bold text-slate-800 truncate">{acc.name || accountId}</div>
+                                <div className="text-[9px] text-slate-400 font-mono mt-0.5">{accountId}</div>
+                              </div>
                             </div>
-                            <div className="flex-1 min-w-0">
-                              <div className="text-[11px] font-bold text-slate-800 truncate leading-tight">{acc.name || accountId}</div>
-                              <div className="text-[9px] text-slate-400 font-mono mt-0.5">{accountId}</div>
+                          )
+                        })
+                      ) : (
+                        tiktokAccounts.map(acc => {
+                          const isSelected = formData.scope.adAccountIds.includes(acc.accountId)
+                          return (
+                            <div
+                              key={acc.accountId}
+                              onClick={() => {
+                                const nextIds = isSelected
+                                  ? formData.scope.adAccountIds.filter(id => id !== acc.accountId)
+                                  : [...formData.scope.adAccountIds, acc.accountId]
+                                setFormData({ ...formData, scope: { ...formData.scope, adAccountIds: nextIds } })
+                              }}
+                              className={`flex items-center gap-3 p-3 rounded-xl border-2 cursor-pointer transition-all ${
+                                isSelected ? 'border-pink-500 bg-pink-50' : 'border-slate-100 bg-slate-50'
+                              }`}
+                            >
+                              <div className={`w-4 h-4 rounded-md border-2 flex items-center justify-center ${isSelected ? 'bg-pink-600 border-pink-600' : 'bg-white border-slate-300'}`}>
+                                {isSelected && <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" /></svg>}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="text-[11px] font-bold text-slate-800 truncate">{acc.name || acc.accountId}</div>
+                                <div className="text-[9px] text-slate-400 font-mono mt-0.5">{acc.accountId}</div>
+                              </div>
                             </div>
-                          </div>
-                        )
-                      })}
+                          )
+                        })
+                      )}
                     </div>
                   )}
-                  <p className="text-[10px] text-slate-400 mt-3 italic">* 只有分配给该 Agent 的账户，AI 才会进行评分和自动调控。</p>
+                  <div className="flex items-center justify-between mt-3">
+                    <p className="text-[10px] text-slate-400 italic">* 已选管辖账户: {formData.scope.adAccountIds.length} 个</p>
+                    <button 
+                      onClick={() => setFormData({...formData, scope: {...formData.scope, adAccountIds: []}})}
+                      className="text-[10px] text-rose-500 font-bold hover:underline"
+                    >
+                      清空选择
+                    </button>
+                  </div>
                 </div>
 
                 {/* 运行模式 */}

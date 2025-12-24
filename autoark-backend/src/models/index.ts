@@ -29,5 +29,8 @@ export { default as FacebookUser } from './FacebookUser'
 // Facebook App 管理（支持多App负载均衡）
 export { default as FacebookApp } from './FacebookApp'
 
+// TikTok 相关模型
+export { default as TiktokToken } from './TiktokToken'
+
 // 自动化 Job（AI Planner/Executor & 幂等任务编排）
 export { default as AutomationJob } from './AutomationJob'
