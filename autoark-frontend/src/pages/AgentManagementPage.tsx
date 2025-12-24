@@ -806,7 +806,7 @@ export default function AgentManagementPage() {
                     <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto p-1 scrollbar-thin">
                       {platformTab === 'facebook' ? (
                         availableAccounts.map(acc => {
-                          const accountId = acc.account_id || acc.id?.replace('act_', '')
+                          const accountId = acc.accountId || acc.id?.replace('act_', '')
                           const isSelected = formData.scope.adAccountIds.includes(accountId)
                           return (
                             <div
