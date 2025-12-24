@@ -41,10 +41,6 @@ const bullmq_1 = require("bullmq");
 const redis_1 = require("../config/redis");
 const logger_1 = __importDefault(require("../utils/logger"));
 const AutomationJob_1 = __importDefault(require("../models/AutomationJob"));
-const agent_service_1 = require("../domain/agent/agent.service");
-const bulkAd_service_1 = __importDefault(require("../services/bulkAd.service"));
-const fbSyncService = __importStar(require("../services/facebook.sync.service"));
-const facebookUser_service_1 = require("../services/facebookUser.service");
 const FbToken_1 = __importDefault(require("../models/FbToken"));
 let automationWorker = null;
 const createWorkerOptions = (concurrency) => {
@@ -85,19 +81,24 @@ const initAutomationWorker = () => {
         try {
             let result;
             const payload = doc.payload || {};
+            // 使用动态导入打破循环依赖
+            const { agentService } = await Promise.resolve().then(() => __importStar(require('../domain/agent/agent.service')));
+            const bulkAdService = (await Promise.resolve().then(() => __importStar(require('../services/bulkAd.service')))).default;
+            const fbSyncService = await Promise.resolve().then(() => __importStar(require('../services/facebook.sync.service')));
+            const { syncFacebookUserAssets } = await Promise.resolve().then(() => __importStar(require('../services/facebookUser.service')));
             switch (doc.type) {
                 case 'RUN_AGENT': {
                     if (!payload.agentId && !doc.agentId)
                         throw new Error('agentId is required');
                     const agentId = String(payload.agentId || doc.agentId);
-                    result = await agent_service_1.agentService.runAgent(agentId);
+                    result = await agentService.runAgent(agentId);
                     break;
                 }
                 case 'RUN_AGENT_AS_JOBS': {
                     if (!payload.agentId && !doc.agentId)
                         throw new Error('agentId is required');
                     const agentId = String(payload.agentId || doc.agentId);
-                    result = await agent_service_1.agentService.runAgentAsJobs(agentId);
+                    result = await agentService.runAgentAsJobs(agentId);
                     break;
                 }
                 case 'EXECUTE_AGENT_OPERATION': {
@@ -107,14 +108,14 @@ const initAutomationWorker = () => {
                     // 可选：传递 agentId 用于 token scope
                     const agentId = payload.agentId ? String(payload.agentId) : undefined;
                     const agent = agentId ? await (require('../domain/agent/agent.model').AgentConfig).findById(agentId) : undefined;
-                    result = await (agent ? agent_service_1.agentService.executeOperation(operationId, agent) : agent_service_1.agentService.executeOperation(operationId));
+                    result = await (agent ? agentService.executeOperation(operationId, agent) : agentService.executeOperation(operationId));
                     break;
                 }
                 case 'PUBLISH_DRAFT': {
                     const draftId = String(payload.draftId || '');
                     if (!draftId)
                         throw new Error('draftId is required');
-                    result = await bulkAd_service_1.default.publishDraft(draftId);
+                    result = await bulkAdService.publishDraft(draftId);
                     break;
                 }
                 case 'RUN_FB_FULL_SYNC': {
@@ -135,7 +136,7 @@ const initAutomationWorker = () => {
                     }
                     if (!token)
                         throw new Error('accessToken or tokenId is required');
-                    result = await (0, facebookUser_service_1.syncFacebookUserAssets)(fbUserId, token, tokenId);
+                    result = await syncFacebookUserAssets(fbUserId, token, tokenId);
                     break;
                 }
                 default:

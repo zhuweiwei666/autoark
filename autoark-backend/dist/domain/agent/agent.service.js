@@ -12,13 +12,18 @@ const MetricsDaily_1 = __importDefault(require("../../models/MetricsDaily"));
 const Campaign_1 = __importDefault(require("../../models/Campaign"));
 const MaterialMetrics_1 = __importDefault(require("../../models/MaterialMetrics"));
 const bulkCreate_api_1 = require("../../integration/facebook/bulkCreate.api");
+const management_api_1 = require("../../integration/tiktok/management.api");
 const FbToken_1 = __importDefault(require("../../models/FbToken"));
+const TiktokToken_1 = __importDefault(require("../../models/TiktokToken"));
 const dayjs_1 = __importDefault(require("dayjs"));
+const scoring_service_1 = require("./analytics/scoring.service");
 const insights_api_1 = require("../../integration/facebook/insights.api");
+const automationJob_service_1 = require("../../services/automationJob.service");
 const materialMetrics_service_1 = require("../../services/materialMetrics.service");
 const dashboard_service_1 = require("../../services/dashboard.service");
 const facebookClient_1 = require("../../integration/facebook/facebookClient");
-const automationJob_service_1 = require("../../services/automationJob.service");
+const feishu_service_1 = require("../../services/feishu.service");
+const momentum_service_1 = require("./executor/momentum.service");
 // 🔥 使用统一的预聚合数据表
 const Aggregation_1 = require("../../models/Aggregation");
 // 🚫 不再在 AI 对话中刷新数据，由后台 cron 统一刷新
@@ -43,6 +48,10 @@ class AgentService {
     }
     // ==================== Agent 配置管理 ====================
     async createAgent(data) {
+        // 过滤掉空的 organizationId，防止 Mongoose 转换失败
+        if (data.organizationId === '') {
+            delete data.organizationId;
+        }
         const agent = new agent_model_1.AgentConfig(data);
         await agent.save();
         logger_1.default.info(`[AgentService] Created agent: ${agent.name}`);
@@ -55,6 +64,10 @@ class AgentService {
         return agent_model_1.AgentConfig.findById(id);
     }
     async updateAgent(id, data) {
+        // 过滤掉空的 organizationId，防止 Mongoose 转换失败
+        if (data.organizationId === '') {
+            delete data.organizationId;
+        }
         return agent_model_1.AgentConfig.findByIdAndUpdate(id, data, { new: true });
     }
     async deleteAgent(id) {
@@ -1429,6 +1442,50 @@ ${conversation.messages.slice(-6).map((m) => `${m.role === 'user' ? '用户' : '
     }
     // ==================== 自动优化执行 ====================
     /**
+     * 获取广告系列/广告组的指标序列 (用于趋势分析)
+     */
+    async getMetricSequence(entityId, entityType, days = 7) {
+        const startDate = (0, dayjs_1.default)().subtract(days, 'day').format('YYYY-MM-DD');
+        const query = {
+            entityId,
+            level: entityType,
+            date: { $gte: startDate }
+        };
+        const docs = await MetricsDaily_1.default.find(query).sort({ date: 1 }).lean();
+        const sequence = {
+            cpm: [],
+            ctr: [],
+            cpc: [],
+            cpa: [],
+            roas: [],
+            hookRate: [], // 🆕
+            atcRate: [], // 🆕
+        };
+        for (const d of docs) {
+            sequence.cpm.push(d.cpm || 0);
+            sequence.ctr.push(d.ctr || 0);
+            sequence.cpc.push(d.cpc || 0);
+            // CPA = spend / installs (or conversions)
+            const cpa = d.installs > 0 ? d.spendUsd / d.installs : 0;
+            sequence.cpa.push(cpa);
+            // ROAS = revenue / spend
+            const roas = d.spendUsd > 0 ? (d.purchase_value || 0) / d.spendUsd : 0;
+            sequence.roas.push(roas);
+            // Hook Rate = video_3sec_views / impressions
+            const actions = d.actions || [];
+            const video3sAction = Array.isArray(actions) ? actions.find((a) => a.action_type === 'video_view' || a.action_type === 'video_3sec_views') : null;
+            const video3s = video3sAction ? parseFloat(video3sAction.value) : (d.raw?.video_3sec_views || 0);
+            const hookRate = d.impressions > 0 ? video3s / d.impressions : 0;
+            sequence.hookRate.push(hookRate);
+            // ATC Rate = add_to_cart / clicks
+            const atcAction = Array.isArray(actions) ? actions.find((a) => a.action_type === 'add_to_cart') : null;
+            const atcCount = atcAction ? parseFloat(atcAction.value) : 0;
+            const atcRate = d.clicks > 0 ? atcCount / d.clicks : 0;
+            sequence.atcRate.push(atcRate);
+        }
+        return sequence;
+    }
+    /**
      * 运行 Agent 检查和优化
      */
     async runAgent(agentId) {
@@ -1485,17 +1542,76 @@ ${conversation.messages.slice(-6).map((m) => `${m.role === 'user' ? '用户' : '
             // 获取该账户的广告系列表现
             const campaignPerformance = await this.getCampaignPerformance(account.accountId, 7);
             for (const campaign of campaignPerformance) {
-                // 检查自动关停规则
-                if (agent.rules.autoStop.enabled) {
-                    const stopOp = await this.checkAutoStop(agent, campaign);
-                    if (stopOp)
-                        operations.push(stopOp);
+                // --- 开始生命周期加权评分逻辑 (LCWTS) ---
+                const sequence = await this.getMetricSequence(campaign._id, 'campaign', 7);
+                const currentMetrics = {
+                    cpm: campaign.dailyData[campaign.dailyData.length - 1]?.spend > 0 ? (campaign.dailyData[campaign.dailyData.length - 1].spend / campaign.dailyData[campaign.dailyData.length - 1].impressions) * 1000 : 0,
+                    ctr: campaign.dailyData[campaign.dailyData.length - 1]?.impressions > 0 ? campaign.dailyData[campaign.dailyData.length - 1].clicks / campaign.dailyData[campaign.dailyData.length - 1].impressions : 0,
+                    cpc: campaign.dailyData[campaign.dailyData.length - 1]?.clicks > 0 ? campaign.dailyData[campaign.dailyData.length - 1].spend / campaign.dailyData[campaign.dailyData.length - 1].clicks : 0,
+                    cpa: campaign.totalRevenue > 0 ? campaign.totalSpend / campaign.totalRevenue : 0, // 简化处理，实际应取具体转化
+                    roas: campaign.avgRoas,
+                    spend: campaign.totalSpend, // 累计消耗用于识别阶段
+                    hookRate: sequence.hookRate[sequence.hookRate.length - 1] || 0,
+                    atcRate: sequence.atcRate[sequence.atcRate.length - 1] || 0,
+                };
+                // 获取详细评分结果
+                const scoreResult = await scoring_service_1.scoringService.evaluate(currentMetrics, sequence, agent);
+                const { finalScore, stage } = scoreResult;
+                // 根据配置的阈值决定动作
+                let action = null;
+                let reason = `[Stage: ${stage}] Score: ${finalScore.toFixed(1)}. `;
+                let changePercent = 0;
+                const thresholds = agent.actionThresholds || {
+                    aggressiveScale: { minScore: 85, changePercent: 30 },
+                    moderateScale: { minScore: 70, changePercent: 15 },
+                    stopLoss: { maxScore: 30, changePercent: -20 },
+                    kill: { maxScore: 15 }
+                };
+                if (finalScore >= thresholds.aggressiveScale.minScore) {
+                    action = 'budget_increase';
+                    changePercent = thresholds.aggressiveScale.changePercent;
+                    reason += `High momentum & performance. Aggressive scale.`;
                 }
-                // 检查自动扩量规则
-                if (agent.rules.autoScale.enabled) {
-                    const scaleOp = await this.checkAutoScale(agent, campaign);
-                    if (scaleOp)
-                        operations.push(scaleOp);
+                else if (finalScore >= thresholds.moderateScale.minScore) {
+                    action = 'budget_increase';
+                    changePercent = thresholds.moderateScale.changePercent;
+                    reason += `Good trend. Moderate scale.`;
+                }
+                else if (finalScore < thresholds.kill.maxScore) {
+                    action = 'pause';
+                    reason += `Critical underperformance. Entity killed.`;
+                }
+                else if (finalScore < thresholds.stopLoss.maxScore) {
+                    action = 'budget_decrease';
+                    changePercent = thresholds.stopLoss.changePercent;
+                    reason += `Declining trend. Stop loss applied.`;
+                }
+                if (action) {
+                    const op = {
+                        agentId: agent._id,
+                        accountId: account.accountId,
+                        entityType: 'campaign',
+                        entityId: campaign._id,
+                        entityName: campaign.campaignName,
+                        action,
+                        reason,
+                        dataSnapshot: campaign,
+                        scoreSnapshot: scoreResult, // 存入详细评分
+                    };
+                    if (action === 'budget_increase' || action === 'budget_decrease') {
+                        const campaignDoc = await Campaign_1.default.findOne({ campaignId: campaign._id });
+                        const currentBudget = parseFloat(campaignDoc?.daily_budget || '0') || 0;
+                        const multiplier = 1 + (changePercent / 100);
+                        const nextBudget = currentBudget * multiplier;
+                        op.beforeValue = { budget: currentBudget };
+                        op.afterValue = { budget: nextBudget };
+                        op.changePercent = changePercent;
+                    }
+                    else if (action === 'pause') {
+                        op.beforeValue = { status: 'ACTIVE' };
+                        op.afterValue = { status: 'PAUSED' };
+                    }
+                    operations.push(op);
                 }
             }
         }
@@ -1574,17 +1690,79 @@ ${conversation.messages.slice(-6).map((m) => `${m.role === 'user' ? '用户' : '
         }
         const accounts = await Account_1.default.find(accountQuery);
         for (const account of accounts) {
+            const platform = account.channel === 'tiktok' ? 'tiktok' : 'facebook';
             const campaignPerformance = await this.getCampaignPerformance(account.accountId, 7);
             for (const campaign of campaignPerformance) {
-                if (agent.rules?.autoStop?.enabled) {
-                    const op = await this.checkAutoStop(agent, campaign);
-                    if (op)
-                        operations.push(op);
+                // --- 开始生命周期加权评分逻辑 (LCWTS) ---
+                const sequence = await this.getMetricSequence(campaign._id, 'campaign', 7);
+                const currentMetrics = {
+                    cpm: campaign.dailyData[campaign.dailyData.length - 1]?.spend > 0 ? (campaign.dailyData[campaign.dailyData.length - 1].spend / campaign.dailyData[campaign.dailyData.length - 1].impressions) * 1000 : 0,
+                    ctr: campaign.dailyData[campaign.dailyData.length - 1]?.impressions > 0 ? campaign.dailyData[campaign.dailyData.length - 1].clicks / campaign.dailyData[campaign.dailyData.length - 1].impressions : 0,
+                    cpc: campaign.dailyData[campaign.dailyData.length - 1]?.clicks > 0 ? campaign.dailyData[campaign.dailyData.length - 1].spend / campaign.dailyData[campaign.dailyData.length - 1].clicks : 0,
+                    cpa: campaign.totalRevenue > 0 ? campaign.totalSpend / campaign.totalRevenue : 0, // 简化处理，实际应取具体转化
+                    roas: campaign.avgRoas,
+                    spend: campaign.totalSpend, // 累计消耗用于识别阶段
+                    hookRate: sequence.hookRate[sequence.hookRate.length - 1] || 0, // 🆕
+                    atcRate: sequence.atcRate[sequence.atcRate.length - 1] || 0, // 🆕
+                };
+                // 获取详细评分结果，传递平台信息
+                const scoreResult = await scoring_service_1.scoringService.evaluate(currentMetrics, sequence, agent, platform);
+                const { finalScore, stage } = scoreResult;
+                // 根据配置的阈值决定动作
+                let action = null;
+                let reason = `[Stage: ${stage}] Score: ${finalScore.toFixed(1)}. `;
+                let changePercent = 0;
+                const thresholds = agent.actionThresholds || {
+                    aggressiveScale: { minScore: 85, changePercent: 30 },
+                    moderateScale: { minScore: 70, changePercent: 15 },
+                    stopLoss: { maxScore: 30, changePercent: -20 },
+                    kill: { maxScore: 15 }
+                };
+                if (finalScore >= thresholds.aggressiveScale.minScore) {
+                    action = 'budget_increase';
+                    changePercent = thresholds.aggressiveScale.changePercent;
+                    reason += `High momentum & performance. Aggressive scale.`;
                 }
-                if (agent.rules?.autoScale?.enabled) {
-                    const op = await this.checkAutoScale(agent, campaign);
-                    if (op)
-                        operations.push(op);
+                else if (finalScore >= thresholds.moderateScale.minScore) {
+                    action = 'budget_increase';
+                    changePercent = thresholds.moderateScale.changePercent;
+                    reason += `Good trend. Moderate scale.`;
+                }
+                else if (finalScore < thresholds.kill.maxScore) {
+                    action = 'pause';
+                    reason += `Critical underperformance. Entity killed.`;
+                }
+                else if (finalScore < thresholds.stopLoss.maxScore) {
+                    action = 'budget_decrease';
+                    changePercent = thresholds.stopLoss.changePercent;
+                    reason += `Declining trend. Stop loss applied.`;
+                }
+                if (action) {
+                    const op = {
+                        agentId: agent._id,
+                        accountId: account.accountId,
+                        entityType: 'campaign',
+                        entityId: campaign._id,
+                        entityName: campaign.campaignName,
+                        action,
+                        reason,
+                        dataSnapshot: campaign,
+                        scoreSnapshot: scoreResult, // 存入详细评分
+                    };
+                    if (action === 'budget_increase' || action === 'budget_decrease') {
+                        const campaignDoc = await Campaign_1.default.findOne({ campaignId: campaign._id });
+                        const currentBudget = parseFloat(campaignDoc?.daily_budget || '0') || 0;
+                        const multiplier = 1 + (changePercent / 100);
+                        const nextBudget = currentBudget * multiplier;
+                        op.beforeValue = { budget: currentBudget };
+                        op.afterValue = { budget: nextBudget };
+                        op.changePercent = changePercent;
+                    }
+                    else if (action === 'pause') {
+                        op.beforeValue = { status: 'ACTIVE' };
+                        op.afterValue = { status: 'PAUSED' };
+                    }
+                    operations.push(op);
                 }
             }
         }
@@ -1603,14 +1781,33 @@ ${conversation.messages.slice(-6).map((m) => `${m.role === 'user' ? '用户' : '
                 await new agent_model_1.AgentOperation({ ...op, status: 'rejected', error: guardrail.reason }).save();
                 continue;
             }
-            // auto 模式下仍可要求审批
-            if (agent.mode === 'auto' && agent.aiConfig?.requireApproval && this.needsApproval(op, agent)) {
-                await new agent_model_1.AgentOperation({ ...op, status: 'pending' }).save();
+            // --- 动量护栏检查 (Momentum Shield) ---
+            const momentum = await momentum_service_1.momentumService.checkMomentum(op.entityId, op.action);
+            if (!momentum.ok) {
+                await new agent_model_1.AgentOperation({ ...op, status: 'rejected', error: momentum.reason }).save();
                 continue;
             }
-            // observe/suggest：只记录
+            // auto 模式下仍可要求审批
+            if (agent.mode === 'auto' && agent.aiConfig?.requireApproval && this.needsApproval(op, agent)) {
+                const saved = await new agent_model_1.AgentOperation({ ...op, status: 'pending' }).save();
+                // 发送飞书卡片
+                if (agent.feishuConfig?.enabled) {
+                    const msgId = await feishu_service_1.feishuService.sendApprovalCard(saved, agent);
+                    if (msgId) {
+                        await agent_model_1.AgentOperation.findByIdAndUpdate(saved._id, { feishuMessageId: msgId });
+                    }
+                }
+                continue;
+            }
+            // observe/suggest：只记录并尝试发飞书
             if (agent.mode !== 'auto') {
-                await new agent_model_1.AgentOperation({ ...op, status: 'pending' }).save();
+                const saved = await new agent_model_1.AgentOperation({ ...op, status: 'pending' }).save();
+                if (agent.feishuConfig?.enabled) {
+                    const msgId = await feishu_service_1.feishuService.sendApprovalCard(saved, agent);
+                    if (msgId) {
+                        await agent_model_1.AgentOperation.findByIdAndUpdate(saved._id, { feishuMessageId: msgId });
+                    }
+                }
                 continue;
             }
             // auto 且不需要审批：写入 approved，并创建执行 job
@@ -1680,55 +1877,10 @@ ${conversation.messages.slice(-6).map((m) => `${m.role === 'user' ? '用户' : '
      * 检查是否需要自动关停
      */
     async checkAutoStop(agent, campaign) {
-        const rules = agent.rules.autoStop;
-        if (campaign.avgRoas < rules.roasThreshold &&
-            campaign.daysCount >= rules.minDays &&
-            campaign.totalSpend >= rules.minSpend) {
-            return {
-                agentId: agent._id,
-                accountId: campaign.accountId,
-                entityType: 'campaign',
-                entityId: campaign._id,
-                entityName: campaign.campaignName,
-                action: 'pause',
-                beforeValue: { status: 'ACTIVE' },
-                afterValue: { status: 'PAUSED' },
-                reason: `ROAS ${campaign.avgRoas.toFixed(2)} < ${rules.roasThreshold}，连续 ${campaign.daysCount} 天，总消耗 $${campaign.totalSpend.toFixed(2)}`,
-                dataSnapshot: campaign,
-            };
-        }
-        return null;
+        return null; // 逻辑已统一到 evaluate 闭环中
     }
-    /**
-     * 检查是否需要自动扩量
-     */
     async checkAutoScale(agent, campaign) {
-        const rules = agent.rules.autoScale;
-        if (campaign.avgRoas > rules.roasThreshold &&
-            campaign.daysCount >= rules.minDays) {
-            // 获取当前预算
-            const campaignDoc = await Campaign_1.default.findOne({ campaignId: campaign._id });
-            const currentBudget = parseFloat(campaignDoc?.daily_budget || '0') || 0;
-            const newBudget = currentBudget * (1 + rules.budgetIncrease);
-            // 检查最大预算限制
-            if (rules.maxBudget && newBudget > rules.maxBudget) {
-                return null;
-            }
-            return {
-                agentId: agent._id,
-                accountId: campaign.accountId,
-                entityType: 'campaign',
-                entityId: campaign._id,
-                entityName: campaign.campaignName,
-                action: 'budget_increase',
-                beforeValue: { budget: currentBudget },
-                afterValue: { budget: newBudget },
-                changePercent: rules.budgetIncrease * 100,
-                reason: `ROAS ${campaign.avgRoas.toFixed(2)} > ${rules.roasThreshold}，连续 ${campaign.daysCount} 天表现优秀`,
-                dataSnapshot: campaign,
-            };
-        }
-        return null;
+        return null; // 逻辑已统一到 evaluate 闭环中
     }
     /**
      * 判断是否需要人工审批
@@ -1753,7 +1905,16 @@ ${conversation.messages.slice(-6).map((m) => `${m.role === 'user' ? '用户' : '
         if (!operation) {
             return { success: false, error: 'Operation not found' };
         }
-        const token = await this.resolveTokenForAccount(operation.accountId, agent);
+        // 获取账户以判断平台
+        const account = await Account_1.default.findOne({ accountId: operation.accountId });
+        if (!account) {
+            operation.status = 'failed';
+            operation.error = 'Account not found';
+            await operation.save();
+            return { success: false, error: 'Account not found' };
+        }
+        const platform = account.channel === 'tiktok' ? 'tiktok' : 'facebook';
+        const token = await this.resolveTokenForAccount(operation.accountId, agent, platform);
         if (!token) {
             operation.status = 'failed';
             operation.error = 'No active token';
@@ -1762,20 +1923,41 @@ ${conversation.messages.slice(-6).map((m) => `${m.role === 'user' ? '用户' : '
         }
         try {
             let result;
-            if (operation.entityType === 'campaign') {
-                if (operation.action === 'pause') {
-                    result = await (0, bulkCreate_api_1.updateCampaign)({
-                        campaignId: operation.entityId,
-                        token: token.token,
-                        status: 'PAUSED',
-                    });
+            if (platform === 'facebook') {
+                if (operation.entityType === 'campaign') {
+                    if (operation.action === 'pause') {
+                        result = await (0, bulkCreate_api_1.updateCampaign)({
+                            campaignId: operation.entityId,
+                            token: token.token,
+                            status: 'PAUSED',
+                        });
+                    }
+                    else if (operation.action === 'budget_increase' || operation.action === 'budget_decrease') {
+                        result = await (0, bulkCreate_api_1.updateCampaign)({
+                            campaignId: operation.entityId,
+                            token: token.token,
+                            dailyBudget: operation.afterValue.budget,
+                        });
+                    }
                 }
-                else if (operation.action === 'budget_increase' || operation.action === 'budget_decrease') {
-                    result = await (0, bulkCreate_api_1.updateCampaign)({
-                        campaignId: operation.entityId,
-                        token: token.token,
-                        dailyBudget: operation.afterValue.budget,
-                    });
+            }
+            else if (platform === 'tiktok') {
+                if (operation.entityType === 'campaign') {
+                    if (operation.action === 'pause' || operation.action === 'resume') {
+                        result = await (0, management_api_1.updateTiktokCampaign)(operation.accountId, operation.entityId, { operation_status: operation.action === 'pause' ? 'DISABLE' : 'ENABLE' }, token.accessToken);
+                    }
+                    else if (operation.action === 'budget_increase' || operation.action === 'budget_decrease') {
+                        result = await (0, management_api_1.updateTiktokCampaign)(operation.accountId, operation.entityId, { budget: operation.afterValue.budget }, token.accessToken);
+                    }
+                }
+                else if (operation.entityType === 'adset') {
+                    // TikTok AdGroup
+                    if (operation.action === 'pause' || operation.action === 'resume') {
+                        result = await (0, management_api_1.updateTiktokAdGroup)(operation.accountId, operation.entityId, { operation_status: operation.action === 'pause' ? 'DISABLE' : 'ENABLE' }, token.accessToken);
+                    }
+                    else if (operation.action === 'budget_increase' || operation.action === 'budget_decrease') {
+                        result = await (0, management_api_1.updateTiktokAdGroup)(operation.accountId, operation.entityId, { budget: operation.afterValue.budget }, token.accessToken);
+                    }
                 }
             }
             operation.status = 'executed';
@@ -1783,7 +1965,7 @@ ${conversation.messages.slice(-6).map((m) => `${m.role === 'user' ? '用户' : '
             operation.executedBy = 'system';
             operation.result = result;
             await operation.save();
-            logger_1.default.info(`[AgentService] Operation executed: ${operation._id}`);
+            logger_1.default.info(`[AgentService] Operation executed: ${operation._id} (${platform})`);
             return { success: true, result };
         }
         catch (error) {
@@ -1797,38 +1979,54 @@ ${conversation.messages.slice(-6).map((m) => `${m.role === 'user' ? '用户' : '
     /**
      * 根据 agent scope/org 选择可访问该广告账户的 token
      */
-    async resolveTokenForAccount(accountId, agent) {
+    async resolveTokenForAccount(accountId, agent, platform = 'facebook') {
         const tokenQuery = { status: 'active' };
         if (agent?.organizationId) {
             tokenQuery.organizationId = agent.organizationId;
         }
-        if (agent?.scope?.fbTokenIds?.length) {
-            tokenQuery._id = { $in: agent.scope.fbTokenIds };
+        if (platform === 'facebook') {
+            if (agent?.scope?.fbTokenIds?.length) {
+                tokenQuery._id = { $in: agent.scope.fbTokenIds };
+            }
+            const tokens = await FbToken_1.default.find(tokenQuery).sort({ updatedAt: -1 }).lean();
+            if (!tokens.length)
+                return null;
+            // 逐个测试 token 是否有访问权限（带缓存）
+            for (const t of tokens) {
+                const cacheKey = `fb:${t._id}:${accountId}`;
+                const cached = this.tokenAccessCache.get(cacheKey);
+                if (cached === true)
+                    return t;
+                if (cached === false)
+                    continue;
+                try {
+                    const r = await facebookClient_1.facebookClient.get(`/act_${accountId}`, {
+                        access_token: t.token,
+                        fields: 'id',
+                    });
+                    if (r?.id) {
+                        this.tokenAccessCache.set(cacheKey, true);
+                        return t;
+                    }
+                    this.tokenAccessCache.set(cacheKey, false);
+                }
+                catch {
+                    this.tokenAccessCache.set(cacheKey, false);
+                }
+            }
         }
-        const tokens = await FbToken_1.default.find(tokenQuery).sort({ updatedAt: -1 }).lean();
-        if (!tokens.length)
-            return null;
-        // 逐个测试 token 是否有访问权限（带缓存）
-        for (const t of tokens) {
-            const cacheKey = `${t._id}:${accountId}`;
-            const cached = this.tokenAccessCache.get(cacheKey);
-            if (cached === true)
-                return t;
-            if (cached === false)
-                continue;
-            try {
-                const r = await facebookClient_1.facebookClient.get(`/act_${accountId}`, {
-                    access_token: t.token,
-                    fields: 'id',
-                });
-                if (r?.id) {
-                    this.tokenAccessCache.set(cacheKey, true);
+        else if (platform === 'tiktok') {
+            if (agent?.scope?.tiktokTokenIds?.length) {
+                tokenQuery._id = { $in: agent.scope.tiktokTokenIds };
+            }
+            const tokens = await TiktokToken_1.default.find(tokenQuery).sort({ updatedAt: -1 }).lean();
+            if (!tokens.length)
+                return null;
+            for (const t of tokens) {
+                // 对于 TikTok，我们检查 advertiserIds 是否包含该账户
+                if (t.advertiserIds.includes(accountId)) {
                     return t;
                 }
-                this.tokenAccessCache.set(cacheKey, false);
-            }
-            catch {
-                this.tokenAccessCache.set(cacheKey, false);
             }
         }
         return null;
@@ -2173,10 +2371,24 @@ ${toWatch.map((m) => `- ${m.materialName}: ROAS ${m.roas.toFixed(2)}, 消耗 $${
         }
         operation.status = 'approved';
         await operation.save();
+        // 如果是通过非飞书渠道审批的，尝试同步更新飞书卡片状态
+        if (operation.feishuMessageId && !userId.startsWith('feishu:')) {
+            const agent = await agent_model_1.AgentConfig.findById(operation.agentId);
+            if (agent) {
+                feishu_service_1.feishuService.updateApprovalCard(operation.feishuMessageId, 'approved', userId, agent).catch(() => { });
+            }
+        }
         // 执行操作
-        return this.executeOperation(operationId);
+        return this.executeOperation(operationId, await agent_model_1.AgentConfig.findById(operation.agentId));
     }
     async rejectOperation(operationId, userId, reason) {
+        const operation = await agent_model_1.AgentOperation.findById(operationId);
+        if (operation?.feishuMessageId && !userId.startsWith('feishu:')) {
+            const agent = await agent_model_1.AgentConfig.findById(operation.agentId);
+            if (agent) {
+                feishu_service_1.feishuService.updateApprovalCard(operation.feishuMessageId, 'rejected', userId, agent).catch(() => { });
+            }
+        }
         return agent_model_1.AgentOperation.findByIdAndUpdate(operationId, {
             status: 'rejected',
             executedBy: userId,

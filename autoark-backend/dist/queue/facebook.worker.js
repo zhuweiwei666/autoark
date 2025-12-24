@@ -252,6 +252,11 @@ const initWorkers = () => {
                     else if (preset === 'today') {
                         actualDate = (0, dayjs_1.default)().format('YYYY-MM-DD');
                     }
+                    // Hook Rate = video_3sec_views / impressions
+                    const actions = insight.actions || [];
+                    const video3sAction = Array.isArray(actions) ? actions.find((a) => a.action_type === 'video_view' || a.action_type === 'video_3sec_views') : null;
+                    const video3s = video3sAction ? parseFloat(video3sAction.value) : (insight.video_3sec_views || 0);
+                    const hookRate = insight.impressions > 0 ? video3s / insight.impressions : 0;
                     const purchaseValue = (0, facebookPurchase_1.extractPurchaseValue)(insight.action_values);
                     const mobileAppInstall = getActionCount(insight.actions, 'mobile_app_install');
                     await facebook_upsert_service_1.upsertService.upsertRawInsights({

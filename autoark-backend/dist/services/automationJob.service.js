@@ -47,10 +47,6 @@ const crypto_1 = __importDefault(require("crypto"));
 const logger_1 = __importDefault(require("../utils/logger"));
 const AutomationJob_1 = __importDefault(require("../models/AutomationJob"));
 const automation_queue_1 = require("../queue/automation.queue");
-const agent_service_1 = require("../domain/agent/agent.service");
-const bulkAd_service_1 = __importDefault(require("./bulkAd.service"));
-const fbSyncService = __importStar(require("./facebook.sync.service"));
-const facebookUser_service_1 = require("./facebookUser.service");
 const FbToken_1 = __importDefault(require("../models/FbToken"));
 const buildIdempotencyKey = (type, payload, agentId) => {
     const raw = JSON.stringify({ type, agentId: agentId || null, payload: payload || {} });
@@ -101,33 +97,38 @@ async function executeAutomationJobInline(automationJobId) {
     try {
         const payload = doc.payload || {};
         let result;
+        // 使用动态导入打破循环依赖
+        const { agentService } = await Promise.resolve().then(() => __importStar(require('../domain/agent/agent.service')));
+        const bulkAdService = (await Promise.resolve().then(() => __importStar(require('./bulkAd.service')))).default;
+        const fbSyncService = await Promise.resolve().then(() => __importStar(require('./facebook.sync.service')));
+        const { syncFacebookUserAssets } = await Promise.resolve().then(() => __importStar(require('./facebookUser.service')));
         switch (doc.type) {
             case 'RUN_AGENT': {
                 const agentId = String(payload.agentId || doc.agentId || '');
                 if (!agentId)
                     throw new Error('agentId is required');
-                result = await agent_service_1.agentService.runAgent(agentId);
+                result = await agentService.runAgent(agentId);
                 break;
             }
             case 'RUN_AGENT_AS_JOBS': {
                 const agentId = String(payload.agentId || doc.agentId || '');
                 if (!agentId)
                     throw new Error('agentId is required');
-                result = await agent_service_1.agentService.runAgentAsJobs(agentId);
+                result = await agentService.runAgentAsJobs(agentId);
                 break;
             }
             case 'EXECUTE_AGENT_OPERATION': {
                 const operationId = String(payload.operationId || '');
                 if (!operationId)
                     throw new Error('operationId is required');
-                result = await agent_service_1.agentService.executeOperation(operationId);
+                result = await agentService.executeOperation(operationId);
                 break;
             }
             case 'PUBLISH_DRAFT': {
                 const draftId = String(payload.draftId || '');
                 if (!draftId)
                     throw new Error('draftId is required');
-                result = await bulkAd_service_1.default.publishDraft(draftId);
+                result = await bulkAdService.publishDraft(draftId);
                 break;
             }
             case 'RUN_FB_FULL_SYNC': {
@@ -147,7 +148,7 @@ async function executeAutomationJobInline(automationJobId) {
                 }
                 if (!token)
                     throw new Error('accessToken or tokenId is required');
-                result = await (0, facebookUser_service_1.syncFacebookUserAssets)(fbUserId, token, tokenId);
+                result = await syncFacebookUserAssets(fbUserId, token, tokenId);
                 break;
             }
             default:

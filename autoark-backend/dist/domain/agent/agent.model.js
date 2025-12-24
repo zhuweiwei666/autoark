@@ -26,6 +26,7 @@ const agentConfigSchema = new mongoose_1.default.Schema({
     scope: {
         adAccountIds: [{ type: String }], // account_id（不带 act_）
         fbTokenIds: [{ type: mongoose_1.default.Schema.Types.ObjectId, ref: 'FbToken' }],
+        tiktokTokenIds: [{ type: mongoose_1.default.Schema.Types.ObjectId, ref: 'TiktokToken' }],
         facebookAppIds: [{ type: mongoose_1.default.Schema.Types.ObjectId, ref: 'FacebookApp' }],
         materials: {
             allowAll: { type: Boolean, default: true },
@@ -139,6 +140,110 @@ const agentConfigSchema = new mongoose_1.default.Schema({
         requireApproval: { type: Boolean, default: true }, // 是否需要人工审批
         approvalThreshold: { type: Number, default: 100 }, // 金额超过此值需审批
     },
+    /**
+     * 生命周期评分配置 (Life-Cycle Momentum System)
+     * 定义不同消耗阶段的权重矩阵
+     */
+    scoringConfig: {
+        stages: [
+            {
+                name: { type: String, default: 'Cold Start' },
+                minSpend: { type: Number, default: 0 },
+                maxSpend: { type: Number, default: 5 },
+                weights: {
+                    cpm: { type: Number, default: 0.4 },
+                    ctr: { type: Number, default: 0.4 },
+                    hookRate: { type: Number, default: 0.2 }, // 🆕 冷启动期加入钩子率
+                    cpc: { type: Number, default: 0 },
+                    cpa: { type: Number, default: 0 },
+                    roas: { type: Number, default: 0 },
+                    atcRate: { type: Number, default: 0 },
+                },
+            },
+            {
+                name: { type: String, default: 'Exploration' },
+                minSpend: { type: Number, default: 5 },
+                maxSpend: { type: Number, default: 30 },
+                weights: {
+                    cpm: { type: Number, default: 0.1 },
+                    ctr: { type: Number, default: 0.1 },
+                    cpc: { type: Number, default: 0.1 },
+                    atcRate: { type: Number, default: 0.3 }, // 🆕 探索期加入加购率
+                    cpa: { type: Number, default: 0.3 },
+                    roas: { type: Number, default: 0.1 },
+                    hookRate: { type: Number, default: 0 },
+                },
+            },
+            {
+                name: { type: String, default: 'Scaling' },
+                minSpend: { type: Number, default: 30 },
+                maxSpend: { type: Number, default: 200 },
+                weights: {
+                    cpm: { type: Number, default: 0 },
+                    ctr: { type: Number, default: 0.1 },
+                    cpc: { type: Number, default: 0 },
+                    atcRate: { type: Number, default: 0.1 },
+                    cpa: { type: Number, default: 0.1 },
+                    roas: { type: Number, default: 0.7 },
+                    hookRate: { type: Number, default: 0 },
+                },
+            },
+            {
+                name: { type: String, default: 'Maturity' },
+                minSpend: { type: Number, default: 200 },
+                maxSpend: { type: Number, default: 999999 },
+                weights: {
+                    cpm: { type: Number, default: 0.1 },
+                    ctr: { type: Number, default: 0.1 },
+                    cpc: { type: Number, default: 0 },
+                    atcRate: { type: Number, default: 0.1 },
+                    cpa: { type: Number, default: 0.1 },
+                    roas: { type: Number, default: 0.6 },
+                    hookRate: { type: Number, default: 0 },
+                },
+            },
+        ],
+        // 动能增益敏感度
+        momentumSensitivity: { type: Number, default: 0.1 },
+        // 归一化基准值 (用于计算 0-100 分)
+        baselines: {
+            cpm: { type: Number, default: 20 }, // $20 为基准
+            ctr: { type: Number, default: 0.01 }, // 1% 为基准
+            cpc: { type: Number, default: 1 }, // $1 为基准
+            hookRate: { type: Number, default: 0.25 }, // 🆕 25% Hook Rate 为基准
+            atcRate: { type: Number, default: 0.05 }, // 🆕 5% ATC Rate 为基准
+        },
+    },
+    /**
+     * 评分-操作映射阈值 (Score-to-Action Mappings)
+     */
+    actionThresholds: {
+        aggressiveScale: {
+            minScore: { type: Number, default: 85 },
+            changePercent: { type: Number, default: 30 }
+        },
+        moderateScale: {
+            minScore: { type: Number, default: 70 },
+            changePercent: { type: Number, default: 15 }
+        },
+        stopLoss: {
+            maxScore: { type: Number, default: 30 },
+            changePercent: { type: Number, default: -20 }
+        },
+        kill: {
+            maxScore: { type: Number, default: 15 }
+        }
+    },
+    /**
+     * 飞书审批配置
+     */
+    feishuConfig: {
+        enabled: { type: Boolean, default: false },
+        appId: { type: String },
+        appSecret: { type: String },
+        receiveId: { type: String }, // 接收消息的群 ID 或用户 ID
+        receiveIdType: { type: String, enum: ['open_id', 'chat_id', 'user_id', 'email'], default: 'chat_id' },
+    },
     createdBy: { type: String },
 }, { timestamps: true });
 /**
@@ -165,6 +270,7 @@ const agentOperationSchema = new mongoose_1.default.Schema({
     reason: { type: String, required: true },
     aiAnalysis: { type: String }, // AI 分析内容
     dataSnapshot: mongoose_1.default.Schema.Types.Mixed, // 决策时的数据快照
+    scoreSnapshot: mongoose_1.default.Schema.Types.Mixed, // 详细评分快照 (Life-Cycle Momentum System)
     // 执行状态
     status: {
         type: String,
@@ -176,6 +282,8 @@ const agentOperationSchema = new mongoose_1.default.Schema({
     // 执行结果
     result: mongoose_1.default.Schema.Types.Mixed,
     error: { type: String },
+    // 飞书消息 ID (用于更新卡片状态)
+    feishuMessageId: { type: String },
 }, { timestamps: true });
 /**
  * 每日报告模型

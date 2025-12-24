@@ -1,4 +1,37 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -97,8 +130,26 @@ router.post('/agents/:id/run', async (req, res) => {
 // 运行 Agent（Planner/Executor）：生成 operations 并创建 AutomationJobs 执行
 router.post('/agents/:id/run-jobs', async (req, res) => {
     try {
-        const result = await agent_service_1.agentService.runAgentAsJobs(req.params.id);
-        res.json({ success: true, data: result });
+        const { createAutomationJob } = await Promise.resolve().then(() => __importStar(require('../../services/automationJob.service')));
+        const agentId = req.params.id;
+        // 创建一个即时运行的 Job (手动触发增加时间戳，确保不被幂等拦截)
+        const job = await createAutomationJob({
+            type: 'RUN_AGENT_AS_JOBS',
+            payload: { agentId, manual: true, triggeredAt: new Date().toISOString() },
+            agentId,
+            organizationId: req.user?.organizationId,
+            createdBy: req.user?.userId,
+            priority: 10, // 高优先级
+            idempotencyKey: `manual:agent:${agentId}:${Date.now()}`,
+        });
+        res.json({
+            success: true,
+            data: {
+                jobId: job._id,
+                status: job.status,
+                message: 'Agent 运行任务已入队，请在“自动化任务”页面查看进度'
+            }
+        });
     }
     catch (error) {
         logger_1.default.error('[AgentController] Run agent as jobs failed:', error);

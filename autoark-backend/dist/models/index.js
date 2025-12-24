@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.AutomationJob = exports.FacebookApp = exports.FacebookUser = exports.Product = exports.AdMaterialMapping = exports.MaterialMetrics = exports.Folder = exports.Material = exports.AdTask = exports.AdDraft = exports.CreativeGroup = exports.CopywritingPackage = exports.TargetingPackage = exports.SyncLog = exports.Rule = exports.OpsLog = exports.MetricsDaily = exports.Creative = exports.Campaign = exports.AdSet = exports.Ad = exports.Account = void 0;
+exports.AutomationJob = exports.TiktokToken = exports.FacebookApp = exports.FacebookUser = exports.Product = exports.AdMaterialMapping = exports.MaterialMetrics = exports.Folder = exports.Material = exports.AdTask = exports.AdDraft = exports.CreativeGroup = exports.CopywritingPackage = exports.TargetingPackage = exports.SyncLog = exports.OpsLog = exports.MetricsDaily = exports.Creative = exports.Campaign = exports.AdSet = exports.Ad = exports.Account = void 0;
 var Account_1 = require("./Account");
 Object.defineProperty(exports, "Account", { enumerable: true, get: function () { return __importDefault(Account_1).default; } });
 var Ad_1 = require("./Ad");
@@ -18,8 +18,6 @@ var MetricsDaily_1 = require("./MetricsDaily");
 Object.defineProperty(exports, "MetricsDaily", { enumerable: true, get: function () { return __importDefault(MetricsDaily_1).default; } });
 var OpsLog_1 = require("./OpsLog");
 Object.defineProperty(exports, "OpsLog", { enumerable: true, get: function () { return __importDefault(OpsLog_1).default; } });
-var Rule_1 = require("./Rule");
-Object.defineProperty(exports, "Rule", { enumerable: true, get: function () { return __importDefault(Rule_1).default; } });
 var SyncLog_1 = require("./SyncLog");
 Object.defineProperty(exports, "SyncLog", { enumerable: true, get: function () { return __importDefault(SyncLog_1).default; } });
 // 批量广告创建相关模型
@@ -51,6 +49,9 @@ Object.defineProperty(exports, "FacebookUser", { enumerable: true, get: function
 // Facebook App 管理（支持多App负载均衡）
 var FacebookApp_1 = require("./FacebookApp");
 Object.defineProperty(exports, "FacebookApp", { enumerable: true, get: function () { return __importDefault(FacebookApp_1).default; } });
+// TikTok 相关模型
+var TiktokToken_1 = require("./TiktokToken");
+Object.defineProperty(exports, "TiktokToken", { enumerable: true, get: function () { return __importDefault(TiktokToken_1).default; } });
 // 自动化 Job（AI Planner/Executor & 幂等任务编排）
 var AutomationJob_1 = require("./AutomationJob");
 Object.defineProperty(exports, "AutomationJob", { enumerable: true, get: function () { return __importDefault(AutomationJob_1).default; } });

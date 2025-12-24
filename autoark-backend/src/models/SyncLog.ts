@@ -4,6 +4,7 @@ const syncLogSchema = new mongoose.Schema(
   {
     startTime: { type: Date, required: true },
     endTime: Date,
+    channel: { type: String, default: 'facebook' }, // 'facebook' | 'tiktok'
     status: {
       type: String,
       enum: ['RUNNING', 'SUCCESS', 'FAILED'],

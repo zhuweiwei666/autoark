@@ -7,6 +7,7 @@ const mongoose_1 = __importDefault(require("mongoose"));
 const syncLogSchema = new mongoose_1.default.Schema({
     startTime: { type: Date, required: true },
     endTime: Date,
+    channel: { type: String, default: 'facebook' }, // 'facebook' | 'tiktok'
     status: {
         type: String,
         enum: ['RUNNING', 'SUCCESS', 'FAILED'],

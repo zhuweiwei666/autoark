@@ -24,10 +24,8 @@ const user_routes_1 = __importDefault(require("./routes/user.routes")); // New: 
 const organization_routes_1 = __importDefault(require("./routes/organization.routes")); // New: 组织管理路由
 const account_management_routes_1 = __importDefault(require("./routes/account.management.routes")); // New: 账户管理路由
 const aggregation_controller_1 = __importDefault(require("./controllers/aggregation.controller")); // New: 预聚合数据 API
-const rule_controller_1 = __importDefault(require("./controllers/rule.controller")); // New: 自动化规则引擎
-const materialAutoTest_controller_1 = __importDefault(require("./controllers/materialAutoTest.controller")); // New: 素材自动测试
-const aiSuggestion_controller_1 = __importDefault(require("./controllers/aiSuggestion.controller")); // New: AI 优化建议
 const automationJob_routes_1 = __importDefault(require("./routes/automationJob.routes")); // New: 自动化 Job 编排
+const feishu_webhook_controller_1 = require("./controllers/feishu.webhook.controller");
 const logger_1 = __importDefault(require("./utils/logger"));
 const errorHandler_1 = require("./middlewares/errorHandler");
 const app = (0, express_1.default)();
@@ -72,10 +70,9 @@ app.use('/api/summary', summary_controller_1.default); // New: 预聚合数据�
 app.use('/api/product-mapping', productMapping_routes_1.default); // New: 产品关系映射（自动投放核心）
 app.use('/api/facebook-apps', facebookApp_routes_1.default); // New: Facebook App 管理（多App负载均衡）
 app.use('/api/agg', aggregation_controller_1.default); // New: 统一预聚合数据 API（前端+AI 共用）
-app.use('/api/rules', rule_controller_1.default); // New: 自动化规则引擎
-app.use('/api/material-auto-test', materialAutoTest_controller_1.default); // New: 素材自动测试
-app.use('/api/ai-suggestions', aiSuggestion_controller_1.default); // New: AI 优化建议
 app.use('/api/automation-jobs', automationJob_routes_1.default); // New: AI Planner/Executor jobs
+// 飞书 Webhook 交互回调
+app.post('/api/webhooks/feishu/interaction', feishu_webhook_controller_1.handleFeishuInteraction);
 // Dashboard UI 已迁移到 React 前端，不再需要后端路由
 // app.use('/dashboard', dashboardRoutes) // 已禁用，让前端 React Router 处理
 // Serve frontend static files (if dist directory exists)

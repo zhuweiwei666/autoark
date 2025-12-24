@@ -120,9 +120,10 @@ export const runTiktokFullSync = async () => {
   const startTime = new Date()
   logger.info('[TikTokSync] Starting Full TikTok Sync...')
 
-  let syncLog
+  let syncLog: any
   try {
-    syncLog = await SyncLog.create({ startTime, status: 'RUNNING', channel: 'tiktok' })
+    syncLog = new SyncLog({ startTime, status: 'RUNNING', channel: 'tiktok' })
+    await syncLog.save()
 
     const advertisers = await getEffectiveTiktokAdvertisers()
     logger.info(`[TikTokSync] Syncing ${advertisers.length} advertisers`)
