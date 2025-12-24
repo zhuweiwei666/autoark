@@ -1693,13 +1693,17 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
       for (const campaign of campaignPerformance) {
         // --- 开始生命周期加权评分逻辑 (LCWTS) ---
         const sequence = await this.getMetricSequence(campaign._id, 'campaign', 7)
+        // 确保数据按日期排序
+        campaign.dailyData.sort((a: any, b: any) => a.date.localeCompare(b.date))
+        const lastDay = campaign.dailyData[campaign.dailyData.length - 1] || {}
+
         const currentMetrics: MetricData = {
-          cpm: campaign.dailyData[campaign.dailyData.length - 1]?.spend > 0 ? (campaign.dailyData[campaign.dailyData.length - 1].spend / campaign.dailyData[campaign.dailyData.length - 1].impressions) * 1000 : 0,
-          ctr: campaign.dailyData[campaign.dailyData.length - 1]?.impressions > 0 ? campaign.dailyData[campaign.dailyData.length - 1].clicks / campaign.dailyData[campaign.dailyData.length - 1].impressions : 0,
-          cpc: campaign.dailyData[campaign.dailyData.length - 1]?.clicks > 0 ? campaign.dailyData[campaign.dailyData.length - 1].spend / campaign.dailyData[campaign.dailyData.length - 1].clicks : 0,
-          cpa: campaign.totalRevenue > 0 ? campaign.totalSpend / campaign.totalRevenue : 0, // 简化处理，实际应取具体转化
+          cpm: lastDay.impressions > 0 ? (lastDay.spend / lastDay.impressions) * 1000 : 0,
+          ctr: lastDay.impressions > 0 ? lastDay.clicks / lastDay.impressions : 0,
+          cpc: lastDay.clicks > 0 ? lastDay.spend / lastDay.clicks : 0,
+          cpa: campaign.totalRevenue > 0 ? campaign.totalSpend / campaign.totalRevenue : 0,
           roas: campaign.avgRoas,
-          spend: campaign.totalSpend, // 累计消耗用于识别阶段
+          spend: campaign.totalSpend,
           hookRate: sequence.hookRate[sequence.hookRate.length - 1] || 0,
           atcRate: sequence.atcRate[sequence.atcRate.length - 1] || 0,
         }
@@ -1854,17 +1858,22 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
       const campaignPerformance = await this.getCampaignPerformance(account.accountId, 7)
       
       for (const campaign of campaignPerformance) {
+        // 确保数据按日期排序
+        campaign.dailyData.sort((a: any, b: any) => a.date.localeCompare(b.date))
+        
+        const lastDay = campaign.dailyData[campaign.dailyData.length - 1] || {}
+
         // --- 开始生命周期加权评分逻辑 (LCWTS) ---
         const sequence = await this.getMetricSequence(campaign._id, 'campaign', 7)
         const currentMetrics: MetricData = {
-          cpm: campaign.dailyData[campaign.dailyData.length - 1]?.spend > 0 ? (campaign.dailyData[campaign.dailyData.length - 1].spend / campaign.dailyData[campaign.dailyData.length - 1].impressions) * 1000 : 0,
-          ctr: campaign.dailyData[campaign.dailyData.length - 1]?.impressions > 0 ? campaign.dailyData[campaign.dailyData.length - 1].clicks / campaign.dailyData[campaign.dailyData.length - 1].impressions : 0,
-          cpc: campaign.dailyData[campaign.dailyData.length - 1]?.clicks > 0 ? campaign.dailyData[campaign.dailyData.length - 1].spend / campaign.dailyData[campaign.dailyData.length - 1].clicks : 0,
-          cpa: campaign.totalRevenue > 0 ? campaign.totalSpend / campaign.totalRevenue : 0, // 简化处理，实际应取具体转化
+          cpm: lastDay.impressions > 0 ? (lastDay.spend / lastDay.impressions) * 1000 : 0,
+          ctr: lastDay.impressions > 0 ? lastDay.clicks / lastDay.impressions : 0,
+          cpc: lastDay.clicks > 0 ? lastDay.spend / lastDay.clicks : 0,
+          cpa: campaign.totalInstalls > 0 ? campaign.totalSpend / campaign.totalInstalls : 0,
           roas: campaign.avgRoas,
           spend: campaign.totalSpend, // 累计消耗用于识别阶段
-          hookRate: sequence.hookRate[sequence.hookRate.length - 1] || 0, // 🆕
-          atcRate: sequence.atcRate[sequence.atcRate.length - 1] || 0,   // 🆕
+          hookRate: sequence.hookRate[sequence.hookRate.length - 1] || 0,
+          atcRate: sequence.atcRate[sequence.atcRate.length - 1] || 0,
         }
 
         // 获取详细评分结果，传递平台信息
@@ -2031,11 +2040,15 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
           accountId: { $first: '$accountId' },
           totalSpend: { $sum: '$spendUsd' },
           totalRevenue: { $sum: { $ifNull: ['$purchase_value', 0] } },
+          totalInstalls: { $sum: { $ifNull: ['$installs', 0] } },
           days: { $addToSet: '$date' },
           dailyData: {
             $push: {
               date: '$date',
               spend: '$spendUsd',
+              impressions: { $ifNull: ['$impressions', 0] },
+              clicks: { $ifNull: ['$clicks', 0] },
+              installs: { $ifNull: ['$installs', 0] },
               revenue: { $ifNull: ['$purchase_value', 0] },
             }
           }
