@@ -72,8 +72,8 @@ interface Agent {
       appSecret: string
       receiveId: string
       receiveIdType: 'open_id' | 'chat_id' | 'user_id' | 'email'
-    }
-    createdAt: string
+  }
+  createdAt: string
 }
 
 interface Operation {
@@ -702,14 +702,14 @@ export default function AgentManagementPage() {
                       <td className="px-6 py-4 text-sm text-slate-500 max-w-xs truncate">{op.reason}</td>
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-2">
-                          <span className={`px-2 py-1 rounded text-xs font-medium ${
-                            op.status === 'executed' ? 'bg-emerald-100 text-emerald-700' :
-                            op.status === 'pending' ? 'bg-amber-100 text-amber-700' :
-                            op.status === 'rejected' ? 'bg-red-100 text-red-700' :
-                            'bg-slate-100 text-slate-600'
-                          }`}>
-                            {op.status}
-                          </span>
+                        <span className={`px-2 py-1 rounded text-xs font-medium ${
+                          op.status === 'executed' ? 'bg-emerald-100 text-emerald-700' :
+                          op.status === 'pending' ? 'bg-amber-100 text-amber-700' :
+                          op.status === 'rejected' ? 'bg-red-100 text-red-700' :
+                          'bg-slate-100 text-slate-600'
+                        }`}>
+                          {op.status}
+                        </span>
                           {op.scoreSnapshot && (
                             <button
                               onClick={() => openSnapshot(op)}
@@ -734,8 +734,8 @@ export default function AgentManagementPage() {
 
         {/* 创建/编辑 Modal */}
         {showModal && (
-          <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-3xl border border-slate-200 w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl">
+          <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4 overflow-y-auto overscroll-contain">
+            <div className="bg-white rounded-3xl border border-slate-200 w-full max-w-2xl max-h-[90vh] overflow-y-auto overscroll-contain shadow-2xl">
               <div className="p-6 border-b border-slate-200">
                 <h2 className="text-xl font-semibold text-slate-900">
                   {editingAgent ? '编辑 Agent' : '创建 Agent'}
@@ -967,7 +967,7 @@ export default function AgentManagementPage() {
                         评分基准 (Baselines)
                       </h4>
                       <div className="grid grid-cols-3 gap-4">
-                        <div>
+                <div>
                           <label className="block text-xs text-slate-500 mb-1">CPM 基准 ($)</label>
                           <input
                             type="number"
@@ -1000,21 +1000,21 @@ export default function AgentManagementPage() {
                         </div>
                         <div>
                           <label className="block text-xs text-slate-500 mb-1">CPC 基准 ($)</label>
-                          <input
+                        <input
                             type="number"
                             step="0.1"
                             value={formData.scoringConfig.baselines.cpc}
-                            onChange={(e) => setFormData({
-                              ...formData,
+                          onChange={(e) => setFormData({
+                            ...formData,
                               scoringConfig: {
                                 ...formData.scoringConfig,
                                 baselines: { ...formData.scoringConfig.baselines, cpc: parseFloat(e.target.value) || 0 }
                               }
-                            })}
+                          })}
                             className="w-full bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-sm"
-                          />
+                        />
                         </div>
-                        <div>
+                          <div>
                           <label className="block text-xs text-slate-500 mb-1">Hook Rate 基准 (%)</label>
                           <input
                             type="number"
@@ -1091,9 +1091,9 @@ export default function AgentManagementPage() {
                             {Object.entries(stage.weights).map(([key, weight]) => (
                               <div key={key} className="bg-slate-50 rounded-xl p-2 border border-slate-100">
                                 <label className="block text-[10px] text-slate-400 uppercase mb-1 text-center font-bold tracking-tight truncate" title={key}>{key}</label>
-                                <input
-                                  type="number"
-                                  step="0.1"
+                            <input
+                              type="number"
+                              step="0.1"
                                   min="0"
                                   max="1"
                                   value={weight as number}
@@ -1125,13 +1125,13 @@ export default function AgentManagementPage() {
                         type="number"
                         step="0.01"
                         value={formData.scoringConfig.momentumSensitivity}
-                        onChange={(e) => setFormData({
-                          ...formData,
+                              onChange={(e) => setFormData({
+                                ...formData,
                           scoringConfig: { ...formData.scoringConfig, momentumSensitivity: parseFloat(e.target.value) || 0 }
-                        })}
+                              })}
                         className="w-20 bg-white border border-indigo-200 rounded-xl px-3 py-2 text-sm text-center font-bold text-indigo-700"
-                      />
-                    </div>
+                            />
+                          </div>
                   </div>
                 </div>
 
@@ -1147,37 +1147,37 @@ export default function AgentManagementPage() {
                     <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-100 space-y-4">
                       <h4 className="text-xs font-bold text-emerald-700 uppercase tracking-wider">激进扩量 (Aggressive)</h4>
                       <div className="grid grid-cols-2 gap-3">
-                        <div>
+                          <div>
                           <label className="block text-[10px] text-emerald-600 mb-1 font-bold">触发分值 ≥</label>
-                          <input
-                            type="number"
+                            <input
+                              type="number"
                             value={formData.actionThresholds.aggressiveScale.minScore}
-                            onChange={(e) => setFormData({
-                              ...formData,
+                              onChange={(e) => setFormData({
+                                ...formData,
                               actionThresholds: {
                                 ...formData.actionThresholds,
                                 aggressiveScale: { ...formData.actionThresholds.aggressiveScale, minScore: parseInt(e.target.value) || 0 }
                               }
-                            })}
+                              })}
                             className="w-full bg-white border border-emerald-200 rounded-xl px-3 py-1.5 text-sm font-bold text-emerald-700"
-                          />
-                        </div>
-                        <div>
+                            />
+                          </div>
+                          <div>
                           <label className="block text-[10px] text-emerald-600 mb-1 font-bold">加价幅度 %</label>
-                          <input
-                            type="number"
+                            <input
+                              type="number"
                             value={formData.actionThresholds.aggressiveScale.changePercent}
-                            onChange={(e) => setFormData({
-                              ...formData,
+                              onChange={(e) => setFormData({
+                                ...formData,
                               actionThresholds: {
                                 ...formData.actionThresholds,
                                 aggressiveScale: { ...formData.actionThresholds.aggressiveScale, changePercent: parseInt(e.target.value) || 0 }
                               }
-                            })}
+                              })}
                             className="w-full bg-white border border-emerald-200 rounded-xl px-3 py-1.5 text-sm font-bold text-emerald-700"
-                          />
+                            />
+                          </div>
                         </div>
-                      </div>
                     </div>
 
                     <div className="p-4 bg-blue-50 rounded-2xl border border-blue-100 space-y-4">
@@ -1200,18 +1200,18 @@ export default function AgentManagementPage() {
                         </div>
                         <div>
                           <label className="block text-[10px] text-blue-600 mb-1 font-bold">加价幅度 %</label>
-                          <input
+                        <input
                             type="number"
                             value={formData.actionThresholds.moderateScale.changePercent}
-                            onChange={(e) => setFormData({
-                              ...formData,
+                          onChange={(e) => setFormData({
+                            ...formData,
                               actionThresholds: {
                                 ...formData.actionThresholds,
                                 moderateScale: { ...formData.actionThresholds.moderateScale, changePercent: parseInt(e.target.value) || 0 }
                               }
-                            })}
+                          })}
                             className="w-full bg-white border border-blue-200 rounded-xl px-3 py-1.5 text-sm font-bold text-blue-700"
-                          />
+                        />
                         </div>
                       </div>
                     </div>
@@ -1220,62 +1220,62 @@ export default function AgentManagementPage() {
                     <div className="p-4 bg-amber-50 rounded-2xl border border-amber-100 space-y-4">
                       <h4 className="text-xs font-bold text-amber-700 uppercase tracking-wider">减速止损 (Stop Loss)</h4>
                       <div className="grid grid-cols-2 gap-3">
-                        <div>
+                          <div>
                           <label className="block text-[10px] text-amber-600 mb-1 font-bold">触发分值 {'<'}</label>
-                          <input
-                            type="number"
+                            <input
+                              type="number"
                             value={formData.actionThresholds.stopLoss.maxScore}
-                            onChange={(e) => setFormData({
-                              ...formData,
+                              onChange={(e) => setFormData({
+                                ...formData,
                               actionThresholds: {
                                 ...formData.actionThresholds,
                                 stopLoss: { ...formData.actionThresholds.stopLoss, maxScore: parseInt(e.target.value) || 0 }
                               }
-                            })}
+                              })}
                             className="w-full bg-white border border-amber-200 rounded-xl px-3 py-1.5 text-sm font-bold text-amber-700"
-                          />
-                        </div>
-                        <div>
+                            />
+                          </div>
+                          <div>
                           <label className="block text-[10px] text-amber-600 mb-1 font-bold">降价幅度 %</label>
-                          <input
-                            type="number"
+                            <input
+                              type="number"
                             value={formData.actionThresholds.stopLoss.changePercent}
-                            onChange={(e) => setFormData({
-                              ...formData,
+                              onChange={(e) => setFormData({
+                                ...formData,
                               actionThresholds: {
                                 ...formData.actionThresholds,
                                 stopLoss: { ...formData.actionThresholds.stopLoss, changePercent: parseInt(e.target.value) || 0 }
                               }
-                            })}
+                              })}
                             className="w-full bg-white border border-amber-200 rounded-xl px-3 py-1.5 text-sm font-bold text-amber-700"
-                          />
-                        </div>
+                            />
+                          </div>
                       </div>
                     </div>
 
                     <div className="p-4 bg-rose-50 rounded-2xl border border-rose-100 space-y-4">
                       <h4 className="text-xs font-bold text-rose-700 uppercase tracking-wider">立即关停 (Kill)</h4>
                       <div className="grid grid-cols-2 gap-3">
-                        <div>
+                          <div>
                           <label className="block text-[10px] text-rose-600 mb-1 font-bold">触发分值 {'<'}</label>
-                          <input
-                            type="number"
+                            <input
+                              type="number"
                             value={formData.actionThresholds.kill.maxScore}
-                            onChange={(e) => setFormData({
-                              ...formData,
+                              onChange={(e) => setFormData({
+                                ...formData,
                               actionThresholds: {
                                 ...formData.actionThresholds,
                                 kill: { ...formData.actionThresholds.kill, maxScore: parseInt(e.target.value) || 0 }
                               }
-                            })}
+                              })}
                             className="w-full bg-white border border-rose-200 rounded-xl px-3 py-1.5 text-sm font-bold text-rose-700"
-                          />
-                        </div>
+                            />
+                          </div>
                         <div className="flex items-end pb-1.5">
                           <span className="text-[10px] text-rose-400 italic">自动执行 PAUSE</span>
                         </div>
-                      </div>
                     </div>
+                  </div>
                   </div>
                 </div>
 
@@ -1396,9 +1396,9 @@ export default function AgentManagementPage() {
 
         {/* 决策快照 Modal */}
         {showSnapshotModal && selectedOp && selectedOp.scoreSnapshot && (
-          <div className="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center z-50 p-4 overflow-y-auto overscroll-contain">
             <div className="absolute inset-0" onClick={() => setShowSnapshotModal(false)}></div>
-            <div className="bg-white rounded-3xl border border-slate-200 w-full max-w-4xl max-h-[90vh] overflow-y-auto shadow-2xl relative z-10 p-8">
+            <div className="bg-white rounded-3xl border border-slate-200 w-full max-w-4xl max-h-[90vh] overflow-y-auto overscroll-contain shadow-2xl relative z-10 p-8">
               <div className="flex items-start justify-between mb-8">
                 <div>
                   <h2 className="text-2xl font-bold text-slate-900">决策专家报告 (Decision Snapshot)</h2>
