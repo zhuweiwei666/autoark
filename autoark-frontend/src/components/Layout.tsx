@@ -147,7 +147,7 @@ export default function Layout({ children }: LayoutProps) {
         </div>
         
         {/* 菜单项 */}
-        <nav className="flex-1 p-4 space-y-1 overflow-y-auto scrollbar-thin">
+        <nav className="flex-1 p-4 space-y-1 overflow-y-scroll overscroll-contain scrollbar-thin app-scroll">
           
           {/* ========== 数据资产板块 ========== */}
           <SectionTitle title="数据资产" section="data" />
@@ -311,7 +311,7 @@ export default function Layout({ children }: LayoutProps) {
 
       {/* 主内容区域 */}
       <main className="flex-1 overflow-hidden">
-        <div className="h-full overflow-y-auto scroll-smooth">
+        <div className="h-full overflow-y-scroll overscroll-contain app-scroll">
           <div key={location.pathname} className="animate-fade-in">
             {children}
           </div>

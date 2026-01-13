@@ -25,6 +25,36 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+html {
+  /* Prevent subtle layout shifts when scrollbars appear/disappear */
+  scrollbar-gutter: stable;
+}
+
+/* Make internal scroll containers keep a stable gutter */
+.app-scroll {
+  scrollbar-gutter: stable;
+}
+
+/*
+ * IMPORTANT:
+ * This codebase uses many `transition: all` / `transition-all`.
+ * When scrollbars or data updates change layout slightly, browsers may animate width/height,
+ * which looks like the whole page is "shaking". Constrain transitions to paint-only properties.
+ */
+button,
+a,
+input,
+select,
+textarea,
+tr,
+.glass-card,
+.glass-loading-card,
+.menu-item,
+.card-selectable,
+.status-badge {
+  transition-property: color, background-color, border-color, outline-color, text-decoration-color, fill, stroke, opacity, box-shadow, transform, filter, backdrop-filter;
+}
+
 /* ==================== 自定义滚动条 ==================== */
 ::-webkit-scrollbar {
   width: 6px;
