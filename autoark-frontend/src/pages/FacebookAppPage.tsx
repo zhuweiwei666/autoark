@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import Loading from '../components/Loading'
-import { useAuth } from '../contexts/AuthContext'
+import { authFetch } from '../services/api'
 
 const API_BASE = '/api'
 
@@ -65,7 +65,6 @@ interface AppStats {
 }
 
 export default function FacebookAppPage() {
-  const { token } = useAuth()
   const [apps, setApps] = useState<FacebookApp[]>([])
   const [stats, setStats] = useState<AppStats | null>(null)
   const [loading, setLoading] = useState(false)
@@ -103,17 +102,6 @@ export default function FacebookAppPage() {
     appReview: 'unknown',
     permissions: [],
   })
-
-  // 带认证的 fetch
-  const authFetch = (url: string, options: RequestInit = {}) => {
-    return fetch(url, {
-      ...options,
-      headers: {
-        ...options.headers,
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-    })
-  }
 
   // 加载 Apps 列表
   const loadApps = async () => {

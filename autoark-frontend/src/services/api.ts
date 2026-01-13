@@ -24,11 +24,13 @@ const getAuthToken = (): string | null => {
 
 /**
  * 带认证的 fetch 封装
+ * 默认添加 Content-Type: application/json，可通过 options.headers 覆盖
  */
 export const authFetch = async (url: string, options: RequestInit = {}): Promise<Response> => {
   const token = getAuthToken()
   const headers: HeadersInit = {
-    ...options.headers,
+    'Content-Type': 'application/json',
+    ...(options.headers || {}),
   }
   
   if (token) {

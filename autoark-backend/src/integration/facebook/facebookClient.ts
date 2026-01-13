@@ -2,9 +2,7 @@ import axios from 'axios'
 import logger from '../../utils/logger'
 import { getFacebookAccessToken } from '../../utils/fbToken'
 import { tokenPool } from './tokenPool'
-
-const FB_API_VERSION = 'v19.0'
-const FB_BASE_URL = 'https://graph.facebook.com'
+import { FB_API_VERSION, FB_BASE_URL } from '../../config/facebook.config'
 
 class FacebookApiError extends Error {
   response?: any

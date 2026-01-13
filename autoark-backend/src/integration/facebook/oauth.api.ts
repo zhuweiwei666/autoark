@@ -1,9 +1,9 @@
 import axios from 'axios'
 import logger from '../../utils/logger'
 import FacebookApp from '../../models/FacebookApp'
+import { FB_API_VERSION, FB_BASE_URL } from '../../config/facebook.config'
 
-const FB_API_VERSION = 'v19.0'
-const FB_GRAPH_BASE_URL = 'https://graph.facebook.com'
+const FB_GRAPH_BASE_URL = FB_BASE_URL
 const FB_OAUTH_BASE_URL = 'https://www.facebook.com'
 
 // 从环境变量读取作为后备

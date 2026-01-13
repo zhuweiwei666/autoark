@@ -6,6 +6,9 @@ import CreativeGroup from '../models/CreativeGroup'
 import FbToken from '../models/FbToken'
 import AdMaterialMapping from '../models/AdMaterialMapping'
 import logger from '../utils/logger'
+import User from '../models/User'
+import Account from '../models/Account'
+import Ad from '../models/Ad'
 import {
   createCampaign,
   createAdSet,
@@ -137,7 +140,7 @@ export const validateDraft = async (draftId: string) => {
   if (!draft) {
     throw new Error('Draft not found')
   }
-
+  
   // 兼容历史/前端空字符串导致的 CastError（例如 targetingPackageId: ""）
   if (draft.adset && draft.adset.targetingPackageId === '') {
     draft.adset.targetingPackageId = undefined
@@ -215,7 +218,6 @@ export const publishDraft = async (draftId: string, userId?: string) => {
   let userName = 'unknown'
   if (userId) {
     try {
-      const User = require('../models/User').default
       const user = await User.findById(userId).lean()
       userName = user?.username?.replace(/[^a-zA-Z0-9\u4e00-\u9fa5-]/g, '') || 'unknown'
     } catch (e) {
@@ -226,7 +228,6 @@ export const publishDraft = async (draftId: string, userId?: string) => {
   let packageName = ''
   if (draft.ad?.copywritingPackageIds?.length > 0) {
     try {
-      const CopywritingPackage = require('../models/CopywritingPackage').default
       const pkg = await CopywritingPackage.findById(draft.ad.copywritingPackageIds[0])
       packageName = pkg?.name?.replace(/[^a-zA-Z0-9\u4e00-\u9fa5-]/g, '') || ''
     } catch (e) {
@@ -449,9 +450,9 @@ export const executeTaskForAccount = async (
   })
   
   // 2. 如果没有绑定关系，尝试从 Account 模型获取 fbUserId
+  // 注意：Account 模型可能不包含 fbUserId 字段，这是历史兼容代码
   if (!fbToken) {
-    const Account = require('../models/Account').default
-    const account = await Account.findOne({ accountId }).lean()
+    const account: any = await Account.findOne({ accountId }).lean()
     if (account?.fbUserId) {
       fbToken = await FbToken.findOne({ 
         status: 'active', 
@@ -961,7 +962,6 @@ export const executeTaskForAccount = async (
     
     // 同步创建 Ad 记录到数据库（用于后续审核状态追踪）
     try {
-      const Ad = require('../models/Ad').default
       for (const adDetail of adsDetails) {
         await Ad.findOneAndUpdate(
           { adId: adDetail.adId },
@@ -1195,7 +1195,6 @@ export const rerunTask = async (taskId: string, multiplier: number = 1, userId?:
   let userName = 'unknown'
   if (userId) {
     try {
-      const User = require('../models/User').default
       const user = await User.findById(userId).lean()
       userName = user?.username?.replace(/[^a-zA-Z0-9\u4e00-\u9fa5-]/g, '') || 'unknown'
     } catch (e) {
@@ -1204,7 +1203,6 @@ export const rerunTask = async (taskId: string, multiplier: number = 1, userId?:
   } else if (originalTask.createdBy) {
     // 如果没有传入 userId，尝试从原任务获取
     try {
-      const User = require('../models/User').default
       const user = await User.findById(originalTask.createdBy).lean()
       userName = user?.username?.replace(/[^a-zA-Z0-9\u4e00-\u9fa5-]/g, '') || 'unknown'
     } catch (e) {

@@ -1,8 +1,8 @@
 import FacebookUser from '../models/FacebookUser'
 import logger from '../utils/logger'
+import { FB_VERSIONED_URL } from '../config/facebook.config'
 
-const FB_API_VERSION = 'v21.0'
-const FB_BASE_URL = `https://graph.facebook.com/${FB_API_VERSION}`
+const FB_BASE_URL = FB_VERSIONED_URL
 
 /**
  * 同步 Facebook 用户的所有资产（Pixels、账户、粉丝页、Catalog）
@@ -108,7 +108,7 @@ export const syncFacebookUserAssets = async (fbUserId: string, accessToken: stri
       // 如果缺少权限，这里通常会报错，直接降级不阻塞主流程
       logger.warn(`[FacebookUser] Failed to fetch catalogs (optional): ${e?.message || e}`)
     }
-
+    
     // 4. 保存到数据库
     const result = await FacebookUser.findOneAndUpdate(
       { fbUserId },

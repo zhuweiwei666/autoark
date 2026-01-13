@@ -19,6 +19,9 @@ import { parseProductUrl } from '../services/productMapping.service'
 import { getOrgFilter } from '../middlewares/auth'
 import { UserRole } from '../models/User'
 import mongoose from 'mongoose'
+import FacebookApp from '../models/FacebookApp'
+import Account from '../models/Account'
+import * as facebookUserService from '../services/facebookUser.service'
 
 /**
  * 获取资产过滤条件（文案包/定向包/创意组等）
@@ -838,7 +841,7 @@ export const getAuthLoginUrl = async (req: Request, res: Response) => {
     if (!req.user) {
       return res.status(401).json({ success: false, error: '未认证' })
     }
-
+    
     // ⚠️ 登录链接必须每次实时生成：禁止任何缓存/304（浏览器/代理可能会缓存）
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
     res.setHeader('Pragma', 'no-cache')
@@ -851,13 +854,12 @@ export const getAuthLoginUrl = async (req: Request, res: Response) => {
     let appId: string | undefined
     const useUserApp = String(req.query.useUserApp || '').toLowerCase() === 'true'
     if (useUserApp) {
-      const FacebookApp = require('../models/FacebookApp').default
-      const userApp = await FacebookApp.findOne({
-        createdBy: req.user.userId,
+      const userApp = await FacebookApp.findOne({ 
+      createdBy: req.user.userId,
         status: 'active',
         'validation.isValid': true,
         'config.enabledForBulkAds': true,
-      }).sort({ createdAt: -1 })
+    }).sort({ createdAt: -1 })
       if (userApp?.appId) {
         appId = userApp.appId
         logger.info(`[BulkAd] OAuth using user's App (forced): ${userApp.appName} (${appId})`)
@@ -965,7 +967,6 @@ export const handleAuthCallback = async (req: Request, res: Response) => {
     }
     
     // 异步同步 Facebook 用户资产
-    const facebookUserService = require('../services/facebookUser.service')
     facebookUserService.syncFacebookUserAssets(
       result.fbUserId, 
       result.accessToken,
@@ -1157,7 +1158,6 @@ export const getAuthAdAccounts = async (req: Request, res: Response) => {
     // 根据 Account 模型中的 organizationId 进行过滤（仅非超级管理员）
     let filteredAccounts = allAccounts
     if (req.user.role !== UserRole.SUPER_ADMIN && req.user.organizationId) {
-      const Account = require('../models/Account').default
       const allowedAccounts = await Account.find({
         accountId: { $in: Array.from(seenAccountIds) },
         organizationId: req.user.organizationId,
@@ -1316,8 +1316,6 @@ export const getCachedPixels = async (req: Request, res: Response) => {
       return res.status(401).json({ success: false, error: '未授权 Facebook 账号' })
     }
     
-    const facebookUserService = require('../services/facebookUser.service')
-    
     // 合并所有 token 的 Pixels
     const pixelMap = new Map<string, any>()
     
@@ -1385,7 +1383,6 @@ export const getCachedCatalogs = async (req: Request, res: Response) => {
       return res.status(401).json({ success: false, error: '未授权 Facebook 账号' })
     }
 
-    const facebookUserService = require('../services/facebookUser.service')
     const catalogMap = new Map<string, any>()
 
     for (const fbToken of fbTokens) {
@@ -1423,7 +1420,6 @@ export const getPixelSyncStatus = async (req: Request, res: Response) => {
       return res.status(401).json({ success: false, error: '未授权 Facebook 账号' })
     }
     
-    const facebookUserService = require('../services/facebookUser.service')
     const status = await facebookUserService.getSyncStatus(fbToken.fbUserId)
     
     res.json({ success: true, data: status })
@@ -1443,8 +1439,6 @@ export const resyncFacebookAssets = async (req: Request, res: Response) => {
     if (!fbToken) {
       return res.status(401).json({ success: false, error: '未授权 Facebook 账号' })
     }
-    
-    const facebookUserService = require('../services/facebookUser.service')
     
     // 异步执行同步
     facebookUserService.syncFacebookUserAssets(

@@ -2,6 +2,7 @@ import { Request, Response } from 'express'
 import FacebookApp from '../models/FacebookApp'
 import axios from 'axios'
 import logger from '../utils/logger'
+import { FB_BASE_URL, FB_OAUTH_URL } from '../config/facebook.config'
 
 // 公开 OAuth 最低需要的权限（用于“任意 FB 号可授权”）
 const PUBLIC_OAUTH_REQUIRED_PERMISSIONS = [
@@ -328,7 +329,7 @@ async function validateAppCredentials(appId: string, appSecret: string): Promise
   try {
     // 获取 app access token
     const response = await axios.get(
-      `https://graph.facebook.com/oauth/access_token`,
+      `${FB_OAUTH_URL}/access_token`,
       {
         params: {
           client_id: appId,
@@ -342,7 +343,7 @@ async function validateAppCredentials(appId: string, appSecret: string): Promise
     if (response.data?.access_token) {
       // 进一步验证 token
       const debugResponse = await axios.get(
-        `https://graph.facebook.com/debug_token`,
+        `${FB_BASE_URL}/debug_token`,
         {
           params: {
             input_token: response.data.access_token,

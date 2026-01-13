@@ -1,6 +1,7 @@
 import { Request, Response } from 'express'
 import FbToken from '../models/FbToken'
 import axios from 'axios'
+import { FB_BASE_URL } from '../config/facebook.config'
 
 export const saveFacebookToken = async (req: Request, res: Response) => {
   try {
@@ -14,7 +15,7 @@ export const saveFacebookToken = async (req: Request, res: Response) => {
     // Validate token via FB API
     try {
       const check = await axios.get(
-        `https://graph.facebook.com/me?access_token=${token}`,
+        `${FB_BASE_URL}/me?access_token=${token}`,
       )
 
       if (!check.data || !check.data.id) {

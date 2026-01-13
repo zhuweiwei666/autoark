@@ -10,6 +10,9 @@ import * as facebookCountriesService from '../services/facebook.countries.servic
 import { getEffectiveAdAccounts } from '../services/facebook.sync.service'
 import { getOrgFilter, getUserAccountIds } from '../middlewares/auth'
 import { UserRole } from '../models/User'
+import { FB_VERSIONED_URL } from '../config/facebook.config'
+import Ad from '../models/Ad'
+import Campaign from '../models/Campaign'
 
 export const syncCampaigns = async (
   req: Request,
@@ -334,8 +337,6 @@ export const getAccounts = async (
 
 // 刷新指定 Campaign 下所有广告的状态
 async function refreshCampaignAdsStatus(campaignId: string, token: string) {
-  const Ad = require('../models/Ad').default
-  
   // 获取该 Campaign 下的所有广告
   const ads = await Ad.find({ campaignId }).select('adId').lean()
   if (ads.length === 0) return
@@ -350,7 +351,7 @@ async function refreshCampaignAdsStatus(campaignId: string, token: string) {
     
     try {
       const response = await fetch(
-        `https://graph.facebook.com/v21.0/?ids=${idsParam}&fields=effective_status&access_token=${token}`
+        `${FB_VERSIONED_URL}/?ids=${idsParam}&fields=effective_status&access_token=${token}`
       )
       const result = await response.json()
       
@@ -396,7 +397,7 @@ export const updateCampaignStatus = async (
     }
     
     // 调用 Facebook API 更新状态
-    const response = await fetch(`https://graph.facebook.com/v21.0/${campaignId}`, {
+    const response = await fetch(`${FB_VERSIONED_URL}/${campaignId}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -415,9 +416,6 @@ export const updateCampaignStatus = async (
     }
     
     // 更新本地数据库
-    const Campaign = require('../models/Campaign').default
-    const Ad = require('../models/Ad').default
-    
     await Campaign.findOneAndUpdate(
       { campaignId },
       { status, updatedAt: new Date() }

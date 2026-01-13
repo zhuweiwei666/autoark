@@ -1,9 +1,7 @@
 import axios from 'axios'
 import FbToken, { IFbToken } from '../models/FbToken'
 import logger from '../utils/logger'
-
-const FB_API_VERSION = 'v19.0'
-const FB_BASE_URL = 'https://graph.facebook.com'
+import { FB_API_VERSION, FB_BASE_URL } from '../config/facebook.config'
 
 /**
  * 验证单个 token 是否有效

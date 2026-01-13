@@ -32,6 +32,11 @@ import {
 // 🚫 不再在 AI 对话中刷新数据，由后台 cron 统一刷新
 // import { refreshRecentDays } from '../../services/aggregation.service'
 
+// 🔄 导入拆分后的子服务（facade 模式）
+import { healthService } from './health/health.service'
+import { alertService } from './alert/alert.service'
+import { approvalService } from './approval/approval.service'
+
 const LLM_API_KEY = process.env.LLM_API_KEY
 const LLM_MODEL = process.env.LLM_MODEL || 'gemini-2.0-flash'
 
@@ -1458,109 +1463,14 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
   }
 
   // ==================== 健康度分析 ====================
+  // 🔄 已拆分到 ./health/health.service.ts
 
   /**
    * 获取账户健康度分析
+   * @deprecated 请直接使用 healthService.analyzeHealth()
    */
   async analyzeHealth(accountId?: string): Promise<any> {
-    const today = dayjs().format('YYYY-MM-DD')
-    const yesterday = dayjs().subtract(1, 'day').format('YYYY-MM-DD')
-    const sevenDaysAgo = dayjs().subtract(7, 'day').format('YYYY-MM-DD')
-
-    const matchQuery: any = { campaignId: { $exists: true, $ne: null } }
-    if (accountId) matchQuery.accountId = accountId
-
-    // 今日数据
-    const todayMetrics = await MetricsDaily.aggregate([
-      { $match: { ...matchQuery, date: today } },
-      {
-        $group: {
-          _id: null,
-          spend: { $sum: '$spendUsd' },
-          revenue: { $sum: { $ifNull: ['$purchase_value', 0] } },
-          impressions: { $sum: '$impressions' },
-          clicks: { $sum: '$clicks' },
-          campaigns: { $addToSet: '$campaignId' }
-        }
-      }
-    ])
-
-    // 昨日数据
-    const yesterdayMetrics = await MetricsDaily.aggregate([
-      { $match: { ...matchQuery, date: yesterday } },
-      {
-        $group: {
-          _id: null,
-          spend: { $sum: '$spendUsd' },
-          revenue: { $sum: { $ifNull: ['$purchase_value', 0] } },
-        }
-      }
-    ])
-
-    // 7天平均
-    const weekMetrics = await MetricsDaily.aggregate([
-      { $match: { ...matchQuery, date: { $gte: sevenDaysAgo, $lte: today } } },
-      {
-        $group: {
-          _id: null,
-          avgSpend: { $avg: '$spendUsd' },
-          avgRevenue: { $avg: { $ifNull: ['$purchase_value', 0] } },
-        }
-      }
-    ])
-
-    const todayData = todayMetrics[0] || { spend: 0, revenue: 0, impressions: 0, clicks: 0, campaigns: [] }
-    const yesterdayData = yesterdayMetrics[0] || { spend: 0, revenue: 0 }
-    const weekData = weekMetrics[0] || { avgSpend: 0, avgRevenue: 0 }
-
-    const todayRoas = todayData.spend > 0 ? todayData.revenue / todayData.spend : 0
-    const yesterdayRoas = yesterdayData.spend > 0 ? yesterdayData.revenue / yesterdayData.spend : 0
-    const weekAvgRoas = weekData.avgSpend > 0 ? weekData.avgRevenue / weekData.avgSpend : 0
-
-    // 计算健康度评分
-    let score = 100
-    const issues: string[] = []
-    const suggestions: string[] = []
-
-    // ROAS 评估
-    if (todayRoas < 0.5) {
-      score -= 30
-      issues.push(`今日 ROAS 过低 (${todayRoas.toFixed(2)})`)
-      suggestions.push('检查亏损广告系列，考虑暂停或降低预算')
-    } else if (todayRoas < 1) {
-      score -= 15
-      issues.push(`今日 ROAS 低于盈亏平衡点 (${todayRoas.toFixed(2)})`)
-    }
-
-    // ROAS 变化
-    if (yesterdayRoas > 0 && todayRoas < yesterdayRoas * 0.7) {
-      score -= 20
-      issues.push(`ROAS 较昨日下降 ${((1 - todayRoas / yesterdayRoas) * 100).toFixed(1)}%`)
-      suggestions.push('分析下降原因，检查是否有异常广告系列')
-    }
-
-    // 消耗异常
-    if (weekData.avgSpend > 0 && todayData.spend > weekData.avgSpend * 2) {
-      score -= 10
-      issues.push(`今日消耗异常高，是7日均值的 ${(todayData.spend / weekData.avgSpend).toFixed(1)} 倍`)
-      suggestions.push('检查是否有预算设置错误或突发流量')
-    }
-
-    return {
-      score: Math.max(0, score),
-      status: score >= 80 ? 'healthy' : score >= 50 ? 'warning' : 'critical',
-      metrics: {
-        todaySpend: todayData.spend,
-        todayRevenue: todayData.revenue,
-        todayRoas,
-        yesterdayRoas,
-        weekAvgRoas,
-        activeCampaigns: todayData.campaigns?.length || 0,
-      },
-      issues,
-      suggestions,
-      analyzedAt: new Date(),
-    }
+    return healthService.analyzeHealth(accountId)
   }
 
   // ==================== 自动优化执行 ====================
@@ -2573,87 +2483,43 @@ ${toWatch.map((m: any) => `- ${m.materialName}: ROAS ${m.roas.toFixed(2)}, 消�
   }
 
   // ==================== 告警通知 ====================
+  // 🔄 已拆分到 ./alert/alert.service.ts
 
   /**
    * 发送告警通知
+   * @deprecated 请直接使用 alertService.sendAlert()
    */
   async sendAlert(agent: any, alert: any): Promise<void> {
-    if (!agent.alerts.enabled) return
-
-    for (const channel of agent.alerts.channels) {
-      try {
-        if (channel.type === 'webhook') {
-          await this.sendWebhook(channel.config.url, alert)
-        } else if (channel.type === 'dingtalk') {
-          await this.sendDingTalk(channel.config, alert)
-        }
-        // TODO: 其他通知渠道
-      } catch (error) {
-        logger.error(`[AgentService] Failed to send alert via ${channel.type}:`, error)
-      }
-    }
-  }
-
-  private async sendWebhook(url: string, data: any): Promise<void> {
-    const axios = require('axios')
-    await axios.post(url, data, { timeout: 10000 })
-  }
-
-  private async sendDingTalk(config: any, alert: any): Promise<void> {
-    const axios = require('axios')
-    const message = {
-      msgtype: 'markdown',
-      markdown: {
-        title: `⚠️ AutoArk 告警`,
-        text: `### ${alert.type}\n\n${alert.message}\n\n- 严重程度: ${alert.severity}\n- 当前值: ${alert.value}\n- 阈值: ${alert.threshold}`
-      }
-    }
-    await axios.post(config.webhook, message, { timeout: 10000 })
+    if (!agent.alerts?.enabled) return
+    await alertService.sendAlert(agent.alerts, alert)
   }
 
   // ==================== 获取待审批操作 ====================
+  // 🔄 已拆分到 ./approval/approval.service.ts
 
+  /**
+   * @deprecated 请直接使用 approvalService.getPendingOperations()
+   */
   async getPendingOperations(filters: any = {}): Promise<any[]> {
-    return AgentOperation.find({ status: 'pending', ...filters })
-      .populate('agentId')
-      .sort({ createdAt: -1 })
+    return approvalService.getPendingOperations(filters)
   }
 
+  /**
+   * @deprecated 请直接使用 approvalService.approveOperation()
+   */
   async approveOperation(operationId: string, userId: string): Promise<any> {
-    const operation: any = await AgentOperation.findById(operationId)
-    if (!operation) {
-      return { success: false, error: 'Operation not found' }
-    }
-    
-    operation.status = 'approved'
-    await operation.save()
-
-    // 如果是通过非飞书渠道审批的，尝试同步更新飞书卡片状态
-    if (operation.feishuMessageId && !userId.startsWith('feishu:')) {
-      const agent = await AgentConfig.findById(operation.agentId)
-      if (agent) {
-        feishuService.updateApprovalCard(operation.feishuMessageId, 'approved', userId, agent).catch(() => {})
-      }
-    }
-    
-    // 执行操作
-    return this.executeOperation(operationId, await AgentConfig.findById(operation.agentId))
+    return approvalService.approveOperation(
+      operationId, 
+      userId, 
+      (opId, agent) => this.executeOperation(opId, agent)
+    )
   }
 
+  /**
+   * @deprecated 请直接使用 approvalService.rejectOperation()
+   */
   async rejectOperation(operationId: string, userId: string, reason?: string): Promise<any> {
-    const operation: any = await AgentOperation.findById(operationId)
-    if (operation?.feishuMessageId && !userId.startsWith('feishu:')) {
-      const agent = await AgentConfig.findById(operation.agentId)
-      if (agent) {
-        feishuService.updateApprovalCard(operation.feishuMessageId, 'rejected', userId, agent).catch(() => {})
-      }
-    }
-
-    return AgentOperation.findByIdAndUpdate(operationId, {
-      status: 'rejected',
-      executedBy: userId,
-      error: reason || 'Rejected by user',
-    }, { new: true })
+    return approvalService.rejectOperation(operationId, userId, reason)
   }
 }
 

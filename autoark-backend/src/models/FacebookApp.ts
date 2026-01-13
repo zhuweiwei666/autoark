@@ -45,7 +45,7 @@ const facebookAppSchema = new mongoose.Schema(
       validatedAt: { type: Date },
       validationError: { type: String },
     },
-
+    
     /**
      * 合规 / 权限可用性信息（用于判断是否能“任意 FB 号”完成授权）
      * 说明：

@@ -4,11 +4,9 @@ import { MetricsDaily } from '../models' // Unified export
 import logger from '../utils/logger'
 import { getEffectiveAdAccounts } from './facebook.sync.service' // Import from sync service
 import { getFacebookAccessToken } from '../utils/fbToken'
+import { FB_API_VERSION, FB_BASE_URL } from '../config/facebook.config'
 
 dotenv.config()
-
-const FB_API_VERSION = 'v18.0'
-const FB_BASE_URL = 'https://graph.facebook.com'
 
 // Generic error handler helper
 const handleApiError = (context: string, error: any) => {

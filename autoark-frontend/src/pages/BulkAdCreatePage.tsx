@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import Loading from '../components/Loading'
 import { useAuth } from '../contexts/AuthContext'
+import { authFetch } from '../services/api'
 
 const API_BASE = '/api'
 
@@ -35,20 +36,9 @@ interface AuthStatus {
 export default function BulkAdCreatePage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
-  const { user, token } = useAuth()  // 获取当前用户信息和认证 token
+  const { user, token } = useAuth()  // 获取当前用户信息和认证状态
   const [currentStep, setCurrentStep] = useState(1)
   
-  // 带认证的 fetch 辅助函数
-  const authFetch = async (url: string, options: RequestInit = {}) => {
-    const headers: HeadersInit = {
-      'Content-Type': 'application/json',
-      ...(options.headers || {}),
-    }
-    if (token) {
-      (headers as Record<string, string>)['Authorization'] = `Bearer ${token}`
-    }
-    return fetch(url, { ...options, headers })
-  }
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   
