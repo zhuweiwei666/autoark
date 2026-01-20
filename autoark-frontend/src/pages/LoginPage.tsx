@@ -90,11 +90,6 @@ const LoginPage: React.FC = () => {
             {isLoading ? '登录中...' : '登录'}
           </button>
         </form>
-
-        <div className="mt-6 text-center text-sm text-gray-600">
-          <p>初始超级管理员账号:</p>
-          <p className="font-mono">admin / admin123456</p>
-        </div>
       </div>
     </div>
   )
