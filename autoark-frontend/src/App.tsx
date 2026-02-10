@@ -40,6 +40,7 @@ import MaterialMetricsPage from './pages/MaterialMetricsPage'
 import FacebookAppPage from './pages/FacebookAppPage'
 import AdReviewStatusPage from './pages/AdReviewStatusPage'
 import AutomationJobsPage from './pages/AutomationJobsPage'
+import AgentChatPage from './pages/AgentChatPage'
 
 function App() {
   return (
@@ -78,6 +79,7 @@ function App() {
               <Route path="/bulk-ad/creative" element={<AssetManagementPage />} />
               <Route path="/bulk-ad/materials" element={<MaterialLibraryPage />} />
               {/* AI Agent Routes */}
+              <Route path="/ai/chat" element={<AgentChatPage />} />
               <Route path="/ai/agents" element={<AgentManagementPage />} />
               <Route path="/ai/automation-jobs" element={<AutomationJobsPage />} />
                     {/* 用户和组织管理 */}

@@ -13,6 +13,9 @@ import { initWorkers } from './queue/facebook.worker'
 import { initBulkAdWorker } from './queue/bulkAd.worker'
 import { initAutomationWorker } from './queue/automation.worker'
 
+// Agent System V2
+import { initializeAgentSystem } from './agent'
+
 // Cron Jobs
 import initCronJobs from './cron'
 // V1 Sync 已废弃，改用 V2 Queue-based Sync
@@ -54,14 +57,17 @@ async function bootstrap() {
   initBulkAdWorker()
   initAutomationWorker()
 
-  // 5) Cron Jobs (start once per process)
+  // 5) Agent System V2 (register all tools)
+  initializeAgentSystem()
+
+  // 6) Cron Jobs (start once per process)
   initCronJobs()
   // V2 Queue-based Sync（替代 V1 串行同步）
   initSyncCronV2()
   initPreaggregationCron()
   initTokenValidationCron()
 
-  // 6) HTTP Server
+  // 7) HTTP Server
   app.listen(PORT, () => {
     logger.info(`AutoArk backend running on port ${PORT}`)
   })
