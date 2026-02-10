@@ -8,8 +8,12 @@ interface Message {
   content: string
   toolCalls?: any[]
   actionIds?: string[]
-  timestamp?: string
 }
+
+const METABASE_URL = 'https://meta.iohubonline.club/question/4002-camp-v5-doris?start_day=&end_day=&user_name=&access_code=xheqmmolkpj9f35e&pkg_name=&cam_id=&platform=ALL&channel_name=ALL'
+const TOPTOU_URL = 'https://toptou.tec-do.com/'
+
+type RightPanel = 'bi' | 'ads'
 
 export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([])
@@ -18,11 +22,13 @@ export default function ChatPage() {
   const [conversationId, setConversationId] = useState<string | null>(null)
   const [pendingCount, setPendingCount] = useState(0)
   const [showTools, setShowTools] = useState<string | null>(null)
+  const [activePanel, setActivePanel] = useState<RightPanel>('bi')
+  const [rightCollapsed, setRightCollapsed] = useState(false)
   const endRef = useRef<HTMLDivElement>(null)
   const navigate = useNavigate()
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages, loading])
-  useEffect(() => { get('/api/monitor/pending-count').then(d => setPendingCount(d.count || 0)) }, [messages])
+  useEffect(() => { get('/api/monitor/pending-count').then(d => setPendingCount(d.count || 0)).catch(() => {}) }, [messages])
 
   const send = async () => {
     if (!input.trim() || loading) return
@@ -45,118 +51,193 @@ export default function ChatPage() {
 
   const quickActions = [
     { label: '分析广告表现', msg: '帮我分析一下最近 7 天所有广告系列的表现，哪些该扩量、哪些该关停？' },
-    { label: '检查今日数据', msg: '今天的广告花费和 ROAS 怎么样？' },
-    { label: '优化建议', msg: '根据最近的数据，给我一些优化建议' },
+    { label: '今日数据', msg: '今天的广告花费和 ROAS 怎么样？' },
+    { label: '优化建议', msg: '根据最近的数据趋势，给我一些优化建议' },
   ]
 
   return (
-    <div className="h-screen flex flex-col bg-slate-50">
-      {/* 顶栏 */}
-      <header className="flex items-center justify-between px-6 py-3 bg-white border-b shadow-sm">
-        <h1 className="text-lg font-bold text-slate-800">AutoArk Agent</h1>
+    <div className="h-screen flex flex-col bg-slate-900 text-white">
+      {/* 极简顶栏 */}
+      <header className="flex items-center justify-between px-4 py-2 bg-slate-800/80 border-b border-slate-700/50 shrink-0">
         <div className="flex items-center gap-3">
+          <span className="text-sm font-bold tracking-wide text-blue-400">AutoArk Agent</span>
           {pendingCount > 0 && (
-            <span className="px-2.5 py-1 bg-amber-100 text-amber-700 text-xs font-medium rounded-full">
+            <span className="px-2 py-0.5 bg-amber-500/20 text-amber-400 text-[10px] font-medium rounded-full">
               {pendingCount} 待审批
             </span>
           )}
-          <button onClick={() => navigate('/monitor')} className="text-sm text-slate-500 hover:text-slate-800">
-            监控
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setRightCollapsed(!rightCollapsed)}
+            className="text-xs text-slate-400 hover:text-white px-2 py-1 rounded transition-colors"
+            title={rightCollapsed ? '展开面板' : '收起面板'}
+          >
+            {rightCollapsed ? '展开' : '收起'} 面板
           </button>
-          <button onClick={() => { setMessages([]); setConversationId(null) }} className="text-sm text-slate-500 hover:text-slate-800">
+          <button
+            onClick={() => { setMessages([]); setConversationId(null) }}
+            className="text-xs text-slate-400 hover:text-white px-2 py-1 rounded transition-colors"
+          >
             新对话
           </button>
-          <button onClick={() => { localStorage.removeItem('token'); navigate('/login') }} className="text-sm text-red-400 hover:text-red-600">
+          <button
+            onClick={() => { localStorage.removeItem('token'); navigate('/login') }}
+            className="text-xs text-red-400 hover:text-red-300 px-2 py-1 rounded transition-colors"
+          >
             退出
           </button>
         </div>
       </header>
 
-      {/* 消息区域 */}
-      <div className="flex-1 overflow-y-auto px-4 py-6 max-w-4xl mx-auto w-full">
-        {messages.length === 0 && (
-          <div className="text-center mt-20">
-            <div className="text-5xl mb-4">🤖</div>
-            <h2 className="text-xl font-semibold text-slate-700 mb-2">你的 AI 投手</h2>
-            <p className="text-slate-400 mb-8">告诉我你想做什么，我来帮你分析和操作广告</p>
-            <div className="flex gap-3 justify-center flex-wrap">
-              {quickActions.map((q, i) => (
-                <button key={i} onClick={() => setInput(q.msg)}
-                  className="px-4 py-2 bg-white border border-slate-200 rounded-xl text-sm text-slate-600 hover:border-blue-300 hover:shadow transition-all">
-                  {q.label}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
+      {/* 主体：左右分栏 */}
+      <div className="flex flex-1 overflow-hidden">
 
-        {messages.map((m, i) => (
-          <div key={i} className={`mb-4 flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-            <div className={`max-w-[85%] rounded-2xl px-4 py-3 ${
-              m.role === 'user'
-                ? 'bg-blue-500 text-white rounded-br-md'
-                : 'bg-white border border-slate-200 rounded-bl-md shadow-sm'
-            }`}>
-              <div className="text-sm whitespace-pre-wrap">{m.content}</div>
+        {/* ========== 左侧：Agent 对话 ========== */}
+        <div className={`flex flex-col bg-slate-900 border-r border-slate-700/50 transition-all ${rightCollapsed ? 'w-full' : 'w-[40%] min-w-[360px]'}`}>
 
-              {/* 审批卡片 */}
-              {m.actionIds?.length > 0 && (
-                <div className="mt-3 space-y-2">
-                  {m.actionIds.map(id => <ActionCard key={id} actionId={id} onUpdate={() => get('/api/monitor/pending-count').then(d => setPendingCount(d.count || 0))} />)}
+          {/* 消息列表 */}
+          <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
+            {messages.length === 0 && (
+              <div className="flex flex-col items-center justify-center h-full text-center">
+                <div className="text-4xl mb-3 opacity-60">🤖</div>
+                <h2 className="text-base font-semibold text-slate-300 mb-1">AI 投手</h2>
+                <p className="text-xs text-slate-500 mb-5 max-w-xs">分析广告数据、提出优化建议、执行投放操作</p>
+                <div className="flex flex-col gap-2 w-full max-w-xs">
+                  {quickActions.map((q, i) => (
+                    <button key={i} onClick={() => setInput(q.msg)}
+                      className="px-3 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-xs text-slate-300 text-left transition-colors">
+                      {q.label}
+                    </button>
+                  ))}
                 </div>
-              )}
+              </div>
+            )}
 
-              {/* 工具调用详情 */}
-              {m.toolCalls?.length > 0 && (
-                <div className="mt-2 border-t border-slate-100 pt-2">
-                  <button onClick={() => setShowTools(showTools === `${i}` ? null : `${i}`)} className="text-xs text-slate-400 hover:text-slate-600">
-                    {showTools === `${i}` ? '▼' : '▶'} {m.toolCalls.length} 个工具调用
-                  </button>
-                  {showTools === `${i}` && (
-                    <div className="mt-1 space-y-1">
-                      {m.toolCalls.map((tc, j) => (
-                        <div key={j} className="text-xs bg-slate-50 rounded p-2">
-                          <span className="font-mono text-blue-600">{tc.name}</span>
-                          <pre className="text-[10px] text-slate-400 mt-1 overflow-x-auto">{JSON.stringify(tc.args, null, 2)}</pre>
-                        </div>
+            {messages.map((m, i) => (
+              <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                <div className={`max-w-[90%] rounded-xl px-3 py-2 ${
+                  m.role === 'user'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-slate-800 border border-slate-700 text-slate-200'
+                }`}>
+                  <div className="text-xs whitespace-pre-wrap leading-relaxed">{m.content}</div>
+
+                  {/* 审批卡片 */}
+                  {m.actionIds && m.actionIds.length > 0 && (
+                    <div className="mt-2 space-y-2">
+                      {m.actionIds.map(id => (
+                        <ActionCard key={id} actionId={id} onUpdate={() => get('/api/monitor/pending-count').then(d => setPendingCount(d.count || 0)).catch(() => {})} />
                       ))}
                     </div>
                   )}
+
+                  {/* 工具调用 */}
+                  {m.toolCalls && m.toolCalls.length > 0 && (
+                    <div className="mt-1.5 border-t border-slate-600/30 pt-1.5">
+                      <button onClick={() => setShowTools(showTools === `${i}` ? null : `${i}`)}
+                        className="text-[10px] text-slate-500 hover:text-slate-300">
+                        {showTools === `${i}` ? '▼' : '▶'} {m.toolCalls.length} 工具调用
+                      </button>
+                      {showTools === `${i}` && (
+                        <div className="mt-1 space-y-1">
+                          {m.toolCalls.map((tc: any, j: number) => (
+                            <div key={j} className="text-[10px] bg-slate-900/50 rounded p-1.5">
+                              <span className="font-mono text-blue-400">{tc.name}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
-              )}
+              </div>
+            ))}
+
+            {loading && (
+              <div className="flex justify-start">
+                <div className="bg-slate-800 border border-slate-700 rounded-xl px-3 py-2">
+                  <div className="flex gap-1">
+                    <div className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce" />
+                    <div className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                    <div className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                  </div>
+                </div>
+              </div>
+            )}
+            <div ref={endRef} />
+          </div>
+
+          {/* 输入框 */}
+          <div className="border-t border-slate-700/50 p-3 bg-slate-800/50">
+            <div className="flex gap-2">
+              <input
+                value={input} onChange={e => setInput(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && !e.shiftKey && send()}
+                placeholder="跟 Agent 说..."
+                disabled={loading}
+                className="flex-1 px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-xs text-white placeholder-slate-500 outline-none focus:border-blue-500 disabled:opacity-40"
+              />
+              <button onClick={send} disabled={loading || !input.trim()}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded-lg transition-colors disabled:opacity-40">
+                发送
+              </button>
             </div>
           </div>
-        ))}
+        </div>
 
-        {loading && (
-          <div className="flex justify-start mb-4">
-            <div className="bg-white border border-slate-200 rounded-2xl rounded-bl-md px-4 py-3 shadow-sm">
-              <div className="flex gap-1">
-                <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" />
-                <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
-              </div>
+        {/* ========== 右侧：双 iframe ========== */}
+        {!rightCollapsed && (
+          <div className="flex-1 flex flex-col bg-slate-950 min-w-0">
+
+            {/* 标签切换 */}
+            <div className="flex items-center bg-slate-800/60 border-b border-slate-700/50 shrink-0">
+              <button
+                onClick={() => setActivePanel('bi')}
+                className={`px-4 py-2 text-xs font-medium transition-colors ${
+                  activePanel === 'bi' ? 'text-blue-400 border-b-2 border-blue-400 bg-slate-800/80' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                📊 BI 数据
+              </button>
+              <button
+                onClick={() => setActivePanel('ads')}
+                className={`px-4 py-2 text-xs font-medium transition-colors ${
+                  activePanel === 'ads' ? 'text-blue-400 border-b-2 border-blue-400 bg-slate-800/80' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                📢 广告操作
+              </button>
+              <button
+                onClick={() => setActivePanel(activePanel === 'bi' ? 'ads' : 'bi')}
+                className="ml-auto px-3 py-2 text-[10px] text-slate-500 hover:text-slate-300"
+              >
+                上下分屏
+              </button>
+            </div>
+
+            {/* iframe 内容区 */}
+            <div className="flex-1 flex flex-col overflow-hidden">
+              {/* 单标签模式 */}
+              <iframe
+                key="bi"
+                src={METABASE_URL}
+                className={`border-0 ${activePanel === 'bi' ? 'flex-1' : 'hidden'}`}
+                style={{ width: '100%' }}
+                title="Metabase BI"
+                sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-top-navigation"
+              />
+              <iframe
+                key="ads"
+                src={TOPTOU_URL}
+                className={`border-0 ${activePanel === 'ads' ? 'flex-1' : 'hidden'}`}
+                style={{ width: '100%' }}
+                title="TopTou Ads"
+                sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-top-navigation"
+              />
             </div>
           </div>
         )}
-        <div ref={endRef} />
-      </div>
-
-      {/* 输入框 */}
-      <div className="border-t bg-white px-4 py-3">
-        <div className="max-w-4xl mx-auto flex gap-3">
-          <input
-            value={input} onChange={e => setInput(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && !e.shiftKey && send()}
-            placeholder="跟 Agent 说..."
-            disabled={loading}
-            className="flex-1 px-4 py-2.5 border border-slate-200 rounded-xl text-sm outline-none focus:border-blue-400 disabled:opacity-50"
-          />
-          <button onClick={send} disabled={loading || !input.trim()}
-            className="px-6 py-2.5 bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium rounded-xl transition-colors disabled:opacity-50">
-            发送
-          </button>
-        </div>
       </div>
     </div>
   )
