@@ -10,9 +10,10 @@ interface Message {
   actionIds?: string[]
 }
 
-// 通过 Nginx 反向代理的地址（解决 iframe 跨域拦截）
+// Metabase 走 Nginx 反向代理（去掉 X-Frame-Options）
 const METABASE_URL = '/bi/question/4002-camp-v5-doris?start_day=&end_day=&user_name=&access_code=xheqmmolkpj9f35e&pkg_name=&cam_id=&platform=ALL&channel_name=ALL'
-const TOPTOU_URL = '/ads/'
+// TopTou 没有 iframe 限制，直接嵌入
+const TOPTOU_URL = 'https://toptou.tec-do.com/'
 
 type Panel = 'bi' | 'ads'
 
