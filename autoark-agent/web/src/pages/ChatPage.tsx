@@ -197,6 +197,16 @@ export default function ChatPage() {
               src={METABASE_URL}
               className={`absolute inset-0 w-full h-full border-0 ${activePanel === 'bi' ? '' : 'hidden'}`}
               title="Metabase BI"
+              onLoad={(e) => {
+                // Metabase 登录后跳转到 / ，检测到后重定向回 /bi/ 页面
+                try {
+                  const f = e.currentTarget as HTMLIFrameElement
+                  const loc = f.contentWindow?.location?.pathname
+                  if (loc && !loc.startsWith('/bi')) {
+                    f.contentWindow!.location.href = METABASE_URL
+                  }
+                } catch (_) { /* cross-origin, ignore */ }
+              }}
             />
             <iframe
               src={TOPTOU_URL}
