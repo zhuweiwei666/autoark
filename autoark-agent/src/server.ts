@@ -22,15 +22,16 @@ async function bootstrap() {
   initSyncCron()
 
   // 5. 确保有管理员账号
-  const adminExists = await User.findOne({ username: env.ADMIN_USERNAME })
-  if (!adminExists) {
-    try {
-      await User.create({ username: env.ADMIN_USERNAME, password: env.ADMIN_PASSWORD, role: 'admin' })
-      log.info(`[Bootstrap] Admin created: ${env.ADMIN_USERNAME}`)
-    } catch (e: any) {
-      if (e.code !== 11000) throw e // ignore duplicate key
-      log.info('[Bootstrap] Admin already exists')
-    }
+  const existingAdmin: any = await User.findOne({ username: env.ADMIN_USERNAME }).select('+password')
+  if (!existingAdmin) {
+    await User.create({ username: env.ADMIN_USERNAME, password: env.ADMIN_PASSWORD, role: 'admin' })
+    log.info(`[Bootstrap] Admin created: ${env.ADMIN_USERNAME}`)
+  } else {
+    // 更新密码确保可以登录
+    existingAdmin.password = env.ADMIN_PASSWORD
+    existingAdmin.role = 'admin'
+    await existingAdmin.save()
+    log.info('[Bootstrap] Admin password synced')
   }
 
   // 6. 启动
