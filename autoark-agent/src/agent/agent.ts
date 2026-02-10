@@ -6,6 +6,8 @@ import { registry, ToolContext } from './tools'
 import { readTools } from './tools/read.tools'
 import { writeTools } from './tools/write.tools'
 import { memoryTools } from './tools/memory.tools'
+import { toptouTools } from './tools/toptou.tools'
+import { metabaseTools } from './tools/metabase.tools'
 import { runAgent, AgentResult } from './runtime'
 import { Token } from '../data/token.model'
 import { AdAccount } from '../data/account.model'
@@ -23,13 +25,21 @@ export async function initAgent() {
   registry.registerAll(readTools)
   registry.registerAll(writeTools)
   registry.registerAll(memoryTools)
+  registry.registerAll(toptouTools)
+  registry.registerAll(metabaseTools)
 
   // 加载 Facebook Token 池
   const fbTokens = await Token.find({ platform: 'facebook', status: 'active' }).lean()
   tokenPool.load(fbTokens.map((t: any) => ({ id: t._id.toString(), token: t.accessToken })))
 
   initialized = true
-  const toolNames = [...readTools, ...writeTools, ...memoryTools].map(t => t.name)
+  // 设置 TopTou token（如果配置了）
+  if (process.env.TOPTOU_TOKEN) {
+    const { setTopTouToken } = await import('../platform/toptou/client')
+    setTopTouToken(process.env.TOPTOU_TOKEN)
+  }
+
+  const toolNames = [...readTools, ...writeTools, ...memoryTools, ...toptouTools, ...metabaseTools].map(t => t.name)
   log.info(`[Agent] Initialized with ${toolNames.length} tools: ${toolNames.join(', ')}`)
 }
 
