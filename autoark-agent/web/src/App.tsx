@@ -10,7 +10,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
 export default function App() {
   return (
-    <BrowserRouter>
+    <BrowserRouter basename="/agent">
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/*" element={<ProtectedRoute><ChatPage /></ProtectedRoute>} />

@@ -3,5 +3,6 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   plugins: [react()],
-  server: { proxy: { '/api': 'http://localhost:3000' } },
+  base: '/agent/',
+  server: { proxy: { '/agent/api': { target: 'http://localhost:3002', rewrite: (p) => p.replace(/^\/agent/, '') } } },
 })

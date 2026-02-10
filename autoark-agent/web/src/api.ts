@@ -1,4 +1,4 @@
-const BASE = ''
+const BASE = '/agent'
 
 function getToken() { return localStorage.getItem('token') }
 
@@ -7,7 +7,7 @@ export async function api(path: string, opts: RequestInit = {}) {
   const token = getToken()
   if (token) headers['Authorization'] = `Bearer ${token}`
   const res = await fetch(`${BASE}${path}`, { ...opts, headers })
-  if (res.status === 401) { localStorage.removeItem('token'); window.location.href = '/login' }
+  if (res.status === 401 && !path.includes('/auth/login')) { localStorage.removeItem('token'); window.location.href = '/agent/login' }
   return res.json()
 }
 
