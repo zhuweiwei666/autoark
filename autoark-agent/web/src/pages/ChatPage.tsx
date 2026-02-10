@@ -10,8 +10,8 @@ interface Message {
   actionIds?: string[]
 }
 
-// Metabase 公开页面（/public/ 路径允许 iframe 嵌入，不需要登录和代理）
-const METABASE_URL = 'https://meta.iohubonline.club/public/question/4002-camp-v5-doris?start_day=&end_day=&user_name=&access_code=xheqmmolkpj9f35e&pkg_name=&cam_id=&platform=ALL&channel_name=ALL'
+// Metabase 公开分享页（access_code 即 public UUID，frame-ancestors * 允许 iframe）
+const METABASE_URL = 'https://meta.iohubonline.club/public/question/xheqmmolkpj9f35e?start_day=&end_day=&user_name=&pkg_name=&cam_id=&platform=ALL&channel_name=ALL'
 // TopTou 直接嵌入
 const TOPTOU_URL = 'https://toptou.tec-do.com/'
 
