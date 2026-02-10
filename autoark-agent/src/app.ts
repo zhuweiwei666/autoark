@@ -6,6 +6,7 @@ import authRoutes from './auth/auth.controller'
 import conversationRoutes from './conversation/conversation.controller'
 import actionRoutes from './action/action.controller'
 import monitorRoutes from './monitor/monitor.controller'
+import metabaseRoutes from './monitor/metabase.controller'
 
 const app = express()
 app.use(cors())
@@ -16,6 +17,7 @@ app.use('/api/auth', authRoutes)
 app.use('/api/chat', conversationRoutes)
 app.use('/api/actions', actionRoutes)
 app.use('/api/monitor', monitorRoutes)
+app.use('/api/metabase', metabaseRoutes)
 
 // 静态文件（前端）
 const distPath = path.join(__dirname, '../web/dist')
