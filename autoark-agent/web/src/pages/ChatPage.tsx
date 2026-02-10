@@ -10,9 +10,9 @@ interface Message {
   actionIds?: string[]
 }
 
-// Metabase 走 Nginx 反向代理（去掉 X-Frame-Options）
-const METABASE_URL = '/bi/question/4002-camp-v5-doris?start_day=&end_day=&user_name=&access_code=xheqmmolkpj9f35e&pkg_name=&cam_id=&platform=ALL&channel_name=ALL'
-// TopTou 没有 iframe 限制，直接嵌入
+// Metabase 公开页面（/public/ 路径允许 iframe 嵌入，不需要登录和代理）
+const METABASE_URL = 'https://meta.iohubonline.club/public/question/4002-camp-v5-doris?start_day=&end_day=&user_name=&access_code=xheqmmolkpj9f35e&pkg_name=&cam_id=&platform=ALL&channel_name=ALL'
+// TopTou 直接嵌入
 const TOPTOU_URL = 'https://toptou.tec-do.com/'
 
 type Panel = 'bi' | 'ads'
@@ -197,16 +197,6 @@ export default function ChatPage() {
               src={METABASE_URL}
               className={`absolute inset-0 w-full h-full border-0 ${activePanel === 'bi' ? '' : 'hidden'}`}
               title="Metabase BI"
-              onLoad={(e) => {
-                // Metabase 登录后跳转到 / ，检测到后重定向回 /bi/ 页面
-                try {
-                  const f = e.currentTarget as HTMLIFrameElement
-                  const loc = f.contentWindow?.location?.pathname
-                  if (loc && !loc.startsWith('/bi')) {
-                    f.contentWindow!.location.href = METABASE_URL
-                  }
-                } catch (_) { /* cross-origin, ignore */ }
-              }}
             />
             <iframe
               src={TOPTOU_URL}
