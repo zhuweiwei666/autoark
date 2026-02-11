@@ -9,9 +9,12 @@ import { executeAction } from './action.executor'
 const router = Router()
 router.use(authenticate)
 
-// 获取待审批操作列表
+// 获取待审批操作列表（包含 Agent 自动生成的无 userId 的操作）
 router.get('/pending', async (req: Request, res: Response) => {
-  const actions = await Action.find({ userId: req.user!.id, status: 'pending' })
+  const actions = await Action.find({
+    status: 'pending',
+    $or: [{ userId: req.user!.id }, { userId: { $exists: false } }, { userId: null }],
+  })
     .sort({ createdAt: -1 })
     .lean()
   res.json(actions)

@@ -74,9 +74,12 @@ router.get('/recent-actions', async (req: Request, res: Response) => {
   res.json(actions)
 })
 
-// 待审批数量
+// 待审批数量（包含 Agent 自动生成的）
 router.get('/pending-count', async (req: Request, res: Response) => {
-  const count = await Action.countDocuments({ userId: req.user!.id, status: 'pending' })
+  const count = await Action.countDocuments({
+    status: 'pending',
+    $or: [{ userId: req.user!.id }, { userId: { $exists: false } }, { userId: null }],
+  })
   res.json({ count })
 })
 
