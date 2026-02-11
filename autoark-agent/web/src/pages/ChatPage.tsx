@@ -26,6 +26,9 @@ export default function ChatPage() {
   const [pendingCount, setPendingCount] = useState(0)
   const [showTools, setShowTools] = useState<string | null>(null)
   const [activePanel, setActivePanel] = useState<Panel>('bi')
+  // Pipeline
+  const [pipelineStatus, setPipelineStatus] = useState<any>(null)
+  const [pipelineRunning, setPipelineRunning] = useState(false)
   // BI 数据
   const [biColumns, setBiColumns] = useState<any[]>([])
   const [biRows, setBiRows] = useState<any[]>([])
@@ -38,6 +41,17 @@ export default function ChatPage() {
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages, loading])
   useEffect(() => { get('/api/monitor/pending-count').then(d => setPendingCount(d.count || 0)).catch(() => {}) }, [messages])
   useEffect(() => { if (activePanel === 'bi') fetchBiData() }, [])
+  useEffect(() => { get('/api/pipeline/latest').then(setPipelineStatus).catch(() => {}) }, [])
+
+  const triggerPipeline = async () => {
+    setPipelineRunning(true)
+    try {
+      const res = await post('/api/pipeline/run', {})
+      setPipelineStatus(res.data || res)
+      get('/api/monitor/pending-count').then(d => setPendingCount(d.count || 0)).catch(() => {})
+    } catch (e: any) { console.error(e) }
+    setPipelineRunning(false)
+  }
 
   const fetchBiData = async () => {
     setBiLoading(true)
@@ -105,6 +119,17 @@ export default function ChatPage() {
           )}
         </div>
         <div className="flex items-center gap-1">
+          {pipelineStatus?.runAt && (
+            <span className="text-[10px] text-slate-500 px-2">
+              上次运行: {new Date(pipelineStatus.runAt).toLocaleTimeString()} |
+              {pipelineStatus.totalCampaigns || 0} campaigns |
+              ROAS {pipelineStatus.overallRoas || '-'}
+            </span>
+          )}
+          <button onClick={triggerPipeline} disabled={pipelineRunning}
+            className="text-xs text-emerald-400 hover:text-emerald-300 px-2 py-1 rounded bg-emerald-500/10 hover:bg-emerald-500/20 transition-colors disabled:opacity-40">
+            {pipelineRunning ? '运行中...' : '运行决策'}
+          </button>
           <button onClick={() => { setMessages([]); setConversationId(null) }}
             className="text-xs text-slate-400 hover:text-white px-2 py-1 rounded transition-colors">新对话</button>
           <button onClick={() => { localStorage.removeItem('token'); navigate('/login') }}

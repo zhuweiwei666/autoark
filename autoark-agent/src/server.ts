@@ -4,6 +4,7 @@ import { connectDB } from './config/db'
 import { initRedis } from './config/redis'
 import { initAgent } from './agent/agent'
 import { initSyncCron } from './data/sync.cron'
+import { initPipelineCron } from './data/pipeline.cron'
 import { User } from './auth/user.model'
 import { env } from './config/env'
 import { log } from './platform/logger'
@@ -20,6 +21,9 @@ async function bootstrap() {
 
   // 4. 数据同步 Cron
   initSyncCron()
+
+  // 5. 决策流水线 Cron（每小时运行）
+  initPipelineCron()
 
   // 5. 确保有管理员账号
   const existingAdmin: any = await User.findOne({ username: env.ADMIN_USERNAME }).select('+password')
