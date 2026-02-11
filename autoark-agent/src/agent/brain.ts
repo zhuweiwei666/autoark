@@ -74,29 +74,32 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
     const criticalEvents = events.filter(e => getEventPriority(e) === 'critical')
     const highEvents = events.filter(e => getEventPriority(e) === 'high')
 
-    // 优先处理紧急事件
+    // 紧急事件 → 也走审批（标记为紧急）
     if (criticalEvents.length > 0) {
       log.info(`[Brain] ${criticalEvents.length} CRITICAL events: ${criticalEvents.map(describeEvent).join('; ')}`)
-      // 紧急事件：花费飙升的直接关停，ROAS 暴跌的关停
       for (const event of criticalEvents) {
         if (event.type === 'spend_spike' || event.type === 'roas_crash') {
-          result.actions.push(await executeWithRetry({
-            type: 'pause', campaignId: event.campaignId, campaignName: event.campaignName,
-            accountId: event.accountId, auto: true,
-            reason: describeEvent(event),
-          }))
+          await Action.create({
+            type: 'pause', platform: 'facebook', accountId: event.accountId,
+            entityId: event.campaignId, entityName: event.campaignName,
+            params: { source: 'brain_urgent', level: 'campaign', priority: 'critical' },
+            reason: `[紧急] ${describeEvent(event)}`, status: 'pending',
+          })
+          result.actions.push({ type: 'pause', campaignId: event.campaignId, campaignName: event.campaignName, reason: describeEvent(event), executed: false })
         }
       }
     }
 
-    // 高优先级事件
+    // 高优先级事件 → 也走审批
     for (const event of highEvents) {
       if (event.type === 'zero_conversion') {
-        result.actions.push(await executeWithRetry({
-          type: 'pause', campaignId: event.campaignId, campaignName: event.campaignName,
-          accountId: event.accountId, auto: true,
-          reason: describeEvent(event),
-        }))
+        await Action.create({
+          type: 'pause', platform: 'facebook', accountId: event.accountId,
+          entityId: event.campaignId, entityName: event.campaignName,
+          params: { source: 'brain_high', level: 'campaign', priority: 'high' },
+          reason: `[高优] ${describeEvent(event)}`, status: 'pending',
+        })
+        result.actions.push({ type: 'pause', campaignId: event.campaignId, campaignName: event.campaignName, reason: describeEvent(event), executed: false })
       }
     }
 
@@ -124,31 +127,27 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
     result.phase = 'execution'
     log.info(`[Brain] Phase 5: Executing ${remainingActions.length} actions...`)
 
+    // 所有操作一律走审批，不自动执行
     for (const action of remainingActions) {
-      if (action.auto) {
-        const execResult = await executeWithRetry(action)
-        result.actions.push(execResult)
-      } else {
-        // 需审批，写入 Action 队列
-        await Action.create({
-          type: action.type === 'increase_budget' ? 'adjust_budget' : action.type,
-          platform: 'facebook',
-          accountId: action.accountId,
-          entityId: action.campaignId,
-          entityName: action.campaignName,
-          params: {
-            source: 'brain',
-            currentBudget: action.currentBudget,
-            newBudget: action.newBudget,
-            level: 'campaign',
-            roasAtDecision: campaigns.find(c => c.campaignId === action.campaignId)?.todayRoas,
-            spendAtDecision: campaigns.find(c => c.campaignId === action.campaignId)?.todaySpend,
-          },
-          reason: action.reason,
-          status: 'pending',
-        })
-        result.actions.push({ ...action, executed: false })
-      }
+      await Action.create({
+        type: action.type === 'increase_budget' ? 'adjust_budget' : action.type,
+        platform: 'facebook',
+        accountId: action.accountId,
+        entityId: action.campaignId,
+        entityName: action.campaignName,
+        params: {
+          source: 'brain',
+          priority: action.auto ? 'high' : 'normal',
+          currentBudget: action.currentBudget,
+          newBudget: action.newBudget,
+          level: 'campaign',
+          roasAtDecision: campaigns.find(c => c.campaignId === action.campaignId)?.todayRoas,
+          spendAtDecision: campaigns.find(c => c.campaignId === action.campaignId)?.todaySpend,
+        },
+        reason: action.auto ? `[建议立即] ${action.reason}` : action.reason,
+        status: 'pending',
+      })
+      result.actions.push({ ...action, executed: false })
     }
 
     // ==================== Phase 6: 记录 ====================
