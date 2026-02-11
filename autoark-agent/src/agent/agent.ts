@@ -90,11 +90,11 @@ export async function chat(userId: string, conversationId: string, message: stri
     },
   }
 
-  // 构建历史消息（最多最近 10 轮）
+  // 构建历史消息（OpenAI 格式：role 只能是 user/assistant）
   const recentMessages = (convo.messages || []).slice(-20)
   const history = recentMessages.map((m: any) => ({
-    role: m.role === 'user' ? 'user' : 'model',
-    parts: [{ text: m.content }],
+    role: m.role === 'user' ? 'user' : 'assistant',
+    content: m.content || '',
   }))
 
   // 运行 Agent
