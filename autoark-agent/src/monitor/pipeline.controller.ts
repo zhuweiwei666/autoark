@@ -1,48 +1,73 @@
-/**
- * Pipeline API - 手动触发、查看快照、查看决策历史
- */
 import { Router, Request, Response } from 'express'
 import { authenticate } from '../auth/auth.middleware'
-import { runPipeline } from '../agent/pipeline'
+import { think } from '../agent/brain'
+import { getReflectionStats } from '../agent/reflection'
 import { Snapshot } from '../data/snapshot.model'
-import { log } from '../platform/logger'
+import { memory } from '../agent/memory.service'
 
 const router = Router()
 router.use(authenticate)
 
-// 手动触发流水线
+// 手动触发 Agent 思考
 router.post('/run', async (_req: Request, res: Response) => {
   try {
-    log.info('[Pipeline API] Manual trigger')
-    const result = await runPipeline('manual')
+    const result = await think('manual')
     res.json({ success: true, data: result })
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message })
   }
 })
 
-// 获取最近一次快照
+// 最近一次运行
 router.get('/latest', async (_req: Request, res: Response) => {
   const snapshot = await Snapshot.findOne().sort({ runAt: -1 }).lean()
   res.json(snapshot || { status: 'never_run' })
 })
 
-// 获取快照历史
+// 运行历史
 router.get('/history', async (req: Request, res: Response) => {
   const limit = Number(req.query.limit) || 20
   const snapshots = await Snapshot.find()
-    .select('runAt triggeredBy totalCampaigns classification totalSpend overallRoas summary status durationMs')
+    .select('runAt triggeredBy totalCampaigns classification totalSpend overallRoas summary status durationMs actions')
     .sort({ runAt: -1 })
     .limit(limit)
     .lean()
   res.json(snapshots)
 })
 
-// 获取某次快照详情
+// 快照详情
 router.get('/snapshot/:id', async (req: Request, res: Response) => {
   const snapshot = await Snapshot.findById(req.params.id).lean()
   if (!snapshot) return res.status(404).json({ error: 'Not found' })
   res.json(snapshot)
+})
+
+// 反思统计
+router.get('/reflection-stats', async (req: Request, res: Response) => {
+  const days = Number(req.query.days) || 7
+  const stats = await getReflectionStats(days)
+  res.json(stats)
+})
+
+// Agent 当前状态
+router.get('/status', async (_req: Request, res: Response) => {
+  const latest = await Snapshot.findOne().sort({ runAt: -1 }).lean()
+  const focus = await memory.getFocus()
+  const stats = await getReflectionStats(7)
+  res.json({
+    lastRun: latest?.runAt || null,
+    lastStatus: latest?.status || 'never_run',
+    lastSummary: latest?.summary || '',
+    focus,
+    reflectionAccuracy: stats.accuracy,
+    totalDecisions7d: stats.total,
+  })
+})
+
+// 经验教训
+router.get('/lessons', async (req: Request, res: Response) => {
+  const lessons = await memory.recallLessons(undefined, 20)
+  res.json(lessons)
 })
 
 export default router

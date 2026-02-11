@@ -3,18 +3,10 @@ import { useNavigate } from 'react-router-dom'
 import { post, get } from '../api'
 import ActionCard from '../components/ActionCard'
 
-interface Message {
-  role: 'user' | 'agent'
-  content: string
-  toolCalls?: any[]
-  actionIds?: string[]
-}
+interface Message { role: 'user' | 'agent'; content: string; toolCalls?: any[]; actionIds?: string[] }
 
 const TOPTOU_URL = 'https://toptou.tec-do.com/'
-const MB_CARD_ID = '7786'
-const MB_ACCESS_CODE = 'VfuSBdaO33sklvtr'
-
-type Panel = 'bi' | 'ads'
+type Panel = 'dashboard' | 'ads'
 
 function today() { return new Date().toISOString().slice(0, 10) }
 
@@ -25,65 +17,43 @@ export default function ChatPage() {
   const [conversationId, setConversationId] = useState<string | null>(null)
   const [pendingCount, setPendingCount] = useState(0)
   const [showTools, setShowTools] = useState<string | null>(null)
-  const [activePanel, setActivePanel] = useState<Panel>('bi')
-  // Pipeline
-  const [pipelineStatus, setPipelineStatus] = useState<any>(null)
+  const [activePanel, setActivePanel] = useState<Panel>('dashboard')
+  const [agentStatus, setAgentStatus] = useState<any>(null)
   const [pipelineRunning, setPipelineRunning] = useState(false)
-  // BI 数据
-  const [biColumns, setBiColumns] = useState<any[]>([])
-  const [biRows, setBiRows] = useState<any[]>([])
-  const [biLoading, setBiLoading] = useState(false)
-  const [biStartDate, setBiStartDate] = useState(today())
-  const [biEndDate, setBiEndDate] = useState(today())
+  const [history, setHistory] = useState<any[]>([])
+  const [lessons, setLessons] = useState<any[]>([])
   const endRef = useRef<HTMLDivElement>(null)
   const navigate = useNavigate()
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages, loading])
-  useEffect(() => { get('/api/monitor/pending-count').then(d => setPendingCount(d.count || 0)).catch(() => {}) }, [messages])
-  useEffect(() => { if (activePanel === 'bi') fetchBiData() }, [])
-  useEffect(() => { get('/api/pipeline/latest').then(setPipelineStatus).catch(() => {}) }, [])
+  useEffect(() => {
+    get('/api/monitor/pending-count').then(d => setPendingCount(d.count || 0)).catch(() => {})
+    get('/api/pipeline/status').then(setAgentStatus).catch(() => {})
+    get('/api/pipeline/history?limit=10').then(setHistory).catch(() => {})
+    get('/api/pipeline/lessons').then(setLessons).catch(() => {})
+  }, [])
 
-  const triggerPipeline = async () => {
+  const triggerBrain = async () => {
     setPipelineRunning(true)
     try {
       const res = await post('/api/pipeline/run', {})
-      setPipelineStatus(res.data || res)
+      setAgentStatus(null)
+      get('/api/pipeline/status').then(setAgentStatus).catch(() => {})
+      get('/api/pipeline/history?limit=10').then(setHistory).catch(() => {})
       get('/api/monitor/pending-count').then(d => setPendingCount(d.count || 0)).catch(() => {})
     } catch (e: any) { console.error(e) }
     setPipelineRunning(false)
   }
 
-  const fetchBiData = async () => {
-    setBiLoading(true)
-    try {
-      const params = new URLSearchParams({
-        access_code: MB_ACCESS_CODE,
-        start_day: biStartDate,
-        end_day: biEndDate,
-        platform: 'ALL', channel_name: 'ALL',
-      })
-      const data = await get(`/api/metabase/query/${MB_CARD_ID}?${params}`)
-      setBiColumns(data.columns || [])
-      setBiRows(data.rows || [])
-    } catch (e: any) {
-      console.error('BI fetch failed:', e)
-    }
-    setBiLoading(false)
-  }
-
   const send = async () => {
     if (!input.trim() || loading) return
-    const msg = input.trim()
-    setInput('')
+    const msg = input.trim(); setInput('')
     setMessages(prev => [...prev, { role: 'user', content: msg }])
     setLoading(true)
     try {
       const data = await post('/api/chat/send', { conversationId, message: msg })
       if (data.conversationId) setConversationId(data.conversationId)
-      setMessages(prev => [...prev, {
-        role: 'agent', content: data.agentResponse || 'No response',
-        toolCalls: data.toolCalls, actionIds: data.actionIds,
-      }])
+      setMessages(prev => [...prev, { role: 'agent', content: data.agentResponse || 'No response', toolCalls: data.toolCalls, actionIds: data.actionIds }])
     } catch (e: any) {
       setMessages(prev => [...prev, { role: 'agent', content: `Error: ${e.message}` }])
     }
@@ -91,20 +61,10 @@ export default function ChatPage() {
   }
 
   const quickActions = [
-    { label: '分析广告表现', msg: '帮我分析一下最近 7 天所有广告系列的表现，哪些该扩量、哪些该关停？' },
-    { label: '今日数据', msg: '今天的广告花费和 ROAS 怎么样？' },
-    { label: '优化建议', msg: '根据最近的数据趋势，给我一些优化建议' },
+    { label: '分析广告表现', msg: '帮我分析一下最近的广告表现' },
+    { label: '查看 Agent 状态', msg: 'Agent 最近做了什么决策？效果如何？' },
+    { label: '优化建议', msg: '根据数据给出优化建议' },
   ]
-
-  const formatCell = (val: any) => {
-    if (val === null || val === undefined) return '-'
-    if (typeof val === 'number') {
-      if (Math.abs(val) < 0.01 && val !== 0) return val.toFixed(4)
-      if (Number.isInteger(val)) return val.toLocaleString()
-      return val.toFixed(2)
-    }
-    return String(val)
-  }
 
   return (
     <div className="h-screen flex flex-col bg-slate-900 text-white">
@@ -112,23 +72,20 @@ export default function ChatPage() {
       <header className="flex items-center justify-between px-4 py-2 bg-slate-800/80 border-b border-slate-700/50 shrink-0">
         <div className="flex items-center gap-3">
           <span className="text-sm font-bold tracking-wide text-blue-400">AutoArk Agent</span>
-          {pendingCount > 0 && (
-            <span className="px-2 py-0.5 bg-amber-500/20 text-amber-400 text-[10px] font-medium rounded-full">
-              {pendingCount} 待审批
+          {agentStatus && (
+            <span className="text-[10px] text-slate-500">
+              {agentStatus.lastRun ? `上次: ${new Date(agentStatus.lastRun).toLocaleTimeString()}` : '未运行'}
+              {agentStatus.reflectionAccuracy > 0 && ` | 准确率: ${agentStatus.reflectionAccuracy}%`}
             </span>
+          )}
+          {pendingCount > 0 && (
+            <span className="px-2 py-0.5 bg-amber-500/20 text-amber-400 text-[10px] font-medium rounded-full">{pendingCount} 待审批</span>
           )}
         </div>
         <div className="flex items-center gap-1">
-          {pipelineStatus?.runAt && (
-            <span className="text-[10px] text-slate-500 px-2">
-              上次运行: {new Date(pipelineStatus.runAt).toLocaleTimeString()} |
-              {pipelineStatus.totalCampaigns || 0} campaigns |
-              ROAS {pipelineStatus.overallRoas || '-'}
-            </span>
-          )}
-          <button onClick={triggerPipeline} disabled={pipelineRunning}
+          <button onClick={triggerBrain} disabled={pipelineRunning}
             className="text-xs text-emerald-400 hover:text-emerald-300 px-2 py-1 rounded bg-emerald-500/10 hover:bg-emerald-500/20 transition-colors disabled:opacity-40">
-            {pipelineRunning ? '运行中...' : '运行决策'}
+            {pipelineRunning ? '思考中...' : '立即决策'}
           </button>
           <button onClick={() => { setMessages([]); setConversationId(null) }}
             className="text-xs text-slate-400 hover:text-white px-2 py-1 rounded transition-colors">新对话</button>
@@ -143,9 +100,17 @@ export default function ChatPage() {
           <div className="flex-1 overflow-y-auto px-3 py-3 space-y-3">
             {messages.length === 0 && (
               <div className="flex flex-col items-center justify-center h-full text-center">
-                <div className="text-4xl mb-3 opacity-60">🤖</div>
-                <h2 className="text-base font-semibold text-slate-300 mb-1">AI 投手</h2>
-                <p className="text-xs text-slate-500 mb-5 max-w-xs">分析数据、优化广告、执行操作</p>
+                <div className="text-4xl mb-3 opacity-60">🧠</div>
+                <h2 className="text-base font-semibold text-slate-300 mb-1">AI 投手 Agent</h2>
+                <p className="text-xs text-slate-500 mb-3">自主感知 / 自主决策 / 自主反思 / 持续进化</p>
+                {agentStatus?.focus?.length > 0 && (
+                  <div className="w-full max-w-xs mb-4 px-3 py-2 bg-slate-800 rounded-lg border border-slate-700">
+                    <div className="text-[10px] text-slate-400 mb-1">当前关注</div>
+                    {agentStatus.focus.map((f: string, i: number) => (
+                      <div key={i} className="text-[10px] text-slate-300">{f}</div>
+                    ))}
+                  </div>
+                )}
                 <div className="flex flex-col gap-2 w-full max-w-xs">
                   {quickActions.map((q, i) => (
                     <button key={i} onClick={() => setInput(q.msg)}
@@ -158,9 +123,7 @@ export default function ChatPage() {
             )}
             {messages.map((m, i) => (
               <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                <div className={`max-w-[90%] rounded-xl px-3 py-2 ${
-                  m.role === 'user' ? 'bg-blue-600 text-white' : 'bg-slate-800 border border-slate-700 text-slate-200'
-                }`}>
+                <div className={`max-w-[90%] rounded-xl px-3 py-2 ${m.role === 'user' ? 'bg-blue-600 text-white' : 'bg-slate-800 border border-slate-700 text-slate-200'}`}>
                   <div className="text-xs whitespace-pre-wrap leading-relaxed">{m.content}</div>
                   {m.actionIds && m.actionIds.length > 0 && (
                     <div className="mt-2 space-y-2">
@@ -169,14 +132,11 @@ export default function ChatPage() {
                   )}
                   {m.toolCalls && m.toolCalls.length > 0 && (
                     <div className="mt-1.5 border-t border-slate-600/30 pt-1.5">
-                      <button onClick={() => setShowTools(showTools === `${i}` ? null : `${i}`)}
-                        className="text-[10px] text-slate-500 hover:text-slate-300">
-                        {showTools === `${i}` ? '▼' : '▶'} {m.toolCalls.length} 工具调用
+                      <button onClick={() => setShowTools(showTools === `${i}` ? null : `${i}`)} className="text-[10px] text-slate-500 hover:text-slate-300">
+                        {showTools === `${i}` ? '▼' : '▶'} {m.toolCalls.length} 工具
                       </button>
                       {showTools === `${i}` && m.toolCalls.map((tc: any, j: number) => (
-                        <div key={j} className="text-[10px] bg-slate-900/50 rounded p-1.5 mt-1">
-                          <span className="font-mono text-blue-400">{tc.name}</span>
-                        </div>
+                        <div key={j} className="text-[10px] bg-slate-900/50 rounded p-1.5 mt-1"><span className="font-mono text-blue-400">{tc.name}</span></div>
                       ))}
                     </div>
                   )}
@@ -198,8 +158,7 @@ export default function ChatPage() {
           </div>
           <div className="border-t border-slate-700/50 p-3 bg-slate-800/50">
             <div className="flex gap-2">
-              <input value={input} onChange={e => setInput(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && !e.shiftKey && send()}
+              <input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && !e.shiftKey && send()}
                 placeholder="跟 Agent 说..." disabled={loading}
                 className="flex-1 px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-xs text-white placeholder-slate-500 outline-none focus:border-blue-500 disabled:opacity-40" />
               <button onClick={send} disabled={loading || !input.trim()}
@@ -208,71 +167,91 @@ export default function ChatPage() {
           </div>
         </div>
 
-        {/* ========== 右侧：BI 数据表 / TopTou ========== */}
+        {/* ========== 右侧 ========== */}
         <div className="flex-1 flex flex-col bg-slate-950 min-w-0">
           <div className="flex items-center bg-slate-800/60 border-b border-slate-700/50 shrink-0">
-            <button onClick={() => setActivePanel('bi')}
-              className={`px-4 py-2 text-xs font-medium border-b-2 transition-colors ${
-                activePanel === 'bi' ? 'text-blue-400 border-blue-400 bg-slate-800/80' : 'text-slate-400 hover:text-white border-transparent'
-              }`}>📊 BI 数据</button>
+            <button onClick={() => setActivePanel('dashboard')}
+              className={`px-4 py-2 text-xs font-medium border-b-2 transition-colors ${activePanel === 'dashboard' ? 'text-blue-400 border-blue-400 bg-slate-800/80' : 'text-slate-400 hover:text-white border-transparent'}`}>
+              🧠 Agent 看板
+            </button>
             <button onClick={() => setActivePanel('ads')}
-              className={`px-4 py-2 text-xs font-medium border-b-2 transition-colors ${
-                activePanel === 'ads' ? 'text-emerald-400 border-emerald-400 bg-slate-800/80' : 'text-slate-400 hover:text-white border-transparent'
-              }`}>📢 广告操作</button>
+              className={`px-4 py-2 text-xs font-medium border-b-2 transition-colors ${activePanel === 'ads' ? 'text-emerald-400 border-emerald-400 bg-slate-800/80' : 'text-slate-400 hover:text-white border-transparent'}`}>
+              📢 广告操作
+            </button>
           </div>
 
-          {/* BI 数据表格 */}
-          {activePanel === 'bi' && (
-            <div className="flex-1 flex flex-col overflow-hidden">
-              {/* 筛选栏 */}
-              <div className="flex items-center gap-2 px-3 py-2 bg-slate-800/40 border-b border-slate-700/30">
-                <label className="text-[10px] text-slate-400">开始</label>
-                <input type="date" value={biStartDate} onChange={e => setBiStartDate(e.target.value)}
-                  className="px-2 py-1 bg-slate-700 border border-slate-600 rounded text-[11px] text-white" />
-                <label className="text-[10px] text-slate-400">结束</label>
-                <input type="date" value={biEndDate} onChange={e => setBiEndDate(e.target.value)}
-                  className="px-2 py-1 bg-slate-700 border border-slate-600 rounded text-[11px] text-white" />
-                <button onClick={fetchBiData} disabled={biLoading}
-                  className="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white text-[11px] rounded transition-colors disabled:opacity-40">
-                  {biLoading ? '查询中...' : '查询'}
-                </button>
-                <span className="text-[10px] text-slate-500 ml-auto">{biRows.length} 行</span>
+          {activePanel === 'dashboard' && (
+            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+              {/* Agent 状态卡片 */}
+              {agentStatus && (
+                <div className="grid grid-cols-4 gap-3">
+                  <div className="bg-slate-800 rounded-lg p-3 border border-slate-700">
+                    <div className="text-[10px] text-slate-400">上次运行</div>
+                    <div className="text-sm text-white font-medium">{agentStatus.lastRun ? new Date(agentStatus.lastRun).toLocaleTimeString() : '-'}</div>
+                  </div>
+                  <div className="bg-slate-800 rounded-lg p-3 border border-slate-700">
+                    <div className="text-[10px] text-slate-400">状态</div>
+                    <div className={`text-sm font-medium ${agentStatus.lastStatus === 'completed' ? 'text-emerald-400' : 'text-amber-400'}`}>
+                      {agentStatus.lastStatus || '-'}
+                    </div>
+                  </div>
+                  <div className="bg-slate-800 rounded-lg p-3 border border-slate-700">
+                    <div className="text-[10px] text-slate-400">决策准确率(7d)</div>
+                    <div className={`text-sm font-medium ${agentStatus.reflectionAccuracy >= 80 ? 'text-emerald-400' : agentStatus.reflectionAccuracy >= 60 ? 'text-amber-400' : 'text-red-400'}`}>
+                      {agentStatus.reflectionAccuracy || 0}%
+                    </div>
+                  </div>
+                  <div className="bg-slate-800 rounded-lg p-3 border border-slate-700">
+                    <div className="text-[10px] text-slate-400">7d 总决策</div>
+                    <div className="text-sm text-white font-medium">{agentStatus.totalDecisions7d || 0}</div>
+                  </div>
+                </div>
+              )}
+
+              {/* 最近运行历史 */}
+              <div className="bg-slate-800 rounded-lg border border-slate-700">
+                <div className="px-3 py-2 border-b border-slate-700 text-xs font-medium text-slate-300">决策历史</div>
+                <div className="divide-y divide-slate-700/50 max-h-60 overflow-y-auto">
+                  {history.length === 0 && <div className="p-3 text-xs text-slate-500 text-center">暂无记录</div>}
+                  {history.map((h: any, i: number) => (
+                    <div key={i} className="px-3 py-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] text-slate-400">{new Date(h.runAt).toLocaleString()}</span>
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded ${h.status === 'completed' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'}`}>
+                          {h.status}
+                        </span>
+                      </div>
+                      <div className="text-[11px] text-slate-300 mt-0.5">{h.summary || '-'}</div>
+                      {h.actions?.length > 0 && (
+                        <div className="text-[10px] text-slate-500 mt-0.5">
+                          {h.actions.filter((a: any) => a.executed).length} 自动执行 | {h.actions.filter((a: any) => !a.executed).length} 待审批
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
               </div>
-              {/* 表格 */}
-              <div className="flex-1 overflow-auto">
-                {biLoading ? (
-                  <div className="flex items-center justify-center h-40 text-sm text-slate-500">加载中...</div>
-                ) : biRows.length === 0 ? (
-                  <div className="flex items-center justify-center h-40 text-sm text-slate-500">暂无数据</div>
-                ) : (
-                  <table className="w-full text-[11px] border-collapse">
-                    <thead className="sticky top-0 bg-slate-800 z-10">
-                      <tr>
-                        {biColumns.map((col, i) => (
-                          <th key={i} className="px-2 py-1.5 text-left text-slate-400 font-medium border-b border-slate-700 whitespace-nowrap">
-                            {col.displayName || col.name}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {biRows.map((row, ri) => (
-                        <tr key={ri} className="hover:bg-slate-800/50 border-b border-slate-800/30">
-                          {row.map((cell: any, ci: number) => (
-                            <td key={ci} className="px-2 py-1 text-slate-300 whitespace-nowrap">
-                              {formatCell(cell)}
-                            </td>
-                          ))}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </div>
+
+              {/* 经验教训 */}
+              {lessons.length > 0 && (
+                <div className="bg-slate-800 rounded-lg border border-slate-700">
+                  <div className="px-3 py-2 border-b border-slate-700 text-xs font-medium text-slate-300">Agent 学到的经验</div>
+                  <div className="divide-y divide-slate-700/50 max-h-40 overflow-y-auto">
+                    {lessons.map((l: any, i: number) => (
+                      <div key={i} className="px-3 py-2">
+                        <div className="text-[11px] text-slate-300">{l.content}</div>
+                        <div className="text-[10px] text-slate-500 mt-0.5">
+                          置信度: {(l.confidence * 100).toFixed(0)}% | 验证: {l.validations}次
+                          {l.tags?.length > 0 && ` | ${l.tags.join(', ')}`}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
-          {/* TopTou iframe */}
           {activePanel === 'ads' && (
             <div className="flex-1 relative">
               <iframe src={TOPTOU_URL} className="absolute inset-0 w-full h-full border-0" title="TopTou" />
