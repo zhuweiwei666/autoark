@@ -297,22 +297,35 @@ export default function ChatPage() {
                       <div className="text-[11px] text-slate-300 mt-0.5">{h.summary || '-'}</div>
                       {/* 展开详情 */}
                       {selectedSnapshot?._id === h._id && h.actions?.length > 0 && (
-                        <div className="mt-2 space-y-1 border-t border-slate-700/30 pt-2">
-                          {h.actions.map((a: any, j: number) => (
-                            <div key={j} className="flex items-center gap-2 text-[10px]">
-                              <span className={`px-1 py-0.5 rounded ${
-                                a.type === 'pause' ? 'bg-red-500/20 text-red-400' :
-                                a.type === 'increase_budget' || a.type === 'adjust_budget' ? 'bg-blue-500/20 text-blue-400' :
-                                'bg-slate-700 text-slate-400'
-                              }`}>
-                                {a.type === 'pause' ? '暂停' : a.type?.includes('budget') ? '调预算' : a.type}
-                              </span>
-                              <span className="text-slate-300 flex-1 truncate">{a.campaignName || a.entityName || a.campaignId}</span>
-                              <span className={a.executed ? 'text-emerald-400' : 'text-amber-400'}>
-                                {a.executed ? '已执行' : '待审批'}
-                              </span>
+                        <div className="mt-2 space-y-1.5 border-t border-slate-700/30 pt-2">
+                          <div className="text-[10px] text-slate-500 mb-1">
+                            共 {h.actions.length} 个操作 | 自动 {h.actions.filter((a: any) => a.executed).length} | 审批 {h.actions.filter((a: any) => !a.executed).length}
+                          </div>
+                          {h.actions.slice(0, 30).map((a: any, j: number) => (
+                            <div key={j} className="bg-slate-900/50 rounded p-1.5">
+                              <div className="flex items-center gap-1.5">
+                                <span className={`text-[9px] px-1 py-0.5 rounded shrink-0 ${
+                                  a.type === 'pause' ? 'bg-red-500/20 text-red-400' :
+                                  a.type?.includes('budget') ? 'bg-blue-500/20 text-blue-400' :
+                                  'bg-slate-700 text-slate-400'
+                                }`}>
+                                  {a.type === 'pause' ? '暂停' : a.type?.includes('budget') ? '调预算' : a.type}
+                                </span>
+                                <span className="text-[10px] text-slate-300 flex-1 truncate">{a.campaignName || a.campaignId}</span>
+                                {a.executed && a.executionResult?.code === 808 ? (
+                                  <span className="text-[9px] text-amber-400 shrink-0">API待调通</span>
+                                ) : a.executed ? (
+                                  <span className="text-[9px] text-emerald-400 shrink-0">已执行</span>
+                                ) : (
+                                  <span className="text-[9px] text-amber-400 shrink-0">待审批</span>
+                                )}
+                              </div>
+                              <div className="text-[9px] text-slate-500 mt-0.5 truncate">{a.reason}</div>
                             </div>
                           ))}
+                          {h.actions.length > 30 && (
+                            <div className="text-[10px] text-slate-500 text-center">...还有 {h.actions.length - 30} 个操作</div>
+                          )}
                         </div>
                       )}
                     </div>
