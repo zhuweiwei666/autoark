@@ -24,55 +24,50 @@ async function getSession(): Promise<string> {
 
 const mb_query: ToolDef = {
   name: 'metabase_query',
-  description: '通过 Metabase 查询 BI 数据（广告花费、ROAS、安装量等）。可以按日期、优化师、包名、广告系列等维度筛选。',
+  description: '通过 Metabase 查询 BI 广告数据（campaign 维度：花费、ROAS、安装量、点击、展示等）。数据来自 TopTou API + Doris 数据仓库，最实时。每行是一个 campaign。字段包括：to_date, pkg_name, optimizer, platform, ad_account_name, ad_account_id, campaign_name, campaign_id, ad_set_name, ad_set_id, ad_name, ad_id, original_ad_spend 等。',
   parameters: S.obj('参数', {
-    cardId: S.str('Metabase Question ID（默认 4002）'),
     startDate: S.str('开始日期 YYYY-MM-DD'),
     endDate: S.str('结束日期 YYYY-MM-DD'),
-    accessCode: S.str('访问码（默认 xheqmmolkpj9f35e）'),
-    optimizer: S.str('优化师名称（可选）'),
-    pkgName: S.str('包名（可选）'),
-    campaignId: S.str('广告系列 ID（可选）'),
-    platform: S.str('平台 ALL/Facebook/Google（默认 ALL）'),
+    optimizer: S.str('优化师名称（可选，筛选某个优化师）'),
+    pkgName: S.str('包名（可选，筛选某个应用）'),
+    campaignId: S.str('广告系列 ID（可选，筛选某个 campaign）'),
+    accountId: S.str('广告账户 ID（可选，筛选某个账户）'),
   }, ['startDate', 'endDate']),
   handler: async (args) => {
     const token = await getSession()
-    const cardId = args.cardId || '4002'
     const parameters: any[] = []
 
-    const addParam = (tag: string, value: string) => {
-      if (value) parameters.push({ type: 'category', value, target: ['variable', ['template-tag', tag]] })
+    const add = (tag: string, value: string | undefined, type = 'category') => {
+      if (value) parameters.push({ type, value, target: ['variable', ['template-tag', tag]] })
     }
 
-    addParam('access_code', args.accessCode || 'xheqmmolkpj9f35e')
-    if (args.startDate) parameters.push({ type: 'date/single', value: args.startDate, target: ['variable', ['template-tag', 'start_day']] })
-    if (args.endDate) parameters.push({ type: 'date/single', value: args.endDate, target: ['variable', ['template-tag', 'end_day']] })
-    addParam('optimizer', args.optimizer || '')
-    addParam('pkg_name', args.pkgName || '')
-    addParam('cam_id', args.campaignId || '')
-    addParam('platform', args.platform || 'ALL')
-    addParam('channel_name', 'ALL')
+    add('access_code', 'VfuSBdaO33sklvtr')
+    add('start_day', args.startDate, 'date/single')
+    add('end_day', args.endDate, 'date/single')
+    add('optimizer', args.optimizer)
+    add('pkg_name', args.pkgName)
+    add('campaign_id', args.campaignId)
+    add('account_id', args.accountId)
+    add('optimizer_code', undefined)
 
-    const res = await axios.post(`${MB_BASE}/api/card/${cardId}/query`, { parameters }, {
+    const res = await axios.post(`${MB_BASE}/api/card/7786/query`, { parameters }, {
       headers: { 'X-Metabase-Session': token, 'Content-Type': 'application/json' },
       timeout: 60000,
     })
 
     const data = res.data?.data
-    if (!data) return { error: 'No data returned' }
+    if (!data?.cols) return { error: 'No data returned' }
 
     const columns = (data.cols || []).map((c: any) => c.display_name || c.name)
     const rows = data.rows || []
 
-    // 如果数据太多，只返回汇总行 + 前 20 行
-    if (rows.length > 25) {
-      const summary = rows.find((r: any[]) => r[0]?.toString().includes('汇总'))
+    // 数据太多时截取，避免超出 LLM token 限制
+    if (rows.length > 30) {
       return {
         columns,
-        summary: summary || null,
-        rows: rows.filter((r: any[]) => !r[0]?.toString().includes('汇总')).slice(0, 20),
+        rows: rows.slice(0, 30),
         totalRows: rows.length,
-        note: `数据共 ${rows.length} 行，已截取前 20 行。如需更多请缩小日期范围。`,
+        note: `共 ${rows.length} 行，已返回前 30 行。可通过 optimizer/pkgName/campaignId/accountId 缩小范围。`,
       }
     }
 

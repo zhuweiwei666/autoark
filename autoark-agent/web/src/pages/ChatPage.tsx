@@ -11,8 +11,8 @@ interface Message {
 }
 
 const TOPTOU_URL = 'https://toptou.tec-do.com/'
-const MB_CARD_ID = '4002'
-const MB_ACCESS_CODE = 'xheqmmolkpj9f35e'
+const MB_CARD_ID = '7786'
+const MB_ACCESS_CODE = 'VfuSBdaO33sklvtr'
 
 type Panel = 'bi' | 'ads'
 
