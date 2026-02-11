@@ -22,6 +22,8 @@ export default function ChatPage() {
   const [pipelineRunning, setPipelineRunning] = useState(false)
   const [history, setHistory] = useState<any[]>([])
   const [lessons, setLessons] = useState<any[]>([])
+  const [pendingActions, setPendingActions] = useState<any[]>([])
+  const [selectedSnapshot, setSelectedSnapshot] = useState<any>(null)
   const endRef = useRef<HTMLDivElement>(null)
   const navigate = useNavigate()
 
@@ -31,7 +33,30 @@ export default function ChatPage() {
     get('/api/pipeline/status').then(setAgentStatus).catch(() => {})
     get('/api/pipeline/history?limit=10').then(setHistory).catch(() => {})
     get('/api/pipeline/lessons').then(setLessons).catch(() => {})
+    get('/api/actions/pending').then(setPendingActions).catch(() => {})
   }, [])
+
+  const refreshPending = () => {
+    get('/api/actions/pending').then(setPendingActions).catch(() => {})
+    get('/api/monitor/pending-count').then(d => setPendingCount(d.count || 0)).catch(() => {})
+  }
+
+  const approveAction = async (id: string) => {
+    await post(`/api/actions/${id}/approve`, {})
+    refreshPending()
+  }
+
+  const rejectAction = async (id: string) => {
+    await post(`/api/actions/${id}/reject`, { reason: 'User rejected' })
+    refreshPending()
+  }
+
+  const approveAll = async () => {
+    const ids = pendingActions.map((a: any) => a._id)
+    if (ids.length === 0) return
+    await post('/api/actions/approve-all', { actionIds: ids })
+    refreshPending()
+  }
 
   const triggerBrain = async () => {
     setPipelineRunning(true)
@@ -208,6 +233,49 @@ export default function ChatPage() {
                 </div>
               )}
 
+              {/* 待审批操作 */}
+              {pendingActions.length > 0 && (
+                <div className="bg-slate-800 rounded-lg border border-amber-500/30">
+                  <div className="px-3 py-2 border-b border-slate-700 flex items-center justify-between">
+                    <span className="text-xs font-medium text-amber-400">待审批操作 ({pendingActions.length})</span>
+                    <button onClick={approveAll} className="text-[10px] px-2 py-0.5 bg-emerald-500/20 text-emerald-400 rounded hover:bg-emerald-500/30 transition-colors">
+                      全部批准
+                    </button>
+                  </div>
+                  <div className="divide-y divide-slate-700/50 max-h-72 overflow-y-auto">
+                    {pendingActions.map((a: any) => (
+                      <div key={a._id} className="px-3 py-2">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+                            a.type === 'pause' ? 'bg-red-500/20 text-red-400' :
+                            a.type === 'adjust_budget' ? 'bg-blue-500/20 text-blue-400' :
+                            'bg-slate-700 text-slate-300'
+                          }`}>
+                            {a.type === 'pause' ? '暂停' : a.type === 'adjust_budget' ? '调预算' : a.type === 'resume' ? '恢复' : a.type}
+                          </span>
+                          <span className="text-[10px] text-slate-500">{new Date(a.createdAt).toLocaleTimeString()}</span>
+                        </div>
+                        <div className="text-[11px] text-slate-200 mb-0.5">{a.entityName || a.entityId}</div>
+                        <div className="text-[10px] text-slate-400 mb-1.5">{a.reason}</div>
+                        {a.params?.currentBudget && a.params?.newBudget && (
+                          <div className="text-[10px] text-slate-500 mb-1.5">预算: ${a.params.currentBudget} → <span className="text-blue-400">${a.params.newBudget}</span></div>
+                        )}
+                        <div className="flex gap-2">
+                          <button onClick={() => approveAction(a._id)}
+                            className="flex-1 py-1 text-[10px] font-medium bg-emerald-500/20 text-emerald-400 rounded hover:bg-emerald-500/30 transition-colors">
+                            批准
+                          </button>
+                          <button onClick={() => rejectAction(a._id)}
+                            className="flex-1 py-1 text-[10px] font-medium bg-slate-700 text-slate-400 rounded hover:bg-slate-600 transition-colors">
+                            拒绝
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* 最近运行历史 */}
               <div className="bg-slate-800 rounded-lg border border-slate-700">
                 <div className="px-3 py-2 border-b border-slate-700 text-xs font-medium text-slate-300">决策历史</div>
@@ -215,16 +283,36 @@ export default function ChatPage() {
                   {history.length === 0 && <div className="p-3 text-xs text-slate-500 text-center">暂无记录</div>}
                   {history.map((h: any, i: number) => (
                     <div key={i} className="px-3 py-2">
-                      <div className="flex items-center justify-between">
+                      <div className="flex items-center justify-between cursor-pointer" onClick={() => setSelectedSnapshot(selectedSnapshot?._id === h._id ? null : h)}>
                         <span className="text-[10px] text-slate-400">{new Date(h.runAt).toLocaleString()}</span>
-                        <span className={`text-[10px] px-1.5 py-0.5 rounded ${h.status === 'completed' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'}`}>
-                          {h.status}
-                        </span>
+                        <div className="flex items-center gap-1">
+                          {h.actions?.length > 0 && (
+                            <span className="text-[10px] text-slate-500">{h.actions.length} 操作</span>
+                          )}
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded ${h.status === 'completed' ? 'bg-emerald-500/20 text-emerald-400' : h.status === 'running' ? 'bg-blue-500/20 text-blue-400' : 'bg-red-500/20 text-red-400'}`}>
+                            {h.status}
+                          </span>
+                        </div>
                       </div>
                       <div className="text-[11px] text-slate-300 mt-0.5">{h.summary || '-'}</div>
-                      {h.actions?.length > 0 && (
-                        <div className="text-[10px] text-slate-500 mt-0.5">
-                          {h.actions.filter((a: any) => a.executed).length} 自动执行 | {h.actions.filter((a: any) => !a.executed).length} 待审批
+                      {/* 展开详情 */}
+                      {selectedSnapshot?._id === h._id && h.actions?.length > 0 && (
+                        <div className="mt-2 space-y-1 border-t border-slate-700/30 pt-2">
+                          {h.actions.map((a: any, j: number) => (
+                            <div key={j} className="flex items-center gap-2 text-[10px]">
+                              <span className={`px-1 py-0.5 rounded ${
+                                a.type === 'pause' ? 'bg-red-500/20 text-red-400' :
+                                a.type === 'increase_budget' || a.type === 'adjust_budget' ? 'bg-blue-500/20 text-blue-400' :
+                                'bg-slate-700 text-slate-400'
+                              }`}>
+                                {a.type === 'pause' ? '暂停' : a.type?.includes('budget') ? '调预算' : a.type}
+                              </span>
+                              <span className="text-slate-300 flex-1 truncate">{a.campaignName || a.entityName || a.campaignId}</span>
+                              <span className={a.executed ? 'text-emerald-400' : 'text-amber-400'}>
+                                {a.executed ? '已执行' : '待审批'}
+                              </span>
+                            </div>
+                          ))}
                         </div>
                       )}
                     </div>
