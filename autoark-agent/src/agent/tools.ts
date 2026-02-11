@@ -1,7 +1,11 @@
 /**
  * 工具注册表 - 管理所有 Agent 工具
  */
-import { SchemaType } from '@google/generative-ai'
+// 自定义 SchemaType（不再依赖 Gemini SDK）
+enum SchemaType {
+  STRING = 'STRING', NUMBER = 'NUMBER', INTEGER = 'INTEGER',
+  BOOLEAN = 'BOOLEAN', OBJECT = 'OBJECT', ARRAY = 'ARRAY',
+}
 
 export interface ToolDef {
   name: string

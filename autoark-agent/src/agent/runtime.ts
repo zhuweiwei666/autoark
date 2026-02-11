@@ -1,10 +1,9 @@
 /**
- * Agent Runtime - Gemini 函数调用循环
+ * Agent Runtime - OpenAI 兼容格式（支持 Claude / GPT / 任何 OpenAI-compatible API）
  * 
- * 核心循环: 发消息 → Gemini 返回 → 有工具调用就执行 → 把结果喂回去 → 循环
- * 直到 Gemini 返回纯文本（没有工具调用）为止
+ * 核心循环: 发消息 → LLM 返回 → 有工具调用就执行 → 把结果喂回去 → 循环
  */
-import { GoogleGenerativeAI, Content, Part, SchemaType } from '@google/generative-ai'
+import axios from 'axios'
 import { env } from '../config/env'
 import { log } from '../platform/logger'
 import { registry, ToolContext } from './tools'
@@ -19,58 +18,146 @@ export interface AgentResult {
   durationMs: number
 }
 
+/**
+ * 把我们的工具定义转成 OpenAI function calling 格式
+ */
+function toOpenAITools() {
+  return registry.toGeminiDeclarations().map(d => ({
+    type: 'function' as const,
+    function: {
+      name: d.name,
+      description: d.description,
+      parameters: convertParams(d.parameters),
+    },
+  }))
+}
+
+/** SchemaType 枚举转小写 JSON Schema type */
+function convertParams(p: any): any {
+  if (!p) return undefined
+  const result: any = {}
+  if (p.type) {
+    const typeMap: Record<string, string> = {
+      STRING: 'string', NUMBER: 'number', INTEGER: 'integer',
+      BOOLEAN: 'boolean', OBJECT: 'object', ARRAY: 'array',
+    }
+    result.type = typeMap[p.type] || p.type.toLowerCase()
+  }
+  if (p.description) result.description = p.description
+  if (p.enum) result.enum = p.enum
+  if (p.properties) {
+    result.properties = {}
+    for (const [k, v] of Object.entries(p.properties)) {
+      result.properties[k] = convertParams(v)
+    }
+  }
+  if (p.required) result.required = p.required
+  if (p.items) result.items = convertParams(p.items)
+  return result
+}
+
 export async function runAgent(
   userMessage: string,
   ctx: ToolContext,
-  history: Content[] = [],
+  history: any[] = [],
 ): Promise<AgentResult> {
   if (!env.LLM_API_KEY) {
-    return { response: 'LLM_API_KEY 未配置，无法运行 Agent', toolCalls: [], iterations: 0, durationMs: 0 }
+    return { response: 'LLM_API_KEY 未配置', toolCalls: [], iterations: 0, durationMs: 0 }
   }
 
   const startTime = Date.now()
   const allToolCalls: AgentResult['toolCalls'] = []
+  const tools = toOpenAITools()
 
-  const genAI = new GoogleGenerativeAI(env.LLM_API_KEY)
-  const declarations = registry.toGeminiDeclarations()
+  // 构建消息历史
+  const messages: any[] = [
+    { role: 'system', content: SYSTEM_PROMPT },
+    ...history,
+    { role: 'user', content: userMessage },
+  ]
 
-  const model = genAI.getGenerativeModel({
-    model: env.LLM_MODEL,
-    systemInstruction: SYSTEM_PROMPT,
-    tools: declarations.length > 0 ? [{ functionDeclarations: declarations }] : undefined,
-    generationConfig: { temperature: 0.2, maxOutputTokens: 8192 },
-  })
+  let iteration = 0
 
-  const chat = model.startChat({ history })
-  let result = await chat.sendMessage(userMessage)
-  let response = result.response
-  let iteration = 1
+  while (iteration < MAX_ITERATIONS) {
+    iteration++
 
-  while (iteration <= MAX_ITERATIONS) {
-    const functionCalls = response.functionCalls()
-    if (!functionCalls || functionCalls.length === 0) break
-
-    log.info(`[Agent] Iteration ${iteration}: ${functionCalls.length} tool call(s): ${functionCalls.map(f => f.name).join(', ')}`)
-
-    const functionResponses: Part[] = []
-    for (const fc of functionCalls) {
-      const toolResult = await registry.execute(fc.name, fc.args as any, ctx)
-      allToolCalls.push({ name: fc.name, args: fc.args, result: toolResult })
-
-      functionResponses.push({
-        functionResponse: { name: fc.name, response: toolResult },
-      } as any)
+    // 调用 LLM
+    let data: any
+    try {
+      const res = await axios.post(
+        `${env.LLM_BASE_URL}/chat/completions`,
+        {
+          model: env.LLM_MODEL,
+          messages,
+          tools: tools.length > 0 ? tools : undefined,
+          tool_choice: tools.length > 0 ? 'auto' : undefined,
+          temperature: 0.2,
+          max_tokens: 8192,
+        },
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${env.LLM_API_KEY}`,
+          },
+          timeout: 120000,
+        }
+      )
+      data = res.data
+    } catch (err: any) {
+      const errMsg = err.response?.data?.error?.message || err.message
+      log.error('[Agent] LLM API error:', errMsg)
+      return {
+        response: `LLM 调用失败: ${errMsg}`,
+        toolCalls: allToolCalls, iterations: iteration, durationMs: Date.now() - startTime,
+      }
     }
 
-    result = await chat.sendMessage(functionResponses)
-    response = result.response
-    iteration++
+    const choice = data.choices?.[0]
+    if (!choice) {
+      return {
+        response: 'LLM 返回空结果',
+        toolCalls: allToolCalls, iterations: iteration, durationMs: Date.now() - startTime,
+      }
+    }
+
+    const msg = choice.message
+    
+    // 没有工具调用 → Agent 结束，返回文本
+    if (!msg.tool_calls || msg.tool_calls.length === 0) {
+      log.info(`[Agent] Done: ${iteration} iterations, ${allToolCalls.length} tool calls, ${Date.now() - startTime}ms`)
+      return {
+        response: msg.content || 'Agent 完成',
+        toolCalls: allToolCalls, iterations: iteration, durationMs: Date.now() - startTime,
+      }
+    }
+
+    // 有工具调用 → 执行并把结果喂回去
+    log.info(`[Agent] Iteration ${iteration}: ${msg.tool_calls.length} tool call(s): ${msg.tool_calls.map((t: any) => t.function.name).join(', ')}`)
+
+    // 先把 assistant 的完整消息加到历史
+    messages.push(msg)
+
+    for (const tc of msg.tool_calls) {
+      const fnName = tc.function.name
+      let args: any = {}
+      try {
+        args = JSON.parse(tc.function.arguments || '{}')
+      } catch { /* ignore parse error */ }
+
+      const toolResult = await registry.execute(fnName, args, ctx)
+      allToolCalls.push({ name: fnName, args, result: toolResult })
+
+      // 把工具结果加到消息历史
+      messages.push({
+        role: 'tool',
+        tool_call_id: tc.id,
+        content: JSON.stringify(toolResult),
+      })
+    }
   }
 
-  const text = response.text() || 'Agent 完成，无文本回复。'
-  const durationMs = Date.now() - startTime
-
-  log.info(`[Agent] Done: ${iteration} iterations, ${allToolCalls.length} tool calls, ${durationMs}ms`)
-
-  return { response: text, toolCalls: allToolCalls, iterations: iteration, durationMs }
+  return {
+    response: '达到最大迭代次数',
+    toolCalls: allToolCalls, iterations: iteration, durationMs: Date.now() - startTime,
+  }
 }
