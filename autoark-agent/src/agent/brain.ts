@@ -55,16 +55,16 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
     const events: AgentEvent[] = []
     for (const c of monitorData.campaigns) {
       for (const a of c.anomalies) {
-        if (a.type === 'spend_spike') events.push({ type: 'spend_spike', campaignId: c.id, campaignName: c.name, accountId: c.accountId, currentRate: c.estimatedDailySpend / 24, normalRate: 0, ratio: a.severity })
-        if (a.type === 'roas_crash') events.push({ type: 'roas_crash', campaignId: c.id, campaignName: c.name, accountId: c.accountId, before: 0, after: c.roi, dropPct: a.severity * 20 })
-        if (a.type === 'zero_conversion') events.push({ type: 'zero_conversion', campaignId: c.id, campaignName: c.name, accountId: c.accountId, spend: c.spend, hours: dayjs().hour() })
+        if (a.type === 'spend_spike') events.push({ type: 'spend_spike', campaignId: c.id, campaignName: c.name, accountId: '', currentRate: c.estimatedDailySpend / 24, normalRate: 0, ratio: a.severity })
+        if (a.type === 'roas_crash') events.push({ type: 'roas_crash', campaignId: c.id, campaignName: c.name, accountId: '', before: 0, after: c.roi, dropPct: a.severity * 20 })
+        if (a.type === 'zero_conversion') events.push({ type: 'zero_conversion', campaignId: c.id, campaignName: c.name, accountId: '', spend: c.spend, hours: dayjs().hour() })
       }
     }
     result.events = events
 
     // 兼容旧格式：构建 campaigns 和 campaignMap
     const campaigns: CampaignMetrics[] = monitorData.campaigns.map(c => ({
-      campaignId: c.id, campaignName: c.name, accountId: c.accountId, accountName: c.accountName,
+      campaignId: c.id, campaignName: c.name, accountId: '', accountName: '',
       platform: c.platform, optimizer: c.optimizer, pkgName: c.pkgName,
       todaySpend: c.spend,
       todayRevenue: c.revenue > 0 ? c.revenue : c.spend * (c.adjustedRoi || c.firstDayRoi || c.roi || 0),
@@ -77,7 +77,7 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
       avgRoas3d: c.adjustedRoi || c.firstDayRoi || c.roi || 0,
       estimatedDailySpend: c.estimatedDailySpend, spendPerHour: c.estimatedDailySpend / 24,
       installs: c.installs, cpi: c.cpi, cpa: 0, firstDayRoi: c.firstDayRoi,
-      adjustedRoi: c.adjustedRoi, day3Roi: c.day3Roi, day7Roi: c.day7Roi, payRate: c.payRate, arpu: c.arpu,
+      adjustedRoi: c.adjustedRoi, day3Roi: c.day3Roi, day7Roi: 0, payRate: c.payRate, arpu: c.arpu,
       dailyData: [],
     }))
     const campaignMap = new Map(campaigns.map(c => [c.campaignId, c]))

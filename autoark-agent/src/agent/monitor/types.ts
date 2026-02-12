@@ -28,8 +28,6 @@ export interface QualityResult {
 export interface CampaignDecisionData {
   id: string
   name: string
-  accountId: string
-  accountName: string
   platform: string
   optimizer: string
   pkgName: string
@@ -67,7 +65,6 @@ export interface CampaignDecisionData {
   firstDayRoi: number
   adjustedRoi: number
   day3Roi: number
-  day7Roi: number
   payRate: number
   arpu: number
 }

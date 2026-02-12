@@ -49,11 +49,13 @@ export async function monitor(): Promise<DecisionReadyData> {
   await storeSamples(campaigns, qualities)
 
   // Step 4: 趋势 + 异常 + 预测
-  const accountGroups = new Map<string, RawCampaign[]>()
+  // 用优化师分组做 peer 对比（同优化师的 campaign 互为参照）
+  const peerGroups = new Map<string, RawCampaign[]>()
   for (const c of campaigns) {
-    const acc = accountGroups.get(c.accountId) || []
-    acc.push(c)
-    accountGroups.set(c.accountId, acc)
+    const key = c.optimizer || 'unknown'
+    const group = peerGroups.get(key) || []
+    group.push(c)
+    peerGroups.set(key, group)
   }
 
   // 批量查时序（一次 DB 查询，不是每个 campaign 查一次）
@@ -84,7 +86,7 @@ export async function monitor(): Promise<DecisionReadyData> {
     const spendTrend = calculateSpendTrend(history as any)
 
     // 异常
-    const peers = accountGroups.get(c.accountId) || []
+    const peers = peerGroups.get(c.optimizer || 'unknown') || []
     const anomalies = detectAnomalies(c, history as any, peers, hour)
 
     // 历史对比（用时序数据）
@@ -98,8 +100,6 @@ export async function monitor(): Promise<DecisionReadyData> {
     results.push({
       id: c.campaignId,
       name: c.campaignName,
-      accountId: c.accountId,
-      accountName: c.accountName,
       platform: c.platform,
       optimizer: c.optimizer,
       pkgName: c.pkgName,
@@ -116,25 +116,24 @@ export async function monitor(): Promise<DecisionReadyData> {
       trendAcceleration: trend.acceleration,
       volatility: trend.volatility,
       vsYesterday,
-      vs3dayAvg: 'N/A', // TODO: 需要更多历史数据
+      vs3dayAvg: 'N/A',
       anomalies,
       estimatedDailySpend: spendTrend.predicted24h,
-      estimatedDailyRoi: roi, // 简单用当前 ROI 预估
+      estimatedDailyRoi: roi,
       firstDayRoi: c.firstDayRoi,
       adjustedRoi: c.adjustedRoi,
       day3Roi: c.day3Roi,
-      day7Roi: c.day7Roi,
       payRate: c.payRate,
       arpu: c.arpu,
     })
   }
 
-  // 账户级异常（附加到该账户的所有 campaign 上）
-  for (const [accId, accCampaigns] of accountGroups) {
-    const accAnomalies = detectAccountAnomalies(accId, accCampaigns)
-    if (accAnomalies.length > 0) {
-      for (const r of results.filter(r => r.accountId === accId)) {
-        r.anomalies.push(...accAnomalies)
+  // 优化师级异常（附加到该优化师下的所有 campaign 上）
+  for (const [optimizer, groupCampaigns] of peerGroups) {
+    const groupAnomalies = detectAccountAnomalies(optimizer, groupCampaigns)
+    if (groupAnomalies.length > 0) {
+      for (const r of results.filter(r => r.optimizer === optimizer)) {
+        r.anomalies.push(...groupAnomalies)
       }
     }
   }

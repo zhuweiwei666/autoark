@@ -44,20 +44,20 @@ export async function buildEnvironment(campaigns: RawCampaign[]): Promise<string
     }
   } catch { /* 首次运行没历史 */ }
 
-  // 4. 按账户汇总
-  const accounts = new Map<string, { spend: number; count: number; lowRoi: number }>()
+  // 4. 按优化师汇总
+  const optimizers = new Map<string, { spend: number; count: number; lowRoi: number }>()
   for (const c of campaigns) {
-    if (!c.accountId) continue
-    const acc = accounts.get(c.accountId) || { spend: 0, count: 0, lowRoi: 0 }
-    acc.spend += c.spend
-    acc.count++
-    if (c.spend > 10 && (c.adjustedRoi || c.firstDayRoi || 0) < 0.3) acc.lowRoi++
-    accounts.set(c.accountId, acc)
+    if (!c.optimizer) continue
+    const opt = optimizers.get(c.optimizer) || { spend: 0, count: 0, lowRoi: 0 }
+    opt.spend += c.spend
+    opt.count++
+    if (c.spend > 10 && (c.adjustedRoi || c.firstDayRoi || 0) < 0.3) opt.lowRoi++
+    optimizers.set(c.optimizer, opt)
   }
 
-  const problemAccounts = [...accounts.entries()].filter(([, a]) => a.count >= 3 && a.lowRoi / a.count > 0.8)
-  if (problemAccounts.length > 0) {
-    parts.push(`问题账户: ${problemAccounts.map(([id, a]) => `${id}(${a.lowRoi}/${a.count}低ROI)`).join(', ')}`)
+  const problemOptimizers = [...optimizers.entries()].filter(([, a]) => a.count >= 3 && a.lowRoi / a.count > 0.8)
+  if (problemOptimizers.length > 0) {
+    parts.push(`问题优化师: ${problemOptimizers.map(([name, a]) => `${name}(${a.lowRoi}/${a.count}低ROI)`).join(', ')}`)
   }
 
   // 5. 时间提示
