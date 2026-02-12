@@ -68,6 +68,15 @@ async function collectCombined(tok: string, src: any, startDate: string, endDate
 
     const spendAPI = Number(r[col('广告花费_API')] || 0)
     const spendBI = Number(r[col('广告花费')] || 0)
+    const spend = spendAPI > 0 ? spendAPI : spendBI  // 优先用 API 花费
+
+    // 收入：优先用 调整的首日收入（比 渠道收入 更准确）
+    const adjustedRevenue = Number(r[col('调整的首日收入')] || 0)
+    const channelRevenue = Number(r[col('渠道收入')] || 0)
+    const firstDayRevenue = Number(r[col('首日新增收入')] || 0)
+
+    // ROI 要基于 API 花费重算，避免 BI花费偏低 导致 ROI 虚高
+    const safeRoi = (rev: number) => spend > 0 ? rev / spend : 0
 
     result.push({
       campaignId: String(camId),
@@ -78,16 +87,16 @@ async function collectCombined(tok: string, src: any, startDate: string, endDate
       optimizer: r[col('优化师')] || '',
       pkgName: r[col('包名')] || '',
       date: r[col('日期')] || endDate,
-      spend: spendAPI > 0 ? spendAPI : spendBI,  // 优先用 API 花费
+      spend,
       impressions: 0,
       clicks: 0,
       installs: Number(r[col('安装量')] || 0),
       cpi: Number(r[col('CPI')] || 0),
       cpa: Number(r[col('CPA')] || 0),
-      revenue: Number(r[col('渠道收入')] || 0),
-      firstDayRoi: Number(r[col('首日ROI')] || 0),
-      adjustedRoi: Number(r[col('调整的首日ROI')] || 0),
-      day3Roi: Number(r[col('三日回收ROI')] || 0),
+      revenue: adjustedRevenue > 0 ? adjustedRevenue : channelRevenue,  // 调整收入优先
+      firstDayRoi: safeRoi(firstDayRevenue),       // 基于 API 花费的 ROI
+      adjustedRoi: safeRoi(adjustedRevenue),        // 基于 API 花费的调整 ROI
+      day3Roi: Number(r[col('三日回收ROI')] || 0),  // 三日保留原值（长期指标差异小）
       day7Roi: 0,  // 聚合表暂无七日数据
       payRate: Number(r[col('首日付费率')] || 0),
       arpu: Number(r[col('首日ARPU')] || 0),
