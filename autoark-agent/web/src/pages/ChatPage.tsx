@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { post, get } from '../api'
 import ActionCard from '../components/ActionCard'
+import AgentCard from '../components/AgentCard'
 
 interface Message { role: 'user' | 'agent'; content: string; toolCalls?: any[]; actionIds?: string[] }
 const TOPTOU_URL = 'https://toptou.tec-do.com/'
@@ -21,10 +22,9 @@ export default function ChatPage() {
   const [lessons, setLessons] = useState<any[]>([])
   const [reflectionStats, setReflectionStats] = useState<any>(null)
   const [scope, setScope] = useState<any>(null)
+  const [agentConfigs, setAgentConfigs] = useState<any>({})
   const [brainRunning, setBrainRunning] = useState(false)
   const [expandedAgent, setExpandedAgent] = useState<string | null>('monitor')
-  const [showScopeEdit, setShowScopeEdit] = useState(false)
-  const [scopeEdit, setScopeEdit] = useState({ accounts: '', packages: '', optimizers: '' })
   const endRef = useRef<HTMLDivElement>(null)
   const navigate = useNavigate()
 
@@ -37,14 +37,8 @@ export default function ChatPage() {
     get('/api/actions/pending').then(setPending).catch(() => {})
     get('/api/pipeline/lessons').then(setLessons).catch(() => {})
     get('/api/pipeline/reflection-stats?days=7').then(setReflectionStats).catch(() => {})
-    get('/api/pipeline/scope').then(d => {
-      setScope(d?.scope)
-      if (d?.scope) setScopeEdit({
-        accounts: (d.scope.accountIds || []).join('\n'),
-        packages: (d.scope.packageNames || []).join('\n'),
-        optimizers: (d.scope.optimizers || []).join('\n'),
-      })
-    }).catch(() => {})
+    get('/api/agent-config').then(setAgentConfigs).catch(() => {})
+    get('/api/pipeline/scope').then(d => setScope(d?.scope)).catch(() => {})
   }
   useEffect(refresh, [])
 
@@ -60,16 +54,7 @@ export default function ChatPage() {
     } catch (e: any) { setMessages(prev => [...prev, { role: 'agent', content: `Error: ${e.message}` }]) }
     setLoading(false); refresh()
   }
-  const approve = async (id: string) => { await post(`/api/actions/${id}/approve`, {}); refresh() }
-  const reject = async (id: string) => { await post(`/api/actions/${id}/reject`, { reason: 'rejected' }); refresh() }
-  const approveAll = async () => { if (!pending.length) return; await post('/api/actions/approve-all', { actionIds: pending.map((a: any) => a._id) }); refresh() }
-  const saveScope = async () => {
-    await post('/api/pipeline/scope', {
-      accountIds: scopeEdit.accounts.split('\n').map(s=>s.trim()).filter(Boolean),
-      packageNames: scopeEdit.packages.split('\n').map(s=>s.trim()).filter(Boolean),
-      optimizers: scopeEdit.optimizers.split('\n').map(s=>s.trim()).filter(Boolean),
-    }); refresh(); setShowScopeEdit(false)
-  }
+  // approve/reject/saveScope 已移入 AgentCard 组件
 
   const ago = (d: string) => {
     if (!d) return '从未'
@@ -203,103 +188,15 @@ export default function ChatPage() {
           {activePanel === 'agents' && (
             <div className="flex-1 grid grid-cols-2 grid-rows-2 gap-3 p-3 overflow-hidden">
               {agents.map(agent => (
-                <div key={agent.id} className="bg-slate-800 rounded-xl border border-slate-700 flex flex-col overflow-hidden min-h-0">
-                  {/* 卡片头 - 固定 */}
-                  <div className="flex items-center justify-between px-3 py-2 border-b border-slate-700/50 shrink-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-base">{agent.icon}</span>
-                      <div>
-                        <div className="text-[11px] font-medium text-slate-200">{agent.name}</div>
-                        <div className="text-[9px] text-slate-500">{agent.role}</div>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      {agent.id === 'monitor' && agent.lastRun && <span className="text-[9px] text-slate-500">{ago(agent.lastRun)}</span>}
-                      <div className={`w-1.5 h-1.5 rounded-full ${statusColors[agent.status] || 'bg-slate-600'}`} />
-                      <span className="text-[9px] text-slate-400">{statusLabels[agent.status] || agent.status}</span>
-                    </div>
-                  </div>
-
-                  {/* 卡片体 - 滚动 */}
-                  <div className="flex-1 overflow-y-auto px-3 py-2 min-h-0">
-                    {/* 日志 */}
-                    <div className="space-y-1">
-                      {agent.logs.map((log, i) => (
-                        <div key={i} className={`text-[10px] leading-relaxed ${log.startsWith('⚠') ? 'text-amber-400' : log.startsWith('→') ? 'text-slate-400' : log.startsWith('学到') ? 'text-blue-300' : 'text-slate-300'}`}>
-                          {!log.startsWith('→') && !log.startsWith('⚠') && !log.startsWith('学到') && <span className="text-slate-600 mr-1">•</span>}
-                          {log}
-                        </div>
-                      ))}
-                    </div>
-
-                    {/* 策略 Agent: 内嵌审批 */}
-                    {agent.id === 'strategy' && pending.length > 0 && (
-                      <div className="mt-2 pt-2 border-t border-slate-700/30">
-                        <div className="flex items-center justify-between mb-1.5">
-                          <span className="text-[9px] text-amber-400 font-medium">待审批 ({pending.length})</span>
-                          <button onClick={approveAll} className="text-[9px] px-1.5 py-0.5 bg-emerald-500/20 text-emerald-400 rounded hover:bg-emerald-500/30">全部批准</button>
-                        </div>
-                        {pending.slice(0, 20).map((a: any) => (
-                          <div key={a._id} className="flex items-center gap-1.5 py-1 border-b border-slate-700/20 last:border-0">
-                            <span className={`text-[8px] px-1 py-0.5 rounded shrink-0 ${a.type === 'pause' ? 'bg-red-500/20 text-red-400' : 'bg-blue-500/20 text-blue-400'}`}>
-                              {typeLabel(a.type)}
-                            </span>
-                            <div className="flex-1 min-w-0">
-                              <div className="text-[9px] text-slate-300 truncate">{a.entityName || a.entityId}</div>
-                            </div>
-                            <div className="flex gap-0.5 shrink-0">
-                              <button onClick={() => approve(a._id)} className="px-1.5 py-0.5 text-[8px] bg-emerald-500/20 text-emerald-400 rounded">✓</button>
-                              <button onClick={() => reject(a._id)} className="px-1.5 py-0.5 text-[8px] bg-slate-700 text-slate-400 rounded">✗</button>
-                            </div>
-                          </div>
-                        ))}
-                        {pending.length > 20 && <div className="text-[9px] text-slate-500 text-center mt-1">+{pending.length - 20} 条</div>}
-                      </div>
-                    )}
-
-                    {/* 执行 Agent: 权责配置 */}
-                    {agent.id === 'executor' && (
-                      <div className="mt-2 pt-2 border-t border-slate-700/30">
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="text-[9px] text-slate-400">权责范围</span>
-                          <button onClick={() => setShowScopeEdit(!showScopeEdit)} className="text-[9px] px-1.5 py-0.5 bg-slate-700 text-slate-300 rounded hover:bg-slate-600">
-                            {showScopeEdit ? '取消' : '编辑'}
-                          </button>
-                        </div>
-                        {!showScopeEdit ? (
-                          <div className="text-[9px] text-slate-400 space-y-0.5">
-                            <div>账户: {scope?.accountIds?.length ? <span className="text-slate-300">{scope.accountIds.join(', ')}</span> : <span className="text-slate-600">未限制</span>}</div>
-                            <div>产品: {scope?.packageNames?.length ? <span className="text-slate-300">{scope.packageNames.join(', ')}</span> : <span className="text-slate-600">未限制</span>}</div>
-                            <div>优化师: {scope?.optimizers?.length ? <span className="text-slate-300">{scope.optimizers.join(', ')}</span> : <span className="text-slate-600">未限制</span>}</div>
-                          </div>
-                        ) : (
-                          <div className="space-y-1">
-                            {[['账户ID','accounts','每行一个'],['包名','packages','com.app'],['优化师','optimizers','zhuweiwei']].map(([l,k,p]:any) => (
-                              <div key={k}>
-                                <label className="text-[8px] text-slate-500">{l}</label>
-                                <textarea value={(scopeEdit as any)[k]} onChange={e=>setScopeEdit({...scopeEdit,[k]:e.target.value})} rows={2} placeholder={p}
-                                  className="w-full px-1.5 py-0.5 bg-slate-700 border border-slate-600 rounded text-[9px] text-white placeholder-slate-500 outline-none focus:border-blue-500 resize-none"/>
-                              </div>
-                            ))}
-                            <button onClick={saveScope} className="w-full py-1 text-[9px] bg-blue-600 text-white rounded">保存</button>
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {/* 审计 Agent: 经验列表 */}
-                    {agent.id === 'auditor' && lessons.length > 0 && (
-                      <div className="mt-2 pt-2 border-t border-slate-700/30">
-                        <div className="text-[9px] text-slate-400 mb-1">积累的经验</div>
-                        {lessons.map((l: any, i: number) => (
-                          <div key={i} className="text-[9px] text-blue-300/80 py-0.5">
-                            💡 {l.content?.substring(0, 80)} <span className="text-slate-600">({Math.round((l.confidence||0)*100)}%)</span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
+                <AgentCard
+                  key={agent.id}
+                  agent={agent}
+                  config={agentConfigs[agent.id]}
+                  pending={agent.id === 'strategy' ? pending : []}
+                  lessons={agent.id === 'auditor' ? lessons : []}
+                  skills={agentConfigs.strategy?.activeSkillIds || []}
+                  onRefresh={refresh}
+                />
               ))}
             </div>
           )}
