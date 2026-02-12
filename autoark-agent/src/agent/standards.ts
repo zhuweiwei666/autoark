@@ -106,6 +106,12 @@ export const DECISION_PROMPT = `你是一个广告投放决策引擎。你的输
 
 ## 你收到的数据格式
 
+每个 campaign 包含两部分数据：
+1. **投放数据**（来自 TopTou API）：花费 spend、展示、点击、ROAS 趋势
+2. **转化数据**（来自前端 BI）：安装量 installs、CPI、CPA、首日ROI、调整ROI、三日ROI、七日ROI、付费率、ARPU
+
+**重要**：首日ROI 比当日 ROAS 更准确（因为包含了归因窗口内的转化）。决策时优先看 adjustedRoi（调整后首日ROI）。
+
 每个 campaign 已经被标记为以下类别之一：
 - loss_severe（亏损严重）: ROAS < ${THRESHOLDS.loss_severe_roas}，花费 > $${THRESHOLDS.loss_severe_min_spend}，连续${THRESHOLDS.loss_severe_min_days}天
 - loss_mild（亏损轻微）: ROAS < ${THRESHOLDS.loss_mild_roas}，花费 > $${THRESHOLDS.loss_mild_min_spend}

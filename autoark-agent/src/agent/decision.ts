@@ -58,6 +58,14 @@ export async function makeDecisions(
       roasTrend: `${c.roasTrend > 0 ? '+' : ''}${c.roasTrend}%`,
       estimatedDailySpend: c.estimatedDailySpend,
       todayConversions: c.todayConversions,
+      // 转化指标（来自前端数据）
+      installs: c.installs || 0,
+      cpi: c.cpi || 0,
+      firstDayRoi: c.firstDayRoi || 0,
+      adjustedRoi: c.adjustedRoi || 0,
+      day3Roi: c.day3Roi || 0,
+      day7Roi: c.day7Roi || 0,
+      payRate: c.payRate || 0,
       recentlyOperated: recentCampaignIds.has(c.campaignId),
     }))
 
