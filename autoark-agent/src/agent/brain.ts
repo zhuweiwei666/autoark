@@ -62,6 +62,15 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
     }
     result.events = events
 
+    // #region agent log
+    const sampleMonitorCamps = monitorData.campaigns.slice(0, 5).map(c => ({id:c.id, name:c.name, spend:c.spend, revenue:c.revenue, roi:c.roi, adjustedRoi:c.adjustedRoi, firstDayRoi:c.firstDayRoi}))
+    const monTotalRev = monitorData.campaigns.reduce((s,c) => s + (c.revenue || 0), 0)
+    const monNonZeroRev = monitorData.campaigns.filter(c => c.revenue > 0).length
+    const monNonZeroRoi = monitorData.campaigns.filter(c => (c.adjustedRoi || c.firstDayRoi || c.roi || 0) > 0).length
+    log.info(`[DEBUG_ROAS][HE] monitor raw: ${JSON.stringify({totalCampaigns:monitorData.campaigns.length,totalRevenue:monTotalRev,nonZeroRevenueCount:monNonZeroRev,nonZeroRoiCount:monNonZeroRoi})}`)
+    log.info(`[DEBUG_ROAS][HE] sample campaigns: ${JSON.stringify(sampleMonitorCamps)}`)
+    // #endregion
+
     // 兼容旧格式：构建 campaigns 和 campaignMap
     const campaigns: CampaignMetrics[] = monitorData.campaigns.map(c => ({
       campaignId: c.id, campaignName: c.name, accountId: c.accountId, accountName: c.accountName,
@@ -207,6 +216,13 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
     result.phase = 'recording'
     const totalSpend = campaigns.reduce((s, c) => s + c.todaySpend, 0)
     const totalRevenue = campaigns.reduce((s, c) => s + c.todayRevenue, 0)
+
+    // #region agent log
+    const sampleCalced = campaigns.slice(0, 5).map(c => ({id:c.campaignId, todaySpend:c.todaySpend, todayRevenue:c.todayRevenue, todayRoas:c.todayRoas}))
+    const nonZeroRevCampaigns = campaigns.filter(c => c.todayRevenue > 0).length
+    log.info(`[DEBUG_ROAS][HE] FINAL: ${JSON.stringify({totalSpend,totalRevenue,overallRoas:totalSpend>0?(totalRevenue/totalSpend).toFixed(2):0,campaignCount:campaigns.length,nonZeroRevCampaigns})}`)
+    log.info(`[DEBUG_ROAS][HE] sample calced: ${JSON.stringify(sampleCalced)}`)
+    // #endregion
     const autoExecuted = result.actions.filter(a => a.executed)
     const pendingApproval = result.actions.filter(a => !a.executed)
 
