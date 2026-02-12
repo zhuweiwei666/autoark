@@ -1,5 +1,5 @@
 /**
- * 时序数据管理 — 存储、查询、清理
+ * 时序数据管理 — 存储全维度指标快照，供趋势分析使用
  */
 import dayjs from 'dayjs'
 import { TimeSeries } from './timeseries.model'
@@ -8,7 +8,7 @@ import { QualityResult } from './types'
 import { log } from '../../platform/logger'
 
 /**
- * 存储一批采样数据
+ * 存储一批采样数据（全维度）
  */
 export async function storeSamples(
   campaigns: RawCampaign[],
@@ -23,13 +23,23 @@ export async function storeSamples(
     return {
       campaignId: c.campaignId,
       sampledAt: now,
+      // 花费
       spend: c.spend,
       spendRate: hour > 0.5 ? Math.round(c.spend / hour * 100) / 100 : 0,
+      // 转化
       installs: c.installs,
       revenue: c.revenue,
+      // ROI
       roi,
       firstDayRoi: c.firstDayRoi,
       adjustedRoi: c.adjustedRoi,
+      // 效率指标
+      cpi: c.cpi,
+      cpa: c.cpa,
+      payRate: c.payRate,
+      arpu: c.arpu,
+      ctr: c.ctr,
+      // 质量
       confidence: q?.confidence || 1,
       dataNote: q?.notes?.join('; ') || '',
     }

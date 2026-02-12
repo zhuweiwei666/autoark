@@ -73,6 +73,9 @@ export interface CampaignMetrics {
   payRate: number
   arpu: number
 
+  // 趋势摘要（自然语言，来自监控 Agent 的多维趋势分析）
+  trendSummary: string
+
   // 原始天数据
   dailyData: Array<{ date: string; spend: number; revenue: number; roas: number }>
 }
@@ -193,6 +196,8 @@ export function analyzeData(
 
       // 转化指标（默认 0，后续由 data-fetcher 合并覆盖）
       installs: 0, cpi: 0, cpa: 0, firstDayRoi: 0, adjustedRoi: 0, day3Roi: 0, day7Roi: 0, payRate: 0, arpu: 0,
+
+      trendSummary: '',  // 由 brain.ts 从监控 Agent 传入
 
       dailyData: [
         { date: dayBefore, spend: round(dbSpend), revenue: round(dbRevenue), roas: round(dbRoas) },

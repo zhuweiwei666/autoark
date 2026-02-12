@@ -10,20 +10,50 @@ export interface AnomalyResult {
   message: string
 }
 
+// ==================== 多维度趋势类型 ====================
+
+/** 单指标趋势 */
+export interface MetricTrend {
+  current: number                  // 当前值
+  prev1h: number | null            // 1 小时前的值
+  prev3h: number | null            // 3 小时前的值
+  prevYesterday: number | null     // 昨天同时段的值
+  changeRate1h: number             // 1h 变化率 (%, +20 = 涨了 20%)
+  changeRate3h: number             // 3h 变化率
+  changeRateVsYesterday: number    // vs 昨天变化率
+  slope: number                    // 线性回归斜率（每采样周期变化量）
+  label: TrendLabel                // 趋势分类
+}
+
+/** Campaign 完整趋势（多维度） */
+export interface CampaignTrends {
+  spend: MetricTrend       // 花费趋势
+  roi: MetricTrend         // ROI 趋势
+  installs: MetricTrend    // 安装趋势
+  cpi: MetricTrend         // CPI 趋势
+  revenue: MetricTrend     // 收入趋势
+  dataPoints: number       // 时序数据点数
+  dataQuality: number      // 数据可信度 0-1
+}
+
+// ==================== 兼容旧接口 ====================
+
 export interface TrendResult {
   trend: TrendLabel
-  slope: number             // 每小时变化率（正=上升）
-  acceleration: number      // 加速度（正=变化在加快）
-  volatility: number        // 波动性（标准差）
-  confidence: number        // 趋势判断的置信度 0-1
-  dataPoints: number        // 用了多少个数据点
+  slope: number
+  acceleration: number
+  volatility: number
+  confidence: number
+  dataPoints: number
 }
 
 export interface QualityResult {
-  confidence: number        // 0-1 数据可信度
-  notes: string[]           // 质量问题说明
-  reliable: boolean         // confidence > 0.5
+  confidence: number
+  notes: string[]
+  reliable: boolean
 }
+
+// ==================== 决策就绪数据 ====================
 
 export interface CampaignDecisionData {
   id: string
@@ -34,7 +64,7 @@ export interface CampaignDecisionData {
 
   // 当前数据
   spend: number
-  roi: number               // 优先用 adjustedRoi, 没有用 firstDayRoi
+  roi: number
   installs: number
   cpi: number
   revenue: number
@@ -44,14 +74,18 @@ export interface CampaignDecisionData {
   dataNote: string
   reliable: boolean
 
-  // 趋势
+  // 多维度趋势（新）
+  trends: CampaignTrends
+  trendSummary: string          // 自然语言趋势摘要（直接给 LLM）
+
+  // 兼容旧字段
   trend: TrendLabel
   trendSlope: number
   trendAcceleration: number
   volatility: number
 
   // 历史对比
-  vsYesterday: string       // "+20%" / "-30%" / "N/A"
+  vsYesterday: string
   vs3dayAvg: string
 
   // 异常

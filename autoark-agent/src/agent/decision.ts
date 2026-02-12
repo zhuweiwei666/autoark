@@ -47,7 +47,6 @@ export async function makeDecisions(
     .map(c => ({
       campaignId: c.campaignId,
       campaignName: c.campaignName,
-      accountId: c.accountId,
       label: c.label,
       labelName: c.labelName,
       todaySpend: c.todaySpend,
@@ -55,17 +54,17 @@ export async function makeDecisions(
       yesterdayRoas: c.yesterdayRoas,
       avgRoas3d: c.avgRoas3d,
       totalSpend3d: c.totalSpend3d,
-      roasTrend: `${c.roasTrend > 0 ? '+' : ''}${c.roasTrend}%`,
       estimatedDailySpend: c.estimatedDailySpend,
       todayConversions: c.todayConversions,
-      // 转化指标（来自前端数据）
+      // 转化指标
       installs: c.installs || 0,
       cpi: c.cpi || 0,
       firstDayRoi: c.firstDayRoi || 0,
       adjustedRoi: c.adjustedRoi || 0,
       day3Roi: c.day3Roi || 0,
-      day7Roi: c.day7Roi || 0,
       payRate: c.payRate || 0,
+      // 多维趋势摘要（自然语言，LLM 直接读）
+      trendSummary: c.trendSummary || '',
       recentlyOperated: recentCampaignIds.has(c.campaignId),
     }))
 

@@ -1,7 +1,7 @@
 /**
  * 监控 Agent 主入口
  * 
- * 采集 → 质量评估 → 存时序 → 算趋势 → 检测异常 → 构建环境 → 输出 DecisionReadyData
+ * 采集 → 质量评估 → 存时序 → 多维趋势分析 → 检测异常 → 构建环境 → 输出 DecisionReadyData
  */
 import dayjs from 'dayjs'
 import { log } from '../../platform/logger'
@@ -9,7 +9,7 @@ import { collectData, RawCampaign } from './data-collector'
 import { assessQuality, summarizeQuality } from './quality'
 import { storeSamples } from './timeseries'
 import { TimeSeries } from './timeseries.model'
-import { calculateTrend, calculateSpendTrend } from './trend'
+import { buildCampaignTrends, describeTrends, calculateTrend, calculateSpendTrend } from './trend'
 import { detectAnomalies, detectAccountAnomalies } from './anomaly'
 import { buildEnvironment } from './environment'
 import { DecisionReadyData, CampaignDecisionData, QualityResult } from './types'
@@ -37,7 +37,7 @@ export async function monitor(): Promise<DecisionReadyData> {
   }
   const campaigns = [...latestBycamp.values()]
 
-  // Step 2: 质量评估（纯计算，不查 DB，快）
+  // Step 2: 质量评估
   const qualities = new Map<string, QualityResult>()
   for (const c of campaigns) {
     qualities.set(c.campaignId, assessQuality(c, hour))
@@ -48,8 +48,7 @@ export async function monitor(): Promise<DecisionReadyData> {
   // Step 3: 存时序
   await storeSamples(campaigns, qualities)
 
-  // Step 4: 趋势 + 异常 + 预测
-  // 用优化师分组做 peer 对比（同优化师的 campaign 互为参照）
+  // Step 4: 趋势 + 异常
   const peerGroups = new Map<string, RawCampaign[]>()
   for (const c of campaigns) {
     const key = c.optimizer || 'unknown'
@@ -58,20 +57,38 @@ export async function monitor(): Promise<DecisionReadyData> {
     peerGroups.set(key, group)
   }
 
-  // 批量查时序（一次 DB 查询，不是每个 campaign 查一次）
+  // 批量查时序：最近 24h + 昨天同时段（一次查询）
   const allCampaignIds = campaigns.map(c => c.campaignId)
-  const since2h = dayjs().subtract(2, 'hour').toDate()
   let historyMap = new Map<string, any[]>()
+  let yesterdayMap = new Map<string, any>()
+
   try {
+    // 查最近 24h 的时序数据（每个 campaign 最多 24 个点，即 4h 的 10min 间隔数据）
     const allHistory = await TimeSeries.find({
       campaignId: { $in: allCampaignIds },
-      sampledAt: { $gte: dayjs().subtract(24, 'hour').toDate() },
-    }).sort({ sampledAt: -1 }).limit(allCampaignIds.length * 12).lean()
+      sampledAt: { $gte: dayjs().subtract(6, 'hour').toDate() },
+    }).sort({ sampledAt: -1 }).limit(allCampaignIds.length * 36).lean()
+
     for (const h of allHistory as any[]) {
       const arr = historyMap.get(h.campaignId) || []
-      if (arr.length < 12) arr.push(h)
+      if (arr.length < 36) arr.push(h)
       historyMap.set(h.campaignId, arr)
     }
+
+    // 查昨天同时段（-24h ± 30min）的数据做日间对比
+    const yStart = dayjs().subtract(24.5, 'hour').toDate()
+    const yEnd = dayjs().subtract(23.5, 'hour').toDate()
+    const yData = await TimeSeries.find({
+      campaignId: { $in: allCampaignIds },
+      sampledAt: { $gte: yStart, $lte: yEnd },
+    }).sort({ sampledAt: -1 }).lean()
+
+    for (const y of yData as any[]) {
+      if (!yesterdayMap.has(y.campaignId)) {
+        yesterdayMap.set(y.campaignId, y)
+      }
+    }
+    log.info(`[Monitor] TimeSeries: ${historyMap.size} campaigns with history, ${yesterdayMap.size} with yesterday data`)
   } catch { /* 首次运行 */ }
 
   const results: CampaignDecisionData[] = []
@@ -79,22 +96,26 @@ export async function monitor(): Promise<DecisionReadyData> {
   for (const c of campaigns) {
     const q = qualities.get(c.campaignId)!
     const history = historyMap.get(c.campaignId) || []
+    const yesterday = yesterdayMap.get(c.campaignId) || null
     const roi = c.adjustedRoi || c.firstDayRoi || 0
 
-    // 趋势
-    const trend = calculateTrend(history as any)
+    // 多维度趋势
+    const trends = buildCampaignTrends(history, yesterday)
+    const trendSummary = describeTrends(trends)
+
+    // 兼容旧趋势接口
+    const legacyTrend = calculateTrend(history as any)
     const spendTrend = calculateSpendTrend(history as any)
 
-    // 异常
+    // 异常检测
     const peers = peerGroups.get(c.optimizer || 'unknown') || []
     const anomalies = detectAnomalies(c, history as any, peers, hour)
 
-    // 历史对比（用时序数据）
+    // vsYesterday（兼容旧字段）
     let vsYesterday = 'N/A'
-    const yData = history.filter((h: any) => dayjs(h.sampledAt).isBefore(dayjs().subtract(20, 'hour')))
-    if (yData.length > 0) {
-      const yRoi = (yData[0] as any).roi || 0
-      if (yRoi > 0) vsYesterday = `${((roi / yRoi - 1) * 100).toFixed(0)}%`
+    if (trends.roi.prevYesterday !== null && trends.roi.prevYesterday > 0) {
+      const pct = trends.roi.changeRateVsYesterday
+      vsYesterday = `${pct >= 0 ? '+' : ''}${pct.toFixed(0)}%`
     }
 
     results.push({
@@ -111,10 +132,14 @@ export async function monitor(): Promise<DecisionReadyData> {
       confidence: q.confidence,
       dataNote: q.notes.join('; '),
       reliable: q.reliable,
-      trend: trend.trend,
-      trendSlope: trend.slope,
-      trendAcceleration: trend.acceleration,
-      volatility: trend.volatility,
+      // 新：多维度趋势
+      trends,
+      trendSummary,
+      // 兼容旧字段
+      trend: legacyTrend.trend,
+      trendSlope: legacyTrend.slope,
+      trendAcceleration: legacyTrend.acceleration,
+      volatility: legacyTrend.volatility,
       vsYesterday,
       vs3dayAvg: 'N/A',
       anomalies,
@@ -128,7 +153,7 @@ export async function monitor(): Promise<DecisionReadyData> {
     })
   }
 
-  // 优化师级异常（附加到该优化师下的所有 campaign 上）
+  // 优化师级异常
   for (const [optimizer, groupCampaigns] of peerGroups) {
     const groupAnomalies = detectAccountAnomalies(optimizer, groupCampaigns)
     if (groupAnomalies.length > 0) {

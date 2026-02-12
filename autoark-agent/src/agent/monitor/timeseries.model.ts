@@ -1,5 +1,6 @@
 /**
  * 时序数据模型 — 每次采样存一条，保留 7 天
+ * 存储全维度指标，供多维趋势分析使用
  */
 import mongoose from 'mongoose'
 
@@ -12,9 +13,16 @@ const timeseriesSchema = new mongoose.Schema({
   // 转化
   installs: { type: Number, default: 0 },
   revenue: { type: Number, default: 0 },
+  // ROI
   roi: { type: Number, default: 0 },       // 最佳可用 ROI
   firstDayRoi: { type: Number, default: 0 },
   adjustedRoi: { type: Number, default: 0 },
+  // 效率指标
+  cpi: { type: Number, default: 0 },
+  cpa: { type: Number, default: 0 },
+  payRate: { type: Number, default: 0 },
+  arpu: { type: Number, default: 0 },
+  ctr: { type: Number, default: 0 },
   // 质量
   confidence: { type: Number, default: 1 },
   dataNote: { type: String, default: '' },

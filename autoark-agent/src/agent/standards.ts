@@ -106,11 +106,28 @@ export const DECISION_PROMPT = `你是一个广告投放决策引擎。你的输
 
 ## 你收到的数据格式
 
-每个 campaign 包含两部分数据：
-1. **投放数据**（来自 TopTou API）：花费 spend、展示、点击、ROAS 趋势
-2. **转化数据**（来自前端 BI）：安装量 installs、CPI、CPA、首日ROI、调整ROI、三日ROI、七日ROI、付费率、ARPU
+每个 campaign 包含：
+1. **当前指标**：花费 spend、安装量 installs、CPI、首日ROI、调整ROI adjustedRoi、三日ROI、付费率
+2. **多维趋势摘要** trendSummary：花费/ROI/安装/CPI/收入 五个维度的趋势变化（含 1h/3h/vs昨天 三个时间窗口对比），以及综合信号判断
 
-**重要**：首日ROI 比当日 ROAS 更准确（因为包含了归因窗口内的转化）。决策时优先看 adjustedRoi（调整后首日ROI）。
+**重要**：
+- adjustedRoi（调整后首日ROI）比当日 ROAS 更准确，决策优先看它
+- trendSummary 是最关键的决策依据，它告诉你每个维度在涨还是跌、变化幅度多大
+
+## 趋势解读指南
+
+趋势摘要中的箭头含义：↑=上升 ↓=下降 →=稳定
+
+**关键趋势组合与对应操作：**
+- 花费↑ + ROI↓ = 效果衰退，钱花得越多亏越多 → 应降预算或暂停
+- 花费→ + ROI↑ = 效果回暖 → 可继续观察，确认持续后加量
+- CPI↑ + 安装↓ = 获客成本飙升，受众可能饱和 → 应暂停或换素材
+- ROI↓ + vs昨天大幅下降 = 不是波动而是趋势性衰退 → 应果断暂停
+- 花费↑ + ROI↑ + 安装↑ = 全面增长 → 应加预算扩量
+- 所有维度→ 稳定 = 正常运行 → 不操作
+
+**数据不足时（trendSummary 显示"数据不足"）：**
+- 不要基于趋势做判断，只看当前值和分类标签
 
 每个 campaign 已经被标记为以下类别之一：
 - loss_severe（亏损严重）: ROAS < ${THRESHOLDS.loss_severe_roas}，花费 > $${THRESHOLDS.loss_severe_min_spend}，连续${THRESHOLDS.loss_severe_min_days}天
@@ -176,7 +193,8 @@ export const DECISION_PROMPT = `你是一个广告投放决策引擎。你的输
 
 ## 重要
 - 只输出 JSON，不要其他内容
-- reason 要具体：包含 ROAS 数值、天数、趋势等
+- reason 要具体：包含 ROAS 数值、趋势变化、信号判断等
+- 充分利用 trendSummary 中的趋势信息来支撑你的决策理由
 - 对 observing 的 campaign 不要做任何操作
 - 如果没有需要操作的，actions 为空数组
 `

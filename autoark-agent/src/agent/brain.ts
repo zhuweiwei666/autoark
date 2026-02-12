@@ -78,6 +78,7 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
       estimatedDailySpend: c.estimatedDailySpend, spendPerHour: c.estimatedDailySpend / 24,
       installs: c.installs, cpi: c.cpi, cpa: 0, firstDayRoi: c.firstDayRoi,
       adjustedRoi: c.adjustedRoi, day3Roi: c.day3Roi, day7Roi: 0, payRate: c.payRate, arpu: c.arpu,
+      trendSummary: c.trendSummary || '',
       dailyData: [],
     }))
     const campaignMap = new Map(campaigns.map(c => [c.campaignId, c]))
