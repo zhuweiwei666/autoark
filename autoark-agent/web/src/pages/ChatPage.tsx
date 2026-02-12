@@ -201,112 +201,104 @@ export default function ChatPage() {
           </div>
 
           {activePanel === 'agents' && (
-            <div className="flex-1 overflow-y-auto p-3 space-y-3">
-              {/* 四个 Agent 卡片 */}
+            <div className="flex-1 grid grid-cols-2 grid-rows-2 gap-3 p-3 overflow-hidden">
               {agents.map(agent => (
-                <div key={agent.id} className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
-                  {/* 卡片头 */}
-                  <div className="flex items-center justify-between px-4 py-2.5 cursor-pointer hover:bg-slate-700/30"
-                    onClick={() => setExpandedAgent(expandedAgent === agent.id ? null : agent.id)}>
-                    <div className="flex items-center gap-2.5">
-                      <span className="text-lg">{agent.icon}</span>
+                <div key={agent.id} className="bg-slate-800 rounded-xl border border-slate-700 flex flex-col overflow-hidden min-h-0">
+                  {/* 卡片头 - 固定 */}
+                  <div className="flex items-center justify-between px-3 py-2 border-b border-slate-700/50 shrink-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-base">{agent.icon}</span>
                       <div>
-                        <div className="text-xs font-medium text-slate-200">{agent.name}</div>
-                        <div className="text-[10px] text-slate-500">{agent.role}</div>
+                        <div className="text-[11px] font-medium text-slate-200">{agent.name}</div>
+                        <div className="text-[9px] text-slate-500">{agent.role}</div>
                       </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                      {agent.id === 'monitor' && agent.lastRun && <span className="text-[10px] text-slate-500">{ago(agent.lastRun)}</span>}
-                      <div className="flex items-center gap-1">
-                        <div className={`w-1.5 h-1.5 rounded-full ${statusColors[agent.status] || 'bg-slate-600'}`} />
-                        <span className="text-[10px] text-slate-400">{statusLabels[agent.status] || agent.status}</span>
-                      </div>
-                      <span className="text-slate-600 text-xs">{expandedAgent === agent.id ? '▼' : '▶'}</span>
+                    <div className="flex items-center gap-1.5">
+                      {agent.id === 'monitor' && agent.lastRun && <span className="text-[9px] text-slate-500">{ago(agent.lastRun)}</span>}
+                      <div className={`w-1.5 h-1.5 rounded-full ${statusColors[agent.status] || 'bg-slate-600'}`} />
+                      <span className="text-[9px] text-slate-400">{statusLabels[agent.status] || agent.status}</span>
                     </div>
                   </div>
 
-                  {/* 展开内容 */}
-                  {expandedAgent === agent.id && (
-                    <div className="px-4 pb-3 border-t border-slate-700/50">
-                      {/* 日志 */}
-                      <div className="mt-2 space-y-1">
-                        {agent.logs.map((log, i) => (
-                          <div key={i} className={`text-[11px] ${log.startsWith('⚠') ? 'text-amber-400' : log.startsWith('→') ? 'text-slate-400' : log.startsWith('学到') ? 'text-blue-300' : 'text-slate-300'}`}>
-                            {!log.startsWith('→') && !log.startsWith('⚠') && !log.startsWith('学到') && <span className="text-slate-600 mr-1">•</span>}
-                            {log}
+                  {/* 卡片体 - 滚动 */}
+                  <div className="flex-1 overflow-y-auto px-3 py-2 min-h-0">
+                    {/* 日志 */}
+                    <div className="space-y-1">
+                      {agent.logs.map((log, i) => (
+                        <div key={i} className={`text-[10px] leading-relaxed ${log.startsWith('⚠') ? 'text-amber-400' : log.startsWith('→') ? 'text-slate-400' : log.startsWith('学到') ? 'text-blue-300' : 'text-slate-300'}`}>
+                          {!log.startsWith('→') && !log.startsWith('⚠') && !log.startsWith('学到') && <span className="text-slate-600 mr-1">•</span>}
+                          {log}
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* 策略 Agent: 内嵌审批 */}
+                    {agent.id === 'strategy' && pending.length > 0 && (
+                      <div className="mt-2 pt-2 border-t border-slate-700/30">
+                        <div className="flex items-center justify-between mb-1.5">
+                          <span className="text-[9px] text-amber-400 font-medium">待审批 ({pending.length})</span>
+                          <button onClick={approveAll} className="text-[9px] px-1.5 py-0.5 bg-emerald-500/20 text-emerald-400 rounded hover:bg-emerald-500/30">全部批准</button>
+                        </div>
+                        {pending.slice(0, 20).map((a: any) => (
+                          <div key={a._id} className="flex items-center gap-1.5 py-1 border-b border-slate-700/20 last:border-0">
+                            <span className={`text-[8px] px-1 py-0.5 rounded shrink-0 ${a.type === 'pause' ? 'bg-red-500/20 text-red-400' : 'bg-blue-500/20 text-blue-400'}`}>
+                              {typeLabel(a.type)}
+                            </span>
+                            <div className="flex-1 min-w-0">
+                              <div className="text-[9px] text-slate-300 truncate">{a.entityName || a.entityId}</div>
+                            </div>
+                            <div className="flex gap-0.5 shrink-0">
+                              <button onClick={() => approve(a._id)} className="px-1.5 py-0.5 text-[8px] bg-emerald-500/20 text-emerald-400 rounded">✓</button>
+                              <button onClick={() => reject(a._id)} className="px-1.5 py-0.5 text-[8px] bg-slate-700 text-slate-400 rounded">✗</button>
+                            </div>
+                          </div>
+                        ))}
+                        {pending.length > 20 && <div className="text-[9px] text-slate-500 text-center mt-1">+{pending.length - 20} 条</div>}
+                      </div>
+                    )}
+
+                    {/* 执行 Agent: 权责配置 */}
+                    {agent.id === 'executor' && (
+                      <div className="mt-2 pt-2 border-t border-slate-700/30">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-[9px] text-slate-400">权责范围</span>
+                          <button onClick={() => setShowScopeEdit(!showScopeEdit)} className="text-[9px] px-1.5 py-0.5 bg-slate-700 text-slate-300 rounded hover:bg-slate-600">
+                            {showScopeEdit ? '取消' : '编辑'}
+                          </button>
+                        </div>
+                        {!showScopeEdit ? (
+                          <div className="text-[9px] text-slate-400 space-y-0.5">
+                            <div>账户: {scope?.accountIds?.length ? <span className="text-slate-300">{scope.accountIds.join(', ')}</span> : <span className="text-slate-600">未限制</span>}</div>
+                            <div>产品: {scope?.packageNames?.length ? <span className="text-slate-300">{scope.packageNames.join(', ')}</span> : <span className="text-slate-600">未限制</span>}</div>
+                            <div>优化师: {scope?.optimizers?.length ? <span className="text-slate-300">{scope.optimizers.join(', ')}</span> : <span className="text-slate-600">未限制</span>}</div>
+                          </div>
+                        ) : (
+                          <div className="space-y-1">
+                            {[['账户ID','accounts','每行一个'],['包名','packages','com.app'],['优化师','optimizers','zhuweiwei']].map(([l,k,p]:any) => (
+                              <div key={k}>
+                                <label className="text-[8px] text-slate-500">{l}</label>
+                                <textarea value={(scopeEdit as any)[k]} onChange={e=>setScopeEdit({...scopeEdit,[k]:e.target.value})} rows={2} placeholder={p}
+                                  className="w-full px-1.5 py-0.5 bg-slate-700 border border-slate-600 rounded text-[9px] text-white placeholder-slate-500 outline-none focus:border-blue-500 resize-none"/>
+                              </div>
+                            ))}
+                            <button onClick={saveScope} className="w-full py-1 text-[9px] bg-blue-600 text-white rounded">保存</button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* 审计 Agent: 经验列表 */}
+                    {agent.id === 'auditor' && lessons.length > 0 && (
+                      <div className="mt-2 pt-2 border-t border-slate-700/30">
+                        <div className="text-[9px] text-slate-400 mb-1">积累的经验</div>
+                        {lessons.map((l: any, i: number) => (
+                          <div key={i} className="text-[9px] text-blue-300/80 py-0.5">
+                            💡 {l.content?.substring(0, 80)} <span className="text-slate-600">({Math.round((l.confidence||0)*100)}%)</span>
                           </div>
                         ))}
                       </div>
-
-                      {/* 策略 Agent: 内嵌审批 */}
-                      {agent.id === 'strategy' && pending.length > 0 && (
-                        <div className="mt-3 border-t border-slate-700/30 pt-2">
-                          <div className="flex items-center justify-between mb-2">
-                            <span className="text-[10px] text-amber-400 font-medium">待审批操作</span>
-                            <button onClick={approveAll} className="text-[10px] px-2 py-0.5 bg-emerald-500/20 text-emerald-400 rounded hover:bg-emerald-500/30">全部批准</button>
-                          </div>
-                          {pending.slice(0, 8).map((a: any) => (
-                            <div key={a._id} className="flex items-center gap-2 py-1.5 border-b border-slate-700/20 last:border-0">
-                              <span className={`text-[9px] px-1 py-0.5 rounded shrink-0 ${a.type === 'pause' ? 'bg-red-500/20 text-red-400' : 'bg-blue-500/20 text-blue-400'}`}>
-                                {typeLabel(a.type)}
-                              </span>
-                              <div className="flex-1 min-w-0">
-                                <div className="text-[10px] text-slate-300 truncate">{a.entityName || a.entityId}</div>
-                                <div className="text-[9px] text-slate-500 truncate">{a.reason?.replace(/^\[.*?\]\s*/, '')}</div>
-                              </div>
-                              <div className="flex gap-1 shrink-0">
-                                <button onClick={() => approve(a._id)} className="px-2 py-0.5 text-[9px] bg-emerald-500/20 text-emerald-400 rounded hover:bg-emerald-500/30">批准</button>
-                                <button onClick={() => reject(a._id)} className="px-2 py-0.5 text-[9px] bg-slate-700 text-slate-400 rounded hover:bg-slate-600">拒绝</button>
-                              </div>
-                            </div>
-                          ))}
-                          {pending.length > 8 && <div className="text-[10px] text-slate-500 text-center mt-1">还有 {pending.length - 8} 条</div>}
-                        </div>
-                      )}
-
-                      {/* 执行 Agent: 权责配置 */}
-                      {agent.id === 'executor' && (
-                        <div className="mt-3 border-t border-slate-700/30 pt-2">
-                          <div className="flex items-center justify-between mb-1">
-                            <span className="text-[10px] text-slate-400">权责范围</span>
-                            <button onClick={() => setShowScopeEdit(!showScopeEdit)} className="text-[10px] px-1.5 py-0.5 bg-slate-700 text-slate-300 rounded hover:bg-slate-600">
-                              {showScopeEdit ? '取消' : '编辑'}
-                            </button>
-                          </div>
-                          {!showScopeEdit ? (
-                            <div className="text-[10px] text-slate-400 space-y-0.5">
-                              <div>账户: {scope?.accountIds?.length ? <span className="text-slate-300">{scope.accountIds.join(', ')}</span> : <span className="text-slate-600">未限制</span>}</div>
-                              <div>产品: {scope?.packageNames?.length ? <span className="text-slate-300">{scope.packageNames.join(', ')}</span> : <span className="text-slate-600">未限制</span>}</div>
-                              <div>优化师: {scope?.optimizers?.length ? <span className="text-slate-300">{scope.optimizers.join(', ')}</span> : <span className="text-slate-600">未限制</span>}</div>
-                            </div>
-                          ) : (
-                            <div className="space-y-1.5">
-                              {[['账户ID','accounts','每行一个'],['产品/包名','packages','如 com.app'],['优化师','optimizers','如 zhuweiwei']].map(([l,k,p]:any) => (
-                                <div key={k}>
-                                  <label className="text-[9px] text-slate-500">{l}</label>
-                                  <textarea value={(scopeEdit as any)[k]} onChange={e=>setScopeEdit({...scopeEdit,[k]:e.target.value})} rows={2} placeholder={p}
-                                    className="w-full px-2 py-1 bg-slate-700 border border-slate-600 rounded text-[10px] text-white placeholder-slate-500 outline-none focus:border-blue-500 resize-none"/>
-                                </div>
-                              ))}
-                              <button onClick={saveScope} className="w-full py-1 text-[10px] bg-blue-600 hover:bg-blue-500 text-white rounded">保存</button>
-                            </div>
-                          )}
-                        </div>
-                      )}
-
-                      {/* 审计 Agent: 经验列表 */}
-                      {agent.id === 'auditor' && lessons.length > 0 && (
-                        <div className="mt-3 border-t border-slate-700/30 pt-2">
-                          <div className="text-[10px] text-slate-400 mb-1">积累的经验</div>
-                          {lessons.slice(0, 5).map((l: any, i: number) => (
-                            <div key={i} className="text-[10px] text-blue-300/80 py-0.5">
-                              💡 {l.content?.substring(0, 60)} <span className="text-slate-600">(置信度{Math.round((l.confidence||0)*100)}%)</span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
