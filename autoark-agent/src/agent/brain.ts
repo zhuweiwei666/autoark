@@ -10,13 +10,14 @@
  */
 import dayjs from 'dayjs'
 import { log } from '../platform/logger'
-import { perceive } from './perception'
+import { monitor } from './monitor'
 import { classifyCampaigns, classifySummary } from './classifier'
 import { makeDecisions, DecisionAction } from './decision'
 import { reflectAll, getReflectionStats } from './reflection'
 import { memory } from './memory.service'
 import { AgentEvent, getEventPriority, describeEvent } from './events'
 import { CampaignMetrics } from './analyzer'
+import type { DecisionReadyData } from './monitor'
 import { Snapshot } from '../data/snapshot.model'
 import { Action } from '../action/action.model'
 import * as toptouApi from '../platform/toptou/api'
@@ -45,12 +46,36 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
   }
 
   try {
-    // ==================== Phase 1: 感知 ====================
+    // ==================== Phase 1: 监控感知 ====================
     result.phase = 'perception'
-    log.info('[Brain] Phase 1: Perceiving...')
-    const { events, campaigns } = await perceive()
+    log.info('[Brain] Phase 1: Monitor perceiving...')
+    const monitorData = await monitor()
+    
+    // 从 DecisionReadyData 中提取事件（异常即事件）
+    const events: AgentEvent[] = []
+    for (const c of monitorData.campaigns) {
+      for (const a of c.anomalies) {
+        if (a.type === 'spend_spike') events.push({ type: 'spend_spike', campaignId: c.id, campaignName: c.name, accountId: c.accountId, currentRate: c.estimatedDailySpend / 24, normalRate: 0, ratio: a.severity })
+        if (a.type === 'roas_crash') events.push({ type: 'roas_crash', campaignId: c.id, campaignName: c.name, accountId: c.accountId, before: 0, after: c.roi, dropPct: a.severity * 20 })
+        if (a.type === 'zero_conversion') events.push({ type: 'zero_conversion', campaignId: c.id, campaignName: c.name, accountId: c.accountId, spend: c.spend, hours: dayjs().hour() })
+      }
+    }
     result.events = events
 
+    // 兼容旧格式：构建 campaigns 和 campaignMap
+    const campaigns: CampaignMetrics[] = monitorData.campaigns.map(c => ({
+      campaignId: c.id, campaignName: c.name, accountId: c.accountId, accountName: c.accountName,
+      platform: c.platform, optimizer: c.optimizer, pkgName: c.pkgName,
+      todaySpend: c.spend, todayRevenue: c.revenue, todayRoas: c.roi,
+      todayImpressions: 0, todayClicks: 0, todayConversions: c.installs,
+      yesterdaySpend: 0, yesterdayRoas: 0, dayBeforeSpend: 0, dayBeforeRoas: 0,
+      spendTrend: c.trendSlope * 100, roasTrend: c.trendSlope * 100,
+      totalSpend3d: c.spend, totalRevenue3d: c.revenue, avgRoas3d: c.roi,
+      estimatedDailySpend: c.estimatedDailySpend, spendPerHour: c.estimatedDailySpend / 24,
+      installs: c.installs, cpi: c.cpi, cpa: 0, firstDayRoi: c.firstDayRoi,
+      adjustedRoi: c.adjustedRoi, day3Roi: c.day3Roi, day7Roi: c.day7Roi, payRate: c.payRate, arpu: c.arpu,
+      dailyData: [],
+    }))
     const campaignMap = new Map(campaigns.map(c => [c.campaignId, c]))
 
     // ==================== Phase 2: 反思 ====================
@@ -123,13 +148,7 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
     const classified = await classifyCampaigns(campaigns)
     const classSummary = classifySummary(classified)
 
-    // 构建记忆上下文给 LLM
-    const memoryContext = await memory.buildContext(
-      campaigns.slice(0, 10).map(c => c.campaignId),
-      ['pause', 'increase_budget'],
-    )
-
-    // LLM 决策（注入记忆上下文）
+    // LLM 决策（monitor 的环境上下文会通过 context.ts 自动注入）
     const decisions = await makeDecisions(classified)
 
     // 过滤掉已经在紧急事件中处理过的
