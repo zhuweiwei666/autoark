@@ -30,9 +30,12 @@ export interface DecisionResult {
 
 /**
  * 调 LLM 生成决策
+ * @param campaigns  权责范围内的已分类 campaign（不是全量）
+ * @param benchmarks 大盘锚定值（从全量数据计算，作为参照系）
  */
 export async function makeDecisions(
   campaigns: ClassifiedCampaign[],
+  benchmarks?: any,
 ): Promise<DecisionResult> {
   // 过滤掉最近 24h 操作过的 campaign（冷却期）
   const recentActions = await Action.find({
@@ -79,19 +82,26 @@ export async function makeDecisions(
   // 构建动态上下文（经验 + 时间感知 + 用户偏好 + 数据质量）
   const dynamicContext = await buildDynamicContext()
 
+  // 大盘锚定值描述
+  const benchmarkDesc = benchmarks ? `
+## 大盘锚定值（全量 ${benchmarks.totalCampaigns} 个 campaign 的统计）
+- 总花费: $${benchmarks.totalSpend}
+- 加权 ROAS: ${benchmarks.weightedRoas}
+- ROI 分位: P25=${benchmarks.p25Roi} | 中位数=${benchmarks.medianRoi} | P75=${benchmarks.p75Roi}
+- 平均 CPI: $${benchmarks.avgCpi}
+- 平均付费率: ${benchmarks.avgPayRate}
+${Object.entries(benchmarks.byPlatform).map(([p, v]: [string, any]) => `- ${p}: ${v.count}个, 均ROI ${v.avgRoi}, 均CPI $${v.avgCpi}, 花费 $${v.totalSpend}`).join('\n')}
+
+你负责的是其中 ${stats.total} 个 campaign，请用大盘数据作为参照来判断你的 campaign 表现是好是差。` : ''
+
   const userMessage = `${dynamicContext}
 
 ---
 
 当前时间: ${dayjs().format('YYYY-MM-DD HH:mm')}
+${benchmarkDesc}
 
-## 数据统计
-- 总 campaign: ${stats.total}
-- 观察期（跳过）: ${stats.observing}
-- 需要审查: ${stats.needsReview}
-- 24h内操作过（跳过）: ${stats.recentlyOperated}
-
-## Campaign 数据（已标记）
+## 你负责的 Campaign（${stats.needsReview} 个需审查，${stats.observing} 个观察期已跳过）
 ${JSON.stringify(inputData.filter(c => !c.recentlyOperated), null, 2)}
 
 请根据决策规则输出操作清单（JSON）。`

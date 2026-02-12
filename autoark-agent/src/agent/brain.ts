@@ -1,12 +1,11 @@
 /**
  * Agent Brain - 动态规划中枢
  * 
- * 不是固定 pipeline，而是自主决定做什么：
- * 1. 感知环境 → 生成事件
+ * 1. 感知环境（全量数据）→ 生成事件 + 大盘锚定值
  * 2. 查看记忆 → 有没有待办任务、待复盘决策
- * 3. 根据事件优先级 → 决定做什么
- * 4. 执行 → 带重试和纠错
- * 5. 记录 → 存记忆，设置后续提醒
+ * 3. 权责过滤 → 只把自己能操作的 campaign 送进决策
+ * 4. 分类 + LLM 决策（带大盘锚定值做参照）
+ * 5. 记录
  */
 import dayjs from 'dayjs'
 import { log } from '../platform/logger'
@@ -24,6 +23,19 @@ import * as toptouApi from '../platform/toptou/api'
 import { getTopTouToken } from '../platform/toptou/client'
 import { canOperate, describeScopeForPrompt } from './scope'
 
+export interface MarketBenchmark {
+  totalCampaigns: number
+  totalSpend: number
+  weightedRoas: number     // 花费加权 ROAS
+  avgCpi: number
+  avgAdjustedRoi: number
+  medianRoi: number
+  p25Roi: number           // ROI 25 分位（差的水平线）
+  p75Roi: number           // ROI 75 分位（好的水平线）
+  avgPayRate: number
+  byPlatform: Record<string, { count: number; avgRoi: number; avgCpi: number; totalSpend: number }>
+}
+
 export interface BrainCycleResult {
   snapshotId: string
   phase: string
@@ -32,6 +44,57 @@ export interface BrainCycleResult {
   actions: any[]
   summary: string
   durationMs: number
+}
+
+/**
+ * 从全量数据计算大盘锚定值
+ */
+function computeBenchmarks(campaigns: CampaignMetrics[]): MarketBenchmark {
+  const withSpend = campaigns.filter(c => c.todaySpend > 10)
+  const totalSpend = withSpend.reduce((s, c) => s + c.todaySpend, 0)
+
+  // 花费加权 ROAS
+  const weightedRoas = totalSpend > 0
+    ? withSpend.reduce((s, c) => s + c.todayRoas * c.todaySpend, 0) / totalSpend
+    : 0
+
+  // ROI 分位数
+  const rois = withSpend.map(c => c.todayRoas).filter(r => r > 0).sort((a, b) => a - b)
+  const pct = (arr: number[], p: number) => arr.length > 0 ? arr[Math.floor(arr.length * p)] || 0 : 0
+
+  // 按平台汇总
+  const platMap = new Map<string, { count: number; roiSum: number; cpiSum: number; spend: number }>()
+  for (const c of withSpend) {
+    const p = c.platform || 'other'
+    const cur = platMap.get(p) || { count: 0, roiSum: 0, cpiSum: 0, spend: 0 }
+    cur.count++
+    cur.roiSum += c.todayRoas
+    cur.cpiSum += c.cpi
+    cur.spend += c.todaySpend
+    platMap.set(p, cur)
+  }
+  const byPlatform: Record<string, any> = {}
+  for (const [p, v] of platMap) {
+    byPlatform[p] = {
+      count: v.count,
+      avgRoi: v.count > 0 ? Number((v.roiSum / v.count).toFixed(2)) : 0,
+      avgCpi: v.count > 0 ? Number((v.cpiSum / v.count).toFixed(2)) : 0,
+      totalSpend: Math.round(v.spend),
+    }
+  }
+
+  return {
+    totalCampaigns: campaigns.length,
+    totalSpend: Math.round(totalSpend),
+    weightedRoas: Number(weightedRoas.toFixed(2)),
+    avgCpi: withSpend.length > 0 ? Number((withSpend.reduce((s, c) => s + c.cpi, 0) / withSpend.length).toFixed(2)) : 0,
+    avgAdjustedRoi: withSpend.length > 0 ? Number((withSpend.reduce((s, c) => s + c.todayRoas, 0) / withSpend.length).toFixed(2)) : 0,
+    medianRoi: Number(pct(rois, 0.5).toFixed(2)),
+    p25Roi: Number(pct(rois, 0.25).toFixed(2)),
+    p75Roi: Number(pct(rois, 0.75).toFixed(2)),
+    avgPayRate: withSpend.length > 0 ? Number((withSpend.reduce((s, c) => s + c.payRate, 0) / withSpend.length).toFixed(2)) : 0,
+    byPlatform,
+  }
 }
 
 /**
@@ -46,12 +109,12 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
   }
 
   try {
-    // ==================== Phase 1: 监控感知 ====================
+    // ==================== Phase 1: 监控感知（全量） ====================
     result.phase = 'perception'
     log.info('[Brain] Phase 1: Monitor perceiving...')
     const monitorData = await monitor()
     
-    // 从 DecisionReadyData 中提取事件（异常即事件）
+    // 提取异常事件
     const events: AgentEvent[] = []
     for (const c of monitorData.campaigns) {
       for (const a of c.anomalies) {
@@ -62,8 +125,8 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
     }
     result.events = events
 
-    // 兼容旧格式：构建 campaigns 和 campaignMap
-    const campaigns: CampaignMetrics[] = monitorData.campaigns.map(c => ({
+    // 全量 campaign 映射
+    const allCampaigns: CampaignMetrics[] = monitorData.campaigns.map(c => ({
       campaignId: c.id, campaignName: c.name, accountId: '', accountName: '',
       platform: c.platform, optimizer: c.optimizer, pkgName: c.pkgName,
       todaySpend: c.spend,
@@ -81,7 +144,15 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
       trendSummary: c.trendSummary || '',
       dailyData: [],
     }))
-    const campaignMap = new Map(campaigns.map(c => [c.campaignId, c]))
+
+    // ==================== 大盘锚定值（全量计算） ====================
+    const benchmarks = computeBenchmarks(allCampaigns)
+    log.info(`[Brain] Benchmarks: ${benchmarks.totalCampaigns} campaigns, $${benchmarks.totalSpend} spend, weighted ROAS ${benchmarks.weightedRoas}, ROI P25/P50/P75: ${benchmarks.p25Roi}/${benchmarks.medianRoi}/${benchmarks.p75Roi}`)
+
+    // ==================== 权责过滤：只把自己能操作的 campaign 送入决策 ====================
+    const scopedCampaigns = allCampaigns.filter(c => canOperate({ pkgName: c.pkgName, optimizer: c.optimizer }))
+    const campaignMap = new Map(allCampaigns.map(c => [c.campaignId, c]))
+    log.info(`[Brain] Scope filter: ${allCampaigns.length} total → ${scopedCampaigns.length} in scope`)
 
     // ==================== Phase 2: 反思 ====================
     result.phase = 'reflection'
@@ -98,28 +169,26 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
       })
     }
 
-    // ==================== Phase 3: 规划（动态决定做什么）====================
+    // ==================== Phase 3: 紧急事件处理（仅限权责范围） ====================
     result.phase = 'planning'
     log.info('[Brain] Phase 3: Planning...')
 
     const criticalEvents = events.filter(e => getEventPriority(e) === 'critical')
     const highEvents = events.filter(e => getEventPriority(e) === 'high')
 
-    // 加载已有 pending 用于去重
     const allPending = await Action.find({ status: 'pending' }).select('entityId type').lean()
     const pendingSet = new Set(allPending.map((a: any) => `${a.entityId}:${a.type}`))
 
-    // 紧急事件 → 走审批（仅限权责范围内）
     if (criticalEvents.length > 0) {
       log.info(`[Brain] ${criticalEvents.length} CRITICAL events: ${criticalEvents.map(describeEvent).join('; ')}`)
       for (const event of criticalEvents) {
         if (event.type === 'spend_spike' || event.type === 'roas_crash') {
           const c = campaignMap.get(event.campaignId)
-          if (!canOperate({ accountId: event.accountId, pkgName: c?.pkgName, optimizer: c?.optimizer })) continue
+          if (!canOperate({ pkgName: c?.pkgName, optimizer: c?.optimizer })) continue
           if (pendingSet.has(`${event.campaignId}:pause`)) continue
           pendingSet.add(`${event.campaignId}:pause`)
           await Action.create({
-            type: 'pause', platform: 'facebook', accountId: event.accountId,
+            type: 'pause', platform: 'facebook', accountId: '',
             entityId: event.campaignId, entityName: event.campaignName,
             params: { source: 'brain_urgent', level: 'campaign', priority: 'critical' },
             reason: `[紧急] ${describeEvent(event)}`, status: 'pending',
@@ -129,15 +198,14 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
       }
     }
 
-    // 高优先级事件 → 走审批（仅限权责范围内）
     for (const event of highEvents) {
       if (event.type === 'zero_conversion') {
         const c = campaignMap.get(event.campaignId)
-        if (!canOperate({ accountId: event.accountId, pkgName: c?.pkgName, optimizer: c?.optimizer })) continue
+        if (!canOperate({ pkgName: c?.pkgName, optimizer: c?.optimizer })) continue
         if (pendingSet.has(`${event.campaignId}:pause`)) continue
         pendingSet.add(`${event.campaignId}:pause`)
         await Action.create({
-          type: 'pause', platform: 'facebook', accountId: event.accountId,
+          type: 'pause', platform: 'facebook', accountId: '',
           entityId: event.campaignId, entityName: event.campaignName,
           params: { source: 'brain_high', level: 'campaign', priority: 'high' },
           reason: `[高优] ${describeEvent(event)}`, status: 'pending',
@@ -146,47 +214,41 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
       }
     }
 
-    // ==================== Phase 4: 全量分析决策 ====================
+    // ==================== Phase 4: 权责范围内精准决策（带大盘锚定值） ====================
     result.phase = 'decision'
-    log.info('[Brain] Phase 4: Analyzing all campaigns...')
+    log.info(`[Brain] Phase 4: Analyzing ${scopedCampaigns.length} in-scope campaigns (with benchmarks)...`)
 
-    const classified = await classifyCampaigns(campaigns)
+    // 只分类权责范围内的 campaign
+    const classified = await classifyCampaigns(scopedCampaigns)
     const classSummary = classifySummary(classified)
 
-    // LLM 决策（monitor 的环境上下文会通过 context.ts 自动注入）
-    const decisions = await makeDecisions(classified)
+    // LLM 决策：只处理权责范围内的，附带大盘锚定值
+    const decisions = await makeDecisions(classified, benchmarks)
 
     // 过滤掉已经在紧急事件中处理过的
     const executedIds = new Set(result.actions.map(a => a.campaignId))
     const remainingActions = decisions.actions.filter(a => !executedIds.has(a.campaignId))
 
-    // ==================== Phase 5: 执行 ====================
+    // ==================== Phase 5: 执行（已经是 scope 内，不需要再过滤） ====================
     result.phase = 'execution'
     log.info(`[Brain] Phase 5: Executing ${remainingActions.length} actions...`)
 
-    // 去重：不重复生成已有的 pending 操作
     const existingPending = await Action.find({ status: 'pending' }).select('entityId type').lean()
     const pendingKeys = new Set(existingPending.map((a: any) => `${a.entityId}:${a.type}`))
 
-    let skippedOutOfScope = 0
     let skippedDuplicate = 0
     for (const action of remainingActions) {
-      const c = campaigns.find(x => x.campaignId === action.campaignId)
-      if (!canOperate({ accountId: action.accountId, pkgName: c?.pkgName, optimizer: c?.optimizer })) {
-        skippedOutOfScope++
-        continue
-      }
-      // 已有相同 pending 的跳过
       const key = `${action.campaignId}:${action.type === 'increase_budget' ? 'adjust_budget' : action.type}`
       if (pendingKeys.has(key)) {
         skippedDuplicate++
         continue
       }
       pendingKeys.add(key)
+      const c = scopedCampaigns.find(x => x.campaignId === action.campaignId)
       await Action.create({
         type: action.type === 'increase_budget' ? 'adjust_budget' : action.type,
         platform: 'facebook',
-        accountId: action.accountId,
+        accountId: '',
         entityId: action.campaignId,
         entityName: action.campaignName,
         params: {
@@ -195,8 +257,8 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
           currentBudget: action.currentBudget,
           newBudget: action.newBudget,
           level: 'campaign',
-          roasAtDecision: campaigns.find(c => c.campaignId === action.campaignId)?.todayRoas,
-          spendAtDecision: campaigns.find(c => c.campaignId === action.campaignId)?.todaySpend,
+          roasAtDecision: c?.todayRoas,
+          spendAtDecision: c?.todaySpend,
         },
         reason: action.auto ? `[建议立即] ${action.reason}` : action.reason,
         status: 'pending',
@@ -206,32 +268,32 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
 
     // ==================== Phase 6: 记录 ====================
     result.phase = 'recording'
-    const totalSpend = campaigns.reduce((s, c) => s + c.todaySpend, 0)
-    const totalRevenue = campaigns.reduce((s, c) => s + c.todayRevenue, 0)
+    const totalSpend = allCampaigns.reduce((s, c) => s + c.todaySpend, 0)
+    const totalRevenue = allCampaigns.reduce((s, c) => s + c.todayRevenue, 0)
+    const scopedSpend = scopedCampaigns.reduce((s, c) => s + c.todaySpend, 0)
 
-    const autoExecuted = result.actions.filter(a => a.executed)
     const pendingApproval = result.actions.filter(a => !a.executed)
 
-    if (skippedOutOfScope > 0) log.info(`[Brain] Skipped ${skippedOutOfScope} (out of scope)`)
     if (skippedDuplicate > 0) log.info(`[Brain] Skipped ${skippedDuplicate} (duplicate pending)`)
 
     result.summary = [
-      `扫描 ${campaigns.length} 个 campaign`,
-      `总花费 $${Math.round(totalSpend)} | ROAS ${totalSpend > 0 ? (totalRevenue / totalSpend).toFixed(2) : 0}`,
+      `扫描 ${allCampaigns.length} 个 campaign`,
+      `总花费 $${Math.round(totalSpend)} | ROAS ${benchmarks.weightedRoas}`,
+      `权责范围: ${scopedCampaigns.length} 个 (花费 $${Math.round(scopedSpend)})`,
       `检测 ${events.length} 个事件 (${criticalEvents.length} 紧急)`,
       `反思 ${reflections.length} 个历史决策`,
-      `自动执行 ${autoExecuted.length} 个操作 | ${pendingApproval.length} 个待审批`,
+      `${pendingApproval.length} 个待审批`,
       classSummary ? `分类: 严重亏损${classSummary.loss_severe || 0} 轻微亏损${classSummary.loss_mild || 0} 高潜力${classSummary.high_potential || 0} 稳定${(classSummary.stable_good || 0) + (classSummary.stable_normal || 0)} 观察${classSummary.observing || 0}` : '',
     ].filter(Boolean).join(' | ')
 
     result.durationMs = Date.now() - startTime
 
     await Snapshot.updateOne({ _id: snapshot._id }, {
-      totalCampaigns: campaigns.length,
+      totalCampaigns: allCampaigns.length,
       classification: classSummary,
       totalSpend: Math.round(totalSpend),
       totalRevenue: Math.round(totalRevenue),
-      overallRoas: totalSpend > 0 ? Number((totalRevenue / totalSpend).toFixed(2)) : 0,
+      overallRoas: benchmarks.weightedRoas,
       actions: result.actions,
       summary: result.summary,
       alerts: decisions.alerts,
@@ -239,14 +301,12 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
       status: 'completed',
     })
 
-    // 存入短期记忆
     await memory.rememberShort('decision', `cycle_${dayjs().format('YYYYMMDD_HH')}`, {
       summary: result.summary,
       actionCount: result.actions.length,
       eventCount: events.length,
     })
 
-    // 更新注意力焦点
     const focusItems = [
       ...criticalEvents.map(e => describeEvent(e)),
       ...pendingApproval.map(a => `待审批: ${a.reason}`),
@@ -295,7 +355,6 @@ async function executeWithRetry(action: DecisionAction, maxRetries = 3): Promise
         })
       }
 
-      // 记录到 Action 表
       await Action.create({
         type: action.type === 'increase_budget' ? 'adjust_budget' : action.type,
         platform: 'facebook',
@@ -313,7 +372,7 @@ async function executeWithRetry(action: DecisionAction, maxRetries = 3): Promise
     } catch (err: any) {
       log.warn(`[Brain] Execute attempt ${attempt}/${maxRetries} failed for ${action.campaignId}: ${err.message}`)
       if (attempt < maxRetries) {
-        await new Promise(r => setTimeout(r, 30000 * attempt)) // 30s, 60s, 90s
+        await new Promise(r => setTimeout(r, 30000 * attempt))
       } else {
         return { ...action, executed: false, error: `Failed after ${maxRetries} attempts: ${err.message}` }
       }

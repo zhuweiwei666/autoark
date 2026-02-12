@@ -129,6 +129,14 @@ export const DECISION_PROMPT = `你是一个广告投放决策引擎。你的输
 **数据不足时（trendSummary 显示"数据不足"）：**
 - 不要基于趋势做判断，只看当前值和分类标签
 
+## 大盘锚定值解读
+
+你会收到一组"大盘锚定值"——这是从全量 campaign（包括其他优化师的）计算的统计基准。用法：
+- **ROI P25/P50/P75**：你的 campaign ROI 低于 P25 说明在全公司垫底，高于 P75 说明是优质的
+- **加权 ROAS**：全公司整体回报水平，你的 campaign 应该跑赢这个基准
+- **平台均值**：同平台（FB/TT）的平均 CPI 和 ROI，判断你的 campaign 是优于还是劣于同平台均值
+- 决策时优先用大盘锚定值做相对判断（"比大盘差" vs "比大盘好"），而不是绝对数值
+
 每个 campaign 已经被标记为以下类别之一：
 - loss_severe（亏损严重）: ROAS < ${THRESHOLDS.loss_severe_roas}，花费 > $${THRESHOLDS.loss_severe_min_spend}，连续${THRESHOLDS.loss_severe_min_days}天
 - loss_mild（亏损轻微）: ROAS < ${THRESHOLDS.loss_mild_roas}，花费 > $${THRESHOLDS.loss_mild_min_spend}
