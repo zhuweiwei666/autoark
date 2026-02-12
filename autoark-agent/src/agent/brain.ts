@@ -21,6 +21,7 @@ import { Snapshot } from '../data/snapshot.model'
 import { Action } from '../action/action.model'
 import * as toptouApi from '../platform/toptou/api'
 import { getTopTouToken } from '../platform/toptou/client'
+import { canOperate, describeScopeForPrompt } from './scope'
 
 export interface BrainCycleResult {
   snapshotId: string
@@ -74,11 +75,16 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
     const criticalEvents = events.filter(e => getEventPriority(e) === 'critical')
     const highEvents = events.filter(e => getEventPriority(e) === 'high')
 
-    // 紧急事件 → 也走审批（标记为紧急）
+    // 紧急事件 → 走审批（仅限权责范围内）
     if (criticalEvents.length > 0) {
       log.info(`[Brain] ${criticalEvents.length} CRITICAL events: ${criticalEvents.map(describeEvent).join('; ')}`)
       for (const event of criticalEvents) {
         if (event.type === 'spend_spike' || event.type === 'roas_crash') {
+          const c = campaignMap.get(event.campaignId)
+          if (!canOperate({ accountId: event.accountId, pkgName: c?.pkgName, optimizer: c?.optimizer })) {
+            log.info(`[Brain] SKIP (out of scope): ${event.campaignName}`)
+            continue
+          }
           await Action.create({
             type: 'pause', platform: 'facebook', accountId: event.accountId,
             entityId: event.campaignId, entityName: event.campaignName,
@@ -90,9 +96,11 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
       }
     }
 
-    // 高优先级事件 → 也走审批
+    // 高优先级事件 → 走审批（仅限权责范围内）
     for (const event of highEvents) {
       if (event.type === 'zero_conversion') {
+        const c = campaignMap.get(event.campaignId)
+        if (!canOperate({ accountId: event.accountId, pkgName: c?.pkgName, optimizer: c?.optimizer })) continue
         await Action.create({
           type: 'pause', platform: 'facebook', accountId: event.accountId,
           entityId: event.campaignId, entityName: event.campaignName,
@@ -127,8 +135,14 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
     result.phase = 'execution'
     log.info(`[Brain] Phase 5: Executing ${remainingActions.length} actions...`)
 
-    // 所有操作一律走审批，不自动执行
+    // 所有操作一律走审批（仅限权责范围内的 campaign）
+    let skippedOutOfScope = 0
     for (const action of remainingActions) {
+      const c = campaigns.find(x => x.campaignId === action.campaignId)
+      if (!canOperate({ accountId: action.accountId, pkgName: c?.pkgName, optimizer: c?.optimizer })) {
+        skippedOutOfScope++
+        continue
+      }
       await Action.create({
         type: action.type === 'increase_budget' ? 'adjust_budget' : action.type,
         platform: 'facebook',
@@ -156,6 +170,10 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
     const totalRevenue = campaigns.reduce((s, c) => s + c.todayRevenue, 0)
     const autoExecuted = result.actions.filter(a => a.executed)
     const pendingApproval = result.actions.filter(a => !a.executed)
+
+    if (skippedOutOfScope > 0) {
+      log.info(`[Brain] Skipped ${skippedOutOfScope} actions (out of scope)`)
+    }
 
     result.summary = [
       `扫描 ${campaigns.length} 个 campaign`,

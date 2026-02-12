@@ -4,6 +4,7 @@ import { think } from '../agent/brain'
 import { getReflectionStats } from '../agent/reflection'
 import { Snapshot } from '../data/snapshot.model'
 import { memory } from '../agent/memory.service'
+import { getScope, setScope, describeScopeForPrompt } from '../agent/scope'
 
 const router = Router()
 router.use(authenticate)
@@ -68,6 +69,22 @@ router.get('/status', async (_req: Request, res: Response) => {
 router.get('/lessons', async (req: Request, res: Response) => {
   const lessons = await memory.recallLessons(undefined, 20)
   res.json(lessons)
+})
+
+// 查看权责范围
+router.get('/scope', async (_req: Request, res: Response) => {
+  res.json({ scope: getScope(), description: describeScopeForPrompt() })
+})
+
+// 修改权责范围
+router.post('/scope', async (req: Request, res: Response) => {
+  const { accountIds, packageNames, optimizers } = req.body
+  setScope({
+    ...(accountIds !== undefined ? { accountIds } : {}),
+    ...(packageNames !== undefined ? { packageNames } : {}),
+    ...(optimizers !== undefined ? { optimizers } : {}),
+  })
+  res.json({ scope: getScope(), description: describeScopeForPrompt() })
 })
 
 export default router
