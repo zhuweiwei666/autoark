@@ -24,6 +24,9 @@ export default function ChatPage() {
   const [lessons, setLessons] = useState<any[]>([])
   const [pendingActions, setPendingActions] = useState<any[]>([])
   const [selectedSnapshot, setSelectedSnapshot] = useState<any>(null)
+  const [scopeData, setScopeData] = useState<any>(null)
+  const [scopeEdit, setScopeEdit] = useState({ accounts: '', packages: '', optimizers: '' })
+  const [showScopeEdit, setShowScopeEdit] = useState(false)
   const endRef = useRef<HTMLDivElement>(null)
   const navigate = useNavigate()
 
@@ -34,6 +37,14 @@ export default function ChatPage() {
     get('/api/pipeline/history?limit=10').then(setHistory).catch(() => {})
     get('/api/pipeline/lessons').then(setLessons).catch(() => {})
     get('/api/actions/pending').then(setPendingActions).catch(() => {})
+    get('/api/pipeline/scope').then(d => {
+      setScopeData(d)
+      if (d?.scope) setScopeEdit({
+        accounts: (d.scope.accountIds || []).join('\n'),
+        packages: (d.scope.packageNames || []).join('\n'),
+        optimizers: (d.scope.optimizers || []).join('\n'),
+      })
+    }).catch(() => {})
   }, [])
 
   const refreshPending = () => {
@@ -49,6 +60,17 @@ export default function ChatPage() {
   const rejectAction = async (id: string) => {
     await post(`/api/actions/${id}/reject`, { reason: 'User rejected' })
     refreshPending()
+  }
+
+  const saveScope = async () => {
+    const body = {
+      accountIds: scopeEdit.accounts.split('\n').map(s => s.trim()).filter(Boolean),
+      packageNames: scopeEdit.packages.split('\n').map(s => s.trim()).filter(Boolean),
+      optimizers: scopeEdit.optimizers.split('\n').map(s => s.trim()).filter(Boolean),
+    }
+    const res = await post('/api/pipeline/scope', body)
+    setScopeData(res)
+    setShowScopeEdit(false)
   }
 
   const approveAll = async () => {
@@ -350,6 +372,62 @@ export default function ChatPage() {
                   </div>
                 </div>
               )}
+              {/* 权责范围配置 */}
+              <div className="bg-slate-800 rounded-lg border border-slate-700">
+                <div className="px-3 py-2 border-b border-slate-700 flex items-center justify-between">
+                  <span className="text-xs font-medium text-slate-300">权责范围</span>
+                  <button onClick={() => setShowScopeEdit(!showScopeEdit)}
+                    className="text-[10px] px-2 py-0.5 bg-slate-700 text-slate-300 rounded hover:bg-slate-600 transition-colors">
+                    {showScopeEdit ? '取消' : '编辑'}
+                  </button>
+                </div>
+                <div className="p-3">
+                  {!showScopeEdit ? (
+                    <div className="space-y-1.5">
+                      <div className="text-[10px]">
+                        <span className="text-slate-500">可操作账户: </span>
+                        <span className="text-slate-300">{scopeData?.scope?.accountIds?.length ? scopeData.scope.accountIds.join(', ') : '未配置'}</span>
+                      </div>
+                      <div className="text-[10px]">
+                        <span className="text-slate-500">可操作产品: </span>
+                        <span className="text-slate-300">{scopeData?.scope?.packageNames?.length ? scopeData.scope.packageNames.join(', ') : '未配置'}</span>
+                      </div>
+                      <div className="text-[10px]">
+                        <span className="text-slate-500">可操作优化师: </span>
+                        <span className="text-slate-300">{scopeData?.scope?.optimizers?.length ? scopeData.scope.optimizers.join(', ') : '未配置'}</span>
+                      </div>
+                      {!scopeData?.scope?.accountIds?.length && !scopeData?.scope?.packageNames?.length && !scopeData?.scope?.optimizers?.length && (
+                        <div className="text-[10px] text-amber-400 mt-1">未配置范围，Agent 不会生成任何操作建议</div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <div>
+                        <label className="text-[10px] text-slate-400 block mb-0.5">可操作账户 ID（每行一个）</label>
+                        <textarea value={scopeEdit.accounts} onChange={e => setScopeEdit({...scopeEdit, accounts: e.target.value})}
+                          rows={3} placeholder="输入账户 ID，每行一个"
+                          className="w-full px-2 py-1 bg-slate-700 border border-slate-600 rounded text-[11px] text-white placeholder-slate-500 outline-none focus:border-blue-500 resize-none" />
+                      </div>
+                      <div>
+                        <label className="text-[10px] text-slate-400 block mb-0.5">可操作产品/包名（每行一个）</label>
+                        <textarea value={scopeEdit.packages} onChange={e => setScopeEdit({...scopeEdit, packages: e.target.value})}
+                          rows={2} placeholder="如 com.app.name"
+                          className="w-full px-2 py-1 bg-slate-700 border border-slate-600 rounded text-[11px] text-white placeholder-slate-500 outline-none focus:border-blue-500 resize-none" />
+                      </div>
+                      <div>
+                        <label className="text-[10px] text-slate-400 block mb-0.5">可操作优化师（每行一个）</label>
+                        <textarea value={scopeEdit.optimizers} onChange={e => setScopeEdit({...scopeEdit, optimizers: e.target.value})}
+                          rows={2} placeholder="如 zhuweiwei"
+                          className="w-full px-2 py-1 bg-slate-700 border border-slate-600 rounded text-[11px] text-white placeholder-slate-500 outline-none focus:border-blue-500 resize-none" />
+                      </div>
+                      <button onClick={saveScope}
+                        className="w-full py-1.5 text-[11px] font-medium bg-blue-600 hover:bg-blue-500 text-white rounded transition-colors">
+                        保存
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
           )}
 
