@@ -15,6 +15,7 @@ const agentConfigSchema = new mongoose.Schema({
       cardId: String,          // Metabase question ID: "7786"
       accessCode: String,      // "VfuSBdaO33sklvtr"
       description: String,     // 描述
+      role: String,            // "spend" | "conversion"
       enabled: { type: Boolean, default: true },
     }],
     // 扫描频率
@@ -108,13 +109,10 @@ export const DEFAULT_CONFIGS: Record<string, any> = {
   monitor: {
     agentId: 'monitor',
     monitor: {
-      dataSources: [{
-        name: 'Campaign 消耗报表',
-        cardId: '7786',
-        accessCode: 'VfuSBdaO33sklvtr',
-        description: 'TopTou API + Doris，campaign 维度实时数据',
-        enabled: true,
-      }],
+      dataSources: [
+        { name: 'Campaign 消耗报表（TopTou API）', cardId: '7786', accessCode: 'VfuSBdaO33sklvtr', description: '花费、展示、点击等投放数据', role: 'spend', enabled: true },
+        { name: 'Campaign 转化报表（前端数据）', cardId: '4002', accessCode: 'VfuSBdaO33sklvtr', description: '安装量、CPI、CPA、首日ROI、三日ROI、七日ROI、付费率', role: 'conversion', enabled: true },
+      ],
       scanIntervalMinutes: 10,
       eventThresholds: { spendSpikeRatio: 2, roasCrashDropPct: 50, zeroConversionMinSpend: 50 },
     },
