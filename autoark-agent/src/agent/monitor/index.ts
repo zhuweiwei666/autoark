@@ -7,7 +7,8 @@ import dayjs from 'dayjs'
 import { log } from '../../platform/logger'
 import { collectData, RawCampaign } from './data-collector'
 import { assessQuality, summarizeQuality } from './quality'
-import { storeSamples, getRecentSamples } from './timeseries'
+import { storeSamples } from './timeseries'
+import { TimeSeries } from './timeseries.model'
 import { calculateTrend, calculateSpendTrend } from './trend'
 import { detectAnomalies, detectAccountAnomalies } from './anomaly'
 import { buildEnvironment } from './environment'
@@ -36,11 +37,10 @@ export async function monitor(): Promise<DecisionReadyData> {
   }
   const campaigns = [...latestBycamp.values()]
 
-  // Step 2: 质量评估
+  // Step 2: 质量评估（纯计算，不查 DB，快）
   const qualities = new Map<string, QualityResult>()
   for (const c of campaigns) {
-    const q = await assessQuality(c, hour)
-    qualities.set(c.campaignId, q)
+    qualities.set(c.campaignId, assessQuality(c, hour))
   }
   const qualitySummary = summarizeQuality(qualities, campaigns.length)
   log.info(`[Monitor] Quality: ${qualitySummary.reliableCount} reliable, ${qualitySummary.unreliableCount} unreliable (${qualitySummary.overallConfidence})`)
@@ -56,11 +56,27 @@ export async function monitor(): Promise<DecisionReadyData> {
     accountGroups.set(c.accountId, acc)
   }
 
+  // 批量查时序（一次 DB 查询，不是每个 campaign 查一次）
+  const allCampaignIds = campaigns.map(c => c.campaignId)
+  const since2h = dayjs().subtract(2, 'hour').toDate()
+  let historyMap = new Map<string, any[]>()
+  try {
+    const allHistory = await TimeSeries.find({
+      campaignId: { $in: allCampaignIds },
+      sampledAt: { $gte: dayjs().subtract(24, 'hour').toDate() },
+    }).sort({ sampledAt: -1 }).limit(allCampaignIds.length * 12).lean()
+    for (const h of allHistory as any[]) {
+      const arr = historyMap.get(h.campaignId) || []
+      if (arr.length < 12) arr.push(h)
+      historyMap.set(h.campaignId, arr)
+    }
+  } catch { /* 首次运行 */ }
+
   const results: CampaignDecisionData[] = []
 
   for (const c of campaigns) {
     const q = qualities.get(c.campaignId)!
-    const history = await getRecentSamples(c.campaignId, 12)
+    const history = historyMap.get(c.campaignId) || []
     const roi = c.adjustedRoi || c.firstDayRoi || 0
 
     // 趋势

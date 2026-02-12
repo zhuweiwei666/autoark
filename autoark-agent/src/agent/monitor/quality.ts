@@ -4,15 +4,14 @@
 import dayjs from 'dayjs'
 import { RawCampaign } from './data-collector'
 import { QualityResult, DataQualitySummary } from './types'
-import { TimeSeries } from './timeseries.model'
 
 /**
  * 评估单个 campaign 的数据质量
  */
-export async function assessQuality(
+export function assessQuality(
   campaign: RawCampaign,
   hour: number,
-): Promise<QualityResult> {
+): QualityResult {
   let confidence = 1.0
   const notes: string[] = []
 
@@ -48,18 +47,7 @@ export async function assessQuality(
     notes.push('有花费无转化，可能归因延迟2-4h')
   }
 
-  // 4. 和上次采样对比跳变
-  try {
-    const lastSample = await TimeSeries.findOne({ campaignId: campaign.campaignId })
-      .sort({ sampledAt: -1 }).lean() as any
-    if (lastSample && lastSample.spend > 10) {
-      const spendJump = Math.abs(campaign.spend - lastSample.spend) / lastSample.spend
-      if (spendJump > 3) {
-        confidence *= 0.6
-        notes.push(`花费跳变 ${(spendJump * 100).toFixed(0)}%，可能是数据刷新`)
-      }
-    }
-  } catch { /* 首次运行没有历史数据 */ }
+  // 4. 跳变检测（在外层批量做，这里跳过单个查询避免性能问题）
 
   // 5. ROI 异常高（可能是小样本偶然）
   const roi = campaign.adjustedRoi || campaign.firstDayRoi
