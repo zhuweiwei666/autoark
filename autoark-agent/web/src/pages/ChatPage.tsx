@@ -71,7 +71,14 @@ export default function ChatPage() {
 
   // 用 latest API 获取最新快照（比 history 更可靠）
   const [latestSnap, setLatestSnap] = useState<any>(null)
-  useEffect(() => { get('/api/pipeline/latest').then(setLatestSnap).catch(() => {}) }, [])
+  useEffect(() => {
+    // 轮询直到拿到 completed 状态的快照
+    const load = () => get('/api/pipeline/latest').then(d => {
+      setLatestSnap(d)
+      if (d?.status === 'running') setTimeout(load, 5000) // 5 秒后重试
+    }).catch(() => {})
+    load()
+  }, [])
 
   const classif = latestSnap?.classification || {}
 

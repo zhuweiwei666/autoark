@@ -20,9 +20,10 @@ router.post('/run', async (_req: Request, res: Response) => {
   }
 })
 
-// 最近一次运行
+// 最近一次完成的运行（优先返回 completed，不返回 running）
 router.get('/latest', async (_req: Request, res: Response) => {
-  const snapshot = await Snapshot.findOne().sort({ runAt: -1 }).lean()
+  const snapshot = await Snapshot.findOne({ status: 'completed' }).sort({ runAt: -1 }).lean()
+    || await Snapshot.findOne().sort({ runAt: -1 }).lean()
   res.json(snapshot || { status: 'never_run' })
 })
 
