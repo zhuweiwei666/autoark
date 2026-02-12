@@ -1,5 +1,8 @@
 /**
- * 数据采集器 — 从 Metabase 拉取配置好的数据源，合并返回
+ * 数据采集器 — 从 Metabase 拉取聚合后的单表数据
+ * 
+ * BI 已将 spend + conversion 聚合到一张表（card 7726），
+ * 一次请求即可获取全部指标，不再需要两表拼接。
  */
 import axios from 'axios'
 import { log } from '../../platform/logger'
@@ -28,13 +31,79 @@ export interface RawCampaign {
 }
 
 /**
- * 拉取所有配置的数据源并合并
+ * 拉取聚合数据（单表查询）
  */
 export async function collectData(startDate: string, endDate: string): Promise<RawCampaign[]> {
   const tok = await session()
   const cfg = await getAgentConfig('monitor')
   const sources = (cfg?.monitor?.dataSources || []).filter((d: any) => d.enabled)
 
+  // 优先使用 role='combined' 的聚合数据源；兼容旧配置（自动回退两表模式）
+  const combinedSource = sources.find((s: any) => s.role === 'combined')
+  if (combinedSource) {
+    return collectCombined(tok, combinedSource, startDate, endDate)
+  }
+
+  // 兼容旧的两表模式
+  return collectLegacy(tok, sources, startDate, endDate)
+}
+
+/**
+ * 新模式：单表查询（card 7726）
+ */
+async function collectCombined(tok: string, src: any, startDate: string, endDate: string): Promise<RawCampaign[]> {
+  const data = await queryCard(tok, src.cardId, src.accessCode, startDate, endDate, {
+    platform: 'ALL', channel_name: 'ALL',
+  })
+
+  log.info(`[Collector] ${src.name}: ${data.rows.length} rows, ${data.cols.length} cols`)
+
+  const col = (name: string) => data.cols.indexOf(name)
+  const result: RawCampaign[] = []
+  let skipped = 0
+
+  for (const r of data.rows) {
+    const camId = r[col('cam_id')]
+    if (!camId || camId === '_' || camId === 'None' || camId === null) { skipped++; continue }
+
+    const spendAPI = Number(r[col('广告花费_API')] || 0)
+    const spendBI = Number(r[col('广告花费')] || 0)
+
+    result.push({
+      campaignId: String(camId),
+      campaignName: r[col('campaign_name')] || '',
+      accountId: '',   // 聚合表无 ad_account_id，通过 optimizer/pkgName 做权责匹配
+      accountName: '',
+      platform: r[col('渠道')] || '',
+      optimizer: r[col('优化师')] || '',
+      pkgName: r[col('包名')] || '',
+      date: r[col('日期')] || endDate,
+      spend: spendAPI > 0 ? spendAPI : spendBI,  // 优先用 API 花费
+      impressions: 0,
+      clicks: 0,
+      installs: Number(r[col('安装量')] || 0),
+      cpi: Number(r[col('CPI')] || 0),
+      cpa: Number(r[col('CPA')] || 0),
+      revenue: Number(r[col('渠道收入')] || 0),
+      firstDayRoi: Number(r[col('首日ROI')] || 0),
+      adjustedRoi: Number(r[col('调整的首日ROI')] || 0),
+      day3Roi: Number(r[col('三日回收ROI')] || 0),
+      day7Roi: 0,  // 聚合表暂无七日数据
+      payRate: Number(r[col('首日付费率')] || 0),
+      arpu: Number(r[col('首日ARPU')] || 0),
+      ctr: Number(r[col('CTR')] || 0),
+    })
+  }
+
+  if (skipped > 0) log.info(`[Collector] Skipped ${skipped} summary/empty rows`)
+  log.info(`[Collector] Result: ${result.length} campaigns`)
+  return result
+}
+
+/**
+ * 旧模式：两表拼接（spend + conversion），保留兼容
+ */
+async function collectLegacy(tok: string, sources: any[], startDate: string, endDate: string): Promise<RawCampaign[]> {
   let spendRows: any[][] = [], spendCols: string[] = []
   let convRows: any[][] = [], convCols: string[] = []
 
@@ -45,21 +114,16 @@ export async function collectData(startDate: string, endDate: string): Promise<R
     const data = await queryCard(tok, src.cardId, src.accessCode, startDate, endDate, extra)
     if (src.role === 'spend') { spendCols = data.cols; spendRows = data.rows }
     else if (src.role === 'conversion') { convCols = data.cols; convRows = data.rows }
-    else { spendCols = data.cols; spendRows = data.rows } // 默认当 spend
+    else { spendCols = data.cols; spendRows = data.rows }
     log.info(`[Collector] ${src.name}: ${data.rows.length} rows`)
-
   }
 
-  // 没有数据直接返回
   if (spendRows.length === 0) {
     log.warn('[Collector] No spend data')
     return []
   }
 
-  // 转化数据建索引
   const convMap = buildConvMap(convRows, convCols)
-
-  // 合并
   const idx = (cols: string[], name: string) => cols.findIndex(c => c.toLowerCase() === name.toLowerCase())
   const result: RawCampaign[] = []
 
@@ -122,7 +186,6 @@ function buildConvMap(rows: any[][], cols: string[]) {
   let skipped = 0
   for (const r of rows) {
     const id = r[ci]
-    // cam_id 为空的是杂质，直接过滤
     if (!id || id === '_' || id === 'None' || id === null) { skipped++; continue }
     map.set(String(id), {
       installs: Number(r[i('安装量')] || 0), cpi: Number(r[i('CPI')] || 0), cpa: Number(r[i('CPA')] || 0),
