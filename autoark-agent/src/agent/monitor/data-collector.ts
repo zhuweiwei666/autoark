@@ -2,7 +2,6 @@
  * 数据采集器 — 从 Metabase 拉取配置好的数据源，合并返回
  */
 import axios from 'axios'
-import dayjs from 'dayjs'
 import { log } from '../../platform/logger'
 import { getAgentConfig } from '../agent-config.model'
 
@@ -119,8 +118,11 @@ function buildConvMap(rows: any[][], cols: string[]) {
   const map = new Map<string, any>()
   const ci = i('cam_id')
   if (ci === -1) return map
+  let skipped = 0
   for (const r of rows) {
-    const id = r[ci]; if (!id) continue
+    const id = r[ci]
+    // cam_id 为空的是杂质，直接过滤
+    if (!id || id === '_' || id === 'None' || id === null) { skipped++; continue }
     map.set(String(id), {
       installs: Number(r[i('安装量')] || 0), cpi: Number(r[i('CPI')] || 0), cpa: Number(r[i('CPA')] || 0),
       revenue: Number(r[i('渠道收入')] || 0), firstDayRoi: Number(r[i('首日ROI')] || 0),
@@ -129,5 +131,6 @@ function buildConvMap(rows: any[][], cols: string[]) {
       arpu: Number(r[i('首日ARPU')] || 0), ctr: Number(r[i('CTR')] || 0),
     })
   }
+  if (skipped > 0) log.info(`[Collector] Conversion data: ${map.size} matched, ${skipped} skipped (no cam_id)`)
   return map
 }
