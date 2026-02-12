@@ -28,14 +28,15 @@ export async function assessQuality(
     notes.push('花费<$30，数据量有限')
   }
 
-  // 2. 时间因素
-  if (hour < 4) {
+  // 2. 时间因素（用 UTC+8 北京时间）
+  const bjHour = (hour + 8) % 24  // UTC → 北京时间
+  if (bjHour < 4) {
     confidence *= 0.15
     notes.push('凌晨0-4点，数据覆盖<17%')
-  } else if (hour < 8) {
+  } else if (bjHour < 8) {
     confidence *= 0.4
     notes.push('早间数据，覆盖<33%')
-  } else if (hour < 12) {
+  } else if (bjHour < 12) {
     confidence *= 0.7
     notes.push('上午数据，覆盖约50%')
   }

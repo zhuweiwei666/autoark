@@ -19,7 +19,8 @@ import { DecisionReadyData, CampaignDecisionData, QualityResult } from './types'
 export async function monitor(): Promise<DecisionReadyData> {
   const today = dayjs().format('YYYY-MM-DD')
   const dayBefore = dayjs().subtract(2, 'day').format('YYYY-MM-DD')
-  const hour = dayjs().hour() + dayjs().minute() / 60
+  const utcHour = dayjs().hour() + dayjs().minute() / 60
+  const hour = (utcHour + 8) % 24  // UTC → 北京时间
 
   log.info('[Monitor] Starting perception cycle...')
 

@@ -10,7 +10,7 @@ import { TimeSeries } from './timeseries.model'
  */
 export async function buildEnvironment(campaigns: RawCampaign[]): Promise<string> {
   const parts: string[] = []
-  const hour = dayjs().hour()
+  const hour = (dayjs().hour() + 8) % 24  // UTC → 北京时间
   const now = dayjs()
 
   // 1. 时间背景

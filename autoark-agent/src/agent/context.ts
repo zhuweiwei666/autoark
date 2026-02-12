@@ -41,8 +41,8 @@ export async function buildDynamicContext(): Promise<string> {
 // ==================== 时间感知 ====================
 
 function getTimeContext(): string {
-  const hour = dayjs().hour()
-  const dayOfWeek = dayjs().day() // 0=周日
+  const hour = (dayjs().hour() + 8) % 24  // UTC → 北京时间
+  const dayOfWeek = dayjs().add(8, 'hour').day() // UTC → 北京时间的星期
   const isWeekend = dayOfWeek === 0 || dayOfWeek === 6
 
   const parts = ['## 当前时间背景']
@@ -70,8 +70,8 @@ function getTimeContext(): string {
 // ==================== 数据质量 ====================
 
 function getDataQualityContext(): string {
-  const hour = dayjs().hour()
-  const minutesPassed = hour * 60 + dayjs().minute()
+  const bjHour = (dayjs().hour() + 8) % 24
+  const minutesPassed = bjHour * 60 + dayjs().minute()
   const dataCoverage = Math.round((minutesPassed / 1440) * 100)
 
   return `## 数据质量提示
