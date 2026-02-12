@@ -4,30 +4,49 @@
  */
 import { CampaignMetrics } from './analyzer'
 import { CampaignLabel, THRESHOLDS, LABEL_NAMES } from './standards'
+import { Skill, matchCampaignToSkill } from './skill.model'
 
 export interface ClassifiedCampaign extends CampaignMetrics {
   label: CampaignLabel
   labelName: string
   labelReason: string
+  skillName?: string
 }
 
 /**
- * 对每个 campaign 进行分类标记
+ * 对每个 campaign 进行分类标记（支持 Skill 覆盖阈值）
  */
-export function classifyCampaigns(campaigns: CampaignMetrics[]): ClassifiedCampaign[] {
+export async function classifyCampaigns(campaigns: CampaignMetrics[]): Promise<ClassifiedCampaign[]> {
+  // 加载所有活跃 Skill
+  let skills: any[] = []
+  try {
+    skills = await Skill.find({ isActive: true }).lean()
+  } catch { /* Skill 集合不存在时不报错 */ }
+
   return campaigns.map(c => {
-    const { label, reason } = classify(c)
+    // 匹配 Skill
+    const skill = matchCampaignToSkill(
+      { pkgName: c.pkgName, platform: c.platform, optimizer: c.optimizer, accountId: c.accountId },
+      skills
+    )
+
+    // 合并阈值：Skill 覆盖默认值
+    const thresholds = skill?.thresholds
+      ? { ...THRESHOLDS, ...Object.fromEntries(Object.entries(skill.thresholds).filter(([, v]) => v != null)) }
+      : THRESHOLDS
+
+    const { label, reason } = classify(c, thresholds)
     return {
       ...c,
       label,
       labelName: LABEL_NAMES[label],
       labelReason: reason,
+      skillName: skill?.name,
     }
   })
 }
 
-function classify(c: CampaignMetrics): { label: CampaignLabel; reason: string } {
-  const T = THRESHOLDS
+function classify(c: CampaignMetrics, T = THRESHOLDS): { label: CampaignLabel; reason: string } {
 
   // 1. 观察期：花费太少，数据不够
   if (c.totalSpend3d < T.observe_max_spend) {

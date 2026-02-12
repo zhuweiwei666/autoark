@@ -5,6 +5,7 @@ import { getReflectionStats } from '../agent/reflection'
 import { Snapshot } from '../data/snapshot.model'
 import { memory } from '../agent/memory.service'
 import { getScope, setScope, describeScopeForPrompt } from '../agent/scope'
+import { runEvolution } from '../agent/evolution'
 
 const router = Router()
 router.use(authenticate)
@@ -69,6 +70,16 @@ router.get('/status', async (_req: Request, res: Response) => {
 router.get('/lessons', async (req: Request, res: Response) => {
   const lessons = await memory.recallLessons(undefined, 20)
   res.json(lessons)
+})
+
+// 触发进化分析
+router.post('/evolve', async (_req: Request, res: Response) => {
+  try {
+    const proposals = await runEvolution()
+    res.json({ success: true, proposals })
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message })
+  }
 })
 
 // 查看权责范围

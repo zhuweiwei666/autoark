@@ -75,16 +75,19 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
     const criticalEvents = events.filter(e => getEventPriority(e) === 'critical')
     const highEvents = events.filter(e => getEventPriority(e) === 'high')
 
+    // 加载已有 pending 用于去重
+    const allPending = await Action.find({ status: 'pending' }).select('entityId type').lean()
+    const pendingSet = new Set(allPending.map((a: any) => `${a.entityId}:${a.type}`))
+
     // 紧急事件 → 走审批（仅限权责范围内）
     if (criticalEvents.length > 0) {
       log.info(`[Brain] ${criticalEvents.length} CRITICAL events: ${criticalEvents.map(describeEvent).join('; ')}`)
       for (const event of criticalEvents) {
         if (event.type === 'spend_spike' || event.type === 'roas_crash') {
           const c = campaignMap.get(event.campaignId)
-          if (!canOperate({ accountId: event.accountId, pkgName: c?.pkgName, optimizer: c?.optimizer })) {
-            log.info(`[Brain] SKIP (out of scope): ${event.campaignName}`)
-            continue
-          }
+          if (!canOperate({ accountId: event.accountId, pkgName: c?.pkgName, optimizer: c?.optimizer })) continue
+          if (pendingSet.has(`${event.campaignId}:pause`)) continue
+          pendingSet.add(`${event.campaignId}:pause`)
           await Action.create({
             type: 'pause', platform: 'facebook', accountId: event.accountId,
             entityId: event.campaignId, entityName: event.campaignName,
@@ -101,6 +104,8 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
       if (event.type === 'zero_conversion') {
         const c = campaignMap.get(event.campaignId)
         if (!canOperate({ accountId: event.accountId, pkgName: c?.pkgName, optimizer: c?.optimizer })) continue
+        if (pendingSet.has(`${event.campaignId}:pause`)) continue
+        pendingSet.add(`${event.campaignId}:pause`)
         await Action.create({
           type: 'pause', platform: 'facebook', accountId: event.accountId,
           entityId: event.campaignId, entityName: event.campaignName,
@@ -115,7 +120,7 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
     result.phase = 'decision'
     log.info('[Brain] Phase 4: Analyzing all campaigns...')
 
-    const classified = classifyCampaigns(campaigns)
+    const classified = await classifyCampaigns(campaigns)
     const classSummary = classifySummary(classified)
 
     // 构建记忆上下文给 LLM
@@ -135,14 +140,25 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
     result.phase = 'execution'
     log.info(`[Brain] Phase 5: Executing ${remainingActions.length} actions...`)
 
-    // 所有操作一律走审批（仅限权责范围内的 campaign）
+    // 去重：不重复生成已有的 pending 操作
+    const existingPending = await Action.find({ status: 'pending' }).select('entityId type').lean()
+    const pendingKeys = new Set(existingPending.map((a: any) => `${a.entityId}:${a.type}`))
+
     let skippedOutOfScope = 0
+    let skippedDuplicate = 0
     for (const action of remainingActions) {
       const c = campaigns.find(x => x.campaignId === action.campaignId)
       if (!canOperate({ accountId: action.accountId, pkgName: c?.pkgName, optimizer: c?.optimizer })) {
         skippedOutOfScope++
         continue
       }
+      // 已有相同 pending 的跳过
+      const key = `${action.campaignId}:${action.type === 'increase_budget' ? 'adjust_budget' : action.type}`
+      if (pendingKeys.has(key)) {
+        skippedDuplicate++
+        continue
+      }
+      pendingKeys.add(key)
       await Action.create({
         type: action.type === 'increase_budget' ? 'adjust_budget' : action.type,
         platform: 'facebook',
@@ -171,9 +187,8 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
     const autoExecuted = result.actions.filter(a => a.executed)
     const pendingApproval = result.actions.filter(a => !a.executed)
 
-    if (skippedOutOfScope > 0) {
-      log.info(`[Brain] Skipped ${skippedOutOfScope} actions (out of scope)`)
-    }
+    if (skippedOutOfScope > 0) log.info(`[Brain] Skipped ${skippedOutOfScope} (out of scope)`)
+    if (skippedDuplicate > 0) log.info(`[Brain] Skipped ${skippedDuplicate} (duplicate pending)`)
 
     result.summary = [
       `扫描 ${campaigns.length} 个 campaign`,

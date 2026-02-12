@@ -9,6 +9,7 @@ import { ClassifiedCampaign } from './classifier'
 import { DECISION_PROMPT } from './standards'
 import { Action } from '../action/action.model'
 import dayjs from 'dayjs'
+import { buildDynamicContext } from './context'
 
 export interface DecisionAction {
   type: 'pause' | 'increase_budget' | 'decrease_budget' | 'resume'
@@ -68,7 +69,14 @@ export async function makeDecisions(
     recentlyOperated: inputData.filter(c => c.recentlyOperated).length,
   }
 
-  const userMessage = `当前时间: ${dayjs().format('YYYY-MM-DD HH:mm')}
+  // 构建动态上下文（经验 + 时间感知 + 用户偏好 + 数据质量）
+  const dynamicContext = await buildDynamicContext()
+
+  const userMessage = `${dynamicContext}
+
+---
+
+当前时间: ${dayjs().format('YYYY-MM-DD HH:mm')}
 
 ## 数据统计
 - 总 campaign: ${stats.total}

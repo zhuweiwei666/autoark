@@ -9,6 +9,7 @@ import { memoryTools } from './tools/memory.tools'
 import { toptouTools } from './tools/toptou.tools'
 import { metabaseTools } from './tools/metabase.tools'
 import { runAgent, AgentResult } from './runtime'
+import { routeUserMessage, AGENT_PROMPTS } from './multi-agent'
 import { Token } from '../data/token.model'
 import { AdAccount } from '../data/account.model'
 import { Conversation } from '../conversation/conversation.model'
@@ -97,8 +98,13 @@ export async function chat(userId: string, conversationId: string, message: stri
     content: m.content || '',
   }))
 
+  // 路由到合适的 Agent 角色
+  const role = routeUserMessage(message)
+  const rolePrompt = AGENT_PROMPTS[role]
+  const fullMessage = rolePrompt ? `[${role} agent]\n${message}` : message
+
   // 运行 Agent
-  const result = await runAgent(message, ctx, history)
+  const result = await runAgent(fullMessage, ctx, history)
 
   // 提取本轮产生的 action IDs
   const actionIds = result.toolCalls

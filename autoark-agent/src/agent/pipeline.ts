@@ -86,7 +86,7 @@ export async function runPipeline(trigger: 'cron' | 'manual' = 'cron'): Promise<
 
     // ==================== Step 3: 分类标记 ====================
     log.info('[Pipeline] Step 3: Classifying campaigns...')
-    const classified = classifyCampaigns(campaigns)
+    const classified = await classifyCampaigns(campaigns)
     const summary = classifySummary(classified)
     log.info(`[Pipeline] Step 3 done: ${JSON.stringify(summary)}`)
 

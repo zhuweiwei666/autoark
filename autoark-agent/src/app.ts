@@ -8,6 +8,7 @@ import actionRoutes from './action/action.controller'
 import monitorRoutes from './monitor/monitor.controller'
 import metabaseRoutes from './monitor/metabase.controller'
 import pipelineRoutes from './monitor/pipeline.controller'
+import skillRoutes from './monitor/skill.controller'
 
 const app = express()
 app.use(cors())
@@ -20,6 +21,7 @@ app.use('/api/actions', actionRoutes)
 app.use('/api/monitor', monitorRoutes)
 app.use('/api/metabase', metabaseRoutes)
 app.use('/api/pipeline', pipelineRoutes)
+app.use('/api/skills', skillRoutes)
 
 // 静态文件（前端）
 const distPath = path.join(__dirname, '../web/dist')
