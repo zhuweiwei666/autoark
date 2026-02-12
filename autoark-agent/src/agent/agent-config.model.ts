@@ -159,24 +159,29 @@ export const DEFAULT_CONFIGS: Record<string, any> = {
 }
 
 /**
- * 获取 Agent 配置（不存在则创建默认配置）
+ * 获取 Agent 配置（直接读 raw collection，避免 Mongoose schema 过滤）
  */
 export async function getAgentConfig(agentId: string): Promise<any> {
-  let config = await AgentConfig.findOne({ agentId }).lean()
+  const db = mongoose.connection.db
+  if (!db) return DEFAULT_CONFIGS[agentId] || null
+  let config = await db.collection('agentconfig2s').findOne({ agentId })
   if (!config && DEFAULT_CONFIGS[agentId]) {
-    const doc = await AgentConfig.create(DEFAULT_CONFIGS[agentId])
-    config = JSON.parse(JSON.stringify(doc))
+    await db.collection('agentconfig2s').insertOne({ ...DEFAULT_CONFIGS[agentId], createdAt: new Date(), updatedAt: new Date() })
+    config = await db.collection('agentconfig2s').findOne({ agentId })
   }
   return config
 }
 
 /**
- * 更新 Agent 配置
+ * 更新 Agent 配置（直接写 raw collection）
  */
 export async function updateAgentConfig(agentId: string, updates: any): Promise<any> {
-  return AgentConfig.findOneAndUpdate(
+  const db = mongoose.connection.db
+  if (!db) return null
+  await db.collection('agentconfig2s').updateOne(
     { agentId },
-    { $set: updates },
-    { new: true, upsert: true }
-  ).lean()
+    { $set: { ...updates, updatedAt: new Date() } },
+    { upsert: true }
+  )
+  return db.collection('agentconfig2s').findOne({ agentId })
 }
