@@ -35,10 +35,6 @@ export async function collectData(startDate: string, endDate: string): Promise<R
   const cfg = await getAgentConfig('monitor')
   const sources = (cfg?.monitor?.dataSources || []).filter((d: any) => d.enabled)
 
-  // #region agent log
-  log.info(`[DEBUG_ROAS][HA] dataSources config: ${JSON.stringify({sourceCount:sources.length,sources:sources.map((s:any)=>({name:s.name,role:s.role,cardId:s.cardId,enabled:s.enabled})),rawMonitorKeys:cfg?.monitor ? Object.keys(cfg.monitor) : 'no monitor key'})}`)
-  // #endregion
-
   let spendRows: any[][] = [], spendCols: string[] = []
   let convRows: any[][] = [], convCols: string[] = []
 
@@ -52,11 +48,6 @@ export async function collectData(startDate: string, endDate: string): Promise<R
     else { spendCols = data.cols; spendRows = data.rows } // 默认当 spend
     log.info(`[Collector] ${src.name}: ${data.rows.length} rows`)
 
-    // #region agent log
-    if (src.role === 'conversion') {
-      log.info(`[DEBUG_ROAS][HB] conversion data: ${JSON.stringify({convCols:data.cols,convRowCount:data.rows.length,sampleRow:data.rows.length>0?data.rows[0]:null,hasCamIdCol:data.cols.includes('cam_id'),has渠道收入Col:data.cols.includes('渠道收入'),has首日ROICol:data.cols.includes('首日ROI'),has调整ROICol:data.cols.includes('调整的首日ROI')})}`)
-    }
-    // #endregion
   }
 
   // 没有数据直接返回
@@ -68,27 +59,14 @@ export async function collectData(startDate: string, endDate: string): Promise<R
   // 转化数据建索引
   const convMap = buildConvMap(convRows, convCols)
 
-  // #region agent log
-  const sampleConvEntries = [...convMap.entries()].slice(0, 3).map(([k,v]) => ({key:k, revenue:v.revenue, firstDayRoi:v.firstDayRoi, adjustedRoi:v.adjustedRoi}))
-  log.info(`[DEBUG_ROAS][HC] convMap: ${JSON.stringify({convMapSize:convMap.size,sampleEntries:sampleConvEntries,convRowCount:convRows.length,convColCount:convCols.length})}`)
-  // #endregion
-
   // 合并
   const idx = (cols: string[], name: string) => cols.findIndex(c => c.toLowerCase() === name.toLowerCase())
   const result: RawCampaign[] = []
-
-  // #region agent log
-  let matchCount = 0, missCount = 0
-  // #endregion
 
   for (const row of spendRows) {
     const cid = row[idx(spendCols, 'campaign_id')]
     if (!cid) continue
     const conv = convMap.get(String(cid)) || {} as any
-
-    // #region agent log
-    if (conv.revenue !== undefined) matchCount++; else missCount++;
-    // #endregion
 
     result.push({
       campaignId: String(cid),
@@ -115,15 +93,6 @@ export async function collectData(startDate: string, endDate: string): Promise<R
       ctr: conv.ctr || 0,
     })
   }
-
-  // #region agent log
-  const sampleMerged = result.slice(0, 5).map(r => ({id:r.campaignId, spend:r.spend, revenue:r.revenue, firstDayRoi:r.firstDayRoi, adjustedRoi:r.adjustedRoi}))
-  const totalRev = result.reduce((s,r) => s + r.revenue, 0)
-  const totalAdj = result.reduce((s,r) => s + r.adjustedRoi, 0)
-  const totalFdr = result.reduce((s,r) => s + r.firstDayRoi, 0)
-  log.info(`[DEBUG_ROAS][HC/D] merge: ${JSON.stringify({totalCampaigns:result.length,matchCount,missCount,totalRevenue:totalRev,totalAdjustedRoi:totalAdj,totalFirstDayRoi:totalFdr})}`)
-  log.info(`[DEBUG_ROAS][HC/D] sample: ${JSON.stringify(sampleMerged)}`)
-  // #endregion
 
   log.info(`[Collector] Merged: ${result.length} campaigns`)
   return result
