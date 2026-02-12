@@ -50,15 +50,23 @@ export async function getMediaUserAccounts() {
 
 // ==================== 写操作（参数格式待确认）====================
 
-/** 更新广告系列状态 */
+// ==================== 写操作 ====================
+// TopTou API 的 level 参数必须是数字：1=campaign, 2=adset, 3=ad
+
+const LEVEL_MAP: Record<string, number> = { campaign: 1, adset: 2, ad: 3 }
+
+/** 更新广告系列/广告组/广告状态（暂停/恢复） */
 export async function updateStatus(params: {
   level: 'campaign' | 'adset' | 'ad'
   list: Array<{ id: string; accountId: string; status: 'ACTIVE' | 'PAUSED' }>
 }) {
-  return toptouClient.post('/fb/list/status', params)
+  return toptouClient.post('/fb/list/status', {
+    level: LEVEL_MAP[params.level] || 1,
+    list: params.list,
+  })
 }
 
-/** 更新预算/名称 */
+/** 更新预算/名称（注意：此接口参数格式可能需要更新） */
 export async function updateNameOrBudget(params: {
   level: 'campaign' | 'adset'
   id: string
@@ -66,7 +74,10 @@ export async function updateNameOrBudget(params: {
   daily_budget?: number
   name?: string
 }) {
-  return toptouClient.post('/facebook/editor/name-or-budget', params)
+  return toptouClient.post('/facebook/editor/name-or-budget', {
+    ...params,
+    level: LEVEL_MAP[params.level] || 1,
+  })
 }
 
 /** 更新广告系列 */

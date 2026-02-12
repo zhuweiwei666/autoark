@@ -1,11 +1,12 @@
 /**
- * Action Executor - 审批通过后真正调 API 执行
+ * Action Executor - 审批通过后通过 TopTou API 执行操作
+ *
+ * 执行链路：
+ * 策略 Agent 生成 Action(pending) → 用户审批(approved) → 本模块执行(executed/failed)
  */
 import { Action } from './action.model'
-import { Token } from '../data/token.model'
-import { AdAccount } from '../data/account.model'
-import * as fbWrite from '../platform/facebook/write'
-import * as ttWrite from '../platform/tiktok/write'
+import * as toptouApi from '../platform/toptou/api'
+import { getTopTouToken } from '../platform/toptou/client'
 import { log } from '../platform/logger'
 
 /**
@@ -16,64 +17,37 @@ export async function executeAction(actionId: string): Promise<{ success: boolea
   if (!action) return { success: false, error: 'Action not found' }
   if (action.status !== 'approved') return { success: false, error: `Action status is ${action.status}, not approved` }
 
-  try {
-    const token = await resolveToken(action.platform, action.accountId)
-    if (!token) {
-      await Action.updateOne({ _id: actionId }, { status: 'failed', result: { error: 'No token available' } })
-      return { success: false, error: 'No token available' }
-    }
+  if (!getTopTouToken()) {
+    await Action.updateOne({ _id: actionId }, { status: 'failed', result: { error: 'TopTou token not set' } })
+    return { success: false, error: 'TopTou token not set' }
+  }
 
+  try {
     let result: any
 
     switch (action.type) {
-      case 'create_campaign':
-        result = await fbWrite.createCampaign({
-          accountId: action.accountId, token,
-          name: action.params.name,
-          objective: action.params.objective,
-          status: 'PAUSED', // 新创建的先暂停
-          dailyBudget: action.params.dailyBudget,
-          bidStrategy: action.params.bidStrategy,
-        })
-        break
-
-      case 'adjust_budget':
-        if (action.params.entityType === 'adset') {
-          result = await fbWrite.updateAdSet(action.entityId, token, { dailyBudget: action.params.newBudget })
-        } else {
-          result = await fbWrite.updateCampaign(action.entityId, token, { dailyBudget: action.params.newBudget })
-        }
-        break
-
       case 'pause':
-        if (action.params.entityType === 'adset') {
-          result = await fbWrite.updateAdSet(action.entityId, token, { status: 'PAUSED' })
-        } else if (action.params.entityType === 'ad') {
-          result = await fbWrite.updateAd(action.entityId, token, { status: 'PAUSED' })
-        } else {
-          result = await fbWrite.updateCampaign(action.entityId, token, { status: 'PAUSED' })
-        }
+        result = await executePause(action)
         break
 
       case 'resume':
-        if (action.params.entityType === 'adset') {
-          result = await fbWrite.updateAdSet(action.entityId, token, { status: 'ACTIVE' })
-        } else if (action.params.entityType === 'ad') {
-          result = await fbWrite.updateAd(action.entityId, token, { status: 'ACTIVE' })
-        } else {
-          result = await fbWrite.updateCampaign(action.entityId, token, { status: 'ACTIVE' })
-        }
+        result = await executeResume(action)
+        break
+
+      case 'adjust_budget':
+        result = await executeAdjustBudget(action)
         break
 
       default:
-        result = { success: false, error: `Unknown action type: ${action.type}` }
+        result = { success: false, error: `Unsupported action type: ${action.type}` }
     }
 
-    const status = result?.success !== false ? 'executed' : 'failed'
+    const success = result?.code === 200 || result?.success === true
+    const status = success ? 'executed' : 'failed'
     await Action.updateOne({ _id: actionId }, { status, result, executedAt: new Date() })
 
-    log.info(`[Executor] Action ${actionId} (${action.type}): ${status}`)
-    return { success: status === 'executed' }
+    log.info(`[Executor] Action ${actionId} (${action.type} ${action.entityName || action.entityId}): ${status}${!success ? ' - ' + (result?.msg || result?.error || '') : ''}`)
+    return { success }
   } catch (err: any) {
     log.error(`[Executor] Action ${actionId} failed: ${err.message}`)
     await Action.updateOne({ _id: actionId }, { status: 'failed', result: { error: err.message } })
@@ -81,12 +55,51 @@ export async function executeAction(actionId: string): Promise<{ success: boolea
   }
 }
 
-async function resolveToken(platform: string, accountId: string): Promise<string | null> {
-  const account: any = await AdAccount.findOne({ platform, accountId }).lean()
-  if (account?.tokenId) {
-    const t: any = await Token.findById(account.tokenId).lean()
-    if (t?.accessToken) return t.accessToken
+/**
+ * 暂停 campaign/adset/ad
+ */
+async function executePause(action: any) {
+  const level = action.params?.level || 'campaign'
+  const entityId = action.entityId
+  const accountId = action.accountId || action.params?.accountId || ''
+
+  return toptouApi.updateStatus({
+    level,
+    list: [{ id: entityId, accountId, status: 'PAUSED' }],
+  })
+}
+
+/**
+ * 恢复 campaign/adset/ad
+ */
+async function executeResume(action: any) {
+  const level = action.params?.level || 'campaign'
+  const entityId = action.entityId
+  const accountId = action.accountId || action.params?.accountId || ''
+
+  return toptouApi.updateStatus({
+    level,
+    list: [{ id: entityId, accountId, status: 'ACTIVE' }],
+  })
+}
+
+/**
+ * 调整预算
+ */
+async function executeAdjustBudget(action: any) {
+  const level = action.params?.level || 'campaign'
+  const entityId = action.entityId
+  const accountId = action.accountId || action.params?.accountId || ''
+  const newBudget = action.params?.newBudget
+
+  if (!newBudget) {
+    return { success: false, error: 'newBudget not specified' }
   }
-  const t: any = await Token.findOne({ platform, status: 'active' }).lean()
-  return t?.accessToken || null
+
+  return toptouApi.updateNameOrBudget({
+    level,
+    id: entityId,
+    accountId,
+    daily_budget: newBudget,
+  })
 }
