@@ -42,7 +42,13 @@ export default function ChatPage() {
   }
   useEffect(refresh, [])
 
-  const triggerBrain = async () => { setBrainRunning(true); try { await post('/api/pipeline/run', {}) } catch{}; refresh(); setBrainRunning(false) }
+  const triggerBrain = async () => {
+    setBrainRunning(true)
+    try { await post('/api/pipeline/run', {}) } catch {}
+    refresh()
+    get('/api/pipeline/latest').then(setLatestSnap).catch(() => {})
+    setBrainRunning(false)
+  }
   const send = async () => {
     if (!input.trim() || loading) return
     const msg = input.trim(); setInput('')
@@ -63,7 +69,10 @@ export default function ChatPage() {
   }
   const typeLabel = (t: string) => ({ pause:'暂停', adjust_budget:'调预算', resume:'恢复' }[t] || t)
 
-  const latestSnap = history[0]
+  // 用 latest API 获取最新快照（比 history 更可靠）
+  const [latestSnap, setLatestSnap] = useState<any>(null)
+  useEffect(() => { get('/api/pipeline/latest').then(setLatestSnap).catch(() => {}) }, [])
+
   const classif = latestSnap?.classification || {}
 
   // 四个 Agent 卡片数据
@@ -73,12 +82,13 @@ export default function ChatPage() {
       status: status?.lastStatus === 'completed' ? 'online' : status?.lastStatus || 'idle',
       lastRun: status?.lastRun,
       logs: [
-        latestSnap ? `扫描了 ${latestSnap.totalCampaigns || '?'} 个广告系列` : null,
-        latestSnap ? `今日总花费 $${latestSnap.totalSpend || 0}，整体 ROAS ${latestSnap.overallRoas || 0}` : null,
+        latestSnap?.totalCampaigns ? `扫描了 ${latestSnap.totalCampaigns} 个广告系列` : (status?.lastRun ? '数据加载中...' : '未运行'),
+        latestSnap?.totalSpend ? `今日总花费 $${latestSnap.totalSpend}，整体 ROAS ${latestSnap.overallRoas || 0}` : null,
         classif.loss_severe ? `发现 ${classif.loss_severe} 个严重亏损` : null,
         classif.loss_mild ? `发现 ${classif.loss_mild} 个轻微亏损` : null,
         classif.high_potential ? `发现 ${classif.high_potential} 个高潜力` : null,
-        `${classif.observing || 0} 个在观察期，${classif.stable_normal || 0} 个表现稳定`,
+        (classif.observing || classif.stable_normal) ? `${classif.observing || 0} 个在观察期，${classif.stable_normal || 0} 个表现稳定` : null,
+        latestSnap?.summary ? `最近: ${latestSnap.summary.substring(0, 80)}` : null,
       ].filter(Boolean) as string[],
     },
     {
