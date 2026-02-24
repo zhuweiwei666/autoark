@@ -29,13 +29,20 @@ export async function monitor(): Promise<DecisionReadyData> {
   const raw = await collectData(dayBefore, today)
   log.info(`[Monitor] Collected ${raw.length} raw campaigns`)
 
-  // 按 campaignId 聚合（可能多天数据）
+  // 按 campaignId 聚合（取最新日期的数据）
   const latestBycamp = new Map<string, RawCampaign>()
   for (const r of raw) {
     const existing = latestBycamp.get(r.campaignId)
     if (!existing || r.date > existing.date) latestBycamp.set(r.campaignId, r)
   }
-  const campaigns = [...latestBycamp.values()]
+
+  // 过滤掉今天没有数据的 campaign（已删除/已暂停/已归档）
+  // 如果一个 campaign 最新数据不是今天，说明今天不在投放，不应进入决策
+  const staleCount = [...latestBycamp.values()].filter(c => c.date < today).length
+  const campaigns = [...latestBycamp.values()].filter(c => c.date >= today)
+  if (staleCount > 0) {
+    log.info(`[Monitor] Filtered ${staleCount} stale campaigns (last data before today, likely paused/deleted)`)
+  }
 
   // Step 2: 质量评估
   const qualities = new Map<string, QualityResult>()
