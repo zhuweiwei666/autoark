@@ -11,6 +11,7 @@ export const env = {
   LLM_API_KEY: process.env.LLM_API_KEY || '',
   LLM_MODEL: process.env.LLM_MODEL || 'claude-opus-4-20250514',
   LLM_BASE_URL: process.env.LLM_BASE_URL || 'https://api.openai.com/v1',
+  LLM_REFLECTION_ENABLED: process.env.LLM_REFLECTION_ENABLED !== 'false',
   FACEBOOK_APP_ID: process.env.FACEBOOK_APP_ID || '',
   FACEBOOK_APP_SECRET: process.env.FACEBOOK_APP_SECRET || '',
   FACEBOOK_REDIRECT_URI: process.env.FACEBOOK_REDIRECT_URI || '',

@@ -60,6 +60,7 @@ const skillSchema = new mongoose.Schema({
   // ========== 通用 ==========
   enabled: { type: Boolean, default: true },
   order: { type: Number, default: 100 },
+  proposedBy: { type: String, enum: ['human', 'librarian'], default: 'human' },
   stats: {
     triggered: { type: Number, default: 0 },
     correct: { type: Number, default: 0 },
@@ -123,6 +124,7 @@ export interface AgentSkillDoc {
   decision: DecisionSkillData
   enabled: boolean
   order: number
+  proposedBy: 'human' | 'librarian'
   stats: { triggered: number; correct: number; wrong: number; accuracy: number; lastTriggeredAt?: Date }
   learnedNotes: string[]
 }

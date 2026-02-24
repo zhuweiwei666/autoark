@@ -20,7 +20,7 @@ const knowledgeSchema = new mongoose.Schema({
   validations: { type: Number, default: 1 },
   source: {
     type: String,
-    enum: ['auditor', 'evolution', 'user_feedback', 'llm_synthesis', 'statistical'],
+    enum: ['auditor', 'evolution', 'user_feedback', 'llm_synthesis', 'statistical', 'reflection'],
     default: 'auditor',
   },
   relatedSkills: { type: [String], default: [] },

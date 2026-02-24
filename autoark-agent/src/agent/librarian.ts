@@ -8,7 +8,9 @@
  * 3. 知识库管理（衰减/清理/综合）
  * 4. 为其他 Agent 提供上下文
  */
+import axios from 'axios'
 import dayjs from 'dayjs'
+import { env } from '../config/env'
 import { log } from '../platform/logger'
 import { Skill } from './skill.model'
 import { Knowledge } from './librarian.model'
@@ -327,6 +329,7 @@ export async function dailySummary(): Promise<string> {
   const skillActions = await manageSkillLifecycle()
   await decayKnowledge()
   await learnUserPreferences()
+  const proposed = await proposeNewSkills()
 
   const knowledgeCount = await Knowledge.countDocuments({ archived: { $ne: true } })
 
@@ -337,6 +340,7 @@ export async function dailySummary(): Promise<string> {
     `Executor: ${totalExec} 执行, ${totalFailed} 失败`,
     `知识库: ${knowledgeCount} 条活跃知识`,
     skillActions.length > 0 ? `Skill 调整: ${skillActions.join('; ')}` : '',
+    proposed.length > 0 ? `Skill 提议: ${proposed.length} 个新 Skill 待审批` : '',
   ].filter(Boolean).join('\n')
 
   await memory.rememberShort('librarian', `daily_${dayjs().format('YYYYMMDD')}`, { summary, reports: reports.length })
@@ -377,4 +381,140 @@ export async function weeklyEvolution(): Promise<string> {
   log.info(`[Librarian] Weekly evolution:\n${summary}`)
 
   return summary
+}
+
+// ==================== 6. Knowledge → Skill 自动提议 ====================
+
+const SKILL_PROPOSAL_PROMPT = `你是广告投放 Skill 生成专家。根据以下从审查中积累的知识洞察，生成一个新的筛选或决策 Skill。
+
+## 知识洞察
+{insights}
+
+## 现有 Skill 示例（作为格式参考）
+{examples}
+
+## 要求
+1. 根据洞察内容判断应该生成 screener Skill 还是 decision Skill
+2. screener Skill 需要 screening.conditions 和 screening.verdict
+3. decision Skill 需要 decision.triggerLabels, decision.action, decision.auto
+4. conditions 中的 field 必须是以下之一: todaySpend, adjustedRoi, todayRoas, installs, cpi, roiDropVsYesterday, spendTrend, estimatedDailySpend, payRate, confidence, hasPendingAction, belowBenchmarkP25
+5. 输出严格 JSON 对象，不要其他内容
+
+输出格式:
+{
+  "name": "简短的 Skill 名称",
+  "agentId": "screener 或 decision",
+  "description": "Skill 描述",
+  "screening": { ... } 或 "decision": { ... },
+  "order": 100
+}`
+
+/**
+ * 从高置信度 Knowledge 中自动提议新 Skill
+ * 生成的 Skill 为 enabled: false，需人工审批后启用
+ */
+export async function proposeNewSkills(): Promise<string[]> {
+  if (!env.LLM_API_KEY) return []
+
+  const candidates = await Knowledge.find({
+    category: { $in: ['skill_insight', 'decision_lesson'] },
+    confidence: { $gte: 0.8 },
+    validations: { $gte: 5 },
+    archived: { $ne: true },
+  }).sort({ confidence: -1, validations: -1 }).limit(10).lean()
+
+  if (candidates.length === 0) return []
+
+  // 过滤掉已有对应 Skill 的知识
+  const existingSkills = await Skill.find({}).select('name').lean()
+  const existingNames = new Set(existingSkills.map((s: any) => s.name.toLowerCase()))
+
+  const novel = candidates.filter(k => {
+    const related = (k as any).relatedSkills || []
+    if (related.length > 0) {
+      return !related.some((s: string) => existingNames.has(s.toLowerCase()))
+    }
+    return true
+  })
+
+  if (novel.length === 0) return []
+
+  const insightsText = novel.map((k, i) =>
+    `${i + 1}. [置信度${((k as any).confidence * 100).toFixed(0)}%, 验证${(k as any).validations}次] ${k.content}`
+  ).join('\n')
+
+  const exampleSkills = [
+    {
+      name: '严重亏损识别', agentId: 'screener',
+      screening: {
+        conditions: [{ field: 'todaySpend', operator: '>', value: 50 }, { field: 'adjustedRoi', operator: '<', value: 0.3 }],
+        conditionLogic: 'AND', verdict: 'needs_decision', priority: 'critical',
+        reasonTemplate: 'ROAS {adjustedRoi} < 0.3，花费 ${todaySpend}，严重亏损',
+      },
+    },
+    {
+      name: '严重亏损止损', agentId: 'decision',
+      decision: {
+        triggerLabels: ['loss_severe'], conditions: [], conditionLogic: 'AND',
+        action: 'pause', auto: true, params: { budgetChangePct: 0 },
+        reasonTemplate: '严重亏损: ROAS {avgRoas3d}，立即暂停',
+      },
+    },
+  ]
+
+  const prompt = SKILL_PROPOSAL_PROMPT
+    .replace('{insights}', insightsText)
+    .replace('{examples}', JSON.stringify(exampleSkills, null, 2))
+
+  const proposed: string[] = []
+
+  try {
+    const res = await axios.post(
+      `${env.LLM_BASE_URL}/chat/completions`,
+      {
+        model: env.LLM_MODEL,
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.2,
+        max_tokens: 1024,
+      },
+      {
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.LLM_API_KEY}` },
+        timeout: 30000,
+      }
+    )
+
+    const content = res.data.choices?.[0]?.message?.content || ''
+    const jsonMatch = content.match(/\{[\s\S]*\}/)
+    if (!jsonMatch) return []
+
+    const skillDef = JSON.parse(jsonMatch[0])
+
+    if (!skillDef.name || !skillDef.agentId) return []
+    if (existingNames.has(skillDef.name.toLowerCase())) return []
+
+    await Skill.create({
+      ...skillDef,
+      enabled: false,
+      proposedBy: 'librarian',
+    })
+
+    await Knowledge.create({
+      category: 'skill_insight',
+      key: `skill_proposed:${skillDef.name}:${dayjs().format('YYYYMMDD')}`,
+      content: `Librarian 自动提议新 Skill "${skillDef.name}" (${skillDef.agentId})，待人工审批`,
+      data: { skillName: skillDef.name, agentId: skillDef.agentId, sourceInsights: novel.map(k => (k as any).key) },
+      source: 'evolution',
+      confidence: 0.7,
+      relatedSkills: [skillDef.name],
+      tags: ['skill_proposed', skillDef.agentId],
+      lastValidatedAt: new Date(),
+    })
+
+    proposed.push(skillDef.name)
+    log.info(`[Librarian] Proposed new Skill: "${skillDef.name}" (${skillDef.agentId}, enabled: false)`)
+  } catch (err: any) {
+    log.warn(`[Librarian] Skill proposal failed: ${err.message}`)
+  }
+
+  return proposed
 }

@@ -10,6 +10,7 @@
 import dayjs from 'dayjs'
 import { memory } from './memory.service'
 import { Action } from '../action/action.model'
+import { Knowledge } from './librarian.model'
 
 /**
  * 构建完整的动态上下文（注入到 LLM 决策 prompt 前）
@@ -85,12 +86,17 @@ function getDataQualityContext(): string {
 // ==================== 历史经验 ====================
 
 async function getLessonsContext(): Promise<string | null> {
-  const lessons = await memory.recallLessons(undefined, 8)
+  const lessons = await Knowledge.find({
+    category: 'decision_lesson',
+    archived: { $ne: true },
+    confidence: { $gte: 0.3 },
+  }).sort({ confidence: -1 }).limit(8).lean()
+
   if (lessons.length === 0) return null
 
   const parts = ['## 历史经验（Agent 自己学到的）']
   for (const l of lessons) {
-    const conf = Math.round(l.confidence * 100)
+    const conf = Math.round((l as any).confidence * 100)
     parts.push(`- [置信度${conf}%] ${l.content}`)
   }
   parts.push('')

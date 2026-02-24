@@ -1,42 +1,28 @@
 /**
  * 记忆层 - Agent 的大脑存储
- * 三层架构：工作记忆(Redis) + 短期记忆(MongoDB 7天) + 长期记忆(MongoDB 永久)
+ *
+ * 三层架构：
+ *   工作记忆(Redis) + 短期记忆(MongoDB 7天TTL) + 长期知识(Knowledge 表，统一知识层)
+ *
+ * 长期知识统一存储在 Knowledge 表（librarian.model.ts），不再使用独立的 LongTermMemory。
+ * 这样 Librarian 沉淀的知识和 Reflection 学到的经验共享同一个置信度体系。
  */
 import { getRedis } from '../config/redis'
 import { log } from '../platform/logger'
 import mongoose from 'mongoose'
+import { Knowledge } from './librarian.model'
 
 // ==================== 短期记忆模型 (7天自动清理) ====================
 
 const shortTermSchema = new mongoose.Schema({
-  category: { type: String, required: true, index: true }, // 'decision' | 'task' | 'user_pref' | 'observation'
+  category: { type: String, required: true, index: true },
   key: { type: String, required: true },
   content: mongoose.Schema.Types.Mixed,
-  expiresAt: { type: Date, index: { expires: 0 } }, // TTL 索引自动清理
+  expiresAt: { type: Date, index: { expires: 0 } },
 }, { timestamps: true })
 
 shortTermSchema.index({ category: 1, key: 1 })
 const ShortTermMemory = mongoose.model('AgentShortMemory', shortTermSchema)
-
-// ==================== 长期记忆模型 (永久) ====================
-
-const longTermSchema = new mongoose.Schema({
-  category: { type: String, required: true, index: true }, // 'lesson' | 'pattern' | 'feedback' | 'rule_adjustment'
-  key: { type: String, required: true },
-  content: { type: String, required: true },  // 自然语言描述
-  data: mongoose.Schema.Types.Mixed,          // 结构化数据
-  confidence: { type: Number, default: 0.5 }, // 置信度 0-1
-  validations: { type: Number, default: 1 },  // 被验证的次数
-  source: { type: String, enum: ['reflection', 'user_feedback', 'statistical', 'evolution'] },
-  relatedCampaigns: [String],
-  relatedPackages: [String],
-  tags: [String],
-}, { timestamps: true })
-
-longTermSchema.index({ category: 1, confidence: -1 })
-longTermSchema.index({ tags: 1 })
-longTermSchema.index({ key: 1 }, { unique: true })
-const LongTermMemory = mongoose.model('AgentLongMemory', longTermSchema)
 
 // ==================== 记忆服务 ====================
 
@@ -60,7 +46,6 @@ class MemoryService {
     } catch { return null }
   }
 
-  /** 获取 Agent 当前的注意力焦点 */
   async getFocus(): Promise<string[]> {
     return await this.getWorking<string[]>('focus') || []
   }
@@ -85,76 +70,100 @@ class MemoryService {
     return ShortTermMemory.find(query).sort({ createdAt: -1 }).limit(limit).lean()
   }
 
-  /** 获取未完成的任务 */
   async getPendingTasks(): Promise<any[]> {
     return this.recallShort('task')
   }
 
-  /** 记录一次观察 */
   async recordObservation(key: string, data: any): Promise<void> {
     await this.rememberShort('observation', key, data, 3)
   }
 
-  // ---------- 长期记忆 (MongoDB, 永久) ----------
+  // ---------- 长期知识 (统一 Knowledge 表) ----------
 
   async learnLesson(key: string, content: string, data: any, source: string, tags: string[] = []): Promise<void> {
-    const existing = await LongTermMemory.findOne({ key })
+    const knowledgeSource = source === 'reflection' ? 'reflection' : 'statistical'
+    const existing = await Knowledge.findOne({ key })
     if (existing) {
-      // 已有此经验，增加置信度
-      existing.validations += 1
-      existing.confidence = Math.min(1, existing.confidence + 0.1)
-      existing.content = content
-      existing.data = data
+      existing.set('validations', (existing.get('validations') || 1) + 1)
+      existing.set('confidence', Math.min(1, (existing.get('confidence') || 0.5) + 0.1))
+      existing.set('content', content)
+      existing.set('data', data)
+      existing.set('lastValidatedAt', new Date())
       await existing.save()
-      log.info(`[Memory] Lesson reinforced: ${key} (confidence: ${existing.confidence})`)
+      log.info(`[Memory] Lesson reinforced: ${key} (confidence: ${existing.get('confidence')})`)
     } else {
-      await LongTermMemory.create({
-        category: 'lesson', key, content, data,
-        confidence: 0.5, source, tags,
+      await Knowledge.create({
+        category: 'decision_lesson',
+        key,
+        content,
+        data,
+        confidence: 0.5,
+        source: knowledgeSource,
+        tags,
+        lastValidatedAt: new Date(),
       })
       log.info(`[Memory] New lesson: ${key}`)
     }
   }
 
   async recallLessons(tags?: string[], limit = 10): Promise<any[]> {
-    const query: any = { category: 'lesson' }
+    const query: any = {
+      category: 'decision_lesson',
+      archived: { $ne: true },
+    }
     if (tags?.length) query.tags = { $in: tags }
-    return LongTermMemory.find(query).sort({ confidence: -1 }).limit(limit).lean()
+    return Knowledge.find(query).sort({ confidence: -1 }).limit(limit).lean()
   }
 
   async recordPattern(key: string, content: string, data: any): Promise<void> {
-    await LongTermMemory.findOneAndUpdate(
+    await Knowledge.findOneAndUpdate(
       { key },
-      { category: 'pattern', content, data, source: 'statistical', $inc: { validations: 1 } },
+      {
+        category: 'campaign_pattern',
+        content,
+        data,
+        source: 'statistical',
+        lastValidatedAt: new Date(),
+        $inc: { validations: 1 },
+        $setOnInsert: { confidence: 0.5 },
+      },
       { upsert: true }
     )
   }
 
   async recordFeedback(key: string, content: string, data: any): Promise<void> {
-    await LongTermMemory.findOneAndUpdate(
+    await Knowledge.findOneAndUpdate(
       { key },
-      { category: 'feedback', content, data, source: 'user_feedback', confidence: 0.9 },
+      {
+        category: 'user_preference',
+        content,
+        data,
+        source: 'user_feedback',
+        confidence: 0.9,
+        lastValidatedAt: new Date(),
+        $inc: { validations: 1 },
+      },
       { upsert: true }
     )
   }
 
   // ---------- 构建上下文 ----------
 
-  /** 为 LLM 决策构建记忆上下文 */
   async buildContext(campaignIds: string[] = [], tags: string[] = []): Promise<string> {
     const parts: string[] = []
 
-    // 相关经验
     const lessons = await this.recallLessons(tags, 5)
     if (lessons.length > 0) {
       parts.push('## 历史经验')
       for (const l of lessons) {
-        parts.push(`- [置信度${l.confidence}] ${l.content}`)
+        parts.push(`- [置信度${(l as any).confidence}] ${l.content}`)
       }
     }
 
-    // 用户反馈
-    const feedback = await LongTermMemory.find({ category: 'feedback' }).sort({ updatedAt: -1 }).limit(3).lean()
+    const feedback = await Knowledge.find({
+      category: 'user_preference',
+      archived: { $ne: true },
+    }).sort({ updatedAt: -1 }).limit(3).lean()
     if (feedback.length > 0) {
       parts.push('\n## 用户反馈')
       for (const f of feedback) {
@@ -162,7 +171,6 @@ class MemoryService {
       }
     }
 
-    // 最近决策
     const recentDecisions = await this.recallShort('decision', undefined, 5)
     if (recentDecisions.length > 0) {
       parts.push('\n## 最近决策')

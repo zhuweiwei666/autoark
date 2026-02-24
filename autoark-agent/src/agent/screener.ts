@@ -6,6 +6,7 @@
  */
 import { log } from '../platform/logger'
 import { Skill, AgentSkillDoc, matchesCampaign, evaluateConditions, fillReasonTemplate } from './skill.model'
+import { Knowledge } from './librarian.model'
 import { TimeSeries } from './monitor/timeseries.model'
 import { Action } from '../action/action.model'
 import { CampaignMetrics } from './analyzer'
@@ -116,6 +117,9 @@ export async function screenCampaigns(
     }
   }
 
+  // Knowledge 补充筛选：用历史审查洞察兜底，减少漏网之鱼
+  const escalated = await applyKnowledgeEscalation(results, campaigns)
+
   const summary: ScreeningSummary = {
     total: campaigns.length,
     needsDecision: results.filter(r => r.verdict === 'needs_decision').length,
@@ -126,6 +130,9 @@ export async function screenCampaigns(
   }
 
   log.info(`[Screener] ${summary.total} campaigns → ${summary.needsDecision} needs_decision, ${summary.watch} watch, ${summary.skip} skip`)
+  if (escalated > 0) {
+    log.info(`[Screener] Knowledge escalation: ${escalated} campaigns upgraded from watch/skip to needs_decision`)
+  }
   if (Object.keys(skillHits).length > 0) {
     log.info(`[Screener] Skill hits: ${Object.entries(skillHits).map(([k, v]) => `${k}(${v})`).join(', ')}`)
   }
@@ -260,4 +267,52 @@ async function runHistoryChecks(
   }
 
   return results
+}
+
+// ==================== Knowledge 补充筛选 ====================
+
+/**
+ * 用 Librarian 沉淀的历史审查洞察，对 watch/skip 的 campaign 做兜底检查。
+ * 如果 Knowledge 中记录了类似场景的 screener_miss，提升 verdict 为 needs_decision。
+ */
+async function applyKnowledgeEscalation(
+  results: ScreeningResult[],
+  campaigns: CampaignMetrics[],
+): Promise<number> {
+  const missInsights = await Knowledge.find({
+    category: 'skill_insight',
+    tags: 'screener_miss',
+    archived: { $ne: true },
+    confidence: { $gte: 0.5 },
+  }).sort({ confidence: -1 }).limit(20).lean()
+
+  if (missInsights.length === 0) return 0
+
+  const campaignMap = new Map(campaigns.map(c => [c.campaignId, c]))
+  let escalated = 0
+
+  for (const r of results) {
+    if (r.verdict === 'needs_decision') continue
+
+    const campaign = campaignMap.get(r.campaignId)
+    if (!campaign || campaign.todaySpend < 20) continue
+
+    for (const insight of missInsights as any[]) {
+      const matchesPkg = insight.relatedPackages?.length > 0 && campaign.pkgName
+        ? insight.relatedPackages.some((p: string) => campaign.pkgName!.toLowerCase().includes(p.toLowerCase()))
+        : false
+      const matchesCampaignId = insight.data?.campaignId === r.campaignId
+
+      if (matchesPkg || matchesCampaignId) {
+        r.verdict = 'needs_decision'
+        r.reasons.push(`基于历史审查经验提升优先级 (${insight.content?.substring(0, 60)})`)
+        r.priority = 'normal'
+        r.matchedSkill = `knowledge:${insight.key}`
+        escalated++
+        break
+      }
+    }
+  }
+
+  return escalated
 }

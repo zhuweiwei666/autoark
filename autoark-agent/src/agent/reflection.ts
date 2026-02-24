@@ -1,15 +1,16 @@
 /**
  * 反思层 — Agent 的自我评估
  *
- * 决策执行后 2-24 小时回顾效果，积累经验。
- * 反思结果写回 Skill stats 和 learnedNotes，写入长期记忆。
+ * 双引擎架构：
+ *   主引擎: LLM 评估（更灵活，能理解上下文和细微差别）
+ *   降级引擎: 规则评估（LLM 不可用时 fallback）
  *
- * 修复的关键问题：
- * 1. pause 后 campaign 没有今日数据（已暂停），不能要求 currentCampaigns.get() 有值
- * 2. 决策时指标 (roasAtDecision/spendAtDecision) 可能为 0，需要从 action.reason 推断
- * 3. 减少 unclear 判定，尽量给出 correct/wrong
+ * 决策执行后 2-24 小时回顾效果，积累经验。
+ * 反思结果写回 Skill stats 和 learnedNotes，写入 Knowledge 知识库。
  */
+import axios from 'axios'
 import dayjs from 'dayjs'
+import { env } from '../config/env'
 import { log } from '../platform/logger'
 import { Action } from '../action/action.model'
 import { Skill } from './skill.model'
@@ -28,13 +29,113 @@ export interface ReflectionResult {
 }
 
 /**
- * 反思一个已执行的决策
+ * 反思一个已执行的决策（调度层：LLM 优先，规则 fallback）
  */
 export async function reflectOnDecision(
   action: any,
   currentCampaigns: Map<string, CampaignMetrics>,
   allCampaigns: CampaignMetrics[],
 ): Promise<ReflectionResult | null> {
+  const campaignId = action.entityId
+  if (!campaignId) return null
+
+  if (env.LLM_API_KEY && env.LLM_REFLECTION_ENABLED) {
+    try {
+      const llmResult = await reflectWithLLM(action, currentCampaigns, allCampaigns)
+      if (llmResult && llmResult.assessment !== 'unclear') return llmResult
+      // LLM 返回 unclear 时也降级到规则引擎尝试
+    } catch (err: any) {
+      log.warn(`[Reflection] LLM reflection failed, falling back to rules: ${err.message}`)
+    }
+  }
+
+  return reflectOnDecisionRuleBased(action, currentCampaigns, allCampaigns)
+}
+
+// ==================== LLM 反思引擎 ====================
+
+async function reflectWithLLM(
+  action: any,
+  currentCampaigns: Map<string, CampaignMetrics>,
+  allCampaigns: CampaignMetrics[],
+): Promise<ReflectionResult | null> {
+  const campaignId = action.entityId
+  const current = currentCampaigns.get(campaignId)
+  const beforeRoas = action.params?.roasAtDecision || 0
+  const beforeSpend = action.params?.spendAtDecision || 0
+  const siblings = findSiblings(action, allCampaigns)
+  const hoursSince = Math.round((Date.now() - new Date(action.executedAt).getTime()) / 3600000)
+
+  const siblingsDesc = siblings.length > 0
+    ? siblings.slice(0, 5).map(s =>
+        `  - ${s.campaignName}: 花费 $${s.todaySpend.toFixed(0)}, ROAS ${s.todayRoas.toFixed(2)}`
+      ).join('\n')
+    : '  无可比较的同类 campaign'
+
+  const prompt = `你是广告投放决策复盘专家。以下是一个已执行的操作，请评估是否正确。
+
+## 原始决策
+- 操作: ${action.type} | Campaign: ${action.entityName || campaignId}
+- 原因: ${action.reason || '未记录'}
+- Skill: ${action.params?.skillName || '无'}
+- 决策时指标: 花费 $${beforeSpend.toFixed(0)}, ROAS ${beforeRoas.toFixed(2)}
+
+## 当前数据（决策后 ${hoursSince}h）
+- 当前: 花费 $${current?.todaySpend?.toFixed(0) || '无数据'}, ROAS ${current?.todayRoas?.toFixed(2) || '无数据(已暂停)'}
+${action.type === 'pause' ? '- 注意: pause 后 campaign 没有新数据是正常的，需要用决策时指标+同类对比来判断' : ''}
+
+## 同类 Campaign 参考（同包名/同优化师）
+${siblingsDesc}
+
+## 规则
+1. 输出严格 JSON，不要其他内容
+2. assessment 只能是 correct / wrong / unclear 之一
+3. lesson 要具体可复用，不要泛泛而谈
+4. confidence 范围 0.0-1.0，代表你对判断的确信程度
+
+输出 JSON:
+{ "assessment": "correct|wrong|unclear", "reason": "具体原因", "lesson": "可复用的经验教训", "confidence": 0.0-1.0 }`
+
+  const res = await axios.post(
+    `${env.LLM_BASE_URL}/chat/completions`,
+    {
+      model: env.LLM_MODEL,
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.1,
+      max_tokens: 512,
+    },
+    {
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.LLM_API_KEY}` },
+      timeout: 30000,
+    }
+  )
+
+  const content = res.data.choices?.[0]?.message?.content || ''
+  const jsonMatch = content.match(/\{[\s\S]*\}/)
+  if (!jsonMatch) return null
+
+  const parsed = JSON.parse(jsonMatch[0])
+  if (!['correct', 'wrong', 'unclear'].includes(parsed.assessment)) return null
+
+  return {
+    decisionId: action._id.toString(),
+    campaignId,
+    type: action.type,
+    assessment: parsed.assessment,
+    reason: parsed.reason || '',
+    lesson: parsed.lesson || '',
+    metricsBefore: { spend: beforeSpend, roas: beforeRoas },
+    metricsAfter: { spend: current?.todaySpend || 0, roas: current?.todayRoas || 0 },
+  }
+}
+
+// ==================== 规则反思引擎（fallback）====================
+
+function reflectOnDecisionRuleBased(
+  action: any,
+  currentCampaigns: Map<string, CampaignMetrics>,
+  allCampaigns: CampaignMetrics[],
+): ReflectionResult | null {
   const campaignId = action.entityId
   if (!campaignId) return null
 
@@ -56,15 +157,11 @@ export async function reflectOnDecision(
   const entityName = action.entityName || campaignId
 
   if (action.type === 'pause') {
-    // pause 后 campaign 通常没有今日数据（已暂停），这是正常的
-    // 评估策略：用决策时的指标判断是否该关
-
     if (beforeRoas > 0 && beforeRoas < 0.5 && beforeSpend > 20) {
       result.assessment = 'correct'
       result.reason = `关停时 ROAS ${beforeRoas.toFixed(2)}，花费 $${beforeSpend.toFixed(0)}，止损正确`
       result.lesson = `ROAS < 0.5 且花费 > $20 时关停是正确的 (${entityName})`
     } else if (beforeRoas >= 0.5 && beforeRoas < 1.0 && beforeSpend > 30) {
-      // 处于临界区域，看同包名/同优化师的其他 campaign 是否也在下降
       const siblings = findSiblings(action, allCampaigns)
       if (siblings.length > 0) {
         const avgSiblingRoas = siblings.reduce((s, c) => s + c.todayRoas, 0) / siblings.length
@@ -91,7 +188,6 @@ export async function reflectOnDecision(
       result.assessment = 'unclear'
       result.reason = `花费仅 $${beforeSpend.toFixed(0)}，数据太少无法判断`
     } else if (beforeRoas === 0 && beforeSpend === 0) {
-      // 决策时指标缺失，尝试从 reason 文本推断
       const reasonLower = (action.reason || '').toLowerCase()
       if (reasonLower.includes('严重亏损') || reasonLower.includes('零转化')) {
         result.assessment = 'correct'
