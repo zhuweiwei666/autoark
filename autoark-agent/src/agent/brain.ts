@@ -185,26 +185,31 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
 
     let skippedDuplicate = 0
     for (const action of decisions.actions) {
-      const key = `${action.campaignId}:${action.type === 'increase_budget' ? 'adjust_budget' : action.type}`
-      if (pendingKeys.has(key)) { skippedDuplicate++; continue }
-      pendingKeys.add(key)
+      try {
+        if (!action?.campaignId || !action?.type) continue
+        const key = `${action.campaignId}:${action.type === 'increase_budget' ? 'adjust_budget' : action.type}`
+        if (pendingKeys.has(key)) { skippedDuplicate++; continue }
+        pendingKeys.add(key)
 
-      const c = screenedCampaigns.find(x => x.campaignId === action.campaignId)
-      await Action.create({
-        type: action.type === 'increase_budget' ? 'adjust_budget' : action.type,
-        platform: 'facebook', accountId: '',
-        entityId: action.campaignId, entityName: action.campaignName,
-        params: {
-          source: 'brain', priority: action.auto ? 'high' : 'normal',
-          currentBudget: action.currentBudget, newBudget: action.newBudget,
-          level: 'campaign',
-          roasAtDecision: c?.todayRoas, spendAtDecision: c?.todaySpend,
-          skillName: (action as any).skillName,
-        },
-        reason: action.auto ? `[建议立即] ${action.reason}` : action.reason,
-        status: 'pending',
-      })
-      result.actions.push({ ...action, executed: false })
+        const c = screenedCampaigns.find(x => x.campaignId === action.campaignId)
+        await Action.create({
+          type: action.type === 'increase_budget' ? 'adjust_budget' : action.type,
+          platform: 'facebook', accountId: action.accountId || '',
+          entityId: action.campaignId, entityName: action.campaignName || '',
+          params: {
+            source: 'brain', priority: action.auto ? 'high' : 'normal',
+            currentBudget: action.currentBudget, newBudget: action.newBudget,
+            level: 'campaign',
+            roasAtDecision: c?.todayRoas, spendAtDecision: c?.todaySpend,
+            skillName: (action as any).skillName,
+          },
+          reason: action.auto ? `[建议立即] ${action.reason || ''}` : (action.reason || ''),
+          status: 'pending',
+        })
+        result.actions.push({ ...action, executed: false })
+      } catch (actionErr: any) {
+        log.warn(`[Brain] Failed to create action for ${action?.campaignId}: ${actionErr.message}`)
+      }
     }
 
     if (skippedDuplicate > 0) log.info(`[Brain] Skipped ${skippedDuplicate} duplicate pending`)
