@@ -1,8 +1,13 @@
 /**
  * TopTou 工具 - 通过 TopTou 平台查询和操作 Facebook 广告
+ * 批量激活工具使用 Facebook Marketing API 直接执行（能查到所有状态的广告）
  */
+import axios from 'axios'
 import { ToolDef, S } from '../tools'
 import * as toptouApi from '../../platform/toptou/api'
+import { log } from '../../platform/logger'
+
+const FB_GRAPH = 'https://graph.facebook.com/v21.0'
 
 const tt_getCampaigns: ToolDef = {
   name: 'toptou_get_campaigns',
@@ -133,8 +138,7 @@ const tt_updateBudget: ToolDef = {
 
 const tt_batchActivate: ToolDef = {
   name: 'toptou_batch_activate',
-  description: `按名称关键词批量激活（打开）campaign。
-用于快速打开某个优化师、某个产品、某天发布的全部广告。
+  description: `按名称关键词批量激活（打开）campaign。使用 Facebook Marketing API 直接执行，能查到所有状态的广告（包括已暂停/已关闭的）。
 campaign 命名规范：{优化师}_fb_{产品}_{地区}_{其他}_{日期}
 例如：wwz_fb_funce_ios_0224 表示优化师 wwz、产品 funce、2月24日。
 可传多个关键词用逗号分隔，将取交集匹配。激活操作直接执行无需审批。`,
@@ -143,57 +147,86 @@ campaign 命名规范：{优化师}_fb_{产品}_{地区}_{其他}_{日期}
     dryRun: S.bool('仅预览匹配结果不执行（默认 false）'),
   }, ['keywords']),
   handler: async (args) => {
+    const fbToken = process.env.FB_ACCESS_TOKEN
+    if (!fbToken) return { error: 'FB_ACCESS_TOKEN 未配置' }
+
     const keywords = (args.keywords as string).split(',').map((k: string) => k.trim().toLowerCase()).filter(Boolean)
     if (keywords.length === 0) return { error: '请提供至少一个匹配关键词' }
 
+    // Step 1: 获取所有广告账户
+    const accountsRes = await axios.get(`${FB_GRAPH}/me/adaccounts`, {
+      params: { fields: 'id,account_id,name', limit: 200, access_token: fbToken },
+    })
+    const accounts = accountsRes.data?.data || []
+
+    // Step 2: 遍历账户查询 campaign（含所有状态）
     const allCampaigns: any[] = []
-    for (let page = 1; page <= 10; page++) {
-      const res = await toptouApi.getCampaignList({ pageSize: 50, pageNum: page })
-      if (res.code !== 200 || !res.data?.length) break
-      allCampaigns.push(...res.data)
-      if (res.data.length < 50) break
+    for (const acc of accounts) {
+      try {
+        const campRes = await axios.get(`${FB_GRAPH}/${acc.id}/campaigns`, {
+          params: {
+            fields: 'id,name,status,daily_budget',
+            limit: 500,
+            access_token: fbToken,
+          },
+        })
+        const camps = (campRes.data?.data || []).map((c: any) => ({ ...c, accountId: acc.account_id, accountName: acc.name }))
+        allCampaigns.push(...camps)
+      } catch { /* skip inaccessible accounts */ }
     }
 
+    // Step 3: 按关键词匹配
     const matched = allCampaigns.filter((c: any) => {
       const name = (c.name || '').toLowerCase()
       return keywords.every((kw: string) => name.includes(kw))
     })
 
     if (matched.length === 0) {
-      return { matched: 0, message: `未找到包含 [${keywords.join(', ')}] 的 campaign（共扫描 ${allCampaigns.length} 个）` }
+      return { matched: 0, message: `在 ${accounts.length} 个账户的 ${allCampaigns.length} 个 campaign 中，未找到同时包含 [${keywords.join(', ')}] 的广告` }
     }
 
     if (args.dryRun) {
       return {
         dryRun: true,
         matched: matched.length,
-        total: allCampaigns.length,
-        campaigns: matched.map((c: any) => ({ id: c.id, name: c.name, accountId: c.accountId })),
+        totalAccounts: accounts.length,
+        totalCampaigns: allCampaigns.length,
+        campaigns: matched.map((c: any) => ({ id: c.id, name: c.name, status: c.status, account: c.accountName })),
       }
     }
 
+    // Step 4: 通过 Facebook API 激活
     const activated: any[] = []
     const failed: any[] = []
+    const skipped: any[] = []
 
     for (const c of matched) {
+      if (c.status === 'ACTIVE') {
+        skipped.push({ id: c.id, name: c.name, reason: '已经是 ACTIVE 状态' })
+        continue
+      }
       try {
-        await toptouApi.updateStatus({
-          level: 'campaign',
-          list: [{ id: c.id, accountId: c.accountId, status: 'ACTIVE' }],
+        await axios.post(`${FB_GRAPH}/${c.id}`, null, {
+          params: { status: 'ACTIVE', access_token: fbToken },
         })
-        activated.push({ id: c.id, name: c.name })
+        activated.push({ id: c.id, name: c.name, account: c.accountName })
+        log.info(`[BatchActivate] Activated: ${c.name} (${c.id})`)
       } catch (e: any) {
-        failed.push({ id: c.id, name: c.name, error: e.message })
+        const errMsg = e.response?.data?.error?.message || e.message
+        failed.push({ id: c.id, name: c.name, error: errMsg })
+        log.warn(`[BatchActivate] Failed: ${c.name} - ${errMsg}`)
       }
     }
 
     return {
       matched: matched.length,
       activated: activated.length,
+      skipped: skipped.length,
       failed: failed.length,
       activatedCampaigns: activated.map((c: any) => c.name),
+      skippedCampaigns: skipped,
       failedCampaigns: failed,
-      message: `已激活 ${activated.length}/${matched.length} 个 campaign${failed.length > 0 ? `，${failed.length} 个失败` : ''}`,
+      message: `匹配 ${matched.length} 个 campaign，激活 ${activated.length} 个${skipped.length > 0 ? `，跳过 ${skipped.length} 个（已是活跃状态）` : ''}${failed.length > 0 ? `，失败 ${failed.length} 个` : ''}`,
     }
   },
 }
