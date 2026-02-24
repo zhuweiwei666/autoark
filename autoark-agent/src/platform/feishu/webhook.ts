@@ -1,13 +1,20 @@
 /**
- * 飞书 Webhook 回调 — 处理卡片交互（审批/拒绝）
+ * 飞书 Webhook 回调
+ *
+ * 两个端点：
+ * POST /interaction — 卡片交互（审批/拒绝按钮）
+ * POST /event       — 事件订阅（接收用户消息，驱动 Agent 对话）
  */
 import { Router, Request, Response } from 'express'
 import { log } from '../logger'
 import { Action } from '../../action/action.model'
-import { updateApprovalStatus } from './feishu.service'
+import { updateApprovalStatus, replyMessage, getBotId } from './feishu.service'
 import { executeWithRetry } from '../../agent/brain'
+import { chat } from '../../agent/agent'
 
 const router = Router()
+
+const processedEvents = new Set<string>()
 
 router.post('/interaction', async (req: Request, res: Response) => {
   try {
@@ -76,6 +83,78 @@ router.post('/interaction', async (req: Request, res: Response) => {
   } catch (e: any) {
     log.error(`[FeishuWebhook] Error: ${e.message}`)
     res.status(500).json({ error: e.message })
+  }
+})
+
+// ==================== 事件订阅（接收消息）====================
+
+router.post('/event', async (req: Request, res: Response) => {
+  try {
+    // 飞书 URL 验证（配置事件订阅时触发）
+    if (req.body.type === 'url_verification') {
+      return res.json({ challenge: req.body.challenge })
+    }
+
+    // 飞书 v2 事件格式
+    const { header, event } = req.body
+    if (!header || !event) {
+      return res.json({ code: 0 })
+    }
+
+    // 立即响应飞书（避免 3 秒超时重发）
+    res.json({ code: 0 })
+
+    // 去重：飞书可能重发事件
+    const eventId = header.event_id
+    if (!eventId || processedEvents.has(eventId)) return
+    processedEvents.add(eventId)
+    setTimeout(() => processedEvents.delete(eventId), 300000)
+
+    // 只处理文本消息
+    if (header.event_type !== 'im.message.receive_v1') return
+    const msgType = event.message?.message_type
+    if (msgType !== 'text') {
+      log.info(`[FeishuEvent] Ignoring non-text message: ${msgType}`)
+      return
+    }
+
+    // 过滤机器人自己的消息
+    const senderId = event.sender?.sender_id?.open_id
+    const botId = await getBotId()
+    if (botId && senderId === botId) return
+
+    // 提取消息文本
+    const messageId = event.message?.message_id
+    let text = ''
+    try {
+      const content = JSON.parse(event.message?.content || '{}')
+      text = (content.text || '').trim()
+    } catch {
+      return
+    }
+
+    // 去掉 @机器人 的提及标记
+    text = text.replace(/@_user_\d+/g, '').trim()
+    if (!text) return
+
+    const senderName = event.sender?.sender_id?.open_id || 'feishu_user'
+    log.info(`[FeishuEvent] Message from ${senderName}: ${text.substring(0, 100)}`)
+
+    // 调用 Agent 对话
+    try {
+      const feishuUserId = `feishu:${senderId}`
+      const result = await chat(feishuUserId, '', text)
+      const response = result.agentResponse || '处理完成，但没有生成回复。'
+
+      await replyMessage(messageId, response)
+      log.info(`[FeishuEvent] Replied (${result.durationMs}ms): ${response.substring(0, 80)}...`)
+    } catch (agentErr: any) {
+      log.error(`[FeishuEvent] Agent chat failed: ${agentErr.message}`)
+      await replyMessage(messageId, `处理出错: ${agentErr.message}`)
+    }
+  } catch (e: any) {
+    log.error(`[FeishuEvent] Error: ${e.message}`)
+    if (!res.headersSent) res.json({ code: 0 })
   }
 })
 

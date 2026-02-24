@@ -131,6 +131,73 @@ const tt_updateBudget: ToolDef = {
   },
 }
 
+const tt_batchActivate: ToolDef = {
+  name: 'toptou_batch_activate',
+  description: `按名称关键词批量激活（打开）campaign。
+用于快速打开某个优化师、某个产品、某天发布的全部广告。
+campaign 命名规范：{优化师}_fb_{产品}_{地区}_{其他}_{日期}
+例如：wwz_fb_funce_ios_0224 表示优化师 wwz、产品 funce、2月24日。
+可传多个关键词用逗号分隔，将取交集匹配。激活操作直接执行无需审批。`,
+  parameters: S.obj('参数', {
+    keywords: S.str('逗号分隔的匹配关键词，如 "wwz,funce,0224"。所有关键词必须同时命中才匹配。'),
+    dryRun: S.bool('仅预览匹配结果不执行（默认 false）'),
+  }, ['keywords']),
+  handler: async (args) => {
+    const keywords = (args.keywords as string).split(',').map((k: string) => k.trim().toLowerCase()).filter(Boolean)
+    if (keywords.length === 0) return { error: '请提供至少一个匹配关键词' }
+
+    const allCampaigns: any[] = []
+    for (let page = 1; page <= 10; page++) {
+      const res = await toptouApi.getCampaignList({ pageSize: 50, pageNum: page })
+      if (res.code !== 200 || !res.data?.length) break
+      allCampaigns.push(...res.data)
+      if (res.data.length < 50) break
+    }
+
+    const matched = allCampaigns.filter((c: any) => {
+      const name = (c.name || '').toLowerCase()
+      return keywords.every((kw: string) => name.includes(kw))
+    })
+
+    if (matched.length === 0) {
+      return { matched: 0, message: `未找到包含 [${keywords.join(', ')}] 的 campaign（共扫描 ${allCampaigns.length} 个）` }
+    }
+
+    if (args.dryRun) {
+      return {
+        dryRun: true,
+        matched: matched.length,
+        total: allCampaigns.length,
+        campaigns: matched.map((c: any) => ({ id: c.id, name: c.name, accountId: c.accountId })),
+      }
+    }
+
+    const activated: any[] = []
+    const failed: any[] = []
+
+    for (const c of matched) {
+      try {
+        await toptouApi.updateStatus({
+          level: 'campaign',
+          list: [{ id: c.id, accountId: c.accountId, status: 'ACTIVE' }],
+        })
+        activated.push({ id: c.id, name: c.name })
+      } catch (e: any) {
+        failed.push({ id: c.id, name: c.name, error: e.message })
+      }
+    }
+
+    return {
+      matched: matched.length,
+      activated: activated.length,
+      failed: failed.length,
+      activatedCampaigns: activated.map((c: any) => c.name),
+      failedCampaigns: failed,
+      message: `已激活 ${activated.length}/${matched.length} 个 campaign${failed.length > 0 ? `，${failed.length} 个失败` : ''}`,
+    }
+  },
+}
+
 export const toptouTools: ToolDef[] = [
   tt_getBaseInfo,
   tt_getCampaigns,
@@ -139,4 +206,5 @@ export const toptouTools: ToolDef[] = [
   tt_getAdDetails,
   tt_updateStatus,
   tt_updateBudget,
+  tt_batchActivate,
 ]

@@ -34,7 +34,7 @@ export function routeUserMessage(message: string): AgentRole {
 
   // 执行类
   if (/暂停|关停|关掉|停掉|pause|stop/.test(lower)) return 'executor'
-  if (/恢复|开启|resume|activate/.test(lower)) return 'executor'
+  if (/恢复|开启|打开|激活|启动|resume|activate/.test(lower)) return 'executor'
   if (/加预算|提预算|increase.*budget/.test(lower)) return 'executor'
 
   // 审计类

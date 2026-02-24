@@ -208,3 +208,61 @@ export async function updateApprovalStatus(
 
   await updateCard(messageId, card, config)
 }
+
+// ==================== 对话消息 ====================
+
+/**
+ * 回复某条飞书消息（作为线程回复）
+ */
+export async function replyMessage(messageId: string, text: string): Promise<string | null> {
+  const config = await loadFeishuConfig()
+  if (!config) return null
+
+  try {
+    const token = await getTenantAccessToken(config.appId, config.appSecret)
+    const res = await axios.post(
+      `https://open.feishu.cn/open-apis/im/v1/messages/${messageId}/reply`,
+      {
+        msg_type: 'text',
+        content: JSON.stringify({ text }),
+      },
+      { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } }
+    )
+
+    if (res.data.code === 0) {
+      return res.data.data?.message_id || null
+    }
+    log.error(`[Feishu] Reply failed: ${res.data.msg}`)
+    return null
+  } catch (e: any) {
+    log.error(`[Feishu] Reply error: ${e.response?.data?.msg || e.message}`)
+    return null
+  }
+}
+
+/**
+ * 获取飞书应用的 bot_id（用于过滤自己发的消息）
+ */
+let cachedBotId: string | null = null
+
+export async function getBotId(): Promise<string | null> {
+  if (cachedBotId) return cachedBotId
+  const config = await loadFeishuConfig()
+  if (!config) return null
+
+  try {
+    const token = await getTenantAccessToken(config.appId, config.appSecret)
+    const res = await axios.get('https://open.feishu.cn/open-apis/bot/v3/info', {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    if (res.data.code === 0) {
+      cachedBotId = res.data.bot?.open_id || null
+      return cachedBotId
+    }
+  } catch (e: any) {
+    log.warn(`[Feishu] Get bot info failed: ${e.message}`)
+  }
+  return null
+}
+
+export { loadFeishuConfig, type FeishuConfig }
