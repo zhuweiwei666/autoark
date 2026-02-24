@@ -8,6 +8,7 @@
 import { Router, Request, Response } from 'express'
 import { log } from '../logger'
 import { Action } from '../../action/action.model'
+import { User } from '../../auth/user.model'
 import { updateApprovalStatus, replyMessage, getBotId } from './feishu.service'
 import { executeWithRetry } from '../../agent/brain'
 import { chat } from '../../agent/agent'
@@ -15,6 +16,16 @@ import { chat } from '../../agent/agent'
 const router = Router()
 
 const processedEvents = new Set<string>()
+
+async function getOrCreateFeishuUser(openId: string): Promise<string> {
+  const username = `feishu_${openId.slice(-8)}`
+  let user = await User.findOne({ username })
+  if (!user) {
+    user = await User.create({ username, password: `feishu_${Date.now()}`, role: 'user' })
+    log.info(`[FeishuEvent] Created user: ${username} (${user._id})`)
+  }
+  return user._id.toString()
+}
 
 router.post('/interaction', async (req: Request, res: Response) => {
   try {
@@ -142,8 +153,8 @@ router.post('/event', async (req: Request, res: Response) => {
 
     // 调用 Agent 对话
     try {
-      const feishuUserId = `feishu:${senderId}`
-      const result = await chat(feishuUserId, '', text)
+      const userId = await getOrCreateFeishuUser(senderId)
+      const result = await chat(userId, '', text)
       const response = result.agentResponse || '处理完成，但没有生成回复。'
 
       await replyMessage(messageId, response)
