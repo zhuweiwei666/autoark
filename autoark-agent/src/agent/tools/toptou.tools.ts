@@ -153,49 +153,21 @@ campaign 命名规范：{优化师}_fb_{产品}_{地区}_{其他}_{日期}
     const keywords = (args.keywords as string).split(',').map((k: string) => k.trim().toLowerCase()).filter(Boolean)
     if (keywords.length === 0) return { error: '请提供至少一个匹配关键词' }
 
-    // Step 1: 获取所有广告账户
-    const accountsRes = await axios.get(`${FB_GRAPH}/me/adaccounts`, {
-      params: { fields: 'id,account_id,name', limit: 200, access_token: fbToken },
-    })
-    const accounts = accountsRes.data?.data || []
-
-    // Step 2: 遍历账户查询 campaign（含所有状态）
-    const allCampaigns: any[] = []
-    for (const acc of accounts) {
-      try {
-        const campRes = await axios.get(`${FB_GRAPH}/${acc.id}/campaigns`, {
-          params: {
-            fields: 'id,name,status,daily_budget',
-            limit: 500,
-            access_token: fbToken,
-          },
-        })
-        const camps = (campRes.data?.data || []).map((c: any) => ({ ...c, accountId: acc.account_id, accountName: acc.name }))
-        allCampaigns.push(...camps)
-      } catch { /* skip inaccessible accounts */ }
-    }
-
-    // Step 3: 按关键词匹配
-    const matched = allCampaigns.filter((c: any) => {
-      const name = (c.name || '').toLowerCase()
-      return keywords.every((kw: string) => name.includes(kw))
-    })
+    const { campaigns: matched, accounts } = await fbSearchCampaigns(fbToken, keywords)
 
     if (matched.length === 0) {
-      return { matched: 0, message: `在 ${accounts.length} 个账户的 ${allCampaigns.length} 个 campaign 中，未找到同时包含 [${keywords.join(', ')}] 的广告` }
+      return { matched: 0, message: `在 ${accounts} 个账户中未找到同时包含 [${keywords.join(', ')}] 的广告` }
     }
 
     if (args.dryRun) {
       return {
         dryRun: true,
         matched: matched.length,
-        totalAccounts: accounts.length,
-        totalCampaigns: allCampaigns.length,
         campaigns: matched.map((c: any) => ({ id: c.id, name: c.name, status: c.status, account: c.accountName })),
       }
     }
 
-    // Step 4: 通过 Facebook API 激活
+    // 通过 Facebook API 激活
     const activated: any[] = []
     const failed: any[] = []
     const skipped: any[] = []
@@ -231,6 +203,102 @@ campaign 命名规范：{优化师}_fb_{产品}_{地区}_{其他}_{日期}
   },
 }
 
+// ==================== Facebook API: 批量调预算 ====================
+
+async function fbSearchCampaigns(fbToken: string, keywords: string[]): Promise<{ campaigns: any[]; accounts: number }> {
+  const accountsRes = await axios.get(`${FB_GRAPH}/me/adaccounts`, {
+    params: { fields: 'id,account_id,name', limit: 200, access_token: fbToken },
+  })
+  const accounts = accountsRes.data?.data || []
+  const allCampaigns: any[] = []
+
+  for (const acc of accounts) {
+    try {
+      const campRes = await axios.get(`${FB_GRAPH}/${acc.id}/campaigns`, {
+        params: { fields: 'id,name,status,daily_budget', limit: 500, access_token: fbToken },
+      })
+      const camps = (campRes.data?.data || []).map((c: any) => ({ ...c, accountId: acc.account_id, accountName: acc.name }))
+      allCampaigns.push(...camps)
+    } catch { /* skip */ }
+  }
+
+  const matched = allCampaigns.filter((c: any) => {
+    const name = (c.name || '').toLowerCase()
+    return keywords.every((kw: string) => name.includes(kw))
+  })
+
+  return { campaigns: matched, accounts: accounts.length }
+}
+
+const tt_batchBudget: ToolDef = {
+  name: 'fb_batch_update_budget',
+  description: `按名称关键词批量调整 campaign 日预算。使用 Facebook Marketing API 直接执行。
+campaign 命名规范：{优化师}_fb_{产品}_{地区}_{其他}_{日期}
+可传多个关键词用逗号分隔，将取交集匹配。预算单位为美元（会自动转为美分传给 API）。直接执行无需审批。`,
+  parameters: S.obj('参数', {
+    keywords: S.str('逗号分隔的匹配关键词，如 "wwz,funce,0224"'),
+    dailyBudgetUsd: S.num('新的日预算（美元），例如 10 表示 $10/天'),
+    dryRun: S.bool('仅预览匹配结果不执行（默认 false）'),
+  }, ['keywords', 'dailyBudgetUsd']),
+  handler: async (args) => {
+    const fbToken = process.env.FB_ACCESS_TOKEN
+    if (!fbToken) return { error: 'FB_ACCESS_TOKEN 未配置' }
+
+    const keywords = (args.keywords as string).split(',').map((k: string) => k.trim().toLowerCase()).filter(Boolean)
+    if (keywords.length === 0) return { error: '请提供至少一个匹配关键词' }
+
+    const budgetUsd = Number(args.dailyBudgetUsd)
+    if (!budgetUsd || budgetUsd <= 0) return { error: '预算必须大于 0' }
+    const budgetCents = Math.round(budgetUsd * 100)
+
+    const { campaigns: matched, accounts } = await fbSearchCampaigns(fbToken, keywords)
+
+    if (matched.length === 0) {
+      return { matched: 0, message: `在 ${accounts} 个账户中未找到同时包含 [${keywords.join(', ')}] 的 campaign` }
+    }
+
+    if (args.dryRun) {
+      return {
+        dryRun: true,
+        matched: matched.length,
+        newBudget: `$${budgetUsd}/day`,
+        campaigns: matched.map((c: any) => ({
+          name: c.name, status: c.status, account: c.accountName,
+          currentBudget: c.daily_budget ? `$${(Number(c.daily_budget) / 100).toFixed(2)}` : 'unknown',
+        })),
+      }
+    }
+
+    const updated: any[] = []
+    const failed: any[] = []
+
+    for (const c of matched) {
+      try {
+        await axios.post(`${FB_GRAPH}/${c.id}`, null, {
+          params: { daily_budget: budgetCents, access_token: fbToken },
+        })
+        const oldBudget = c.daily_budget ? `$${(Number(c.daily_budget) / 100).toFixed(2)}` : '?'
+        updated.push({ id: c.id, name: c.name, account: c.accountName, oldBudget, newBudget: `$${budgetUsd}` })
+        log.info(`[BatchBudget] Updated: ${c.name} → $${budgetUsd}/day`)
+      } catch (e: any) {
+        const errMsg = e.response?.data?.error?.message || e.message
+        failed.push({ id: c.id, name: c.name, error: errMsg })
+        log.warn(`[BatchBudget] Failed: ${c.name} - ${errMsg}`)
+      }
+    }
+
+    return {
+      matched: matched.length,
+      updated: updated.length,
+      failed: failed.length,
+      newBudget: `$${budgetUsd}/day`,
+      updatedCampaigns: updated.map((c: any) => `${c.name} (${c.oldBudget} → ${c.newBudget})`),
+      failedCampaigns: failed,
+      message: `匹配 ${matched.length} 个 campaign，已将 ${updated.length} 个的日预算调整为 $${budgetUsd}${failed.length > 0 ? `，${failed.length} 个失败` : ''}`,
+    }
+  },
+}
+
 export const toptouTools: ToolDef[] = [
   tt_getBaseInfo,
   tt_getCampaigns,
@@ -240,4 +308,5 @@ export const toptouTools: ToolDef[] = [
   tt_updateStatus,
   tt_updateBudget,
   tt_batchActivate,
+  tt_batchBudget,
 ]
