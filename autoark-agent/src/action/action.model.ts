@@ -24,7 +24,7 @@ const actionSchema = new mongoose.Schema({
 
   // 平台和目标实体
   platform: { type: String, enum: ['facebook', 'tiktok'], required: true },
-  accountId: { type: String, required: true },
+  accountId: { type: String, default: '' },
   entityId: String,    // campaignId / adsetId / adId
   entityName: String,
 
