@@ -1,13 +1,14 @@
 /**
  * Agent Brain — 多 Agent 协调者
  *
+ * Phase 0: Corrective → 读取 Auditor 纠正指令（优先处理）
  * Phase 1: Monitor    → 感知全量数据
  * Phase 2: Screener   → Skill 驱动筛选，输出 needs_decision 列表
  * Phase 3: Classifier → 对筛选出的 campaign 分类打标
  * Phase 4: Decision   → Skill 驱动 + LLM 决策，输出 actions
- * Phase 5: Executor   → 创建 Action 记录
+ * Phase 5: Executor   → auto 直接执行 / pending 待审批
  * Phase 6: Feishu     → 飞书通知
- * Phase 7: Reflection → 反思历史决策，写回 Skill.stats
+ * Phase 7: Auditor    → 审查 + Librarian 知识沉淀
  */
 import dayjs from 'dayjs'
 import { log } from '../platform/logger'
@@ -16,6 +17,8 @@ import { classifyCampaigns, classifySummary } from './classifier'
 import { makeDecisions, DecisionAction } from './decision'
 import { reflectAll, getReflectionStats } from './reflection'
 import { screenCampaigns, ScreeningSummary } from './screener'
+import { popCorrective } from './auditor'
+import { processAuditFindings } from './librarian'
 import { memory } from './memory.service'
 import { AgentEvent, getEventPriority, describeEvent } from './events'
 import { CampaignMetrics } from './analyzer'
@@ -106,6 +109,13 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
   }
 
   try {
+    // ==================== Phase 0: Corrective 纠正指令 ====================
+    result.phase = 'corrective'
+    const corrective = await popCorrective()
+    if (corrective.length > 0) {
+      log.info(`[Brain] Phase 0: ${corrective.length} corrective actions from Auditor: ${corrective.map(c => `${c.action}:${c.campaignId}`).join(', ')}`)
+    }
+
     // ==================== Phase 1: Monitor 感知 ====================
     result.phase = 'perception'
     log.info('[Brain] Phase 1: Monitor perceiving...')
@@ -253,16 +263,36 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
       log.warn(`[Brain] Feishu notification failed: ${e.message}`)
     }
 
-    // ==================== Phase 7: Reflection 反思 ====================
-    result.phase = 'reflection'
-    log.info('[Brain] Phase 7: Reflecting on past decisions...')
-    const reflections = await reflectAll(campaignMap)
+    // ==================== Phase 7: Auditor 审查 + Librarian 知识沉淀 ====================
+    result.phase = 'audit'
+    log.info('[Brain] Phase 7: Auditor reviewing + Librarian learning...')
+
+    // 7a. Reflection（复用改进后的反思，传入 allCampaigns 用于兄弟比较）
+    const reflections = await reflectAll(campaignMap, allCampaigns)
     result.reflections = reflections
     if (reflections.length > 0) {
       const stats = await getReflectionStats(7)
-      log.info(`[Brain] Reflection: ${reflections.length} decisions reviewed. 7d accuracy: ${stats.accuracy}%`)
+      log.info(`[Brain] Reflection: ${reflections.length} reviewed, ${stats.correct} correct, ${stats.wrong} wrong, accuracy ${stats.accuracy}%`)
+
+      // 7b. 将反思结果交给 Librarian 沉淀知识
+      const findings = reflections
+        .filter(r => r.assessment !== 'unclear')
+        .map(r => ({
+          type: r.assessment === 'correct' ? 'decision_correct' as const : 'decision_wrong' as const,
+          campaignId: r.campaignId,
+          skillName: '',
+          detail: r.reason,
+          severity: r.assessment === 'wrong' ? 'medium' as const : 'low' as const,
+          suggestion: r.lesson,
+        }))
+      try {
+        await processAuditFindings(findings)
+      } catch (e: any) {
+        log.warn(`[Brain] Librarian processing failed: ${e.message}`)
+      }
+
       await memory.rememberShort('decision', `reflection_${dayjs().format('YYYYMMDD_HH')}`, {
-        summary: `反思 ${reflections.length} 个决策: ${reflections.filter(r => r.assessment === 'correct').length} 正确, ${reflections.filter(r => r.assessment === 'wrong').length} 错误`,
+        summary: `反思 ${reflections.length} 个决策: ${stats.correct} 正确, ${stats.wrong} 错误, 准确率 ${stats.accuracy}%`,
         stats,
       })
     }

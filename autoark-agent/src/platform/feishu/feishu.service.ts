@@ -163,6 +163,28 @@ export async function notifyFeishu(params: NotifyFeishuParams): Promise<void> {
 }
 
 /**
+ * Librarian 每日摘要推送到飞书
+ */
+export async function notifyFeishuDailyReport(summary: string): Promise<void> {
+  const config = await loadFeishuConfig()
+  if (!config) return
+
+  const card = {
+    config: { wide_screen_mode: true },
+    header: {
+      template: 'purple',
+      title: { content: `AutoArk Librarian 每日报告 | ${new Date().toISOString().slice(0, 10)}`, tag: 'plain_text' },
+    },
+    elements: [
+      { tag: 'div', text: { content: summary.replace(/\n/g, '\n'), tag: 'lark_md' } },
+    ],
+  }
+
+  await sendCard(card, config)
+  log.info('[Feishu] Daily report card sent')
+}
+
+/**
  * 审批通过/拒绝后更新飞书卡片
  */
 export async function updateApprovalStatus(
