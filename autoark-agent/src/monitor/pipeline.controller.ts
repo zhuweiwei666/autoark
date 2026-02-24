@@ -3,9 +3,14 @@ import { authenticate } from '../auth/auth.middleware'
 import { think } from '../agent/brain'
 import { getReflectionStats } from '../agent/reflection'
 import { Snapshot } from '../data/snapshot.model'
+import { Skill } from '../agent/skill.model'
+import { Action } from '../action/action.model'
+import { AuditReport } from '../agent/auditor.model'
+import { Knowledge } from '../agent/librarian.model'
 import { memory } from '../agent/memory.service'
 import { getScope, setScope, describeScopeForPrompt } from '../agent/scope'
 import { runEvolution } from '../agent/evolution'
+import dayjs from 'dayjs'
 
 const router = Router()
 router.use(authenticate)
@@ -97,6 +102,137 @@ router.post('/scope', async (req: Request, res: Response) => {
     ...(optimizers !== undefined ? { optimizers } : {}),
   })
   res.json({ scope: getScope(), description: describeScopeForPrompt() })
+})
+
+// Dashboard 聚合 API — 一次拿全前端所需数据
+router.get('/dashboard', async (_req: Request, res: Response) => {
+  try {
+    const now = new Date()
+    const today = dayjs().startOf('day').toDate()
+
+    // 最近 5 轮 cycle
+    const recentSnapshots = await Snapshot.find({ status: 'completed' })
+      .sort({ runAt: -1 }).limit(5).lean() as any[]
+
+    const latest = recentSnapshots[0]
+
+    // Skill 统计
+    const skills = await Skill.find({}).sort({ 'stats.triggered': -1 }).lean() as any[]
+
+    // Action 统计（最近 24h）
+    const since24h = dayjs().subtract(24, 'hour').toDate()
+    const recentActions = await Action.find({ createdAt: { $gte: since24h } }).lean() as any[]
+    const executed = recentActions.filter((a: any) => a.status === 'executed').length
+    const failed = recentActions.filter((a: any) => a.status === 'failed').length
+    const pending = recentActions.filter((a: any) => a.status === 'pending').length
+
+    // 审查统计
+    const latestAudit = await AuditReport.findOne().sort({ auditedAt: -1 }).lean() as any
+    const reflectionStats = await getReflectionStats(7)
+
+    // 知识库统计
+    let knowledgeTotal = 0, knowledgeNewToday = 0
+    try {
+      knowledgeTotal = await Knowledge.countDocuments({ archived: { $ne: true } })
+      knowledgeNewToday = await Knowledge.countDocuments({ createdAt: { $gte: today }, archived: { $ne: true } })
+    } catch { /* Knowledge collection might not exist yet */ }
+
+    // 构建 Agent 状态
+    const screenerSkills = skills.filter((s: any) => s.agentId === 'screener')
+    const decisionSkills = skills.filter((s: any) => s.agentId === 'decision')
+
+    const agents = {
+      monitor: {
+        status: latest ? 'online' : 'idle',
+        lastRun: latest?.runAt,
+        campaignCount: latest?.totalCampaigns || 0,
+        spend: latest?.totalSpend || 0,
+        roas: latest?.overallRoas || 0,
+      },
+      screener: {
+        status: latest ? 'online' : 'idle',
+        lastRun: latest?.runAt,
+        needsDecision: 0, watch: 0, skip: 0,
+        topSkills: screenerSkills.slice(0, 5).map((s: any) => ({ name: s.name, triggered: s.stats?.triggered || 0, accuracy: s.stats?.accuracy || 0 })),
+      },
+      decision: {
+        status: recentActions.length > 0 ? 'active' : 'idle',
+        lastRun: latest?.runAt,
+        actionsCount: recentActions.length,
+        autoExecuted: executed,
+        pending,
+      },
+      executor: {
+        status: executed > 0 ? 'active' : 'idle',
+        lastRun: latest?.runAt,
+        executed,
+        failed,
+      },
+      auditor: {
+        status: latestAudit ? 'online' : 'idle',
+        lastRun: latestAudit?.auditedAt,
+        accuracy: reflectionStats.accuracy,
+        findings: latestAudit ? (latestAudit.screenerAudit?.findings?.length || 0) + (latestAudit.decisionAudit?.findings?.length || 0) : 0,
+        correct: reflectionStats.correct,
+        wrong: reflectionStats.wrong,
+      },
+      librarian: {
+        status: knowledgeTotal > 0 ? 'online' : 'idle',
+        knowledgeCount: knowledgeTotal,
+        knowledgeNewToday,
+        skillsManaged: skills.length,
+      },
+    }
+
+    // 解析 screening 数据
+    if (latest?.summary) {
+      const m = latest.summary.match(/筛选[：:]\s*(\d+)\s*需决策\s*\/\s*(\d+)\s*观察\s*\/\s*(\d+)\s*跳过/)
+      if (m) {
+        agents.screener.needsDecision = parseInt(m[1])
+        agents.screener.watch = parseInt(m[2])
+        agents.screener.skip = parseInt(m[3])
+      }
+    }
+
+    // 构建 timeline cycles
+    const recentCycles = recentSnapshots.map((s: any) => ({
+      id: s._id,
+      runAt: s.runAt,
+      duration: s.durationMs,
+      summary: s.summary,
+      status: s.status,
+      totalCampaigns: s.totalCampaigns,
+      totalSpend: s.totalSpend,
+      overallRoas: s.overallRoas,
+      classification: s.classification,
+      actions: (s.actions || []).map((a: any) => ({
+        type: a.type, campaign: a.campaignName, auto: a.auto, executed: a.executed,
+      })),
+    }))
+
+    // Skill 热力图数据
+    const skillStats = skills.map((s: any) => ({
+      name: s.name,
+      agentId: s.agentId,
+      triggered: s.stats?.triggered || 0,
+      accuracy: s.stats?.accuracy || 0,
+      enabled: s.enabled,
+      correct: s.stats?.correct || 0,
+      wrong: s.stats?.wrong || 0,
+    }))
+
+    res.json({
+      currentPhase: 'idle',
+      lastCycleAt: latest?.runAt,
+      lastCycleSummary: latest?.summary || '暂无数据',
+      agents,
+      recentCycles,
+      skillStats,
+      knowledgeSummary: { total: knowledgeTotal, newToday: knowledgeNewToday },
+    })
+  } catch (err: any) {
+    res.status(500).json({ error: err.message })
+  }
 })
 
 export default router
