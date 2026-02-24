@@ -4,7 +4,7 @@
  */
 import { CampaignMetrics } from './analyzer'
 import { CampaignLabel, THRESHOLDS, LABEL_NAMES } from './standards'
-import { Skill, matchCampaignToSkill } from './skill.model'
+import { Skill, matchesCampaign, AgentSkillDoc } from './skill.model'
 
 export interface ClassifiedCampaign extends CampaignMetrics {
   label: CampaignLabel
@@ -14,34 +14,24 @@ export interface ClassifiedCampaign extends CampaignMetrics {
 }
 
 /**
- * 对每个 campaign 进行分类标记（支持 Skill 覆盖阈值）
+ * 对每个 campaign 进行分类标记
+ * Decision Skills 中的 thresholds 覆盖可通过 strategy config 的 thresholds 字段实现（兼容旧逻辑）
  */
 export async function classifyCampaigns(campaigns: CampaignMetrics[]): Promise<ClassifiedCampaign[]> {
-  // 加载所有活跃 Skill
-  let skills: any[] = []
+  let skills: AgentSkillDoc[] = []
   try {
-    skills = await Skill.find({ isActive: true }).lean()
-  } catch { /* Skill 集合不存在时不报错 */ }
+    skills = await Skill.find({ agentId: 'decision', enabled: true }).sort({ order: 1 }).lean() as AgentSkillDoc[]
+  } catch { /* ignore */ }
 
   return campaigns.map(c => {
-    // 匹配 Skill
-    const skill = matchCampaignToSkill(
-      { pkgName: c.pkgName, platform: c.platform, optimizer: c.optimizer, accountId: c.accountId },
-      skills
-    )
-
-    // 合并阈值：Skill 覆盖默认值
-    const thresholds = skill?.thresholds
-      ? { ...THRESHOLDS, ...Object.fromEntries(Object.entries(skill.thresholds).filter(([, v]) => v != null)) }
-      : THRESHOLDS
-
-    const { label, reason } = classify(c, thresholds)
+    const matched = skills.find(s => matchesCampaign(s, c))
+    const { label, reason } = classify(c, THRESHOLDS)
     return {
       ...c,
       label,
       labelName: LABEL_NAMES[label],
       labelReason: reason,
-      skillName: skill?.name,
+      skillName: matched?.name,
     }
   })
 }

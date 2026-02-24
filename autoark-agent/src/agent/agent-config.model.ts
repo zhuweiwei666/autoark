@@ -155,6 +155,23 @@ export const DEFAULT_CONFIGS: Record<string, any> = {
     },
     enabled: true,
   },
+  feishu: {
+    agentId: 'feishu',
+    feishu: {
+      enabled: true,
+      appId: 'cli_a9c0a78e8a385ccd',
+      appSecret: '1Xcpc1LTr3C7Zh1KJHVpdgWh7FNcYRJl',
+      receiveId: 'oc_f249fe67a3c7a316d818f95510d0f43a',
+      receiveIdType: 'chat_id',
+      notifications: {
+        cycleSummary: true,
+        approvalCard: true,
+        urgentAlert: true,
+        onlyWhenActions: false,
+      },
+    },
+    enabled: true,
+  },
 }
 
 /**

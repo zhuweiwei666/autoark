@@ -10,6 +10,7 @@ import metabaseRoutes from './monitor/metabase.controller'
 import pipelineRoutes from './monitor/pipeline.controller'
 import skillRoutes from './monitor/skill.controller'
 import agentConfigRoutes from './monitor/agent-config.controller'
+import feishuWebhook from './platform/feishu/webhook'
 
 const app = express()
 app.use(cors())
@@ -24,6 +25,7 @@ app.use('/api/metabase', metabaseRoutes)
 app.use('/api/pipeline', pipelineRoutes)
 app.use('/api/skills', skillRoutes)
 app.use('/api/agent-config', agentConfigRoutes)
+app.use('/api/webhooks/feishu', feishuWebhook)
 
 // 静态文件（前端）
 const distPath = path.join(__dirname, '../web/dist')

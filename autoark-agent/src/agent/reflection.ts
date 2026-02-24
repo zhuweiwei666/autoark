@@ -1,11 +1,13 @@
 /**
  * 反思层 - Agent 的自我评估
  * 每个决策执行后 2-4 小时回顾效果，积累经验
+ * 反思结果写回对应 Skill 的 stats 和 learnedNotes
  */
 import dayjs from 'dayjs'
 import axios from 'axios'
 import { log } from '../platform/logger'
 import { Action } from '../action/action.model'
+import { Skill } from './skill.model'
 import { memory } from './memory.service'
 import { CampaignMetrics } from './analyzer'
 
@@ -118,9 +120,34 @@ export async function reflectAll(
       { $set: { 'params.reflected': true, 'params.reflection': result } }
     )
 
+    // 写回对应 Skill 的 stats
+    const skillName = (action as any).params?.skillName
+    if (skillName && result.assessment !== 'unclear') {
+      try {
+        const update: any = {}
+        if (result.assessment === 'correct') {
+          update.$inc = { 'stats.correct': 1 }
+        } else if (result.assessment === 'wrong') {
+          update.$inc = { 'stats.wrong': 1 }
+          update.$push = { learnedNotes: { $each: [result.lesson], $slice: -10 } }
+        }
+        if (update.$inc || update.$push) {
+          await Skill.updateOne({ name: skillName }, update)
+          // 重算准确率
+          const skill = await Skill.findOne({ name: skillName }).select('stats').lean() as any
+          if (skill?.stats) {
+            const total = (skill.stats.correct || 0) + (skill.stats.wrong || 0)
+            const accuracy = total > 0 ? Math.round((skill.stats.correct || 0) / total * 100) : 0
+            await Skill.updateOne({ name: skillName }, { $set: { 'stats.accuracy': accuracy } })
+          }
+        }
+      } catch { /* non-critical */ }
+    }
+
     // 写入记忆
     if (result.assessment !== 'unclear') {
       const tags = [result.type, result.assessment]
+      if (skillName) tags.push(`skill:${skillName}`)
       if ((action as any).entityName) {
         const pkg = (action as any).entityName?.match(/fb_(\w+)_/)?.[1]
         if (pkg) tags.push(`pkg:${pkg}`)
@@ -138,7 +165,7 @@ export async function reflectAll(
     // 记录到短期记忆
     await memory.rememberShort('reflection', result.decisionId, result, 7)
 
-    log.info(`[Reflection] ${result.campaignId}: ${result.assessment} - ${result.reason}`)
+    log.info(`[Reflection] ${result.campaignId}: ${result.assessment} - ${result.reason}${skillName ? ` (skill: ${skillName})` : ''}`)
   }
 
   return results

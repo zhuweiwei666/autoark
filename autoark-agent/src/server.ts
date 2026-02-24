@@ -16,10 +16,12 @@ async function bootstrap() {
   // 2. Redis（可选）
   initRedis()
 
-  // 3. 初始化 Agent（注册工具、加载 Token 池、加载权责范围）
+  // 3. 初始化 Agent（注册工具、加载 Token 池、初始化 Skills）
   await initAgent()
   const { loadScope } = await import('./agent/scope')
   await loadScope()
+  const { seedSkills } = await import('./agent/skill-seeds')
+  await seedSkills()
 
   // 4. 数据同步 Cron
   initSyncCron()
