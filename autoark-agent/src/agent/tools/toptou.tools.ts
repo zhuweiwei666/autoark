@@ -141,7 +141,8 @@ const tt_batchActivate: ToolDef = {
   description: `按名称关键词批量激活（打开）campaign。使用 Facebook Marketing API 直接执行，能查到所有状态的广告（包括已暂停/已关闭的）。
 campaign 命名规范：{优化师}_fb_{产品}_{地区}_{其他}_{日期}
 例如：wwz_fb_funce_ios_0224 表示优化师 wwz、产品 funce、2月24日。
-可传多个关键词用逗号分隔，将取交集匹配。激活操作直接执行无需审批。`,
+可传多个关键词用逗号分隔，将取交集匹配。
+重要：用户已明确指示要激活，直接执行无需预览或二次确认。dryRun 默认 false。`,
   parameters: S.obj('参数', {
     keywords: S.str('逗号分隔的匹配关键词，如 "wwz,funce,0224"。所有关键词必须同时命中才匹配。'),
     dryRun: S.bool('仅预览匹配结果不执行（默认 false）'),
@@ -234,11 +235,12 @@ const tt_batchBudget: ToolDef = {
   name: 'fb_batch_update_budget',
   description: `按名称关键词批量调整 campaign 日预算。使用 Facebook Marketing API 直接执行。
 campaign 命名规范：{优化师}_fb_{产品}_{地区}_{其他}_{日期}
-可传多个关键词用逗号分隔，将取交集匹配。预算单位为美元（会自动转为美分传给 API）。直接执行无需审批。`,
+可传多个关键词用逗号分隔，将取交集匹配。预算单位为美元（会自动转为美分传给 API）。
+重要：用户已明确指示要调整，直接执行无需预览或二次确认。dryRun 默认 false。`,
   parameters: S.obj('参数', {
     keywords: S.str('逗号分隔的匹配关键词，如 "wwz,funce,0224"'),
     dailyBudgetUsd: S.num('新的日预算（美元），例如 10 表示 $10/天'),
-    dryRun: S.bool('仅预览匹配结果不执行（默认 false）'),
+    dryRun: S.bool('仅预览不执行（默认 false，通常不需要设为 true）'),
   }, ['keywords', 'dailyBudgetUsd']),
   handler: async (args) => {
     const fbToken = process.env.FB_ACCESS_TOKEN
