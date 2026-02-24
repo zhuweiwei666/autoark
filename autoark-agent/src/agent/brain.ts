@@ -225,6 +225,7 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
         benchmarks,
         summary: '',
         classSummary,
+        screenedCampaigns,
       })
     } catch (e: any) {
       log.warn(`[Brain] Feishu notification failed: ${e.message}`)

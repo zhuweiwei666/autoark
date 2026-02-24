@@ -1,10 +1,15 @@
 /**
  * 飞书服务 — Token 管理 + 消息推送 + Webhook
+ *
+ * 推送策略：
+ * 1. 摘要卡片：每轮推送，包含 needs_decision campaign 的明细（可展开）
+ * 2. 紧急止损卡片：仅 critical + auto 的暂停操作独立推送（带审批按钮）
+ * 3. 非紧急操作：合并在摘要卡片明细里，不单独推送
  */
 import axios from 'axios'
 import { log } from '../logger'
 import { getAgentConfig } from '../../agent/agent-config.model'
-import { buildSummaryCard, buildApprovalCard, buildAlertCard } from './cards'
+import { buildSummaryCard, buildUrgentStopLossCard } from './cards'
 import type { ScreeningSummary } from '../../agent/screener'
 import type { MarketBenchmark } from '../../agent/brain'
 
@@ -101,10 +106,15 @@ export interface NotifyFeishuParams {
   benchmarks: MarketBenchmark
   summary: string
   classSummary?: Record<string, number>
+  screenedCampaigns: any[]
 }
 
 /**
- * Brain cycle 结束后调用：推送摘要 + 审批卡片
+ * Brain cycle 结束后调用
+ *
+ * 推送策略：
+ * 1. 摘要卡片 — 每轮一张，包含明细列表
+ * 2. 紧急止损卡片 — 仅 critical 优先级的自动暂停操作，独立推卡（带审批按钮）
  */
 export async function notifyFeishu(params: NotifyFeishuParams): Promise<void> {
   const config = await loadFeishuConfig()
@@ -112,32 +122,32 @@ export async function notifyFeishu(params: NotifyFeishuParams): Promise<void> {
 
   const { notifications } = config
 
-  if (notifications.onlyWhenActions && params.actions.length === 0) {
-    log.info('[Feishu] No actions, skipping notification (onlyWhenActions=true)')
+  if (notifications.onlyWhenActions && params.actions.length === 0 && params.screening.needsDecision === 0) {
+    log.info('[Feishu] No actions or decisions, skipping (onlyWhenActions=true)')
     return
   }
 
+  // 1. 摘要卡片（含 needs_decision 明细）
   if (notifications.cycleSummary) {
     const card = buildSummaryCard(params)
     await sendCard(card, config)
-    log.info('[Feishu] Summary card sent')
+    log.info('[Feishu] Summary card sent (with campaign details)')
   }
 
-  if (notifications.approvalCard) {
-    for (const action of params.actions.filter((a: any) => !a.auto)) {
-      const card = buildApprovalCard(action, params.benchmarks)
-      await sendCard(card, config)
-    }
-    if (params.actions.filter((a: any) => !a.auto).length > 0) {
-      log.info(`[Feishu] ${params.actions.filter((a: any) => !a.auto).length} approval cards sent`)
-    }
-  }
-
+  // 2. 紧急止损卡片 — 仅 critical + 自动暂停 的操作单独推送
   if (notifications.urgentAlert) {
-    const criticals = params.events.filter((e: any) => e.type === 'spend_spike' || e.type === 'roas_crash')
-    for (const event of criticals) {
-      const card = buildAlertCard(event)
+    const urgentStopLoss = params.actions.filter((a: any) =>
+      a.auto === true && a.type === 'pause'
+    )
+
+    for (const action of urgentStopLoss) {
+      const campaign = params.screenedCampaigns?.find((c: any) => c.campaignId === action.campaignId)
+      const card = buildUrgentStopLossCard(action, campaign, params.benchmarks)
       await sendCard(card, config)
+    }
+
+    if (urgentStopLoss.length > 0) {
+      log.info(`[Feishu] ${urgentStopLoss.length} urgent stop-loss cards sent`)
     }
   }
 }
