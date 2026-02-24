@@ -128,6 +128,7 @@ export async function monitor(): Promise<DecisionReadyData> {
     results.push({
       id: c.campaignId,
       name: c.campaignName,
+      accountId: c.accountId || '',
       platform: c.platform,
       optimizer: c.optimizer,
       pkgName: c.pkgName,

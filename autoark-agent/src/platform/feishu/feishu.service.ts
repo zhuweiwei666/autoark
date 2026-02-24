@@ -9,7 +9,7 @@
 import axios from 'axios'
 import { log } from '../logger'
 import { getAgentConfig } from '../../agent/agent-config.model'
-import { buildSummaryCard, buildUrgentStopLossCard } from './cards'
+import { buildSummaryCard, buildAutoExecutedCard, buildApprovalCard } from './cards'
 import type { ScreeningSummary } from '../../agent/screener'
 import type { MarketBenchmark } from '../../agent/brain'
 
@@ -114,7 +114,8 @@ export interface NotifyFeishuParams {
  *
  * 推送策略：
  * 1. 摘要卡片 — 每轮一张，包含明细列表
- * 2. 紧急止损卡片 — 仅 critical 优先级的自动暂停操作，独立推卡（带审批按钮）
+ * 2. 已自动执行 — auto=true + executed 的操作，推"已执行"通知（不带按钮）
+ * 3. 审批卡片 — auto=false 的操作，推审批卡片（带批准/拒绝按钮）
  */
 export async function notifyFeishu(params: NotifyFeishuParams): Promise<void> {
   const config = await loadFeishuConfig()
@@ -131,23 +132,32 @@ export async function notifyFeishu(params: NotifyFeishuParams): Promise<void> {
   if (notifications.cycleSummary) {
     const card = buildSummaryCard(params)
     await sendCard(card, config)
-    log.info('[Feishu] Summary card sent (with campaign details)')
+    log.info('[Feishu] Summary card sent')
   }
 
-  // 2. 紧急止损卡片 — 仅 critical + 自动暂停 的操作单独推送
+  // 2. 已自动执行的操作 — 单独推送"已执行"通知
   if (notifications.urgentAlert) {
-    const urgentStopLoss = params.actions.filter((a: any) =>
-      a.auto === true && a.type === 'pause'
-    )
-
-    for (const action of urgentStopLoss) {
+    const autoExecuted = params.actions.filter((a: any) => a.auto === true && a.executed === true)
+    for (const action of autoExecuted) {
       const campaign = params.screenedCampaigns?.find((c: any) => c.campaignId === action.campaignId)
-      const card = buildUrgentStopLossCard(action, campaign, params.benchmarks)
+      const card = buildAutoExecutedCard(action, campaign, params.benchmarks)
       await sendCard(card, config)
     }
+    if (autoExecuted.length > 0) {
+      log.info(`[Feishu] ${autoExecuted.length} auto-executed notification cards sent`)
+    }
+  }
 
-    if (urgentStopLoss.length > 0) {
-      log.info(`[Feishu] ${urgentStopLoss.length} urgent stop-loss cards sent`)
+  // 3. 待审批操作 — 推送审批卡片
+  if (notifications.approvalCard) {
+    const pendingActions = params.actions.filter((a: any) => !a.auto && !a.executed)
+    for (const action of pendingActions) {
+      const campaign = params.screenedCampaigns?.find((c: any) => c.campaignId === action.campaignId)
+      const card = buildApprovalCard(action, campaign, params.benchmarks)
+      await sendCard(card, config)
+    }
+    if (pendingActions.length > 0) {
+      log.info(`[Feishu] ${pendingActions.length} approval cards sent`)
     }
   }
 }

@@ -58,6 +58,7 @@ export interface QualityResult {
 export interface CampaignDecisionData {
   id: string
   name: string
+  accountId: string
   platform: string
   optimizer: string
   pkgName: string

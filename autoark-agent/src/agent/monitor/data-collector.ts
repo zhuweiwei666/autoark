@@ -24,6 +24,7 @@ async function session(): Promise<string> {
 export interface RawCampaign {
   campaignId: string
   campaignName: string
+  accountId: string     // 广告账户 ID（TopTou 操作必需）
   platform: string      // 渠道: FB / TT
   optimizer: string     // 优化师
   pkgName: string       // 包名
@@ -80,6 +81,7 @@ export async function collectData(startDate: string, endDate: string): Promise<R
     result.push({
       campaignId: String(camId),
       campaignName: r[col('campaign_name')] || '',
+      accountId: String(r[col('ad_account_id')] || ''),
       platform: r[col('渠道')] || '',
       optimizer: r[col('优化师')] || '',
       pkgName: r[col('包名')] || '',

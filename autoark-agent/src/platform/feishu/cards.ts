@@ -158,62 +158,93 @@ function buildCampaignRow(
 }
 
 /**
- * 紧急止损卡片（仅 critical + auto 的暂停操作才独立推送）
+ * 已自动执行通知卡片（auto=true 执行完毕后推送，不带按钮）
  */
-export function buildUrgentStopLossCard(action: any, campaign: any, benchmarks: MarketBenchmark) {
+export function buildAutoExecutedCard(action: any, campaign: any, benchmarks: MarketBenchmark) {
   const name = action.campaignName || action.campaignId
+  const shortName = name.length > 30 ? name.slice(0, 28) + '..' : name
   const spend = campaign ? `$${Math.round(campaign.todaySpend)}` : '-'
   const roi = campaign ? (campaign.adjustedRoi || campaign.todayRoas || 0).toFixed(2) : '-'
-  const trend = campaign?.trendSummary || ''
+  const actionLabel = action.type === 'pause' ? '已暂停' :
+    action.type === 'increase_budget' || action.type === 'adjust_budget' ? '已加预算' :
+    action.type === 'resume' ? '已恢复' : action.type
 
   const fields = [
-    { is_short: true, text: { content: `**Campaign**\n${name}`, tag: 'lark_md' } },
-    { is_short: true, text: { content: `**今日花费**\n${spend}`, tag: 'lark_md' } },
+    { is_short: true, text: { content: `**Campaign**\n${shortName}`, tag: 'lark_md' } },
+    { is_short: true, text: { content: `**操作**\n${actionLabel}`, tag: 'lark_md' } },
+    { is_short: true, text: { content: `**花费**\n${spend}`, tag: 'lark_md' } },
     { is_short: true, text: { content: `**ROI**\n${roi}`, tag: 'lark_md' } },
-    { is_short: true, text: { content: `**大盘 P25**\n${benchmarks.p25Roi}`, tag: 'lark_md' } },
   ]
 
-  if (action.skillName) {
-    fields.push({ is_short: true, text: { content: `**触发 Skill**\n${action.skillName}`, tag: 'lark_md' } })
+  if (action.currentBudget && action.newBudget) {
+    fields.push({ is_short: true, text: { content: `**预算**\n$${action.currentBudget} → $${action.newBudget}`, tag: 'lark_md' } })
   }
-
-  const elements: any[] = [
-    { tag: 'div', fields },
-    { tag: 'div', text: { content: `**止损原因**\n${action.reason || '严重亏损，建议立即暂停'}`, tag: 'lark_md' } },
-  ]
-
-  if (trend) {
-    elements.push({ tag: 'div', text: { content: `**趋势**\n${trend}`, tag: 'lark_md' } })
-  }
-
-  elements.push(
-    { tag: 'note', elements: [{ tag: 'plain_text', content: `大盘: P25=${benchmarks.p25Roi} P50=${benchmarks.medianRoi} P75=${benchmarks.p75Roi} | 加权ROAS=${benchmarks.weightedRoas}` }] },
-    { tag: 'hr' },
-    {
-      tag: 'action',
-      actions: [
-        {
-          tag: 'button',
-          text: { content: '确认暂停', tag: 'plain_text' },
-          type: 'primary',
-          value: { action: 'approve', actionData: JSON.stringify({ campaignId: action.campaignId, type: action.type }) },
-        },
-        {
-          tag: 'button',
-          text: { content: '保留运行', tag: 'plain_text' },
-          type: 'danger',
-          value: { action: 'reject', actionData: JSON.stringify({ campaignId: action.campaignId, type: action.type }) },
-        },
-      ],
-    },
-  )
 
   return {
     config: { wide_screen_mode: true },
     header: {
-      template: 'red',
-      title: { content: `🚨 紧急止损: ${name.length > 25 ? name.slice(0, 23) + '..' : name}`, tag: 'plain_text' },
+      template: action.type === 'pause' ? 'red' : 'green',
+      title: { content: `AutoArk 已自动执行: ${actionLabel} ${shortName}`, tag: 'plain_text' },
     },
-    elements,
+    elements: [
+      { tag: 'div', fields },
+      { tag: 'div', text: { content: `**原因**\n${action.reason || '-'}`, tag: 'lark_md' } },
+      ...(action.skillName ? [{ tag: 'note' as const, elements: [{ tag: 'plain_text' as const, content: `Skill: ${action.skillName} | 大盘 P25=${benchmarks.p25Roi} P50=${benchmarks.medianRoi}` }] }] : []),
+    ],
+  }
+}
+
+/**
+ * 审批卡片（auto=false 的操作，带批准/拒绝按钮）
+ */
+export function buildApprovalCard(action: any, campaign: any, benchmarks: MarketBenchmark) {
+  const name = action.campaignName || action.campaignId
+  const shortName = name.length > 30 ? name.slice(0, 28) + '..' : name
+  const spend = campaign ? `$${Math.round(campaign.todaySpend)}` : '-'
+  const roi = campaign ? (campaign.adjustedRoi || campaign.todayRoas || 0).toFixed(2) : '-'
+  const actionLabel = action.type === 'pause' ? 'PAUSE' :
+    action.type === 'increase_budget' || action.type === 'adjust_budget' ? 'INCREASE BUDGET' :
+    action.type === 'resume' ? 'RESUME' : action.type.toUpperCase()
+
+  const fields = [
+    { is_short: true, text: { content: `**Campaign**\n${shortName}`, tag: 'lark_md' } },
+    { is_short: true, text: { content: `**操作**\n${actionLabel}`, tag: 'lark_md' } },
+    { is_short: true, text: { content: `**花费**\n${spend}`, tag: 'lark_md' } },
+    { is_short: true, text: { content: `**ROI**\n${roi}`, tag: 'lark_md' } },
+  ]
+
+  if (action.currentBudget && action.newBudget) {
+    fields.push({ is_short: true, text: { content: `**预算**\n$${action.currentBudget} → $${action.newBudget}`, tag: 'lark_md' } })
+  }
+
+  return {
+    config: { wide_screen_mode: true },
+    header: {
+      template: action.type === 'pause' ? 'orange' : 'blue',
+      title: { content: `AutoArk 待审批: ${actionLabel} ${shortName}`, tag: 'plain_text' },
+    },
+    elements: [
+      { tag: 'div', fields },
+      { tag: 'div', text: { content: `**决策依据**\n${action.reason || '-'}`, tag: 'lark_md' } },
+      ...(action.skillName ? [{ tag: 'note' as const, elements: [{ tag: 'plain_text' as const, content: `Skill: ${action.skillName} | 大盘 P25=${benchmarks.p25Roi} P50=${benchmarks.medianRoi} P75=${benchmarks.p75Roi}` }] }] : []),
+      { tag: 'hr' },
+      {
+        tag: 'action',
+        actions: [
+          {
+            tag: 'button',
+            text: { content: '通过', tag: 'plain_text' },
+            type: 'primary',
+            value: { action: 'approve', actionData: JSON.stringify({ campaignId: action.campaignId, type: action.type }) },
+          },
+          {
+            tag: 'button',
+            text: { content: '拒绝', tag: 'plain_text' },
+            type: 'danger',
+            value: { action: 'reject', actionData: JSON.stringify({ campaignId: action.campaignId, type: action.type }) },
+          },
+        ],
+      },
+    ],
   }
 }

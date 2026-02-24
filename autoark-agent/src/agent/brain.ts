@@ -114,15 +114,15 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
     const events: AgentEvent[] = []
     for (const c of monitorData.campaigns) {
       for (const a of c.anomalies) {
-        if (a.type === 'spend_spike') events.push({ type: 'spend_spike', campaignId: c.id, campaignName: c.name, accountId: '', currentRate: c.estimatedDailySpend / 24, normalRate: 0, ratio: a.severity })
-        if (a.type === 'roas_crash') events.push({ type: 'roas_crash', campaignId: c.id, campaignName: c.name, accountId: '', before: 0, after: c.roi, dropPct: a.severity * 20 })
-        if (a.type === 'zero_conversion') events.push({ type: 'zero_conversion', campaignId: c.id, campaignName: c.name, accountId: '', spend: c.spend, hours: dayjs().hour() })
+        if (a.type === 'spend_spike') events.push({ type: 'spend_spike', campaignId: c.id, campaignName: c.name, accountId: c.accountId || '', currentRate: c.estimatedDailySpend / 24, normalRate: 0, ratio: a.severity })
+        if (a.type === 'roas_crash') events.push({ type: 'roas_crash', campaignId: c.id, campaignName: c.name, accountId: c.accountId || '', before: 0, after: c.roi, dropPct: a.severity * 20 })
+        if (a.type === 'zero_conversion') events.push({ type: 'zero_conversion', campaignId: c.id, campaignName: c.name, accountId: c.accountId || '', spend: c.spend, hours: dayjs().hour() })
       }
     }
     result.events = events
 
     const allCampaigns: CampaignMetrics[] = monitorData.campaigns.map(c => ({
-      campaignId: c.id, campaignName: c.name, accountId: '', accountName: '',
+      campaignId: c.id, campaignName: c.name, accountId: c.accountId || '', accountName: '',
       platform: c.platform, optimizer: c.optimizer, pkgName: c.pkgName,
       todaySpend: c.spend,
       todayRevenue: c.revenue > 0 ? c.revenue : c.spend * (c.adjustedRoi || c.firstDayRoi || c.roi || 0),
@@ -176,7 +176,7 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
     log.info(`[Brain] Phase 4: Decision on ${classified.length} campaigns...`)
     const decisions = await makeDecisions(classified, benchmarks)
 
-    // ==================== Phase 5: Executor 执行 ====================
+    // ==================== Phase 5: Executor（auto 直接执行 / 非 auto 存 pending 待审批）====================
     result.phase = 'execution'
     log.info(`[Brain] Phase 5: Executing ${decisions.actions.length} actions...`)
 
@@ -184,16 +184,20 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
     const pendingKeys = new Set(existingPending.map((a: any) => `${a.entityId}:${a.type}`))
 
     let skippedDuplicate = 0
+    let autoExecuted = 0
+    let pendingCreated = 0
+
     for (const action of decisions.actions) {
       try {
         if (!action?.campaignId || !action?.type) continue
-        const key = `${action.campaignId}:${action.type === 'increase_budget' ? 'adjust_budget' : action.type}`
+        const dbType = action.type === 'increase_budget' ? 'adjust_budget' : action.type
+        const key = `${action.campaignId}:${dbType}`
         if (pendingKeys.has(key)) { skippedDuplicate++; continue }
         pendingKeys.add(key)
 
         const c = screenedCampaigns.find(x => x.campaignId === action.campaignId)
-        await Action.create({
-          type: action.type === 'increase_budget' ? 'adjust_budget' : action.type,
+        const actionDoc = await Action.create({
+          type: dbType,
           platform: 'facebook', accountId: action.accountId || '',
           entityId: action.campaignId, entityName: action.campaignName || '',
           params: {
@@ -201,18 +205,36 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
             currentBudget: action.currentBudget, newBudget: action.newBudget,
             level: 'campaign',
             roasAtDecision: c?.todayRoas, spendAtDecision: c?.todaySpend,
-            skillName: (action as any).skillName,
+            skillName: action.skillName,
           },
-          reason: action.auto ? `[建议立即] ${action.reason || ''}` : (action.reason || ''),
-          status: 'pending',
+          reason: action.reason || '',
+          status: action.auto ? 'approved' : 'pending',
         })
-        result.actions.push({ ...action, executed: false })
+
+        if (action.auto) {
+          const execResult = await executeWithRetry(action)
+          if (execResult?.executed) {
+            await Action.updateOne({ _id: actionDoc._id }, { $set: { status: 'executed', executedAt: new Date(), result: execResult.result } })
+            log.info(`[Executor] Auto-executed: ${action.type} ${action.campaignName} (${action.skillName || 'rule'})`)
+            result.actions.push({ ...action, executed: true })
+            autoExecuted++
+          } else {
+            await Action.updateOne({ _id: actionDoc._id }, { $set: { status: 'failed', result: { error: execResult?.error } } })
+            log.warn(`[Executor] Auto-execute failed: ${action.campaignName} - ${execResult?.error}`)
+            result.actions.push({ ...action, executed: false })
+          }
+        } else {
+          result.actions.push({ ...action, executed: false })
+          pendingCreated++
+        }
       } catch (actionErr: any) {
-        log.warn(`[Brain] Failed to create action for ${action?.campaignId}: ${actionErr.message}`)
+        log.warn(`[Brain] Failed to process action for ${action?.campaignId}: ${actionErr.message}`)
       }
     }
 
     if (skippedDuplicate > 0) log.info(`[Brain] Skipped ${skippedDuplicate} duplicate pending`)
+    if (autoExecuted > 0) log.info(`[Brain] Auto-executed: ${autoExecuted} actions`)
+    if (pendingCreated > 0) log.info(`[Brain] Pending approval: ${pendingCreated} actions`)
 
     // ==================== Phase 6: Feishu 飞书通知 ====================
     result.phase = 'notification'

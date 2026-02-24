@@ -1,8 +1,9 @@
 /**
  * Agent 2: Decision — Skill 驱动的 LLM 决策引擎
  *
- * 从 Decision Skills 加载策略，动态构建 LLM prompt。
- * LLM 失败时降级为纯 Skill 规则引擎。
+ * 规则引擎先生成基础决策，LLM 审查并补充。
+ * LLM 失败时降级为纯规则引擎。
+ * 所有输出经过 normalizeActions 统一后处理。
  */
 import axios from 'axios'
 import dayjs from 'dayjs'
@@ -32,7 +33,7 @@ export interface DecisionResult {
 }
 
 /**
- * Skill 驱动的 LLM 决策
+ * Skill 驱动的决策（规则引擎 + LLM 双保险）
  */
 export async function makeDecisions(
   campaigns: ClassifiedCampaign[],
@@ -48,16 +49,16 @@ export async function makeDecisions(
     .sort({ order: 1 })
     .lean() as AgentSkillDoc[]
 
-  // 先用规则引擎生成基础决策
   const ruleActions = generateSkillBasedDecisions(campaigns, decisionSkills, recentCampaignIds)
+  log.info(`[Decision] Rule engine: ${ruleActions.length} actions`)
 
-  // 构建 LLM prompt（注入 Skill 知识）
   const inputData = campaigns
     .filter(c => c.label !== 'observing')
     .filter(c => !recentCampaignIds.has(c.campaignId))
     .map(c => ({
       campaignId: c.campaignId,
       campaignName: c.campaignName,
+      accountId: c.accountId,
       label: c.label,
       labelName: c.labelName,
       todaySpend: c.todaySpend,
@@ -74,12 +75,12 @@ export async function makeDecisions(
     }))
 
   if (inputData.length === 0) {
-    return { actions: ruleActions, summary: '无需 LLM 审查的 campaign', alerts: [] }
+    return { actions: normalizeActions(ruleActions, campaigns), summary: '无需审查的 campaign', alerts: [] }
   }
 
   if (!env.LLM_API_KEY) {
     log.warn('[Decision] No LLM_API_KEY, using skill-based rules only')
-    return { actions: ruleActions, summary: `规则引擎: ${ruleActions.length} 个操作`, alerts: [] }
+    return { actions: normalizeActions(ruleActions, campaigns), summary: `规则引擎: ${ruleActions.length} 个操作`, alerts: [] }
   }
 
   const systemPrompt = buildSkillDrivenPrompt(decisionSkills, benchmarks)
@@ -120,11 +121,8 @@ ${JSON.stringify(inputData, null, 2)}
         max_tokens: 4096,
       },
       {
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${env.LLM_API_KEY}`,
-        },
-        timeout: 120000,
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.LLM_API_KEY}` },
+        timeout: 60000,
       }
     )
 
@@ -132,21 +130,58 @@ ${JSON.stringify(inputData, null, 2)}
     const jsonMatch = content.match(/\{[\s\S]*\}/)
     if (!jsonMatch) {
       log.warn('[Decision] LLM did not return valid JSON, using rule-based decisions')
-      return { actions: ruleActions, summary: `LLM 无效输出，降级为规则引擎`, alerts: [] }
+      return { actions: normalizeActions(ruleActions, campaigns), summary: 'LLM 无效输出，降级为规则引擎', alerts: [] }
     }
 
     const decision = JSON.parse(jsonMatch[0]) as DecisionResult
-    log.info(`[Decision] LLM generated ${decision.actions.length} actions (rules had ${ruleActions.length})`)
+    decision.actions = normalizeActions(decision.actions || [], campaigns)
+    log.info(`[Decision] LLM: ${decision.actions.length} actions (rules had ${ruleActions.length})`)
     return decision
   } catch (err: any) {
     log.error('[Decision] LLM call failed:', err.response?.data?.error?.message || err.message)
-    return { actions: ruleActions, summary: `LLM 失败，降级为规则引擎: ${ruleActions.length} 个操作`, alerts: [] }
+    return { actions: normalizeActions(ruleActions, campaigns), summary: `LLM 失败，降级规则引擎: ${ruleActions.length} 个操作`, alerts: [] }
   }
 }
 
+// ==================== 统一后处理 ====================
+
 /**
- * Skill 驱动的规则引擎决策（不依赖 LLM）
+ * 对规则引擎 or LLM 的输出统一校验、补全、去重
  */
+function normalizeActions(
+  actions: DecisionAction[],
+  campaigns: ClassifiedCampaign[],
+): DecisionAction[] {
+  const campaignMap = new Map(campaigns.map(c => [c.campaignId, c]))
+  const seen = new Set<string>()
+  const result: DecisionAction[] = []
+
+  for (const a of actions) {
+    if (!a?.campaignId || !a?.type) continue
+
+    const key = `${a.campaignId}:${a.type}`
+    if (seen.has(key)) continue
+    seen.add(key)
+
+    const c = campaignMap.get(a.campaignId)
+    result.push({
+      type: a.type,
+      campaignId: a.campaignId,
+      campaignName: a.campaignName || c?.campaignName || '',
+      accountId: a.accountId || c?.accountId || '',
+      reason: a.reason || '',
+      auto: a.auto ?? false,
+      currentBudget: a.currentBudget,
+      newBudget: a.newBudget,
+      skillName: a.skillName,
+    })
+  }
+
+  return result
+}
+
+// ==================== Skill 规则引擎 ====================
+
 function generateSkillBasedDecisions(
   campaigns: ClassifiedCampaign[],
   skills: AgentSkillDoc[],
@@ -163,20 +198,15 @@ function generateSkillBasedDecisions(
       const d = skill.decision
       if (!d?.action) continue
 
-      // 匹配 triggerLabels
       const labelMatch = d.triggerLabels?.length > 0
         ? d.triggerLabels.includes(c.label)
         : true
-
-      // 匹配 conditions
       const condMatch = d.conditions?.length > 0
         ? evaluateConditions(d.conditions, d.conditionLogic, c as any)
         : true
-
       if (!labelMatch || !condMatch) continue
 
       const reason = fillReasonTemplate(d.reasonTemplate || skill.name, c as any)
-
       const action: DecisionAction = {
         type: d.action,
         campaignId: c.campaignId,
@@ -188,9 +218,8 @@ function generateSkillBasedDecisions(
       }
 
       if (d.action === 'increase_budget' && d.params?.budgetChangePct) {
-        const pct = d.params.budgetChangePct / 100
         action.currentBudget = Math.round(c.estimatedDailySpend)
-        action.newBudget = Math.round(c.estimatedDailySpend * (1 + pct))
+        action.newBudget = Math.round(c.estimatedDailySpend * (1 + d.params.budgetChangePct / 100))
       }
 
       actions.push(action)
@@ -201,9 +230,8 @@ function generateSkillBasedDecisions(
   return actions
 }
 
-/**
- * 从 Decision Skills 动态构建 LLM System Prompt
- */
+// ==================== LLM Prompt 构建 ====================
+
 function buildSkillDrivenPrompt(skills: AgentSkillDoc[], benchmarks?: any): string {
   const parts: string[] = []
 
@@ -220,9 +248,7 @@ function buildSkillDrivenPrompt(skills: AgentSkillDoc[], benchmarks?: any): stri
     if (d.triggerLabels?.length) parts.push(`- 触发标签: ${d.triggerLabels.join(', ')}`)
     parts.push(`- 操作: ${d.action} (${d.auto ? '自动' : '需审批'})`)
     if (d.llmContext) parts.push(`- 背景: ${d.llmContext}`)
-    if (d.llmRules?.length) {
-      for (const r of d.llmRules) parts.push(`- 规则: ${r}`)
-    }
+    if (d.llmRules?.length) for (const r of d.llmRules) parts.push(`- 规则: ${r}`)
     if (skill.learnedNotes?.length) {
       parts.push(`- 历史经验:`)
       for (const n of skill.learnedNotes.slice(-3)) parts.push(`  - ${n}`)
@@ -230,22 +256,7 @@ function buildSkillDrivenPrompt(skills: AgentSkillDoc[], benchmarks?: any): stri
     parts.push('')
   }
 
-  parts.push(`## 趋势解读
-- trendSummary 中的箭头: ↑=上升 ↓=下降 →=稳定
-- 花费↑ + ROI↓ = 效果衰退 → 降预算或暂停
-- 花费→ + ROI↑ = 效果回暖 → 观察确认后加量
-- CPI↑ + 安装↓ = 获客成本飙升 → 暂停或换素材
-- ROI↑ + 安装↑ + 花费↑ = 全面增长 → 加预算
-
-## 大盘锚定值用法
-- ROI < P25 = 全公司垫底 | ROI > P75 = 优质
-- 优先用相对判断（比大盘差 vs 好），而非绝对数值
-
-## 预算规则
-- 单次不超过 30%，日预算上限 $500
-- 同一 campaign 24h 内最多操作一次
-
-## 输出格式（严格 JSON）
+  parts.push(`## 输出格式（严格 JSON）
 \`\`\`json
 {
   "actions": [
@@ -255,7 +266,7 @@ function buildSkillDrivenPrompt(skills: AgentSkillDoc[], benchmarks?: any): stri
   "alerts": ["异常告警"]
 }
 \`\`\`
-只输出 JSON。reason 要具体，包含数值和趋势信息。`)
+只输出 JSON。reason 要具体，包含数值和趋势。每个 action 必须包含 accountId。`)
 
   return parts.join('\n')
 }
