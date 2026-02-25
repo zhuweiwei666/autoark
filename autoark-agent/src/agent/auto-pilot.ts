@@ -52,8 +52,12 @@ export async function runAutoPilot(): Promise<{ actions: any[]; campaigns: numbe
     return { actions: [], campaigns: 0 }
   }
 
-  // Step 1.5: 从 Metabase 补充 ROAS 和 CPI（FB API 没有 revenue）
+  // Step 1.5: 从 Metabase 补充 ROAS 和 CPI（FB API 没有 revenue 时）
   await enrichWithMetabase(campaigns)
+
+  // 按花费从高到低排序
+  campaigns.sort((a, b) => b.spend - a.spend)
+
   const totalSpend = campaigns.reduce((s, c) => s + c.spend, 0)
   const withRoas = campaigns.filter(c => c.roas > 0).length
   log.info(`[AutoPilot] Fetched ${campaigns.length} campaigns, spend $${totalSpend.toFixed(2)}, ${withRoas} with ROAS data`)
