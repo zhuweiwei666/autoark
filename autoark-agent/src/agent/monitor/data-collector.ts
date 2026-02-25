@@ -183,6 +183,7 @@ async function collectFromMetabase(startDate: string, endDate: string): Promise<
     const firstDayRevenue = Number(r[col('首日新增收入')] || 0)
 
     const roi = (rev: number) => spend > 0 ? rev / spend : 0
+    const firstDayUV = Number(r[col('首日UV')] || 0)
 
     result.push({
       campaignId: String(camId),
@@ -193,8 +194,8 @@ async function collectFromMetabase(startDate: string, endDate: string): Promise<
       pkgName: r[col('包名')] || '',
       date: r[col('日期')] || endDate,
       spend,
-      installs: Number(r[col('安装量')] || 0),
-      cpi: Number(r[col('CPI')] || 0),
+      installs: firstDayUV,
+      cpi: firstDayUV > 0 ? spend / firstDayUV : 0,
       cpa: Number(r[col('CPA')] || 0),
       revenue: adjustedRevenue > 0 ? adjustedRevenue : channelRevenue,
       firstDayRoi: roi(firstDayRevenue),
