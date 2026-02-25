@@ -52,9 +52,10 @@ export async function runAutoPilot(): Promise<{ actions: any[]; campaigns: numbe
     return { actions: [], campaigns: 0 }
   }
 
-  log.info(`[AutoPilot] Fetched ${campaigns.length} campaigns, total spend $${campaigns.reduce((s, c) => s + c.spend, 0).toFixed(2)}`)
+  const totalSpend = campaigns.reduce((s, c) => s + c.spend, 0)
+  log.info(`[AutoPilot] Fetched ${campaigns.length} campaigns, total spend $${totalSpend.toFixed(2)}`)
 
-  // Step 2: Skill 决策
+  // Step 2: Skill 决策（注意：FB API 没有 revenue/ROAS，roas 字段为 0 是数据缺失不是真的亏损）
   const { verdicts, actions } = await makeSkillDecisions(campaigns)
 
   // Step 3: 直接执行 (Facebook API)
@@ -201,11 +202,15 @@ async function makeSkillDecisions(campaigns: FBCampaignData[]): Promise<{ verdic
       continue
     }
 
+    // FB API 没有 revenue，roas=0 是数据缺失。设为 999 避免误触发亏损 Skill。
+    // 只有零转化、花费飙升等不依赖 ROAS 的 Skill 会触发。
+    const effectiveRoas = c.roas > 0 ? c.roas : (c.conversions > 0 ? 999 : 0)
+
     const data: Record<string, any> = {
       ...c,
       todaySpend: c.spend,
-      adjustedRoi: c.roas,
-      todayRoas: c.roas,
+      adjustedRoi: effectiveRoas,
+      todayRoas: effectiveRoas,
       installs: c.conversions,
       estimatedDailySpend: c.spend,
       hasPendingAction: 0,
