@@ -52,10 +52,13 @@ export async function runAutoPilot(): Promise<{ actions: any[]; campaigns: numbe
     return { actions: [], campaigns: 0 }
   }
 
+  // Step 1.5: 从 Metabase 补充 ROAS 和 CPI（FB API 没有 revenue）
+  await enrichWithMetabase(campaigns)
   const totalSpend = campaigns.reduce((s, c) => s + c.spend, 0)
-  log.info(`[AutoPilot] Fetched ${campaigns.length} campaigns, total spend $${totalSpend.toFixed(2)}`)
+  const withRoas = campaigns.filter(c => c.roas > 0).length
+  log.info(`[AutoPilot] Fetched ${campaigns.length} campaigns, spend $${totalSpend.toFixed(2)}, ${withRoas} with ROAS data`)
 
-  // Step 2: Skill 决策（注意：FB API 没有 revenue/ROAS，roas 字段为 0 是数据缺失不是真的亏损）
+  // Step 2: Skill 决策
   const { verdicts, actions } = await makeSkillDecisions(campaigns)
 
   // Step 3: 直接执行 (Facebook API)
@@ -102,6 +105,49 @@ export async function runAutoPilot(): Promise<{ actions: any[]; campaigns: numbe
   const executedCount = verdicts.filter(v => v.execResult === 'executed').length
   log.info(`[AutoPilot] Cycle complete: ${campaigns.length} campaigns, ${actions.length} actions, ${executedCount} executed`)
   return { actions: actions.filter((_, i) => verdicts.find(v => v.campaign.campaignId === actions[i]?.campaignId)?.execResult === 'executed'), campaigns: campaigns.length }
+}
+
+// ==================== Metabase 补充 ROAS/CPI ====================
+
+async function enrichWithMetabase(campaigns: FBCampaignData[]): Promise<void> {
+  try {
+    const today = dayjs().format('YYYY-MM-DD')
+    const { collectData } = await import('./monitor/data-collector')
+    const mbData = await collectData(today, today)
+
+    const mbMap = new Map<string, any>()
+    for (const m of mbData) {
+      mbMap.set(m.campaignId, m)
+    }
+
+    let enriched = 0
+    for (const c of campaigns) {
+      const mb = mbMap.get(c.campaignId)
+      if (!mb) continue
+
+      // ROAS: 用 Metabase 的 adjustedRoi（基于调整收入 / API 花费）
+      if (mb.adjustedRoi > 0) {
+        c.roas = mb.adjustedRoi
+      } else if (mb.firstDayRoi > 0) {
+        c.roas = mb.firstDayRoi
+      }
+
+      // CPI: 用 Metabase 的（广告花费_API / 首日UV）
+      if (mb.cpi > 0) c.cpi = mb.cpi
+
+      // 安装量: 用 Metabase 的首日UV
+      if (mb.installs > 0) c.conversions = mb.installs
+
+      // 花费: 取 FB 和 Metabase 的较大值
+      if (mb.spend > c.spend) c.spend = mb.spend
+
+      enriched++
+    }
+
+    log.info(`[AutoPilot] Metabase enriched: ${enriched}/${campaigns.length} campaigns with ROAS/CPI`)
+  } catch (e: any) {
+    log.warn(`[AutoPilot] Metabase enrichment failed (using FB data only): ${e.message}`)
+  }
 }
 
 // ==================== Facebook 数据拉取 ====================
@@ -202,15 +248,11 @@ async function makeSkillDecisions(campaigns: FBCampaignData[]): Promise<{ verdic
       continue
     }
 
-    // FB API 没有 revenue，roas=0 是数据缺失。设为 999 避免误触发亏损 Skill。
-    // 只有零转化、花费飙升等不依赖 ROAS 的 Skill 会触发。
-    const effectiveRoas = c.roas > 0 ? c.roas : (c.conversions > 0 ? 999 : 0)
-
     const data: Record<string, any> = {
       ...c,
       todaySpend: c.spend,
-      adjustedRoi: effectiveRoas,
-      todayRoas: effectiveRoas,
+      adjustedRoi: c.roas,
+      todayRoas: c.roas,
       installs: c.conversions,
       estimatedDailySpend: c.spend,
       hasPendingAction: 0,
@@ -326,7 +368,7 @@ async function notifyAutoPilot(verdicts: CampaignVerdict[], totalCampaigns: numb
         return {
           tag: 'div' as const,
           text: {
-            content: `${statusIcon} ${actionLabel} **${c.campaignName}**\n花费 $${c.spend.toFixed(2)} | CPI $${c.cpi.toFixed(2)} | CTR ${c.ctr.toFixed(1)}%\n推理: ${v.screenSkill} → ${v.action?.skillName}\n原因: ${v.action?.reason}${v.execError ? `\n错误: ${v.execError}` : ''}`,
+            content: `${statusIcon} ${actionLabel} **${c.campaignName}**\n花费 $${c.spend.toFixed(2)} | ROAS ${c.roas.toFixed(2)} | 安装 ${c.conversions} | CPI $${c.cpi.toFixed(2)}\n推理: ${v.screenSkill} → ${v.action?.skillName}\n原因: ${v.action?.reason}${v.execError ? `\n错误: ${v.execError}` : ''}`,
             tag: 'lark_md' as const,
           },
         }
@@ -350,7 +392,7 @@ async function notifyAutoPilot(verdicts: CampaignVerdict[], totalCampaigns: numb
         return {
           tag: 'div' as const,
           text: {
-            content: `**${c.campaignName}**\n花费 $${c.spend.toFixed(2)} | CPI $${c.cpi.toFixed(2)} | CTR ${c.ctr.toFixed(1)}%\n${v.screenSkill}: ${v.screenReason}`,
+            content: `**${c.campaignName}**\n花费 $${c.spend.toFixed(2)} | ROAS ${c.roas.toFixed(2)} | 安装 ${c.conversions} | CPI $${c.cpi.toFixed(2)}\n${v.screenSkill || '观察中'}: ${v.screenReason || '未触发规则'}`,
             tag: 'lark_md' as const,
           },
         }
