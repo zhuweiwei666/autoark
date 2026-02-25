@@ -250,11 +250,12 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
     result.phase = 'notification'
     log.info('[Brain] Phase 6: Feishu notification...')
     try {
+      const allSpend = allCampaigns.reduce((s, c) => s + c.todaySpend, 0)
       await notifyFeishu({
         screening,
         actions: result.actions,
         events,
-        benchmarks,
+        benchmarks: { ...benchmarks, totalSpend: Math.round(allSpend) },
         summary: '',
         classSummary,
         screenedCampaigns,

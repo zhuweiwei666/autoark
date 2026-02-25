@@ -141,8 +141,12 @@ function buildCampaignRow(
   const action = actions?.find((a: any) => a.campaignId === r.campaignId)
 
   const name = r.campaignName || r.campaignId || '?'
-  const spend = c ? `$${Math.round(c.todaySpend)}` : '-'
+  const spend = c ? `$${c.todaySpend.toFixed(2)}` : '-'
   const roi = c ? (c.adjustedRoi || c.todayRoas || 0).toFixed(2) : '-'
+  const installs = c?.todayConversions || c?.installs || 0
+  const cpi = c?.cpi ? `$${c.cpi.toFixed(2)}` : '-'
+  const payRate = c?.payRate ? `${(c.payRate * 100).toFixed(1)}%` : '-'
+  const trend = c?.trendSummary || ''
   const skillTag = r.matchedSkill || ''
   const reason = r.reasons?.[0] || ''
   const actionTag = action ? (action.type === 'pause' ? '⏸ 暂停' : action.type === 'increase_budget' ? '📈 加预算' : action.type) : ''
@@ -152,7 +156,7 @@ function buildCampaignRow(
     {
       tag: 'div',
       text: {
-        content: `**${name}**\n花费 ${spend} | ROI ${roi} | ${skillTag}\n${reason}${actionTag ? `\n→ ${actionTag}${autoTag}` : ''}`,
+        content: `**${name}**\n花费 ${spend} | ROI ${roi} | 安装 ${installs} | CPI ${cpi} | 付费率 ${payRate}\n${skillTag}: ${reason}${trend ? `\n趋势: ${trend}` : ''}${actionTag ? `\n→ ${actionTag}${autoTag}` : ''}`,
         tag: 'lark_md',
       },
     },
