@@ -1,12 +1,22 @@
 import cron from 'node-cron'
 import { log } from '../platform/logger'
 import { think } from '../agent/brain'
+import { runAutoPilot } from '../agent/auto-pilot'
 import { runEvolution } from '../agent/evolution'
 import { runAudit } from '../agent/auditor'
 import { dailySummary, weeklyEvolution, decayKnowledge, manageSkillLifecycle } from '../agent/librarian'
 
 export function initPipelineCron() {
-  // Brain cycle: 每 30 分钟
+  // AutoPilot: AI 接管优化师的快速循环，每 10 分钟，纯 Facebook API
+  cron.schedule('*/10 * * * *', async () => {
+    try {
+      await runAutoPilot()
+    } catch (err: any) {
+      log.error('[AutoPilot] Failed:', err.message)
+    }
+  })
+
+  // Brain cycle: 全量扫描，每 30 分钟
   cron.schedule('*/30 * * * *', async () => {
     try {
       await think('cron')
@@ -14,8 +24,6 @@ export function initPipelineCron() {
       log.error('[BrainCron] Failed:', err.message)
     }
   })
-
-  // 启动后不再自动跑 Initial run，等下一个 cron 周期
 
   // Auditor: 每 2 小时独立审查
   cron.schedule('5 */2 * * *', async () => {
@@ -66,5 +74,5 @@ export function initPipelineCron() {
     }
   })
 
-  log.info('[Cron] Initialized: brain(30min), auditor(2h), librarian-daily(22:00 CST), evolution(weekly Mon 9:00 CST)')
+  log.info('[Cron] Initialized: auto-pilot(10min), brain(30min), auditor(2h), librarian-daily(22:00 CST), evolution(weekly Mon 9:00 CST)')
 }
