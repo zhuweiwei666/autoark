@@ -348,10 +348,30 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
 
 /**
  * 带重试的操作执行
+ * 优先 Facebook API，失败降级 TopTou
  */
 export async function executeWithRetry(action: DecisionAction, maxRetries = 3): Promise<any> {
+  // 第一优先：Facebook API
+  const fbToken = process.env.FB_ACCESS_TOKEN
+  if (fbToken && action.campaignId) {
+    try {
+      const fbParams: any = { access_token: fbToken }
+      if (action.type === 'pause') fbParams.status = 'PAUSED'
+      else if (action.type === 'resume') fbParams.status = 'ACTIVE'
+      else if (action.type === 'increase_budget' && action.newBudget) fbParams.daily_budget = action.newBudget
+
+      const axios = (await import('axios')).default
+      await axios.post(`https://graph.facebook.com/v21.0/${action.campaignId}`, null, { params: fbParams, timeout: 15000 })
+      log.info(`[Executor] Facebook API: ${action.type} ${action.campaignName} (${action.campaignId})`)
+      return { ...action, executed: true, attempt: 1, via: 'facebook_api' }
+    } catch (fbErr: any) {
+      log.warn(`[Executor] Facebook API failed for ${action.campaignId}, falling back to TopTou: ${fbErr.response?.data?.error?.message || fbErr.message}`)
+    }
+  }
+
+  // 降级：TopTou
   if (!getTopTouToken()) {
-    return { ...action, executed: false, error: 'TopTou token not set' }
+    return { ...action, executed: false, error: 'Both Facebook API and TopTou unavailable' }
   }
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -373,9 +393,10 @@ export async function executeWithRetry(action: DecisionAction, maxRetries = 3): 
           list: [{ id: action.campaignId, accountId: action.accountId, status: 'ACTIVE' }],
         })
       }
-      return { ...action, executed: true, attempt, result: apiResult }
+      log.info(`[Executor] TopTou fallback: ${action.type} ${action.campaignName}`)
+      return { ...action, executed: true, attempt, via: 'toptou', result: apiResult }
     } catch (err: any) {
-      log.warn(`[Brain] Execute attempt ${attempt}/${maxRetries} failed for ${action.campaignId}: ${err.message}`)
+      log.warn(`[Executor] TopTou attempt ${attempt}/${maxRetries} failed for ${action.campaignId}: ${err.message}`)
       if (attempt < maxRetries) {
         await new Promise(r => setTimeout(r, 30000 * attempt))
       } else {

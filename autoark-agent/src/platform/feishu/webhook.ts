@@ -62,23 +62,31 @@ router.post('/interaction', async (req: Request, res: Response) => {
       })
 
       try {
-        // 优先用 Facebook API 直接执行
-        const fbToken = process.env.FB_ACCESS_TOKEN
         const actionType = (dbAction as any).type
         const entityId = (dbAction as any).entityId
+        let executed = false
 
+        // 第一优先：Facebook API
+        const fbToken = process.env.FB_ACCESS_TOKEN
         if (fbToken && entityId) {
-          const fbParams: any = { access_token: fbToken }
-          if (actionType === 'pause') fbParams.status = 'PAUSED'
-          else if (actionType === 'resume') fbParams.status = 'ACTIVE'
-          else if (actionType === 'adjust_budget' && (dbAction as any).params?.newBudget) {
-            fbParams.daily_budget = (dbAction as any).params.newBudget
-          }
+          try {
+            const fbParams: any = { access_token: fbToken }
+            if (actionType === 'pause') fbParams.status = 'PAUSED'
+            else if (actionType === 'resume') fbParams.status = 'ACTIVE'
+            else if (actionType === 'adjust_budget' && (dbAction as any).params?.newBudget) {
+              fbParams.daily_budget = (dbAction as any).params.newBudget
+            }
 
-          await axios.post(`${FB_GRAPH}/${entityId}`, null, { params: fbParams, timeout: 15000 })
-          log.info(`[FeishuWebhook] Executed via Facebook API: ${actionType} ${entityId}`)
-        } else {
-          // 降级到 TopTou
+            await axios.post(`${FB_GRAPH}/${entityId}`, null, { params: fbParams, timeout: 15000 })
+            log.info(`[FeishuWebhook] Executed via Facebook API: ${actionType} ${entityId}`)
+            executed = true
+          } catch (fbErr: any) {
+            log.warn(`[FeishuWebhook] Facebook API failed, falling back to TopTou: ${fbErr.response?.data?.error?.message || fbErr.message}`)
+          }
+        }
+
+        // 降级：TopTou
+        if (!executed) {
           await executeWithRetry({
             type: actionType === 'adjust_budget' ? 'increase_budget' : actionType,
             campaignId: entityId,
@@ -89,10 +97,12 @@ router.post('/interaction', async (req: Request, res: Response) => {
             currentBudget: (dbAction as any).params?.currentBudget,
             newBudget: (dbAction as any).params?.newBudget,
           })
+          log.info(`[FeishuWebhook] Executed via TopTou fallback: ${actionType} ${entityId}`)
         }
+
         await Action.updateOne({ _id: dbAction._id }, { $set: { status: 'executed', executedAt: new Date() } })
       } catch (e: any) {
-        log.error(`[FeishuWebhook] Execute failed: ${e.message}`)
+        log.error(`[FeishuWebhook] Execute failed (both FB and TopTou): ${e.message}`)
         await Action.updateOne({ _id: dbAction._id }, { $set: { status: 'failed', 'result.error': e.message } })
       }
     } else {
