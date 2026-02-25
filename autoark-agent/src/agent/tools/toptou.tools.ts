@@ -384,12 +384,74 @@ campaign 命名规范：{优化师}_fb_{产品}_{地区}_{其他}_{日期}
   },
 }
 
+// ==================== AI 接管管理 ====================
+
+const manageAutoOptimizers: ToolDef = {
+  name: 'manage_auto_optimizers',
+  description: `管理 AI 全权接管的优化师名单。被接管的优化师，其所有广告的操作（暂停、加预算、调预算、恢复）由 AI 自动执行，无需人工审批。
+操作：
+- action="list": 查看当前接管名单
+- action="add", optimizer="wwz": 添加优化师到接管名单
+- action="remove", optimizer="wwz": 从接管名单移除`,
+  parameters: S.obj('参数', {
+    action: S.enum('操作', ['list', 'add', 'remove']),
+    optimizer: S.str('优化师缩写（add/remove 时必填）'),
+  }, ['action']),
+  handler: async (args) => {
+    const mongoose = (await import('mongoose')).default
+    const db = mongoose.connection.db
+    if (!db) return { error: 'Database not connected' }
+
+    const config = await db.collection('agentconfig2s').findOne({ agentId: 'executor' })
+    const current: string[] = config?.executor?.scope?.optimizers || []
+
+    if (args.action === 'list') {
+      return {
+        autoManagedOptimizers: current,
+        count: current.length,
+        message: current.length > 0
+          ? `当前 AI 接管的优化师: ${current.join(', ')}`
+          : '当前没有 AI 接管的优化师，所有操作需人工审批',
+      }
+    }
+
+    if (!args.optimizer) return { error: '请指定优化师缩写' }
+    const opt = args.optimizer.toLowerCase()
+
+    if (args.action === 'add') {
+      if (current.includes(opt)) return { message: `${opt} 已在接管名单中` }
+      const updated = [...current, opt]
+      await db.collection('agentconfig2s').updateOne(
+        { agentId: 'executor' },
+        { $set: { 'executor.scope.optimizers': updated } },
+        { upsert: true }
+      )
+      log.info(`[AutoManage] Added optimizer: ${opt}`)
+      return { message: `已将 ${opt} 加入 AI 接管名单，其所有广告操作将自动执行`, list: updated }
+    }
+
+    if (args.action === 'remove') {
+      const updated = current.filter(o => o !== opt)
+      await db.collection('agentconfig2s').updateOne(
+        { agentId: 'executor' },
+        { $set: { 'executor.scope.optimizers': updated } }
+      )
+      log.info(`[AutoManage] Removed optimizer: ${opt}`)
+      return { message: `已将 ${opt} 从 AI 接管名单移除，后续操作需人工审批`, list: updated }
+    }
+
+    return { error: '未知操作' }
+  },
+}
+
 export const toptouTools: ToolDef[] = [
   // Facebook API 直接工具（第一优先）
   fb_query,
   fb_update,
   tt_batchActivate,
   tt_batchBudget,
+  // AI 接管管理
+  manageAutoOptimizers,
   // TopTou 备选工具
   tt_getBaseInfo,
   tt_getCampaigns,

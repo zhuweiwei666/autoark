@@ -190,6 +190,15 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
     result.phase = 'execution'
     log.info(`[Brain] Phase 5: Executing ${decisions.actions.length} actions...`)
 
+    // 加载 AI 接管配置：哪些优化师的广告全权自动执行
+    const executorConfig = await getAgentConfig('executor')
+    const autoOptimizers = new Set<string>(
+      (executorConfig?.executor?.scope?.optimizers || []).map((o: string) => o.toLowerCase())
+    )
+    if (autoOptimizers.size > 0) {
+      log.info(`[Executor] AI auto-managed optimizers: ${[...autoOptimizers].join(', ')}`)
+    }
+
     const existingPending = await Action.find({ status: 'pending' }).select('entityId type').lean()
     const pendingKeys = new Set(existingPending.map((a: any) => `${a.entityId}:${a.type}`))
 
@@ -205,23 +214,29 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
         if (pendingKeys.has(key)) { skippedDuplicate++; continue }
         pendingKeys.add(key)
 
+        // 检查是否属于 AI 接管的优化师
         const c = screenedCampaigns.find(x => x.campaignId === action.campaignId)
+        const optimizer = (action.campaignName || '').split('_')[0]?.toLowerCase() || ''
+        const isAutoManaged = autoOptimizers.has(optimizer)
+        const isAuto = action.auto || isAutoManaged
+
         const actionDoc = await Action.create({
           type: dbType,
           platform: 'facebook', accountId: action.accountId || '',
           entityId: action.campaignId, entityName: action.campaignName || '',
           params: {
-            source: 'brain', priority: action.auto ? 'high' : 'normal',
+            source: 'brain', priority: isAuto ? 'high' : 'normal',
             currentBudget: action.currentBudget, newBudget: action.newBudget,
             level: 'campaign',
             roasAtDecision: c?.todayRoas, spendAtDecision: c?.todaySpend,
             skillName: action.skillName,
+            autoManaged: isAutoManaged || undefined,
           },
-          reason: action.reason || '',
-          status: action.auto ? 'approved' : 'pending',
+          reason: action.reason + (isAutoManaged ? ` [AI接管: ${optimizer}]` : ''),
+          status: isAuto ? 'approved' : 'pending',
         })
 
-        if (action.auto) {
+        if (isAuto) {
           const execResult = await executeWithRetry(action)
           if (execResult?.executed) {
             await Action.updateOne({ _id: actionDoc._id }, { $set: { status: 'executed', executedAt: new Date(), result: execResult.result } })
