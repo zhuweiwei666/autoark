@@ -20,8 +20,7 @@ import { DecisionReadyData, CampaignDecisionData, QualityResult } from './types'
 export async function monitor(): Promise<DecisionReadyData> {
   const today = dayjs().format('YYYY-MM-DD')
   const dayBefore = dayjs().subtract(2, 'day').format('YYYY-MM-DD')
-  const utcHour = dayjs().hour() + dayjs().minute() / 60
-  const hour = (utcHour + 8) % 24  // UTC → 北京时间
+  const hour = dayjs().hour() + dayjs().minute() / 60  // UTC hour
 
   log.info('[Monitor] Starting perception cycle...')
 
@@ -36,13 +35,11 @@ export async function monitor(): Promise<DecisionReadyData> {
     if (!existing || r.date > existing.date) latestBycamp.set(r.campaignId, r)
   }
 
-  // 只过滤超过 2 天没有数据的 campaign（真正停投的）
-  // Metabase BI 有延迟，今天的数据可能还没入库，不能用 date < today 判断
-  const yesterday = dayjs().subtract(1, 'day').format('YYYY-MM-DD')
-  const staleCount = [...latestBycamp.values()].filter(c => c.date < yesterday).length
-  const campaigns = [...latestBycamp.values()].filter(c => c.date >= yesterday)
+  // 只保留今天 (UTC+0) 有数据的 campaign
+  const staleCount = [...latestBycamp.values()].filter(c => c.date < today).length
+  const campaigns = [...latestBycamp.values()].filter(c => c.date >= today)
   if (staleCount > 0) {
-    log.info(`[Monitor] Filtered ${staleCount} stale campaigns (no data in 2 days)`)
+    log.info(`[Monitor] Filtered ${staleCount} campaigns with no data today (${today} UTC)`)
   }
 
   // Step 2: 质量评估
