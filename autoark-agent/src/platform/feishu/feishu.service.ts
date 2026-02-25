@@ -135,17 +135,15 @@ export async function notifyFeishu(params: NotifyFeishuParams): Promise<void> {
     log.info('[Feishu] Summary card sent')
   }
 
-  // 2. 已自动执行的操作 — 单独推送"已执行"通知
-  if (notifications.urgentAlert) {
-    const autoExecuted = params.actions.filter((a: any) => a.auto === true && a.executed === true)
-    for (const action of autoExecuted) {
-      const campaign = params.screenedCampaigns?.find((c: any) => c.campaignId === action.campaignId)
-      const card = buildAutoExecutedCard(action, campaign, params.benchmarks)
-      await sendCard(card, config)
-    }
-    if (autoExecuted.length > 0) {
-      log.info(`[Feishu] ${autoExecuted.length} auto-executed notification cards sent`)
-    }
+  // 2. 已自动执行的操作 — 每条必须推送（不受开关限制，AI 操作必须通知人类）
+  const autoExecuted = params.actions.filter((a: any) => a.auto === true && a.executed === true)
+  for (const action of autoExecuted) {
+    const campaign = params.screenedCampaigns?.find((c: any) => c.campaignId === action.campaignId)
+    const card = buildAutoExecutedCard(action, campaign, params.benchmarks)
+    await sendCard(card, config)
+  }
+  if (autoExecuted.length > 0) {
+    log.info(`[Feishu] ${autoExecuted.length} auto-executed notification cards sent`)
   }
 
   // 3. 待审批操作 — 推送审批卡片

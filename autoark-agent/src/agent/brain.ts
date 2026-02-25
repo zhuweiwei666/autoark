@@ -240,8 +240,8 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
           const execResult = await executeWithRetry(action)
           if (execResult?.executed) {
             await Action.updateOne({ _id: actionDoc._id }, { $set: { status: 'executed', executedAt: new Date(), result: execResult.result } })
-            log.info(`[Executor] Auto-executed: ${action.type} ${action.campaignName} (${action.skillName || 'rule'})`)
-            result.actions.push({ ...action, executed: true })
+            log.info(`[Executor] Auto-executed: ${action.type} ${action.campaignName} (${action.skillName || 'rule'})${isAutoManaged ? ' [AI接管]' : ''}`)
+            result.actions.push({ ...action, auto: true, executed: true })
             autoExecuted++
           } else {
             await Action.updateOne({ _id: actionDoc._id }, { $set: { status: 'failed', result: { error: execResult?.error } } })
