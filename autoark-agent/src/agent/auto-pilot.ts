@@ -125,20 +125,19 @@ async function enrichWithMetabase(campaigns: FBCampaignData[]): Promise<void> {
       const mb = mbMap.get(c.campaignId)
       if (!mb) continue
 
-      // ROAS: 用 Metabase 的 adjustedRoi（基于调整收入 / API 花费）
-      if (mb.adjustedRoi > 0) {
-        c.roas = mb.adjustedRoi
-      } else if (mb.firstDayRoi > 0) {
-        c.roas = mb.firstDayRoi
+      // ROAS: FB API 优先（purchase_roas），没有时用 Metabase
+      if (c.roas === 0) {
+        if (mb.adjustedRoi > 0) c.roas = mb.adjustedRoi
+        else if (mb.firstDayRoi > 0) c.roas = mb.firstDayRoi
       }
 
-      // CPI: 用 Metabase 的（广告花费_API / 首日UV）
-      if (mb.cpi > 0) c.cpi = mb.cpi
+      // CPI: FB API 优先，没有时用 Metabase（首日UV 口径）
+      if (c.cpi === 0 && mb.cpi > 0) c.cpi = mb.cpi
 
-      // 安装量: 用 Metabase 的首日UV
-      if (mb.installs > 0) c.conversions = mb.installs
+      // 安装量: FB API 优先，没有时用 Metabase 首日UV
+      if (c.conversions === 0 && mb.installs > 0) c.conversions = mb.installs
 
-      // 花费: 取 FB 和 Metabase 的较大值
+      // 花费: 取较大值
       if (mb.spend > c.spend) c.spend = mb.spend
 
       enriched++
@@ -172,10 +171,10 @@ async function fetchFBData(fbToken: string, optimizers: string[]): Promise<FBCam
         const optimizer = (parts[0] || '').toLowerCase()
         if (!optimizers.includes(optimizer)) continue
 
-        let spend = 0, impressions = 0, clicks = 0, conversions = 0
+        let spend = 0, impressions = 0, clicks = 0, conversions = 0, roas = 0, revenue = 0
         try {
           const insRes = await axios.get(`${FB_GRAPH}/${camp.id}/insights`, {
-            params: { fields: 'spend,impressions,clicks,actions', date_preset: 'today', access_token: fbToken },
+            params: { fields: 'spend,impressions,clicks,actions,action_values,purchase_roas', date_preset: 'today', access_token: fbToken },
             timeout: 10000,
           })
           const ins = insRes.data?.data?.[0]
@@ -183,8 +182,28 @@ async function fetchFBData(fbToken: string, optimizers: string[]): Promise<FBCam
             spend = Number(ins.spend || 0)
             impressions = Number(ins.impressions || 0)
             clicks = Number(ins.clicks || 0)
+
             const instAction = (ins.actions || []).find((a: any) => a.action_type === 'app_install' || a.action_type === 'omni_app_install')
             conversions = instAction ? Number(instAction.value || 0) : 0
+
+            // ROAS: 优先用 purchase_roas，否则从 action_values 算
+            const purchaseRoas = ins.purchase_roas?.find((a: any) => a.action_type === 'omni_purchase')
+            if (purchaseRoas) {
+              roas = Number(purchaseRoas.value || 0)
+            }
+
+            // Revenue: 从 action_values 的 omni_purchase 取
+            const purchaseValue = (ins.action_values || []).find((a: any) => a.action_type === 'omni_purchase')
+            if (purchaseValue) {
+              revenue = Number(purchaseValue.value || 0)
+              if (roas === 0 && spend > 0) roas = revenue / spend
+            }
+
+            // 购买次数作为转化（如果没有 install 数据）
+            if (conversions === 0) {
+              const purchaseAction = (ins.actions || []).find((a: any) => a.action_type === 'omni_purchase' || a.action_type === 'purchase')
+              if (purchaseAction) conversions = Number(purchaseAction.value || 0)
+            }
           }
         } catch { /* new campaign, no insights yet */ }
 
@@ -199,7 +218,7 @@ async function fetchFBData(fbToken: string, optimizers: string[]): Promise<FBCam
           impressions,
           clicks,
           conversions,
-          roas: 0,
+          roas,
           cpi: conversions > 0 ? spend / conversions : 0,
           ctr: impressions > 0 ? (clicks / impressions) * 100 : 0,
           optimizer,
