@@ -1,13 +1,20 @@
 /**
- * 数据采集器 — 从 Metabase 聚合表拉取 campaign 全量指标
+ * 数据采集器 — 双源采集：Facebook API (一手) + Metabase BI (补充)
  *
- * 单次请求获取花费、转化、收入、ROI 等全部字段，
- * 监控 Agent 负责将每次采集的快照存入时序，供趋势分析使用。
+ * 优先级：
+ * 1. Facebook API: 实时花费、状态、预算（一手数据，最可信）
+ * 2. Metabase BI: 收入、ROI、付费率、ARPU（FB API 没有的业务指标）
+ *
+ * 合并策略：以 Facebook API 为基础，Metabase 补充业务指标。
+ * 如果 campaign 在 FB API 中存在，用 FB 的 spend/status；
+ * Metabase 中有但 FB 没有的（如 TikTok），保留 Metabase 数据。
  */
 import axios from 'axios'
+import dayjs from 'dayjs'
 import { log } from '../../platform/logger'
 import { getAgentConfig } from '../agent-config.model'
 
+const FB_GRAPH = 'https://graph.facebook.com/v21.0'
 const MB_BASE = 'https://meta.iohubonline.club'
 let mbSession: string | null = null
 let mbExpiry = 0
@@ -24,39 +31,176 @@ async function session(): Promise<string> {
 export interface RawCampaign {
   campaignId: string
   campaignName: string
-  accountId: string     // 广告账户 ID（TopTou 操作必需）
-  platform: string      // 渠道: FB / TT
-  optimizer: string     // 优化师
-  pkgName: string       // 包名
-  date: string          // 日期
-  spend: number         // 花费（API 口径）
-  installs: number      // 安装量
-  cpi: number           // CPI
-  cpa: number           // CPA
-  revenue: number       // 收入（调整的首日收入，最准确）
-  firstDayRoi: number   // 首日 ROI（基于 API 花费）
-  adjustedRoi: number   // 调整 ROI（基于 API 花费）
-  day3Roi: number       // 三日回收 ROI
-  payRate: number       // 首日付费率
-  arpu: number          // 首日 ARPU
-  ctr: number           // CTR
+  accountId: string
+  platform: string
+  optimizer: string
+  pkgName: string
+  date: string
+  spend: number
+  installs: number
+  cpi: number
+  cpa: number
+  revenue: number
+  firstDayRoi: number
+  adjustedRoi: number
+  day3Roi: number
+  payRate: number
+  arpu: number
+  ctr: number
+  source?: 'facebook_api' | 'metabase' | 'merged'
 }
 
 /**
- * 从 Metabase 聚合表采集 campaign 数据
+ * 双源采集：Facebook API + Metabase，合并输出
  */
 export async function collectData(startDate: string, endDate: string): Promise<RawCampaign[]> {
+  const [fbData, mbData] = await Promise.all([
+    collectFromFacebookAPI().catch(err => {
+      log.warn(`[Collector] Facebook API failed, using Metabase only: ${err.message}`)
+      return [] as RawCampaign[]
+    }),
+    collectFromMetabase(startDate, endDate).catch(err => {
+      log.warn(`[Collector] Metabase failed: ${err.message}`)
+      return [] as RawCampaign[]
+    }),
+  ])
+
+  log.info(`[Collector] Facebook API: ${fbData.length} campaigns, Metabase: ${mbData.length} campaigns`)
+
+  // 合并：FB 数据为主，Metabase 补充业务指标
+  const mbMap = new Map(mbData.map(c => [c.campaignId, c]))
+  const merged = new Map<string, RawCampaign>()
+
+  for (const fb of fbData) {
+    const mb = mbMap.get(fb.campaignId)
+    if (mb) {
+      // 两边都有：FB 的 spend 为准，Metabase 补充 revenue/ROI/payRate 等
+      merged.set(fb.campaignId, {
+        ...fb,
+        revenue: mb.revenue,
+        firstDayRoi: fb.spend > 0 && mb.revenue > 0 ? mb.revenue / fb.spend : mb.firstDayRoi,
+        adjustedRoi: fb.spend > 0 && mb.revenue > 0 ? mb.revenue / fb.spend : mb.adjustedRoi,
+        day3Roi: mb.day3Roi,
+        payRate: mb.payRate,
+        arpu: mb.arpu,
+        optimizer: mb.optimizer || fb.optimizer,
+        pkgName: mb.pkgName || fb.pkgName,
+        source: 'merged',
+      })
+      mbMap.delete(fb.campaignId)
+    } else {
+      merged.set(fb.campaignId, { ...fb, source: 'facebook_api' })
+    }
+  }
+
+  // Metabase 独有的（TikTok 或 FB API 没覆盖的）
+  for (const [id, mb] of mbMap) {
+    merged.set(id, { ...mb, source: 'metabase' })
+  }
+
+  const result = [...merged.values()]
+  const fbOnly = result.filter(c => c.source === 'facebook_api').length
+  const mbOnly = result.filter(c => c.source === 'metabase').length
+  const both = result.filter(c => c.source === 'merged').length
+  log.info(`[Collector] Merged: ${result.length} total (${both} merged, ${fbOnly} FB-only, ${mbOnly} Metabase-only)`)
+
+  return result
+}
+
+// ==================== Facebook API 采集 ====================
+
+async function collectFromFacebookAPI(): Promise<RawCampaign[]> {
+  const fbToken = process.env.FB_ACCESS_TOKEN
+  if (!fbToken) return []
+
+  const accountsRes = await axios.get(`${FB_GRAPH}/me/adaccounts`, {
+    params: { fields: 'id,account_id,name', limit: 200, access_token: fbToken },
+    timeout: 15000,
+  })
+  const accounts = accountsRes.data?.data || []
+  const today = dayjs().format('YYYY-MM-DD')
+  const result: RawCampaign[] = []
+
+  for (const acc of accounts) {
+    try {
+      // 一次查 campaign + 今日 insights
+      const res = await axios.get(`${FB_GRAPH}/${acc.id}/campaigns`, {
+        params: {
+          fields: 'id,name,status,daily_budget,created_time',
+          limit: 500,
+          access_token: fbToken,
+        },
+        timeout: 15000,
+      })
+
+      for (const camp of res.data?.data || []) {
+        if (camp.status !== 'ACTIVE') continue
+
+        // 查今日 insights
+        let spend = 0, impressions = 0, clicks = 0, conversions = 0
+        try {
+          const insightRes = await axios.get(`${FB_GRAPH}/${camp.id}/insights`, {
+            params: { fields: 'spend,impressions,clicks,actions', date_preset: 'today', access_token: fbToken },
+            timeout: 10000,
+          })
+          const ins = insightRes.data?.data?.[0]
+          if (ins) {
+            spend = Number(ins.spend || 0)
+            impressions = Number(ins.impressions || 0)
+            clicks = Number(ins.clicks || 0)
+            const installs = (ins.actions || []).find((a: any) => a.action_type === 'app_install' || a.action_type === 'omni_app_install')
+            conversions = installs ? Number(installs.value || 0) : 0
+          }
+        } catch { /* no insights yet for new campaigns */ }
+
+        // 从命名规范解析优化师和包名
+        const parts = camp.name.split('_')
+        const optimizer = parts[0] || ''
+        const pkgName = parts.length >= 3 ? parts[2] : ''
+
+        result.push({
+          campaignId: camp.id,
+          campaignName: camp.name,
+          accountId: acc.account_id,
+          platform: 'FB',
+          optimizer,
+          pkgName,
+          date: today,
+          spend,
+          installs: conversions,
+          cpi: conversions > 0 ? spend / conversions : 0,
+          cpa: 0,
+          revenue: 0,
+          firstDayRoi: 0,
+          adjustedRoi: 0,
+          day3Roi: 0,
+          payRate: 0,
+          arpu: 0,
+          ctr: impressions > 0 ? (clicks / impressions) * 100 : 0,
+        })
+      }
+    } catch (e: any) {
+      log.warn(`[Collector] FB account ${acc.account_id} failed: ${e.message}`)
+    }
+  }
+
+  return result
+}
+
+// ==================== Metabase 采集 ====================
+
+async function collectFromMetabase(startDate: string, endDate: string): Promise<RawCampaign[]> {
   const tok = await session()
   const cfg = await getAgentConfig('monitor')
   const src = (cfg?.monitor?.dataSources || []).find((d: any) => d.enabled)
 
   if (!src) {
-    log.warn('[Collector] No enabled data source')
+    log.warn('[Collector] No enabled Metabase data source')
     return []
   }
 
   const data = await queryCard(tok, src.cardId, src.accessCode, startDate, endDate)
-  log.info(`[Collector] ${src.name}: ${data.rows.length} rows, ${data.cols.length} cols`)
+  log.info(`[Collector] Metabase ${src.name}: ${data.rows.length} rows, ${data.cols.length} cols`)
 
   const col = (name: string) => data.cols.indexOf(name)
   const result: RawCampaign[] = []
@@ -70,12 +214,10 @@ export async function collectData(startDate: string, endDate: string): Promise<R
     const spendBI = Number(r[col('广告花费')] || 0)
     const spend = spendAPI > 0 ? spendAPI : spendBI
 
-    // 收入
     const adjustedRevenue = Number(r[col('调整的首日收入')] || 0)
     const channelRevenue = Number(r[col('渠道收入')] || 0)
     const firstDayRevenue = Number(r[col('首日新增收入')] || 0)
 
-    // ROI 基于 API 花费重算（BI 花费偏低会导致 ROI 虚高）
     const roi = (rev: number) => spend > 0 ? rev / spend : 0
 
     result.push({
@@ -100,8 +242,7 @@ export async function collectData(startDate: string, endDate: string): Promise<R
     })
   }
 
-  if (skipped > 0) log.info(`[Collector] Skipped ${skipped} summary/empty rows`)
-  log.info(`[Collector] Result: ${result.length} campaigns`)
+  if (skipped > 0) log.info(`[Collector] Metabase skipped ${skipped} summary/empty rows`)
   return result
 }
 
