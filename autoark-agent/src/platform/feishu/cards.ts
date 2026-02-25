@@ -141,7 +141,6 @@ function buildCampaignRow(
   const action = actions?.find((a: any) => a.campaignId === r.campaignId)
 
   const name = r.campaignName || r.campaignId || '?'
-  const shortName = name.length > 30 ? name.slice(0, 28) + '..' : name
   const spend = c ? `$${Math.round(c.todaySpend)}` : '-'
   const roi = c ? (c.adjustedRoi || c.todayRoas || 0).toFixed(2) : '-'
   const skillTag = r.matchedSkill || ''
@@ -153,7 +152,7 @@ function buildCampaignRow(
     {
       tag: 'div',
       text: {
-        content: `**${shortName}**\n花费 ${spend} | ROI ${roi} | ${skillTag}\n${reason}${actionTag ? `\n→ ${actionTag}${autoTag}` : ''}`,
+        content: `**${name}**\n花费 ${spend} | ROI ${roi} | ${skillTag}\n${reason}${actionTag ? `\n→ ${actionTag}${autoTag}` : ''}`,
         tag: 'lark_md',
       },
     },
@@ -189,7 +188,6 @@ function buildCampaignRow(
  */
 export function buildAutoExecutedCard(action: any, campaign: any, benchmarks: MarketBenchmark) {
   const name = action.campaignName || action.campaignId
-  const shortName = name.length > 30 ? name.slice(0, 28) + '..' : name
   const spend = campaign ? `$${Math.round(campaign.todaySpend)}` : '-'
   const roi = campaign ? (campaign.adjustedRoi || campaign.todayRoas || 0).toFixed(2) : '-'
   const actionLabel = action.type === 'pause' ? '已暂停' :
@@ -197,7 +195,7 @@ export function buildAutoExecutedCard(action: any, campaign: any, benchmarks: Ma
     action.type === 'resume' ? '已恢复' : action.type
 
   const fields = [
-    { is_short: true, text: { content: `**Campaign**\n${shortName}`, tag: 'lark_md' } },
+    { is_short: true, text: { content: `**Campaign**\n${name}`, tag: 'lark_md' } },
     { is_short: true, text: { content: `**操作**\n${actionLabel}`, tag: 'lark_md' } },
     { is_short: true, text: { content: `**花费**\n${spend}`, tag: 'lark_md' } },
     { is_short: true, text: { content: `**ROI**\n${roi}`, tag: 'lark_md' } },
@@ -211,7 +209,7 @@ export function buildAutoExecutedCard(action: any, campaign: any, benchmarks: Ma
     config: { wide_screen_mode: true },
     header: {
       template: action.type === 'pause' ? 'red' : 'green',
-      title: { content: `AutoArk 已自动执行: ${actionLabel} ${shortName}`, tag: 'plain_text' },
+      title: { content: `AutoArk 已自动执行: ${actionLabel} ${name}`, tag: 'plain_text' },
     },
     elements: [
       { tag: 'div', fields },
@@ -226,7 +224,6 @@ export function buildAutoExecutedCard(action: any, campaign: any, benchmarks: Ma
  */
 export function buildApprovalCard(action: any, campaign: any, benchmarks: MarketBenchmark) {
   const name = action.campaignName || action.campaignId
-  const shortName = name.length > 30 ? name.slice(0, 28) + '..' : name
   const spend = campaign ? `$${Math.round(campaign.todaySpend)}` : '-'
   const roi = campaign ? (campaign.adjustedRoi || campaign.todayRoas || 0).toFixed(2) : '-'
   const actionLabel = action.type === 'pause' ? 'PAUSE' :
@@ -234,7 +231,7 @@ export function buildApprovalCard(action: any, campaign: any, benchmarks: Market
     action.type === 'resume' ? 'RESUME' : action.type.toUpperCase()
 
   const fields = [
-    { is_short: true, text: { content: `**Campaign**\n${shortName}`, tag: 'lark_md' } },
+    { is_short: true, text: { content: `**Campaign**\n${name}`, tag: 'lark_md' } },
     { is_short: true, text: { content: `**操作**\n${actionLabel}`, tag: 'lark_md' } },
     { is_short: true, text: { content: `**花费**\n${spend}`, tag: 'lark_md' } },
     { is_short: true, text: { content: `**ROI**\n${roi}`, tag: 'lark_md' } },
@@ -248,7 +245,7 @@ export function buildApprovalCard(action: any, campaign: any, benchmarks: Market
     config: { wide_screen_mode: true },
     header: {
       template: action.type === 'pause' ? 'orange' : 'blue',
-      title: { content: `AutoArk 待审批: ${actionLabel} ${shortName}`, tag: 'plain_text' },
+      title: { content: `AutoArk 待审批: ${actionLabel} ${name}`, tag: 'plain_text' },
     },
     elements: [
       { tag: 'div', fields },
