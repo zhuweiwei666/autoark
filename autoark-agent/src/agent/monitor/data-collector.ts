@@ -51,12 +51,17 @@ export interface RawCampaign {
 }
 
 /**
- * 双源采集：Facebook API + Metabase，合并输出
+ * 双源采集：Metabase (基础) + Facebook API (补充新 campaign)
+ *
+ * 策略：
+ * 1. Metabase 是权威数据源（花费、收入、ROI 全有），覆盖所有平台
+ * 2. Facebook API 只用来发现 Metabase 中还没有的新 campaign（刚发布的）
+ * 3. 不用 FB API 的 spend 覆盖 Metabase 的 spend（Metabase 更完整）
  */
 export async function collectData(startDate: string, endDate: string): Promise<RawCampaign[]> {
-  const [fbData, mbData] = await Promise.all([
-    collectFromFacebookAPI().catch(err => {
-      log.warn(`[Collector] Facebook API failed, using Metabase only: ${err.message}`)
+  const [fbCampaigns, mbData] = await Promise.all([
+    collectNewCampaignsFromFB().catch(err => {
+      log.warn(`[Collector] Facebook API failed: ${err.message}`)
       return [] as RawCampaign[]
     }),
     collectFromMetabase(startDate, endDate).catch(err => {
@@ -65,61 +70,33 @@ export async function collectData(startDate: string, endDate: string): Promise<R
     }),
   ])
 
-  log.info(`[Collector] Facebook API: ${fbData.length} campaigns, Metabase: ${mbData.length} campaigns`)
+  // Metabase 为基础
+  const result = new Map<string, RawCampaign>()
+  for (const mb of mbData) {
+    result.set(mb.campaignId, { ...mb, source: 'metabase' })
+  }
 
-  // 合并：FB 数据为主，Metabase 补充业务指标
-  const mbMap = new Map(mbData.map(c => [c.campaignId, c]))
-  const merged = new Map<string, RawCampaign>()
-
-  for (const fb of fbData) {
-    const mb = mbMap.get(fb.campaignId)
-    if (mb) {
-      // 两边都有：取较大的 spend（FB insights 有延迟，凌晨可能为 0）
-      const bestSpend = Math.max(fb.spend, mb.spend)
-      const bestInstalls = Math.max(fb.installs, mb.installs)
-      const bestCpi = bestInstalls > 0 ? bestSpend / bestInstalls : Math.max(fb.cpi, mb.cpi)
-      const bestCtr = Math.max(fb.ctr, mb.ctr)
-
-      merged.set(fb.campaignId, {
-        ...fb,
-        spend: bestSpend,
-        installs: bestInstalls,
-        cpi: bestCpi,
-        ctr: bestCtr,
-        revenue: mb.revenue,
-        firstDayRoi: bestSpend > 0 && mb.revenue > 0 ? mb.revenue / bestSpend : mb.firstDayRoi,
-        adjustedRoi: bestSpend > 0 && mb.revenue > 0 ? mb.revenue / bestSpend : mb.adjustedRoi,
-        day3Roi: mb.day3Roi,
-        payRate: mb.payRate,
-        arpu: mb.arpu,
-        optimizer: mb.optimizer || fb.optimizer,
-        pkgName: mb.pkgName || fb.pkgName,
-        date: fb.date > mb.date ? fb.date : mb.date,
-        source: 'merged',
-      })
-      mbMap.delete(fb.campaignId)
-    } else {
-      merged.set(fb.campaignId, { ...fb, source: 'facebook_api' })
+  // FB API 只补充 Metabase 中没有的新 campaign
+  let fbAdded = 0
+  for (const fb of fbCampaigns) {
+    if (!result.has(fb.campaignId)) {
+      result.set(fb.campaignId, { ...fb, source: 'facebook_api' })
+      fbAdded++
     }
   }
 
-  // Metabase 独有的（TikTok 或 FB API 没覆盖的）
-  for (const [id, mb] of mbMap) {
-    merged.set(id, { ...mb, source: 'metabase' })
-  }
+  const all = [...result.values()]
+  log.info(`[Collector] Metabase: ${mbData.length}, FB new: ${fbAdded} (of ${fbCampaigns.length} checked), Total: ${all.length}`)
 
-  const result = [...merged.values()]
-  const fbOnly = result.filter(c => c.source === 'facebook_api').length
-  const mbOnly = result.filter(c => c.source === 'metabase').length
-  const both = result.filter(c => c.source === 'merged').length
-  log.info(`[Collector] Merged: ${result.length} total (${both} merged, ${fbOnly} FB-only, ${mbOnly} Metabase-only)`)
-
-  return result
+  return all
 }
 
-// ==================== Facebook API 采集 ====================
+// ==================== Facebook API: 发现新 campaign ====================
 
-async function collectFromFacebookAPI(): Promise<RawCampaign[]> {
+/**
+ * 只拉 ACTIVE campaign 列表（不查 insights），用于发现 Metabase 中还没有的新广告
+ */
+async function collectNewCampaignsFromFB(): Promise<RawCampaign[]> {
   const fbToken = process.env.FB_ACCESS_TOKEN
   if (!fbToken) return []
 
@@ -133,37 +110,14 @@ async function collectFromFacebookAPI(): Promise<RawCampaign[]> {
 
   for (const acc of accounts) {
     try {
-      // 一次查 campaign + 今日 insights
       const res = await axios.get(`${FB_GRAPH}/${acc.id}/campaigns`, {
-        params: {
-          fields: 'id,name,status,daily_budget,created_time',
-          limit: 500,
-          access_token: fbToken,
-        },
+        params: { fields: 'id,name,status,daily_budget', limit: 500, access_token: fbToken },
         timeout: 15000,
       })
 
       for (const camp of res.data?.data || []) {
         if (camp.status !== 'ACTIVE') continue
 
-        // 查今日 insights
-        let spend = 0, impressions = 0, clicks = 0, conversions = 0
-        try {
-          const insightRes = await axios.get(`${FB_GRAPH}/${camp.id}/insights`, {
-            params: { fields: 'spend,impressions,clicks,actions', date_preset: 'today', access_token: fbToken },
-            timeout: 10000,
-          })
-          const ins = insightRes.data?.data?.[0]
-          if (ins) {
-            spend = Number(ins.spend || 0)
-            impressions = Number(ins.impressions || 0)
-            clicks = Number(ins.clicks || 0)
-            const installs = (ins.actions || []).find((a: any) => a.action_type === 'app_install' || a.action_type === 'omni_app_install')
-            conversions = installs ? Number(installs.value || 0) : 0
-          }
-        } catch { /* no insights yet for new campaigns */ }
-
-        // 从命名规范解析优化师和包名
         const parts = camp.name.split('_')
         const optimizer = parts[0] || ''
         const pkgName = parts.length >= 3 ? parts[2] : ''
@@ -176,9 +130,9 @@ async function collectFromFacebookAPI(): Promise<RawCampaign[]> {
           optimizer,
           pkgName,
           date: today,
-          spend,
-          installs: conversions,
-          cpi: conversions > 0 ? spend / conversions : 0,
+          spend: 0,
+          installs: 0,
+          cpi: 0,
           cpa: 0,
           revenue: 0,
           firstDayRoi: 0,
@@ -186,7 +140,7 @@ async function collectFromFacebookAPI(): Promise<RawCampaign[]> {
           day3Roi: 0,
           payRate: 0,
           arpu: 0,
-          ctr: impressions > 0 ? (clicks / impressions) * 100 : 0,
+          ctr: 0,
         })
       }
     } catch (e: any) {
