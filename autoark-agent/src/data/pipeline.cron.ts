@@ -15,15 +15,7 @@ export function initPipelineCron() {
     }
   })
 
-  // 启动 2 分钟后跑一次 Brain
-  setTimeout(async () => {
-    try {
-      log.info('[BrainCron] Initial run...')
-      await think('cron')
-    } catch (err: any) {
-      log.error('[BrainCron] Initial run failed:', err.message)
-    }
-  }, 120000)
+  // 启动后不再自动跑 Initial run，等下一个 cron 周期
 
   // Auditor: 每 2 小时独立审查
   cron.schedule('5 */2 * * *', async () => {
