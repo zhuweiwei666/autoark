@@ -74,17 +74,27 @@ export async function collectData(startDate: string, endDate: string): Promise<R
   for (const fb of fbData) {
     const mb = mbMap.get(fb.campaignId)
     if (mb) {
-      // 两边都有：FB 的 spend 为准，Metabase 补充 revenue/ROI/payRate 等
+      // 两边都有：取较大的 spend（FB insights 有延迟，凌晨可能为 0）
+      const bestSpend = Math.max(fb.spend, mb.spend)
+      const bestInstalls = Math.max(fb.installs, mb.installs)
+      const bestCpi = bestInstalls > 0 ? bestSpend / bestInstalls : Math.max(fb.cpi, mb.cpi)
+      const bestCtr = Math.max(fb.ctr, mb.ctr)
+
       merged.set(fb.campaignId, {
         ...fb,
+        spend: bestSpend,
+        installs: bestInstalls,
+        cpi: bestCpi,
+        ctr: bestCtr,
         revenue: mb.revenue,
-        firstDayRoi: fb.spend > 0 && mb.revenue > 0 ? mb.revenue / fb.spend : mb.firstDayRoi,
-        adjustedRoi: fb.spend > 0 && mb.revenue > 0 ? mb.revenue / fb.spend : mb.adjustedRoi,
+        firstDayRoi: bestSpend > 0 && mb.revenue > 0 ? mb.revenue / bestSpend : mb.firstDayRoi,
+        adjustedRoi: bestSpend > 0 && mb.revenue > 0 ? mb.revenue / bestSpend : mb.adjustedRoi,
         day3Roi: mb.day3Roi,
         payRate: mb.payRate,
         arpu: mb.arpu,
         optimizer: mb.optimizer || fb.optimizer,
         pkgName: mb.pkgName || fb.pkgName,
+        date: fb.date > mb.date ? fb.date : mb.date,
         source: 'merged',
       })
       mbMap.delete(fb.campaignId)
