@@ -36,12 +36,13 @@ export async function monitor(): Promise<DecisionReadyData> {
     if (!existing || r.date > existing.date) latestBycamp.set(r.campaignId, r)
   }
 
-  // 过滤掉今天没有数据的 campaign（已删除/已暂停/已归档）
-  // 如果一个 campaign 最新数据不是今天，说明今天不在投放，不应进入决策
-  const staleCount = [...latestBycamp.values()].filter(c => c.date < today).length
-  const campaigns = [...latestBycamp.values()].filter(c => c.date >= today)
+  // 只过滤超过 2 天没有数据的 campaign（真正停投的）
+  // Metabase BI 有延迟，今天的数据可能还没入库，不能用 date < today 判断
+  const yesterday = dayjs().subtract(1, 'day').format('YYYY-MM-DD')
+  const staleCount = [...latestBycamp.values()].filter(c => c.date < yesterday).length
+  const campaigns = [...latestBycamp.values()].filter(c => c.date >= yesterday)
   if (staleCount > 0) {
-    log.info(`[Monitor] Filtered ${staleCount} stale campaigns (last data before today, likely paused/deleted)`)
+    log.info(`[Monitor] Filtered ${staleCount} stale campaigns (no data in 2 days)`)
   }
 
   // Step 2: 质量评估
