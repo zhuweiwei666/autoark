@@ -9,9 +9,92 @@ import { log } from '../../platform/logger'
 
 const FB_GRAPH = 'https://graph.facebook.com/v21.0'
 
+// ==================== Facebook Marketing API 直接工具（第一优先）====================
+
+const fb_query: ToolDef = {
+  name: 'fb_query',
+  description: `直接调用 Facebook Marketing API 查询任何广告信息。这是最强大的查询工具，能查到所有状态的广告。
+Token 已配置，无需传入。
+常用查询示例：
+- 查账户列表: endpoint="me/adaccounts", fields="id,name,account_id,account_status,balance,amount_spent,currency"
+- 查某账户的 campaign: endpoint="act_{accountId}/campaigns", fields="id,name,status,daily_budget,budget_remaining,created_time"
+- 查某 campaign 的 adset: endpoint="{campaignId}/adsets", fields="id,name,status,daily_budget,optimization_goal"
+- 查某 adset 的 ad: endpoint="{adsetId}/ads", fields="id,name,status,effective_status,creative{thumbnail_url}"
+- 查某广告的审核状态: endpoint="{adId}", fields="id,name,status,effective_status,ad_review_feedback"
+- 查某实体的 insights: endpoint="{entityId}/insights", fields="spend,impressions,clicks,actions,cpc,cpm,ctr", params 传 date_preset="today"
+始终优先使用此工具而非 TopTou。`,
+  parameters: S.obj('参数', {
+    endpoint: S.str('API 端点路径，如 "me/adaccounts" 或 "{campaignId}/adsets"'),
+    fields: S.str('返回字段，逗号分隔'),
+    params: S.str('额外查询参数，JSON 格式，如 {"limit":"100","date_preset":"today"}'),
+  }, ['endpoint']),
+  handler: async (args) => {
+    const fbToken = process.env.FB_ACCESS_TOKEN
+    if (!fbToken) return { error: 'FB_ACCESS_TOKEN 未配置，请降级使用 toptou_* 工具' }
+
+    try {
+      const queryParams: any = { access_token: fbToken }
+      if (args.fields) queryParams.fields = args.fields
+      if (args.params) {
+        try {
+          const extra = typeof args.params === 'string' ? JSON.parse(args.params) : args.params
+          Object.assign(queryParams, extra)
+        } catch { /* ignore parse error */ }
+      }
+      if (!queryParams.limit) queryParams.limit = 200
+
+      const res = await axios.get(`${FB_GRAPH}/${args.endpoint}`, { params: queryParams, timeout: 30000 })
+      const data = res.data?.data || res.data
+      const count = Array.isArray(data) ? data.length : 1
+      return { data, count, hasMore: !!res.data?.paging?.next }
+    } catch (e: any) {
+      const errMsg = e.response?.data?.error?.message || e.message
+      return { error: `Facebook API 错误: ${errMsg}。可降级使用 toptou_* 工具重试。` }
+    }
+  },
+}
+
+const fb_update: ToolDef = {
+  name: 'fb_update',
+  description: `直接通过 Facebook Marketing API 更新广告实体（campaign/adset/ad）的任何属性。
+常用操作：
+- 暂停: entityId="{id}", updates={"status":"PAUSED"}
+- 激活: entityId="{id}", updates={"status":"ACTIVE"}
+- 改预算: entityId="{id}", updates={"daily_budget":"1000"} (单位美分，$10=1000)
+- 改名称: entityId="{id}", updates={"name":"新名称"}
+直接执行无需审批。始终优先使用此工具。`,
+  parameters: S.obj('参数', {
+    entityId: S.str('要更新的实体 ID（campaign/adset/ad ID）'),
+    updates: S.str('更新内容，JSON 格式，如 {"status":"ACTIVE","daily_budget":"1000"}'),
+  }, ['entityId', 'updates']),
+  handler: async (args) => {
+    const fbToken = process.env.FB_ACCESS_TOKEN
+    if (!fbToken) return { error: 'FB_ACCESS_TOKEN 未配置' }
+
+    try {
+      const params: any = { access_token: fbToken }
+      const updates = typeof args.updates === 'string' ? JSON.parse(args.updates) : args.updates
+      Object.assign(params, updates)
+
+      const res = await axios.post(`${FB_GRAPH}/${args.entityId}`, null, { params, timeout: 15000 })
+      if (res.data?.success) {
+        log.info(`[FB_Update] Updated ${args.entityId}: ${JSON.stringify(updates)}`)
+        return { success: true, entityId: args.entityId, updates }
+      }
+      return { success: false, response: res.data }
+    } catch (e: any) {
+      const errMsg = e.response?.data?.error?.message || e.message
+      log.warn(`[FB_Update] Failed ${args.entityId}: ${errMsg}`)
+      return { error: `Facebook API 错误: ${errMsg}` }
+    }
+  },
+}
+
+// ==================== TopTou 工具（备选，Facebook API 不可用时降级使用）====================
+
 const tt_getCampaigns: ToolDef = {
   name: 'toptou_get_campaigns',
-  description: '通过 TopTou 获取 Facebook 广告系列列表，返回 campaignId、accountId、名称等信息',
+  description: '【备选】通过 TopTou 获取 campaign 列表。注意：只返回活跃广告，查不到已暂停的。优先使用 fb_query。',
   parameters: S.obj('参数', {
     pageSize: S.int('每页数量（默认 50）'),
     pageNum: S.int('页码（默认 1）'),
@@ -28,7 +111,7 @@ const tt_getCampaigns: ToolDef = {
 
 const tt_getCampaignDetails: ToolDef = {
   name: 'toptou_get_campaign_details',
-  description: '通过 TopTou 获取广告系列详情，包括预算、状态、目标等',
+  description: '【备选】通过 TopTou 获取 campaign 详情。优先使用 fb_query。',
   parameters: S.obj('参数', {
     campaignId: S.str('广告系列 ID'),
   }, ['campaignId']),
@@ -41,7 +124,7 @@ const tt_getCampaignDetails: ToolDef = {
 
 const tt_getAdSets: ToolDef = {
   name: 'toptou_get_adsets',
-  description: '通过 TopTou 获取某广告系列下的广告组列表',
+  description: '【备选】通过 TopTou 获取 adset 列表。优先使用 fb_query。',
   parameters: S.obj('参数', {
     campaignId: S.str('广告系列 ID'),
   }, ['campaignId']),
@@ -54,7 +137,7 @@ const tt_getAdSets: ToolDef = {
 
 const tt_getAdDetails: ToolDef = {
   name: 'toptou_get_ad_details',
-  description: '通过 TopTou 获取广告详情',
+  description: '【备选】通过 TopTou 获取广告详情。优先使用 fb_query。',
   parameters: S.obj('参数', {
     adId: S.str('广告 ID'),
   }, ['adId']),
@@ -78,7 +161,7 @@ const tt_getBaseInfo: ToolDef = {
 
 const tt_updateStatus: ToolDef = {
   name: 'propose_toptou_update_status',
-  description: '提议通过 TopTou 暂停或恢复广告系列/广告组/广告。操作需要审批后执行。',
+  description: '【备选】通过 TopTou 提议暂停/恢复，需审批。优先使用 fb_update 直接执行。',
   parameters: S.obj('参数', {
     level: S.enum('操作层级', ['campaign', 'adset', 'ad']),
     entityId: S.str('实体 ID'),
@@ -108,7 +191,7 @@ const tt_updateStatus: ToolDef = {
 
 const tt_updateBudget: ToolDef = {
   name: 'propose_toptou_update_budget',
-  description: '提议通过 TopTou 调整广告系列/广告组的日预算。操作需要审批后执行。',
+  description: '【备选】通过 TopTou 提议调预算，需审批。优先使用 fb_batch_update_budget 或 fb_update 直接执行。',
   parameters: S.obj('参数', {
     level: S.enum('操作层级', ['campaign', 'adset']),
     entityId: S.str('实体 ID'),
@@ -302,6 +385,12 @@ campaign 命名规范：{优化师}_fb_{产品}_{地区}_{其他}_{日期}
 }
 
 export const toptouTools: ToolDef[] = [
+  // Facebook API 直接工具（第一优先）
+  fb_query,
+  fb_update,
+  tt_batchActivate,
+  tt_batchBudget,
+  // TopTou 备选工具
   tt_getBaseInfo,
   tt_getCampaigns,
   tt_getCampaignDetails,
@@ -309,6 +398,4 @@ export const toptouTools: ToolDef[] = [
   tt_getAdDetails,
   tt_updateStatus,
   tt_updateBudget,
-  tt_batchActivate,
-  tt_batchBudget,
 ]
