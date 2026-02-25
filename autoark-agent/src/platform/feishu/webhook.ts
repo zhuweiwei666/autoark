@@ -5,6 +5,7 @@
  * POST /interaction — 卡片交互（审批/拒绝按钮）
  * POST /event       — 事件订阅（接收用户消息，驱动 Agent 对话）
  */
+import axios from 'axios'
 import { Router, Request, Response } from 'express'
 import { log } from '../logger'
 import { Action } from '../../action/action.model'
@@ -12,6 +13,8 @@ import { User } from '../../auth/user.model'
 import { updateApprovalStatus, replyMessage, getBotId } from './feishu.service'
 import { executeWithRetry } from '../../agent/brain'
 import { chat } from '../../agent/agent'
+
+const FB_GRAPH = 'https://graph.facebook.com/v21.0'
 
 const router = Router()
 
@@ -59,16 +62,34 @@ router.post('/interaction', async (req: Request, res: Response) => {
       })
 
       try {
-        await executeWithRetry({
-          type: (dbAction as any).type === 'adjust_budget' ? 'increase_budget' : (dbAction as any).type,
-          campaignId: (dbAction as any).entityId,
-          campaignName: (dbAction as any).entityName,
-          accountId: (dbAction as any).accountId || '',
-          reason: (dbAction as any).reason,
-          auto: false,
-          currentBudget: (dbAction as any).params?.currentBudget,
-          newBudget: (dbAction as any).params?.newBudget,
-        })
+        // 优先用 Facebook API 直接执行
+        const fbToken = process.env.FB_ACCESS_TOKEN
+        const actionType = (dbAction as any).type
+        const entityId = (dbAction as any).entityId
+
+        if (fbToken && entityId) {
+          const fbParams: any = { access_token: fbToken }
+          if (actionType === 'pause') fbParams.status = 'PAUSED'
+          else if (actionType === 'resume') fbParams.status = 'ACTIVE'
+          else if (actionType === 'adjust_budget' && (dbAction as any).params?.newBudget) {
+            fbParams.daily_budget = (dbAction as any).params.newBudget
+          }
+
+          await axios.post(`${FB_GRAPH}/${entityId}`, null, { params: fbParams, timeout: 15000 })
+          log.info(`[FeishuWebhook] Executed via Facebook API: ${actionType} ${entityId}`)
+        } else {
+          // 降级到 TopTou
+          await executeWithRetry({
+            type: actionType === 'adjust_budget' ? 'increase_budget' : actionType,
+            campaignId: entityId,
+            campaignName: (dbAction as any).entityName,
+            accountId: (dbAction as any).accountId || '',
+            reason: (dbAction as any).reason,
+            auto: false,
+            currentBudget: (dbAction as any).params?.currentBudget,
+            newBudget: (dbAction as any).params?.newBudget,
+          })
+        }
         await Action.updateOne({ _id: dbAction._id }, { $set: { status: 'executed', executedAt: new Date() } })
       } catch (e: any) {
         log.error(`[FeishuWebhook] Execute failed: ${e.message}`)

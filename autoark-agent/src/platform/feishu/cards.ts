@@ -76,7 +76,7 @@ export function buildSummaryCard(params: NotifyFeishuParams) {
         },
         border: { color: 'red' },
         vertical_spacing: '8px',
-        elements: criticals.map(r => buildCampaignRow(r, screenedCampaigns, actions)),
+        elements: criticals.flatMap(r => buildCampaignRow(r, screenedCampaigns, actions)),
       })
     }
 
@@ -89,7 +89,7 @@ export function buildSummaryCard(params: NotifyFeishuParams) {
         },
         border: { color: 'orange' },
         vertical_spacing: '8px',
-        elements: highs.map(r => buildCampaignRow(r, screenedCampaigns, actions)),
+        elements: highs.flatMap(r => buildCampaignRow(r, screenedCampaigns, actions)),
       })
     }
 
@@ -102,7 +102,7 @@ export function buildSummaryCard(params: NotifyFeishuParams) {
         },
         border: { color: 'blue' },
         vertical_spacing: '8px',
-        elements: normals.map(r => buildCampaignRow(r, screenedCampaigns, actions)),
+        elements: normals.flatMap(r => buildCampaignRow(r, screenedCampaigns, actions)),
       })
     }
   }
@@ -130,12 +130,13 @@ export function buildSummaryCard(params: NotifyFeishuParams) {
 
 /**
  * 构建单条 campaign 明细行（在摘要卡片内使用）
+ * 如果有待审批的 action，附带"批准/拒绝"按钮
  */
 function buildCampaignRow(
   r: any,
   screenedCampaigns: any[],
   actions: any[],
-) {
+): any[] {
   const c = screenedCampaigns?.find((sc: any) => sc.campaignId === r.campaignId)
   const action = actions?.find((a: any) => a.campaignId === r.campaignId)
 
@@ -146,15 +147,41 @@ function buildCampaignRow(
   const skillTag = r.matchedSkill || ''
   const reason = r.reasons?.[0] || ''
   const actionTag = action ? (action.type === 'pause' ? '⏸ 暂停' : action.type === 'increase_budget' ? '📈 加预算' : action.type) : ''
-  const autoTag = action?.auto ? ' (自动)' : action ? ' (待审批)' : ''
+  const autoTag = action?.auto ? ' (已自动执行)' : action ? '' : ''
 
-  return {
-    tag: 'div',
-    text: {
-      content: `**${shortName}**\n花费 ${spend} | ROI ${roi} | ${skillTag}\n${reason}${actionTag ? `\n→ ${actionTag}${autoTag}` : ''}`,
-      tag: 'lark_md',
+  const elements: any[] = [
+    {
+      tag: 'div',
+      text: {
+        content: `**${shortName}**\n花费 ${spend} | ROI ${roi} | ${skillTag}\n${reason}${actionTag ? `\n→ ${actionTag}${autoTag}` : ''}`,
+        tag: 'lark_md',
+      },
     },
+  ]
+
+  if (action && !action.auto && !action.executed) {
+    elements.push({
+      tag: 'action',
+      actions: [
+        {
+          tag: 'button',
+          text: { content: `✅ 批准${actionTag}`, tag: 'plain_text' },
+          type: 'primary',
+          size: 'small',
+          value: { action: 'approve', actionData: JSON.stringify({ campaignId: action.campaignId, type: action.type }) },
+        },
+        {
+          tag: 'button',
+          text: { content: '❌ 拒绝', tag: 'plain_text' },
+          type: 'danger',
+          size: 'small',
+          value: { action: 'reject', actionData: JSON.stringify({ campaignId: action.campaignId, type: action.type }) },
+        },
+      ],
+    })
   }
+
+  return elements
 }
 
 /**
