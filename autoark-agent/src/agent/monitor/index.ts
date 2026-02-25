@@ -19,28 +19,23 @@ import { DecisionReadyData, CampaignDecisionData, QualityResult } from './types'
  */
 export async function monitor(): Promise<DecisionReadyData> {
   const today = dayjs().format('YYYY-MM-DD')
-  const dayBefore = dayjs().subtract(2, 'day').format('YYYY-MM-DD')
   const hour = dayjs().hour() + dayjs().minute() / 60  // UTC hour
 
   log.info('[Monitor] Starting perception cycle...')
 
-  // Step 1: 采集数据
-  const raw = await collectData(dayBefore, today)
+  // Step 1: 只采集今天的数据（UTC+0），避免多天数据混淆
+  const raw = await collectData(today, today)
   log.info(`[Monitor] Collected ${raw.length} raw campaigns`)
 
-  // 按 campaignId 聚合（取最新日期的数据）
+  // 按 campaignId 去重（同一 campaign 可能在 Metabase 和 FB 各有一条）
   const latestBycamp = new Map<string, RawCampaign>()
   for (const r of raw) {
     const existing = latestBycamp.get(r.campaignId)
-    if (!existing || r.date > existing.date) latestBycamp.set(r.campaignId, r)
+    if (!existing || r.spend > existing.spend) latestBycamp.set(r.campaignId, r)
   }
 
-  // 只保留今天 (UTC+0) 有数据的 campaign
-  const staleCount = [...latestBycamp.values()].filter(c => c.date < today).length
-  const campaigns = [...latestBycamp.values()].filter(c => c.date >= today)
-  if (staleCount > 0) {
-    log.info(`[Monitor] Filtered ${staleCount} campaigns with no data today (${today} UTC)`)
-  }
+  const campaigns = [...latestBycamp.values()]
+  log.info(`[Monitor] Active: ${campaigns.length} campaigns (today ${today} UTC)`)
 
   // Step 2: 质量评估
   const qualities = new Map<string, QualityResult>()
