@@ -55,15 +55,11 @@ export async function runAutoPilot(): Promise<{ actions: any[]; campaigns: numbe
   log.info(`[AutoPilot] Fetched ${campaigns.length} campaigns, total spend $${campaigns.reduce((s, c) => s + c.spend, 0).toFixed(2)}`)
 
   // Step 2: Skill 决策
-  const actions = await makeSkillDecisions(campaigns)
-  if (actions.length === 0) {
-    log.info(`[AutoPilot] No actions needed for ${campaigns.length} campaigns`)
-    return { actions: [], campaigns: campaigns.length }
-  }
+  const { verdicts, actions } = await makeSkillDecisions(campaigns)
 
   // Step 3: 直接执行 (Facebook API)
-  const executed: any[] = []
   for (const action of actions) {
+    const v = verdicts.find(vv => vv.campaign.campaignId === action.campaignId)
     try {
       const fbParams: any = { access_token: fbToken }
       if (action.type === 'pause') fbParams.status = 'PAUSED'
@@ -90,20 +86,21 @@ export async function runAutoPilot(): Promise<{ actions: any[]; campaigns: numbe
         executedAt: new Date(),
       })
 
-      executed.push(action)
+      if (v) v.execResult = 'executed'
       log.info(`[AutoPilot] Executed: ${action.type} ${action.campaignName} (${action.reason})`)
     } catch (e: any) {
-      log.warn(`[AutoPilot] Failed: ${action.type} ${action.campaignName} - ${e.response?.data?.error?.message || e.message}`)
+      const errMsg = e.response?.data?.error?.message || e.message
+      if (v) { v.execResult = 'failed'; v.execError = errMsg }
+      log.warn(`[AutoPilot] Failed: ${action.type} ${action.campaignName} - ${errMsg}`)
     }
   }
 
-  // Step 4: 飞书推送
-  if (executed.length > 0) {
-    await notifyAutoPilot(executed, campaigns.length)
-  }
+  // Step 4: 飞书推送（每次都推，展示全部 campaign 数据）
+  await notifyAutoPilot(verdicts, campaigns.length)
 
-  log.info(`[AutoPilot] Cycle complete: ${campaigns.length} campaigns, ${executed.length} actions executed`)
-  return { actions: executed, campaigns: campaigns.length }
+  const executedCount = verdicts.filter(v => v.execResult === 'executed').length
+  log.info(`[AutoPilot] Cycle complete: ${campaigns.length} campaigns, ${actions.length} actions, ${executedCount} executed`)
+  return { actions: actions.filter((_, i) => verdicts.find(v => v.campaign.campaignId === actions[i]?.campaignId)?.execResult === 'executed'), campaigns: campaigns.length }
 }
 
 // ==================== Facebook 数据拉取 ====================
@@ -168,15 +165,41 @@ async function fetchFBData(fbToken: string, optimizers: string[]): Promise<FBCam
   return result
 }
 
+// ==================== 推理记录 ====================
+
+interface CampaignVerdict {
+  campaign: FBCampaignData
+  screenVerdict: 'needs_decision' | 'watch' | 'skip'
+  screenSkill: string
+  screenReason: string
+  action?: { type: string; reason: string; skillName: string; newBudget?: number }
+  execResult?: 'executed' | 'failed' | 'skipped'
+  execError?: string
+}
+
 // ==================== Skill 决策 ====================
 
-async function makeSkillDecisions(campaigns: FBCampaignData[]): Promise<any[]> {
+async function makeSkillDecisions(campaigns: FBCampaignData[]): Promise<{ verdicts: CampaignVerdict[]; actions: any[] }> {
   const screenerSkills = await Skill.find({ agentId: 'screener', enabled: true }).sort({ order: 1 }).lean() as AgentSkillDoc[]
   const decisionSkills = await Skill.find({ agentId: 'decision', enabled: true }).sort({ order: 1 }).lean() as AgentSkillDoc[]
+  const verdicts: CampaignVerdict[] = []
   const actions: any[] = []
 
   for (const c of campaigns) {
-    if (c.spend < 5) continue
+    const verdict: CampaignVerdict = {
+      campaign: c,
+      screenVerdict: 'watch',
+      screenSkill: '',
+      screenReason: '',
+    }
+
+    if (c.spend < 5) {
+      verdict.screenVerdict = 'skip'
+      verdict.screenSkill = '冷启动保护'
+      verdict.screenReason = `花费 $${c.spend.toFixed(2)} < $5，数据不足`
+      verdicts.push(verdict)
+      continue
+    }
 
     const data: Record<string, any> = {
       ...c,
@@ -191,32 +214,40 @@ async function makeSkillDecisions(campaigns: FBCampaignData[]): Promise<any[]> {
       spendTrend: 0,
     }
 
-    // Screener: 判断是否需要决策
-    let needsDecision = false
+    // Screener
     for (const skill of screenerSkills) {
       if (!matchesCampaign(skill, c as any)) continue
       const sc = skill.screening
       if (!sc?.conditions?.length) continue
       if (evaluateConditions(sc.conditions, sc.conditionLogic, data)) {
-        if (sc.verdict === 'needs_decision') needsDecision = true
+        verdict.screenVerdict = sc.verdict
+        verdict.screenSkill = skill.name
+        verdict.screenReason = fillReasonTemplate(sc.reasonTemplate || skill.name, data)
         break
       }
     }
 
-    if (!needsDecision) continue
+    if (verdict.screenVerdict !== 'needs_decision') {
+      if (!verdict.screenSkill) {
+        verdict.screenReason = '未匹配任何筛选规则，继续观察'
+      }
+      verdicts.push(verdict)
+      continue
+    }
 
-    // Decision: 匹配决策 Skill
+    // Decision
     for (const skill of decisionSkills) {
       if (!matchesCampaign(skill, c as any)) continue
       const d = skill.decision
       if (!d?.action) continue
-
       const condMatch = d.conditions?.length > 0
         ? evaluateConditions(d.conditions, d.conditionLogic, data)
         : true
       if (!condMatch) continue
 
       const reason = fillReasonTemplate(d.reasonTemplate || skill.name, data)
+      verdict.action = { type: d.action, reason, skillName: skill.name }
+
       const action: any = {
         type: d.action === 'increase_budget' ? 'adjust_budget' : d.action,
         campaignId: c.campaignId,
@@ -227,22 +258,23 @@ async function makeSkillDecisions(campaigns: FBCampaignData[]): Promise<any[]> {
         spend: c.spend,
         roas: c.roas,
       }
-
       if (d.action === 'increase_budget' && d.params?.budgetChangePct) {
         action.newBudget = Math.round(c.dailyBudget * 100 * (1 + d.params.budgetChangePct / 100))
+        verdict.action.newBudget = action.newBudget
       }
-
       actions.push(action)
       break
     }
+
+    verdicts.push(verdict)
   }
 
-  return actions
+  return { verdicts, actions }
 }
 
 // ==================== 飞书推送 ====================
 
-async function notifyAutoPilot(actions: any[], totalCampaigns: number): Promise<void> {
+async function notifyAutoPilot(verdicts: CampaignVerdict[], totalCampaigns: number): Promise<void> {
   try {
     const { loadFeishuConfig } = await import('../platform/feishu/feishu.service')
     const config = await (loadFeishuConfig as any)()
@@ -256,22 +288,113 @@ async function notifyAutoPilot(actions: any[], totalCampaigns: number): Promise<
 
     const token = await getTenantAccessToken(config.appId, config.appSecret)
 
-    const lines = actions.map((a: any) => {
-      const label = a.type === 'pause' ? '⏸ 暂停' : a.type === 'adjust_budget' ? '💰 调预算' : a.type === 'resume' ? '▶ 恢复' : a.type
-      return `${label} **${a.campaignName}**\n花费 $${a.spend?.toFixed(2) || '?'} | ${a.reason}`
+    const totalSpend = verdicts.reduce((s, v) => s + v.campaign.spend, 0)
+    const executedCount = verdicts.filter(v => v.execResult === 'executed').length
+    const failedCount = verdicts.filter(v => v.execResult === 'failed').length
+    const needsDecision = verdicts.filter(v => v.screenVerdict === 'needs_decision').length
+    const watching = verdicts.filter(v => v.screenVerdict === 'watch').length
+    const skipped = verdicts.filter(v => v.screenVerdict === 'skip').length
+
+    const elements: any[] = []
+
+    // 概览
+    elements.push({
+      tag: 'div',
+      fields: [
+        { is_short: true, text: { content: `**Campaign**\n${totalCampaigns}`, tag: 'lark_md' } },
+        { is_short: true, text: { content: `**总花费**\n$${totalSpend.toFixed(2)}`, tag: 'lark_md' } },
+        { is_short: true, text: { content: `**需决策**\n${needsDecision}`, tag: 'lark_md' } },
+        { is_short: true, text: { content: `**已执行**\n${executedCount}${failedCount > 0 ? ` (${failedCount}失败)` : ''}`, tag: 'lark_md' } },
+      ],
     })
+
+    elements.push({ tag: 'div', text: { content: `筛选: 需决策 **${needsDecision}** | 观察 ${watching} | 跳过 ${skipped}`, tag: 'lark_md' } })
+    elements.push({ tag: 'hr' })
+
+    // 已执行的操作（展开）
+    const executed = verdicts.filter(v => v.execResult)
+    if (executed.length > 0) {
+      const execRows = executed.map(v => {
+        const c = v.campaign
+        const actionLabel = v.action?.type === 'pause' ? '⏸ 已暂停' : v.action?.type === 'increase_budget' ? '📈 已加预算' : v.action?.type || '?'
+        const statusIcon = v.execResult === 'executed' ? '✅' : '❌'
+        return {
+          tag: 'div' as const,
+          text: {
+            content: `${statusIcon} ${actionLabel} **${c.campaignName}**\n花费 $${c.spend.toFixed(2)} | CPI $${c.cpi.toFixed(2)} | CTR ${c.ctr.toFixed(1)}%\n推理: ${v.screenSkill} → ${v.action?.skillName}\n原因: ${v.action?.reason}${v.execError ? `\n错误: ${v.execError}` : ''}`,
+            tag: 'lark_md' as const,
+          },
+        }
+      })
+
+      elements.push({
+        tag: 'collapsible_panel',
+        expanded: true,
+        header: { title: { tag: 'plain_text', content: `操作执行 (${executed.length})` } },
+        border: { color: executedCount > 0 ? 'green' : 'red' },
+        vertical_spacing: '8px',
+        elements: execRows,
+      })
+    }
+
+    // 观察中的 campaign（折叠）
+    const watchList = verdicts.filter(v => v.screenVerdict === 'watch' || (v.screenVerdict === 'needs_decision' && !v.execResult))
+    if (watchList.length > 0) {
+      const watchRows = watchList.map(v => {
+        const c = v.campaign
+        return {
+          tag: 'div' as const,
+          text: {
+            content: `**${c.campaignName}**\n花费 $${c.spend.toFixed(2)} | CPI $${c.cpi.toFixed(2)} | CTR ${c.ctr.toFixed(1)}%\n${v.screenSkill}: ${v.screenReason}`,
+            tag: 'lark_md' as const,
+          },
+        }
+      })
+
+      elements.push({
+        tag: 'collapsible_panel',
+        expanded: false,
+        header: { title: { tag: 'plain_text', content: `观察中 (${watchList.length})` } },
+        border: { color: 'blue' },
+        vertical_spacing: '8px',
+        elements: watchRows,
+      })
+    }
+
+    // 跳过的（折叠）
+    const skipList = verdicts.filter(v => v.screenVerdict === 'skip')
+    if (skipList.length > 0) {
+      const skipRows = skipList.slice(0, 20).map(v => {
+        const c = v.campaign
+        return {
+          tag: 'div' as const,
+          text: {
+            content: `${c.campaignName}: 花费 $${c.spend.toFixed(2)} | ${v.screenReason}`,
+            tag: 'lark_md' as const,
+          },
+        }
+      })
+      if (skipList.length > 20) {
+        skipRows.push({ tag: 'div' as const, text: { content: `... 还有 ${skipList.length - 20} 个`, tag: 'lark_md' as const } })
+      }
+
+      elements.push({
+        tag: 'collapsible_panel',
+        expanded: false,
+        header: { title: { tag: 'plain_text', content: `跳过 (${skipList.length})` } },
+        border: { color: 'grey' },
+        vertical_spacing: '8px',
+        elements: skipRows,
+      })
+    }
 
     const card = {
       config: { wide_screen_mode: true },
       header: {
-        template: 'violet',
-        title: { content: `AutoPilot | ${dayjs().format('MM-DD HH:mm')} | ${actions.length} 操作已执行`, tag: 'plain_text' },
+        template: executedCount > 0 ? 'violet' : 'turquoise',
+        title: { content: `AutoPilot | ${dayjs().format('MM-DD HH:mm')} | ${totalCampaigns} campaign | ${executedCount} 操作`, tag: 'plain_text' },
       },
-      elements: [
-        { tag: 'div', text: { content: `监控 ${totalCampaigns} 个 AI 接管 campaign，自动执行 ${actions.length} 个操作：`, tag: 'lark_md' } },
-        { tag: 'hr' },
-        ...lines.map(l => ({ tag: 'div' as const, text: { content: l, tag: 'lark_md' as const } })),
-      ],
+      elements,
     }
 
     await axiosLib.post(
@@ -279,7 +402,7 @@ async function notifyAutoPilot(actions: any[], totalCampaigns: number): Promise<
       { receive_id: config.receiveId, msg_type: 'interactive', content: JSON.stringify(card) },
       { headers: { Authorization: `Bearer ${token}` } }
     )
-    log.info(`[AutoPilot] Feishu notification sent: ${actions.length} actions`)
+    log.info(`[AutoPilot] Feishu notification sent: ${totalCampaigns} campaigns, ${executedCount} executed`)
   } catch (e: any) {
     log.warn(`[AutoPilot] Feishu notification failed: ${e.message}`)
   }
