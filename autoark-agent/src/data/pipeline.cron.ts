@@ -6,8 +6,8 @@ import { runAudit } from '../agent/auditor'
 import { dailySummary, weeklyEvolution, decayKnowledge, manageSkillLifecycle } from '../agent/librarian'
 
 export function initPipelineCron() {
-  // Brain cycle: 每 10 分钟
-  cron.schedule('*/10 * * * *', async () => {
+  // Brain cycle: 每 30 分钟
+  cron.schedule('*/30 * * * *', async () => {
     try {
       await think('cron')
     } catch (err: any) {
@@ -74,5 +74,5 @@ export function initPipelineCron() {
     }
   })
 
-  log.info('[Cron] Initialized: brain(10min), auditor(2h), librarian-daily(22:00 CST), evolution(weekly Mon 9:00 CST)')
+  log.info('[Cron] Initialized: brain(30min), auditor(2h), librarian-daily(22:00 CST), evolution(weekly Mon 9:00 CST)')
 }
