@@ -46,9 +46,9 @@ log "[4/6] Build frontend..."
 cd web && npm install 2>&1 | tail -3 && npm run build 2>&1 | tail -5 && cd ..
 log "Frontend build done"
 
-# 5. 重启服务
+# 5. 重启服务（--update-env 确保新环境变量和代码生效）
 log "[5/6] Restart PM2..."
-pm2 restart autoark-agent 2>/dev/null || pm2 start ecosystem.config.js
+pm2 delete autoark-agent 2>/dev/null; pm2 start ecosystem.config.js
 pm2 save --force 2>/dev/null
 
 # 6. 健康检查
