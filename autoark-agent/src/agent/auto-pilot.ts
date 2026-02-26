@@ -388,6 +388,32 @@ async function fetchMBData(): Promise<MBSourceRecord[]> {
   }
 }
 
+// ==================== Facebook Spend 高水位缓存（防 FB pipeline 刷新导致花费临时归零）====================
+
+const spendHighWaterMark = new Map<string, { spend: number; date: string }>()
+
+function applyHighWaterMark(records: FBSourceRecord[]): FBSourceRecord[] {
+  const today = dayjs().format('YYYY-MM-DD')
+
+  for (const r of records) {
+    const cached = spendHighWaterMark.get(r.campaignId)
+
+    if (cached && cached.date === today) {
+      if (r.spend < cached.spend * 0.7) {
+        log.info(`[HWM] ${r.campaignName}: FB spend $${r.spend.toFixed(2)} < cached $${cached.spend.toFixed(2)}, using cached`)
+        r.spend = cached.spend
+        if (r.conversions > 0 && r.spend > 0) r.cpi = r.spend / r.conversions
+      } else if (r.spend >= cached.spend) {
+        cached.spend = r.spend
+      }
+    } else {
+      spendHighWaterMark.set(r.campaignId, { spend: r.spend, date: today })
+    }
+  }
+
+  return records
+}
+
 // ==================== Facebook 数据拉取 ====================
 
 async function fetchFBData(fbToken: string, optimizers: string[]): Promise<FBSourceRecord[]> {
@@ -484,7 +510,7 @@ async function fetchFBData(fbToken: string, optimizers: string[]): Promise<FBSou
     }
   }
 
-  return result
+  return applyHighWaterMark(result)
 }
 
 // ==================== 推理记录 ====================
