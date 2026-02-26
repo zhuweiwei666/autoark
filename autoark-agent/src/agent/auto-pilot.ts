@@ -133,10 +133,62 @@ export async function runAutoPilot(): Promise<{ actions: any[]; campaigns: numbe
   const decisionResult = await makeSkillDecisions(campaigns, recentActions)
   const { verdicts, actions } = decisionResult
 
-  // Step 4: 执行前过滤（冷却期 + 重复保护）
+  // Step 4: A4 全局 ROAS 前置检查（在执行前拦截放量动作）
+  let a4BlockScaling = false
+  let a4BlockReason = ''
+  try {
+    const a4Goals = await Skill.find({ agentId: 'a4_governor', skillType: 'goal', enabled: true }).lean() as any[]
+    if (a4Goals.length > 0) {
+      const mbSess = await axios.post('https://meta.iohubonline.club/api/session', {
+        username: process.env.METABASE_EMAIL, password: process.env.METABASE_PASSWORD,
+      })
+      const mbTok = mbSess.data.id
+      const mbRes = await axios.post('https://meta.iohubonline.club/api/card/3822/query', {
+        parameters: [
+          { type: 'text', value: 'VfuSBdaO33sklvtr', target: ['variable', ['template-tag', 'access_code']] },
+          { type: 'date/single', value: dayjs().format('YYYY-MM-DD'), target: ['variable', ['template-tag', 'start_day']] },
+          { type: 'date/single', value: dayjs().format('YYYY-MM-DD'), target: ['variable', ['template-tag', 'end_day']] },
+          { type: 'text', value: autoOptimizers.join(',') || 'wwz', target: ['variable', ['template-tag', 'user_name']] },
+        ],
+      }, { headers: { 'X-Metabase-Session': mbTok }, timeout: 30000 })
+
+      const mbCols = (mbRes.data?.data?.cols || []).map((c: any) => c.name)
+      const ci = (name: string) => mbCols.indexOf(name)
+      let totalRevenue = 0
+      for (const r of mbRes.data?.data?.rows || []) {
+        if (r[ci('日期')] === '汇总' || r[ci('包名')] === 'ALL') continue
+        totalRevenue += Number(r[ci('调整的首日收入')] || 0)
+      }
+
+      const totalSpendNow = fused.reduce((s, c) => s + c.spend, 0)
+      const globalRoas = totalSpendNow > 0 ? totalRevenue / totalSpendNow : 0
+
+      for (const g of a4Goals) {
+        const roasFloor = g.goal?.roasFloor || 0
+        const priority = g.goal?.priority || 'roas_first'
+        if (roasFloor > 0 && globalRoas < roasFloor && globalRoas > 0 && priority === 'roas_first') {
+          a4BlockScaling = true
+          a4BlockReason = `全局ROAS ${globalRoas.toFixed(2)} < 底线${roasFloor}，${g.goal?.product || ''} 止损优先，阻断放量`
+          log.info(`[A4 Pre-check] ${a4BlockReason}`)
+          break
+        }
+      }
+    }
+  } catch (e: any) {
+    log.warn(`[A4 Pre-check] Failed: ${e.message}, not blocking`)
+  }
+
+  // Step 5: 执行前过滤（A4阻断 + 冷却期 + 重复保护）
   const filteredActions: typeof actions = []
   for (const action of actions) {
     const v = verdicts.find(vv => vv.campaign.campaignId === action.campaignId)
+
+    // A4 全局 ROAS 阻断：止损优先模式下禁止所有放量动作
+    if (a4BlockScaling && (action.type === 'adjust_budget' || action.type === 'increase_budget' || action.type === 'resume')) {
+      if (v) { v.execResult = 'skipped'; v.execError = `A4阻断: ${a4BlockReason}` }
+      log.info(`[A4 Block] ${action.type} ${action.campaignName} blocked: ${a4BlockReason}`)
+      continue
+    }
 
     // 冷却期：最近 N 分钟内操作过的 campaign 跳过
     const recent = recentBycamp.get(action.campaignId)
