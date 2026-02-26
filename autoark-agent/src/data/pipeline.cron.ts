@@ -1,27 +1,16 @@
 import cron from 'node-cron'
 import { log } from '../platform/logger'
-import { think } from '../agent/brain'
 import { runAutoPilot } from '../agent/auto-pilot'
-import { runEvolution } from '../agent/evolution'
 import { runAudit } from '../agent/auditor'
 import { dailySummary, weeklyEvolution, decayKnowledge, manageSkillLifecycle } from '../agent/librarian'
 
 export function initPipelineCron() {
-  // AutoPilot: AI 接管优化师的快速循环，每 10 分钟，纯 Facebook API
+  // 5-Agent 协作循环（唯一主链路），每 10 分钟
   cron.schedule('*/10 * * * *', async () => {
     try {
       await runAutoPilot()
     } catch (err: any) {
       log.error('[AutoPilot] Failed:', err.message)
-    }
-  })
-
-  // Brain cycle: 全量扫描，每 30 分钟
-  cron.schedule('*/30 * * * *', async () => {
-    try {
-      await think('cron')
-    } catch (err: any) {
-      log.error('[BrainCron] Failed:', err.message)
     }
   })
 
@@ -43,22 +32,17 @@ export function initPipelineCron() {
   cron.schedule('0 14 * * *', async () => {
     try {
       log.info('[LibrarianCron] Running daily summary...')
-      const summary = await dailySummary()
-      try {
-        const { notifyFeishuDailyReport } = await import('../platform/feishu/feishu.service')
-        await notifyFeishuDailyReport(summary)
-      } catch { /* feishu optional */ }
+      await dailySummary()
     } catch (err: any) {
       log.error('[LibrarianCron] Daily summary failed:', err.message)
     }
   })
 
-  // Librarian 每周进化 + 旧版 Evolution: 每周一 UTC 1:00 (北京 9:00)
+  // Librarian 每周进化: 每周一 UTC 1:00 (北京 9:00)
   cron.schedule('0 1 * * 1', async () => {
     try {
       log.info('[EvolutionCron] Running weekly evolution...')
       await weeklyEvolution()
-      await runEvolution()
       await manageSkillLifecycle()
     } catch (err: any) {
       log.error('[EvolutionCron] Failed:', err.message)
@@ -74,5 +58,5 @@ export function initPipelineCron() {
     }
   })
 
-  log.info('[Cron] Initialized: auto-pilot(10min), brain(30min), auditor(2h), librarian-daily(22:00 CST), evolution(weekly Mon 9:00 CST)')
+  log.info('[Cron] Initialized: auto-pilot(10min), auditor(2h), librarian-daily(22:00 CST), evolution(weekly Mon 9:00 CST)')
 }
