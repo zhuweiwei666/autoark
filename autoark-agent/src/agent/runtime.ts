@@ -134,8 +134,10 @@ export async function runAgent(
     // 有工具调用 → 执行并把结果喂回去
     log.info(`[Agent] Iteration ${iteration}: ${msg.tool_calls.length} tool call(s): ${msg.tool_calls.map((t: any) => t.function.name).join(', ')}`)
 
-    // 先把 assistant 的完整消息加到历史
-    messages.push(msg)
+    // 先把 assistant 的完整消息加到历史（Claude 要求 content 不为空）
+    const sanitizedMsg = { ...msg }
+    if (!sanitizedMsg.content) sanitizedMsg.content = '(tool calling)'
+    messages.push(sanitizedMsg)
 
     for (const tc of msg.tool_calls) {
       const fnName = tc.function.name

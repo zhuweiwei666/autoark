@@ -322,7 +322,10 @@ async function _runA5AgentInner(
       return { text: response, confirmCard }
     }
 
-    messages.push(msg)
+    // Claude 要求 content 不为空，tool_calls 时 content 可能是 null
+    const sanitizedMsg = { ...msg }
+    if (!sanitizedMsg.content) sanitizedMsg.content = '(tool calling)'
+    messages.push(sanitizedMsg)
 
     for (const tc of msg.tool_calls) {
       const fnName = tc.function.name
