@@ -550,6 +550,8 @@ ${recentOpsText}
 ## 待分析 Campaign (${campaignData.length} 个)
 ${JSON.stringify(campaignData, null, 2)}`
 
+    log.info(`[A2] LLM input: ${activeCandidates.length} candidates (${activeCandidates.filter(c => (c as any).status === 'ACTIVE').length} ACTIVE, ${activeCandidates.filter(c => (c as any).status === 'PAUSED').length} PAUSED), userMsg ${userMessage.length} chars`)
+
     try {
       const res = await axios.post(
         `${env.LLM_BASE_URL}/chat/completions`,
@@ -563,6 +565,7 @@ ${JSON.stringify(campaignData, null, 2)}`
       )
 
       const content = res.data.choices?.[0]?.message?.content || ''
+      log.info(`[A2] LLM raw response (${content.length} chars): ${content.substring(0, 200)}...`)
       const jsonMatch = content.match(/\{[\s\S]*\}/)
       if (jsonMatch) {
         const llmResult = JSON.parse(jsonMatch[0])
