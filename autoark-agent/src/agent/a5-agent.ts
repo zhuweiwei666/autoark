@@ -17,23 +17,31 @@ import { a5Tools } from './tools/a5.tools'
 import { Skill } from './skill.model'
 import { Action } from '../action/action.model'
 import { buildDynamicContext } from './context'
-import { BotRole } from '../platform/feishu/multi-bot'
 
-// ==================== A5 对话记忆 (MongoDB) ====================
+// ==================== A5 对话记忆 (MongoDB, 延迟初始化) ====================
 
-const A5ConversationSchema = new mongoose.Schema({
-  chatId: { type: String, required: true, index: true },
-  messages: [{
-    role: { type: String, enum: ['user', 'assistant'] },
-    content: String,
-    senderId: String,
-    timestamp: { type: Date, default: Date.now },
-  }],
-  summary: { type: String, default: '' },
-  summaryUpTo: { type: Number, default: 0 },
-}, { timestamps: true })
+let _A5Conversation: mongoose.Model<any> | null = null
 
-const A5Conversation = mongoose.models.A5Conversation || mongoose.model('A5Conversation', A5ConversationSchema)
+function getA5ConversationModel() {
+  if (_A5Conversation) return _A5Conversation
+  try {
+    _A5Conversation = mongoose.models.A5Conversation || mongoose.model('A5Conversation', new mongoose.Schema({
+      chatId: { type: String, required: true, index: true },
+      messages: [new mongoose.Schema({
+        role: { type: String },
+        content: { type: String },
+        senderId: { type: String },
+        timestamp: { type: Date, default: Date.now },
+      }, { _id: false })],
+      summary: { type: String, default: '' },
+      summaryUpTo: { type: Number, default: 0 },
+    }, { timestamps: true }))
+  } catch (e: any) {
+    log.warn(`[A5] Model init fallback: ${e.message}`)
+    _A5Conversation = mongoose.models.A5Conversation
+  }
+  return _A5Conversation!
+}
 
 const SUMMARY_THRESHOLD = 50
 const RECENT_MESSAGES_LIMIT = 50
@@ -125,9 +133,10 @@ async function executeA5Tool(name: string, args: any): Promise<any> {
 // ==================== 对话记忆管理 ====================
 
 async function loadConversation(chatId: string) {
-  let convo = await A5Conversation.findOne({ chatId })
+  const Model = getA5ConversationModel()
+  let convo = await Model.findOne({ chatId })
   if (!convo) {
-    convo = await A5Conversation.create({ chatId, messages: [], summary: '' })
+    convo = await Model.create({ chatId, messages: [], summary: '' })
   }
   return convo
 }
@@ -215,8 +224,24 @@ export async function runA5Agent(
   senderId: string,
   chatId: string,
 ): Promise<A5Response> {
+  log.info(`[A5] runA5Agent called: chatId=${chatId}, msg="${userMessage.substring(0, 50)}"`)
+
+  try {
+    return await _runA5AgentInner(userMessage, senderId, chatId)
+  } catch (e: any) {
+    log.error(`[A5] FATAL: ${e.message}\n${e.stack?.substring(0, 300)}`)
+    return { text: `A5 内部错误: ${e.message?.substring(0, 100)}` }
+  }
+}
+
+async function _runA5AgentInner(
+  userMessage: string,
+  senderId: string,
+  chatId: string,
+): Promise<A5Response> {
   const startTime = Date.now()
 
+  log.info(`[A5] Loading conversation...`)
   const convo = await loadConversation(chatId)
 
   convo.messages.push({ role: 'user', content: userMessage, senderId, timestamp: new Date() })
@@ -225,6 +250,7 @@ export async function runA5Agent(
 
   const { history, systemParts } = await buildMessageHistory(convo)
 
+  log.info(`[A5] Building context (${history.length} msgs in history)...`)
   const dynamicContext = await buildDynamicContext()
   systemParts.push(dynamicContext)
 
