@@ -53,7 +53,7 @@ pm2 save --force 2>/dev/null
 
 # 6. 健康检查
 log "[6/6] Health check..."
-sleep 3
+sleep 12
 HEALTHY=false
 for i in 1 2 3; do
   STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTH_URL" 2>/dev/null || echo "000")
