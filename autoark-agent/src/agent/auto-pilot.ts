@@ -157,7 +157,7 @@ export async function runAutoPilot(): Promise<{ actions: any[]; campaigns: numbe
     minSpend,
     spendPriority: prioritySkill?.decision?.params?.spend_priority || 'facebook',
     roasPriority: prioritySkill?.decision?.params?.roas_priority || 'metabase',
-  })
+  }, fusionSkills)
 
   const executedCount = verdicts.filter(v => v.execResult === 'executed').length
   log.info(`[AutoPilot] Cycle complete: ${campaigns.length} campaigns, ${actions.length} actions, ${executedCount} executed`)
@@ -404,7 +404,7 @@ interface FusionConfig {
   roasPriority: string
 }
 
-async function notifyAutoPilot(verdicts: CampaignVerdict[], totalCampaigns: number, snapshot?: any, fusionCfg?: FusionConfig): Promise<void> {
+async function notifyAutoPilot(verdicts: CampaignVerdict[], totalCampaigns: number, snapshot?: any, fusionCfg?: FusionConfig, fusionSkillsList?: any[]): Promise<void> {
   try {
     const { loadMultiBotConfig, sendBotMessage, replyBotMessage } = await import('../platform/feishu/multi-bot')
     const mbConfig = await loadMultiBotConfig()
@@ -486,7 +486,18 @@ async function notifyAutoPilot(verdicts: CampaignVerdict[], totalCampaigns: numb
         { tag: 'collapsible_panel', expanded: false, header: { title: { tag: 'plain_text', content: `Campaign 融合快照 (Top ${Math.min(8, verdicts.length)})` } }, border: { color: 'blue' }, vertical_spacing: '8px',
           elements: [{ tag: 'div', text: { content: topCampaigns || '暂无数据', tag: 'lark_md' } }],
         },
-        { tag: 'note', elements: [{ tag: 'plain_text', content: `TraceId: ${traceId} | SnapshotId: ${snapshot?.snapshotId || traceId} | 数据已交付 → A2 决策分析` }] },
+        { tag: 'collapsible_panel', expanded: false,
+          header: { title: { tag: 'plain_text', content: `A1 Skills 配置 (${fusionSkillsList.length} 条)` } },
+          border: { color: 'blue' }, vertical_spacing: '4px',
+          elements: fusionSkillsList.length > 0 ? fusionSkillsList.map((s: any) => ({
+            tag: 'div' as const,
+            text: {
+              content: `• **${s.name}** [${s.enabled ? '启用' : '禁用'}]\n  ${s.description || ''}\n  参数: ${JSON.stringify(s.decision?.params || {}).substring(0, 120)}`,
+              tag: 'lark_md' as const,
+            },
+          })) : [{ tag: 'div' as const, text: { content: '暂无 A1 Skills 配置', tag: 'lark_md' as const } }],
+        },
+        { tag: 'note', elements: [{ tag: 'plain_text', content: `TraceId: ${traceId} | SnapshotId: ${snapshot?.snapshotId || traceId} | @A1数据融合 可修改配置 | 数据已交付 → A2 决策分析` }] },
       ],
     }
     const a1MessageId = await sendBotMessage('a1_fusion', mbConfig, a1Card)
