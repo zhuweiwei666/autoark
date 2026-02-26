@@ -158,10 +158,12 @@ async function buildMessageHistory(convo: any): Promise<{ history: any[]; system
   }
 
   const recent = allMessages.slice(-RECENT_MESSAGES_LIMIT)
-  const history = recent.map((m: any) => ({
-    role: m.role === 'user' ? 'user' as const : 'assistant' as const,
-    content: m.content || '',
-  }))
+  const history = recent
+    .filter((m: any) => m.content && m.content.trim())
+    .map((m: any) => ({
+      role: m.role === 'user' ? 'user' as const : 'assistant' as const,
+      content: m.content.trim(),
+    }))
 
   return { history, systemParts }
 }
@@ -251,6 +253,12 @@ async function _runA5AgentInner(
 
   log.info(`[A5] Loading conversation...`)
   const convo = await loadConversation(chatId)
+
+  // 清理历史中的空消息（防止 Claude API "text content blocks must be non-empty" 报错）
+  const validMessages = (convo.messages || []).filter((m: any) => m.content && m.content.trim())
+  if (validMessages.length !== (convo.messages || []).length) {
+    convo.messages = validMessages
+  }
 
   convo.messages.push({ role: 'user', content: userMessage, senderId, timestamp: new Date() })
 
