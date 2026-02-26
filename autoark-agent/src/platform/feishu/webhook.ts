@@ -13,7 +13,8 @@ import { updateApprovalStatus, replyMessage, getBotId } from './feishu.service'
 import { loadMultiBotConfig, sendBotMessage, replyBotMessage, BotRole } from './multi-bot'
 import { executeWithRetry } from '../../agent/brain'
 import { chat } from '../../agent/agent'
-import { parseSkillIntent, listSkills, buildDiff, applySkillChange } from '../../agent/skill-editor'
+import { applySkillChange } from '../../agent/skill-editor'
+import { runA5Agent } from '../../agent/a5-agent'
 
 const FB_GRAPH = 'https://graph.facebook.com/v21.0'
 
@@ -262,108 +263,68 @@ router.post('/event', async (req: Request, res: Response) => {
 
     log.info(`[FeishuEvent] From ${senderId}: "${text.substring(0, 80)}" target=${targetRole || 'none'}`)
 
-    // ── 所有 @Agent 指令统一由 A5 处理 Skill 编辑 ──
+    // ── 所有 @Agent 统一由 A5 超级 Agent 处理（自由对话 + Skill 管理）──
     if (targetRole) {
       const replyAs: BotRole = 'a5_knowledge'
       try {
         const mbConfig = await loadMultiBotConfig()
         if (!mbConfig) return
 
-        // A5 统一管理所有 Agent 的 Skill，从文本推断目标 Agent
-        const intent = await parseSkillIntent(text, targetRole !== 'a5_knowledge' ? targetRole : undefined)
+        const chatId = event.message?.chat_id || 'default'
+        const contextHint = targetRole !== 'a5_knowledge' ? `[用户 @了 ${targetRole}] ` : ''
+        const a5Result = await runA5Agent(`${contextHint}${text}`, senderId, chatId)
 
-        if (intent.action === 'list') {
-          const skillsText = await listSkills(intent.targetAgent || (targetRole !== 'a5_knowledge' ? targetRole : undefined))
-          await replyBotMessage(replyAs, mbConfig, messageId, JSON.stringify({ text: skillsText }), 'text')
-          return
-        }
-
-        if (intent.action === 'modify' || intent.action === 'toggle') {
-          const diff = await buildDiff(intent)
-          if (!diff) {
-            await replyBotMessage(replyAs, mbConfig, messageId,
-              JSON.stringify({ text: `未找到匹配的 Skill "${intent.skillName || ''}"，请检查名称。\n\n@A5知识管理 列出skills 查看所有 Skill` }),
-              'text',
-            )
-            return
-          }
-
+        if (a5Result.confirmCard) {
+          const { confirmCard: cc } = a5Result
           const editId = `se_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
           pendingSkillEdits.set(editId, {
-            skillId: diff.skillId,
-            changes: intent.changes!,
+            skillId: cc.skillId,
+            changes: cc.after,
             agentRole: replyAs,
-            summary: diff.summary,
+            summary: cc.description,
             expiresAt: Date.now() + 5 * 60 * 1000,
           })
 
-          const beforeLines = Object.entries(diff.before).map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join('\n')
-          const afterLines = Object.entries(diff.after).map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join('\n')
+          const beforeLines = Object.entries(cc.before).map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join('\n')
+          const afterLines = Object.entries(cc.after).map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join('\n')
 
-          const diffCard = {
-            config: { wide_screen_mode: true },
-            header: {
-              template: 'orange',
-              title: { content: `[A5] Skill 修改预览 | ${diff.skillName}`, tag: 'plain_text' },
+          const elements: any[] = [
+            { tag: 'div', text: { content: a5Result.text, tag: 'lark_md' } },
+            { tag: 'hr' },
+            { tag: 'div', text: { content: `**Skill**: ${cc.skillName}\n**Agent**: ${cc.agentId}\n**操作**: ${cc.description}`, tag: 'lark_md' } },
+            { tag: 'div', text: { content: `**修改前**:\n${beforeLines}`, tag: 'lark_md' } },
+            { tag: 'div', text: { content: `**修改后**:\n${afterLines}`, tag: 'lark_md' } },
+            { tag: 'hr' },
+            {
+              tag: 'action',
+              actions: [
+                { tag: 'button', text: { content: '确认执行', tag: 'plain_text' }, type: 'primary', value: { action: 'skill_confirm', actionData: editId } },
+                { tag: 'button', text: { content: '取消', tag: 'plain_text' }, type: 'default', value: { action: 'skill_cancel', actionData: editId } },
+              ],
             },
-            elements: [
-              { tag: 'div', text: { content: `**Skill**: ${diff.skillName}\n**所属 Agent**: ${diff.agentId}\n**操作**: ${diff.summary}`, tag: 'lark_md' } },
-              { tag: 'hr' },
-              { tag: 'div', text: { content: `**修改前**:\n${beforeLines}`, tag: 'lark_md' } },
-              { tag: 'div', text: { content: `**修改后**:\n${afterLines}`, tag: 'lark_md' } },
-              { tag: 'hr' },
-              {
-                tag: 'action',
-                actions: [
-                  {
-                    tag: 'button',
-                    text: { content: '确认执行', tag: 'plain_text' },
-                    type: 'primary',
-                    value: { action: 'skill_confirm', actionData: editId },
-                  },
-                  {
-                    tag: 'button',
-                    text: { content: '取消', tag: 'plain_text' },
-                    type: 'default',
-                    value: { action: 'skill_cancel', actionData: editId },
-                  },
-                ],
-              },
-              { tag: 'note', elements: [{ tag: 'plain_text', content: `5分钟内有效 | EditId: ${editId}` }] },
-            ],
+            { tag: 'note', elements: [{ tag: 'plain_text', content: `5分钟内有效 | EditId: ${editId}` }] },
+          ]
+
+          const card = {
+            config: { wide_screen_mode: true },
+            header: { template: 'orange', title: { content: `[A5] ${cc.description}`, tag: 'plain_text' } },
+            elements,
           }
-
-          await replyBotMessage(replyAs, mbConfig, messageId, diffCard)
-          log.info(`[SkillEdit] Diff card sent for ${diff.skillName} (agent: ${diff.agentId}), editId=${editId}`)
-          return
+          await replyBotMessage(replyAs, mbConfig, messageId, card)
+        } else {
+          await replyBotMessage(replyAs, mbConfig, messageId, JSON.stringify({ text: a5Result.text }), 'text')
         }
 
-        if (intent.action === 'create') {
-          await replyBotMessage(replyAs, mbConfig, messageId,
-            JSON.stringify({ text: `创建新 Skill 功能开发中。\n\n你的描述: ${intent.description || text}` }),
-            'text',
-          )
-          return
-        }
-
-        if (intent.action === 'delete') {
-          await replyBotMessage(replyAs, mbConfig, messageId,
-            JSON.stringify({ text: `建议先禁用而非删除。\n发送: "@A5知识管理 禁用 ${intent.skillName}" 来禁用它。` }),
-            'text',
-          )
-          return
-        }
-      } catch (skillErr: any) {
-        log.error(`[SkillEdit] Error: ${skillErr.message}`)
+        log.info(`[A5 Chat] Replied to "${text.substring(0, 40)}" (confirm=${!!a5Result.confirmCard})`)
+      } catch (a5Err: any) {
+        log.error(`[A5 Chat] Error: ${a5Err.message}`)
         try {
           const mbConfig = await loadMultiBotConfig()
           if (mbConfig) {
             await replyBotMessage(replyAs, mbConfig, messageId,
-              JSON.stringify({ text: `[A5] 处理指令出错: ${skillErr.message}` }),
-              'text',
-            )
+              JSON.stringify({ text: `[A5] 处理出错: ${a5Err.message?.substring(0, 100)}` }), 'text')
           }
-        } catch { /* last resort, ignore */ }
+        } catch { /* last resort */ }
       }
       return
     }

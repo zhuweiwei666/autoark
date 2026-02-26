@@ -15,6 +15,7 @@ import { createDecisionTrace, appendTraceStep } from './collab/types'
 import { fuseRecords, buildUnifiedSnapshot, FBSourceRecord, MBSourceRecord } from './data-fusion'
 import { buildDynamicContext } from './context'
 import { fetchExperiencesFromPython } from './bridge/python-bridge'
+import { a5QuickEvolve } from './a5-agent'
 
 const FB_GRAPH = 'https://graph.facebook.com/v21.0'
 
@@ -1259,7 +1260,9 @@ async function notifyAutoPilot(verdicts: CampaignVerdict[], totalCampaigns: numb
     const a4MessageId = await replyBotMessage('a4_governor', mbConfig, a1MessageId, a4Card)
     log.info(`[AutoPilot] A4 全局治理 replied: ${a4MessageId}`)
 
-    // ── A5 知识管理：跟帖回复（总结）──
+    // ── A5 知识管理：自主进化 + 总结 ──
+    const evolveResult = await a5QuickEvolve()
+
     const skillHits = new Map<string, number>()
     for (const v of verdicts) {
       if (v.screenSkill && v.screenSkill !== '冷启动保护') {
@@ -1270,28 +1273,38 @@ async function notifyAutoPilot(verdicts: CampaignVerdict[], totalCampaigns: numb
       ? [...skillHits.entries()].map(([k, v]) => `${k}: 命中 ${v} 次`).join('\n')
       : '无 Skill 命中'
 
+    const evolveText = evolveResult.actions.length > 0
+      ? `**自主进化** (${evolveResult.actions.length} 项自动执行):\n${evolveResult.actions.map(a => `• ${a}`).join('\n')}`
+      : ''
+    const evolveConfirmText = evolveResult.confirmCards.length > 0
+      ? `**待确认** (${evolveResult.confirmCards.length} 项高风险变更):\n${evolveResult.confirmCards.map(c => `• ${c.description}`).join('\n')}`
+      : ''
+
+    const a5Elements: any[] = [
+      { tag: 'div', text: { content: `**Skill 命中统计**:\n${skillSummary}`, tag: 'lark_md' } },
+      { tag: 'div', text: { content: `**经验沉淀**: ${executedCount > 0 ? `${executedCount} 条执行结果已记录` : '本轮无新增经验'}`, tag: 'lark_md' } },
+    ]
+
+    if (evolveText) {
+      a5Elements.push({ tag: 'hr' })
+      a5Elements.push({ tag: 'div', text: { content: evolveText, tag: 'lark_md' } })
+    }
+    if (evolveConfirmText) {
+      a5Elements.push({ tag: 'div', text: { content: evolveConfirmText, tag: 'lark_md' } })
+    }
+
+    a5Elements.push(
+      { tag: 'div', text: { content: `**闭环**: A1→A2→A3→A4→A5 ✓ | @A5知识管理 对话管理`, tag: 'lark_md' } },
+      { tag: 'note', elements: [{ tag: 'plain_text', content: `TraceId: ${traceId} | 进化: ${evolveResult.actions.length}自动 + ${evolveResult.confirmCards.length}待确认` }] },
+    )
+
     const a5Card = {
       config: { wide_screen_mode: true },
-      header: { template: 'purple', title: { content: `[A5 知识管理] 本轮总结`, tag: 'plain_text' } },
-      elements: [
-        { tag: 'div', text: { content: `**Skill 命中统计**:\n${skillSummary}`, tag: 'lark_md' } },
-        { tag: 'div', text: { content: `**经验沉淀**: ${executedCount > 0 ? `${executedCount} 条执行结果已记录，供下轮复用` : '本轮无新增经验'}`, tag: 'lark_md' } },
-        { tag: 'div', text: { content: `**闭环状态**: A1数据→A2决策→A3执行→A4治理→A5沉淀 ✓\n本轮协作完成`, tag: 'lark_md' } },
-        { tag: 'collapsible_panel', expanded: false,
-          header: { title: { tag: 'plain_text', content: `Skills 总览 (${screenerSkills.length + decisionSkills.length} 条启用)` } },
-          border: { color: 'purple' }, vertical_spacing: '4px',
-          elements: [
-            { tag: 'div', text: { content: `**筛选 Skills** (${screenerSkills.length}):\n${formatSkillsSummary(screenerSkills, 'screener')}`, tag: 'lark_md' } },
-            { tag: 'hr' },
-            { tag: 'div', text: { content: `**决策 Skills** (${decisionSkills.length}):\n${formatSkillsSummary(decisionSkills, 'decision')}`, tag: 'lark_md' } },
-            { tag: 'note', elements: [{ tag: 'plain_text', content: `@任意Agent + 指令即可修改 Skills | 支持: 修改/启用/禁用/列出` }] },
-          ],
-        },
-        { tag: 'note', elements: [{ tag: 'plain_text', content: `TraceId: ${traceId} | 闭环完成` }] },
-      ],
+      header: { template: 'purple', title: { content: `[A5 知识管理] 本轮总结${evolveResult.actions.length > 0 ? ' + 自主进化' : ''}`, tag: 'plain_text' } },
+      elements: a5Elements,
     }
     await replyBotMessage('a5_knowledge', mbConfig, a1MessageId, a5Card)
-    log.info(`[AutoPilot] A5 知识管理 replied, multi-bot cycle complete`)
+    log.info(`[AutoPilot] A5 知识管理 replied (evolve: ${evolveResult.actions.length} auto, ${evolveResult.confirmCards.length} confirm)`)
   } catch (e: any) {
     log.warn(`[AutoPilot] Multi-bot notification failed: ${e.message}`)
   }
