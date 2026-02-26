@@ -1,17 +1,24 @@
 /**
- * A5 知识管理 Agent 专属工具集
+ * A5 超级 Agent 工具集 — 6 个自身工具 + 4 个跨 Agent 调度工具
  *
- * 让 A5 通过 tool-calling 自主决定何时查看数据、修改 Skill、触发进化。
- * 风险分级：低风险直接执行，高风险返回 { needsConfirm: true } 由上层发卡片。
+ * A5 作为总指挥，可以调度 A1-A4 所有 Agent 的核心能力：
+ * - A1 数据融合：query_campaigns
+ * - A2 决策分析：run_decision
+ * - A3 执行路由：execute_campaign_action
+ * - A4 全局治理：check_global_roas
  */
+import axios from 'axios'
 import dayjs from 'dayjs'
 import { ToolDef, S } from '../tools'
-import { Skill } from '../skill.model'
+import { Skill, AgentSkillDoc, matchesCampaign, evaluateConditions, fillReasonTemplate } from '../skill.model'
 import { Action } from '../../action/action.model'
 import { Knowledge } from '../librarian.model'
 import { getReflectionStats } from '../reflection'
 import { runEvolution } from '../evolution'
 import { log } from '../../platform/logger'
+import { fuseRecords, FBSourceRecord, MBSourceRecord } from '../data-fusion'
+
+const FB_GRAPH = 'https://graph.facebook.com/v21.0'
 
 const HIGH_RISK_FIELDS = new Set(['enabled', 'decision.auto'])
 
@@ -233,6 +240,237 @@ function getNestedValue(obj: any, path: string): any {
   return current
 }
 
+// ==================== 跨 Agent 调度工具 ====================
+
+const queryCampaignsTool: ToolDef = {
+  name: 'query_campaigns',
+  description: `[调度A1] 拉取 Facebook + Metabase 融合后的 campaign 数据。返回每个 campaign 的花费、ROAS、安装量、CPI 等。
+支持按名称/状态/花费过滤。这是 A2 决策时看到的同一份数据。`,
+  parameters: S.obj('参数', {
+    nameFilter: S.str('按 campaign 名称过滤（模糊匹配，如 "funce"、"ydl"）'),
+    statusFilter: S.enum('状态过滤', ['ACTIVE', 'PAUSED', 'ALL']),
+    minSpend: S.num('最低花费过滤（美元）'),
+  }),
+  handler: async () => {
+    const fbToken = process.env.FB_ACCESS_TOKEN
+    if (!fbToken) return { error: '无 FB_ACCESS_TOKEN，无法拉取数据' }
+
+    try {
+      const { getAgentConfig } = await import('../agent-config.model')
+      const fusionSkills = await Skill.find({ agentId: 'a1_fusion', enabled: true }).lean() as any[]
+      const optimizerSkill = fusionSkills.find((s: any) => s.name === 'A1 优化师范围')
+      const optimizers: string[] = optimizerSkill?.config?.value || ['wwz']
+
+      const accountsRes = await axios.get(`${FB_GRAPH}/me/adaccounts`, {
+        params: { fields: 'id,account_id,name', limit: 200, access_token: fbToken },
+        timeout: 15000,
+      })
+
+      const fbRecords: FBSourceRecord[] = []
+      for (const acc of accountsRes.data?.data || []) {
+        try {
+          const campRes = await axios.get(`${FB_GRAPH}/${acc.id}/campaigns`, {
+            params: {
+              fields: 'id,name,status,daily_budget,effective_status',
+              filtering: JSON.stringify([{ field: 'effective_status', operator: 'IN', value: ['ACTIVE', 'PAUSED'] }]),
+              limit: 500, access_token: fbToken,
+            },
+            timeout: 15000,
+          })
+          for (const camp of campRes.data?.data || []) {
+            const parts = camp.name.split('_')
+            const optimizer = (parts[0] || '').toLowerCase()
+            if (!optimizers.includes(optimizer)) continue
+
+            let spend = 0, roas = 0, conversions = 0, revenue = 0
+            try {
+              const insRes = await axios.get(`${FB_GRAPH}/${camp.id}/insights`, {
+                params: { fields: 'spend,actions,action_values,purchase_roas', date_preset: 'today', access_token: fbToken },
+                timeout: 10000,
+              })
+              const ins = insRes.data?.data?.[0]
+              if (ins) {
+                spend = Number(ins.spend || 0)
+                const instAction = (ins.actions || []).find((a: any) => a.action_type === 'app_install' || a.action_type === 'omni_app_install')
+                conversions = instAction ? Number(instAction.value || 0) : 0
+                const purchaseRoas = ins.purchase_roas?.find((a: any) => a.action_type === 'omni_purchase')
+                if (purchaseRoas) roas = Number(purchaseRoas.value || 0)
+                const purchaseValue = (ins.action_values || []).find((a: any) => a.action_type === 'omni_purchase')
+                if (purchaseValue) { revenue = Number(purchaseValue.value || 0); if (roas === 0 && spend > 0) roas = revenue / spend }
+              }
+            } catch { /* skip insights */ }
+
+            fbRecords.push({
+              campaignId: camp.id, campaignName: camp.name, accountId: acc.account_id, accountName: acc.name || '',
+              status: camp.effective_status || camp.status, dailyBudget: camp.daily_budget ? Number(camp.daily_budget) / 100 : 0,
+              spend, impressions: 0, clicks: 0, conversions, roas, cpi: conversions > 0 ? spend / conversions : 0,
+              ctr: 0, revenue, optimizer, pkgName: parts.length >= 3 ? parts[2] : '', platform: 'facebook',
+            })
+          }
+        } catch { /* skip account */ }
+      }
+
+      return {
+        campaigns: fbRecords.map(c => ({
+          id: c.campaignId, name: c.campaignName, account: c.accountId, status: c.status,
+          spend: Number(c.spend.toFixed(2)), roas: Number(c.roas.toFixed(2)),
+          installs: c.conversions, cpi: Number(c.cpi.toFixed(2)), budget: c.dailyBudget,
+          optimizer: c.optimizer, pkg: c.pkgName,
+        })),
+        count: fbRecords.length,
+        note: '数据来自 Facebook API 实时拉取。用 nameFilter/statusFilter/minSpend 参数在你的分析中自行过滤。',
+      }
+    } catch (e: any) {
+      return { error: `数据拉取失败: ${e.message}` }
+    }
+  },
+}
+
+const runDecisionTool: ToolDef = {
+  name: 'run_decision',
+  description: `[调度A2] 对当前所有 campaign 跑一次 Skill 规则引擎评估（不调 LLM），返回每个 campaign 的筛选结果和建议操作。
+用途：让 A5 了解 A2 的规则引擎会对哪些 campaign 触发什么操作。`,
+  parameters: S.obj('参数', {
+    campaignIds: S.str('指定 campaign ID 列表（逗号分隔），不传则评估全部'),
+  }),
+  handler: async (args) => {
+    try {
+      const screenerSkills = await Skill.find({ agentId: { $in: ['screener', 'a2_decision'] }, skillType: { $in: ['rule', undefined, null] }, enabled: true }).sort({ order: 1 }).lean() as AgentSkillDoc[]
+      const decisionSkills = await Skill.find({ agentId: { $in: ['decision', 'a2_decision'] }, 'decision.action': { $exists: true }, enabled: true }).sort({ order: 1 }).lean() as AgentSkillDoc[]
+
+      const filterIds = args.campaignIds ? args.campaignIds.split(',').map((s: string) => s.trim()) : null
+
+      const recentActions = await Action.find({
+        status: { $in: ['executed', 'approved'] },
+        createdAt: { $gte: dayjs().subtract(2, 'hour').toDate() },
+      }).lean()
+      const recentIds = new Set(recentActions.map((a: any) => a.entityId).filter(Boolean))
+
+      const results: any[] = []
+
+      const queryCampaignResult = await queryCampaignsTool.handler({}, { userId: 'a5', conversationId: 'a5', getToken: async () => null })
+      const campaigns = queryCampaignResult.campaigns || []
+
+      for (const c of campaigns) {
+        if (filterIds && !filterIds.includes(c.id)) continue
+        if (recentIds.has(c.id)) { results.push({ id: c.id, name: c.name, verdict: 'cooldown', reason: '2h 内已操作' }); continue }
+
+        const data = { ...c, todaySpend: c.spend, adjustedRoi: c.roas, todayRoas: c.roas, installs: c.installs, campaignId: c.id, campaignName: c.name, accountId: c.account }
+
+        let matched = false
+        for (const skill of screenerSkills) {
+          if (skill.screening?.conditions?.length) {
+            if (evaluateConditions(skill.screening.conditions, skill.screening.conditionLogic, data)) {
+              results.push({ id: c.id, name: c.name, verdict: skill.screening.verdict, skill: skill.name, reason: fillReasonTemplate(skill.screening.reasonTemplate || skill.name, data) })
+              matched = true
+              break
+            }
+          }
+        }
+        if (matched) continue
+
+        for (const skill of decisionSkills) {
+          const d = skill.decision
+          if (!d?.action) continue
+          const condMatch = d.conditions?.length > 0 ? evaluateConditions(d.conditions, d.conditionLogic, data) : false
+          if (condMatch) {
+            results.push({ id: c.id, name: c.name, verdict: 'needs_decision', action: d.action, auto: d.auto, skill: skill.name, reason: fillReasonTemplate(d.reasonTemplate || skill.name, data) })
+            matched = true
+            break
+          }
+        }
+
+        if (!matched) results.push({ id: c.id, name: c.name, verdict: 'watch', reason: '无 Skill 命中，默认观察' })
+      }
+
+      return { evaluations: results, count: results.length, skillsUsed: { screener: screenerSkills.length, decision: decisionSkills.length } }
+    } catch (e: any) {
+      return { error: `决策评估失败: ${e.message}` }
+    }
+  },
+}
+
+const executeCampaignActionTool: ToolDef = {
+  name: 'execute_campaign_action',
+  description: `[调度A3] 通过 Facebook API 执行广告操作（暂停/恢复/调预算）。所有操作都需要用户在飞书确认后才执行（返回 needsConfirm）。`,
+  parameters: S.obj('参数', {
+    campaignId: S.str('Campaign ID'),
+    campaignName: S.str('Campaign 名称（用于展示）'),
+    action: S.enum('操作类型', ['pause', 'resume', 'adjust_budget']),
+    reason: S.str('操作原因'),
+    newBudget: S.num('新预算金额（adjust_budget 时必填，单位美元）'),
+  }, ['campaignId', 'action', 'reason']),
+  handler: async (args) => {
+    return {
+      needsConfirm: true,
+      skillId: `action_${args.campaignId}`,
+      skillName: args.campaignName || args.campaignId,
+      agentId: 'a3_executor',
+      before: { status: args.action === 'pause' ? 'ACTIVE' : args.action === 'resume' ? 'PAUSED' : `budget → $${args.newBudget || '?'}` },
+      after: { action: args.action, ...(args.newBudget ? { newBudget: args.newBudget } : {}) },
+      description: `${args.action} ${args.campaignName || args.campaignId}: ${args.reason}`,
+      _executeData: { campaignId: args.campaignId, action: args.action, reason: args.reason, newBudget: args.newBudget },
+    }
+  },
+}
+
+const checkGlobalRoasTool: ToolDef = {
+  name: 'check_global_roas',
+  description: `[调度A4] 拉取 Metabase 收入数据，计算全局 ROAS，检查是否触发 A4 的止损/补量规则。返回各产品的 ROAS 明细和风控状态。`,
+  parameters: S.obj('参数', {}),
+  handler: async () => {
+    try {
+      const mbSess = await axios.post('https://meta.iohubonline.club/api/session', {
+        username: process.env.METABASE_EMAIL, password: process.env.METABASE_PASSWORD,
+      })
+      const mbTok = mbSess.data.id
+
+      const fusionSkills = await Skill.find({ agentId: 'a1_fusion', enabled: true }).lean() as any[]
+      const optimizerSkill = fusionSkills.find((s: any) => s.name === 'A1 优化师范围')
+      const optimizers: string[] = optimizerSkill?.config?.value || ['wwz']
+
+      const mbRes = await axios.post('https://meta.iohubonline.club/api/card/3822/query', {
+        parameters: [
+          { type: 'text', value: 'VfuSBdaO33sklvtr', target: ['variable', ['template-tag', 'access_code']] },
+          { type: 'date/single', value: dayjs().format('YYYY-MM-DD'), target: ['variable', ['template-tag', 'start_day']] },
+          { type: 'date/single', value: dayjs().format('YYYY-MM-DD'), target: ['variable', ['template-tag', 'end_day']] },
+          { type: 'text', value: optimizers.join(',') || 'wwz', target: ['variable', ['template-tag', 'user_name']] },
+        ],
+      }, { headers: { 'X-Metabase-Session': mbTok }, timeout: 30000 })
+
+      const mbData = mbRes.data?.data
+      const mbCols = (mbData?.cols || []).map((c: any) => c.name)
+      const ci = (name: string) => mbCols.indexOf(name)
+
+      let totalRevenue = 0
+      const products: any[] = []
+      for (const r of mbData?.rows || []) {
+        const date = r[ci('日期')]
+        const pkg = r[ci('包名')]
+        if (!date || date === '汇总' || !pkg || pkg === 'ALL') continue
+        const rev = Number(r[ci('调整的首日收入')] || 0)
+        totalRevenue += rev
+        products.push({ product: pkg, revenue: Number(rev.toFixed(2)) })
+      }
+
+      const a4Goals = await Skill.find({ agentId: 'a4_governor', skillType: 'goal', enabled: true }).lean() as any[]
+      const goals = a4Goals.map((g: any) => ({
+        name: g.name, product: g.goal?.product, roasFloor: g.goal?.roasFloor,
+        spendTarget: g.goal?.dailySpendTarget, priority: g.goal?.priority,
+      }))
+
+      return {
+        totalRevenue: Number(totalRevenue.toFixed(2)),
+        products,
+        a4Goals: goals,
+        note: '花费数据需要结合 query_campaigns 的结果计算 ROAS = revenue / spend',
+      }
+    } catch (e: any) {
+      return { error: `A4 数据拉取失败: ${e.message}` }
+    }
+  },
+}
+
 export const a5Tools: ToolDef[] = [
   listSkillsTool,
   modifySkillTool,
@@ -240,4 +478,8 @@ export const a5Tools: ToolDef[] = [
   triggerEvolutionTool,
   queryKnowledgeTool,
   viewSystemStatusTool,
+  queryCampaignsTool,
+  runDecisionTool,
+  executeCampaignActionTool,
+  checkGlobalRoasTool,
 ]
