@@ -18,6 +18,7 @@ const actionSchema = new mongoose.Schema({
       'create_campaign', 'create_adset', 'create_ad',
       'adjust_budget', 'pause', 'resume',
       'update_targeting', 'update_creative',
+      'copy_campaign',
     ],
     required: true,
   },
