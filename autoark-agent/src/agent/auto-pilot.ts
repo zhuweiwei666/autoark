@@ -813,27 +813,136 @@ async function notifyAutoPilot(verdicts: CampaignVerdict[], totalCampaigns: numb
     const a3MessageId = await replyBotMessage('a3_executor', mbConfig, a1MessageId, a3Card)
     log.info(`[AutoPilot] A3 执行路由 replied: ${a3MessageId}`)
 
-    // ── A4 全局治理：跟帖回复 ──
+    // ── A4 全局治理：从 Metabase 3822 拉产品维度收入，拼 A1 花费算全局 ROAS ──
+    let globalRevenue = 0
+    let globalRoas = 0
+    let globalProducts: Array<{ product: string; revenue: number; spend: number; roas: number }> = []
+
+    try {
+      const mbSess = await axios.post('https://meta.iohubonline.club/api/session', {
+        username: process.env.METABASE_EMAIL, password: process.env.METABASE_PASSWORD,
+      })
+      const mbTok = mbSess.data.id
+      const mbRes = await axios.post('https://meta.iohubonline.club/api/card/3822/query', {
+        parameters: [
+          { type: 'text', value: 'VfuSBdaO33sklvtr', target: ['variable', ['template-tag', 'access_code']] },
+          { type: 'date/single', value: dayjs().format('YYYY-MM-DD'), target: ['variable', ['template-tag', 'start_day']] },
+          { type: 'date/single', value: dayjs().format('YYYY-MM-DD'), target: ['variable', ['template-tag', 'end_day']] },
+          { type: 'text', value: fusionCfg?.autoOptimizers?.join(',') || 'wwz', target: ['variable', ['template-tag', 'user_name']] },
+        ],
+      }, { headers: { 'X-Metabase-Session': mbTok }, timeout: 30000 })
+
+      const mbData = mbRes.data?.data
+      const mbCols = (mbData?.cols || []).map((c: any) => c.name)
+      const ci = (name: string) => mbCols.indexOf(name)
+
+      for (const r of mbData?.rows || []) {
+        const date = r[ci('日期')]
+        const pkg = r[ci('包名')]
+        if (!date || date === '汇总' || !pkg || pkg === 'ALL') continue
+
+        const adjRevenue = Number(r[ci('调整的首日收入')] || 0)
+        const channelRevenue = Number(r[ci('渠道收入')] || 0)
+        const rev = adjRevenue > 0 ? adjRevenue : channelRevenue
+
+        const productSpend = snapshot?.fusedCampaigns
+          ?.filter((f: any) => (f.pkgName || '').toLowerCase().includes(pkg.toLowerCase().replace('ios-', '').replace('android-', '')))
+          ?.reduce((s: number, f: any) => s + f.spend, 0) || 0
+
+        globalRevenue += rev
+        globalProducts.push({
+          product: pkg,
+          revenue: rev,
+          spend: productSpend,
+          roas: productSpend > 0 ? rev / productSpend : 0,
+        })
+      }
+      globalRoas = totalSpend > 0 ? globalRevenue / totalSpend : 0
+      log.info(`[A4] Global ROAS: revenue=$${globalRevenue.toFixed(2)} / spend=$${totalSpend.toFixed(2)} = ${globalRoas.toFixed(2)}`)
+    } catch (e: any) {
+      log.warn(`[A4] Failed to fetch product revenue: ${e.message}, using campaign avg ROAS`)
+      globalRoas = avgRoas
+    }
+
+    // 加载 A4 目标 Skills
+    const a4Goals = await Skill.find({ agentId: 'a4_governor', skillType: 'goal', enabled: true }).lean() as any[]
+    const a4Experiences = await Skill.find({ agentId: 'a4_governor', skillType: 'experience', enabled: true }).lean() as any[]
+
     let riskLevel: 'low' | 'medium' | 'high' = 'low'
     const overrides: string[] = []
-    if (avgRoas < 0.8 && avgRoas > 0) {
-      riskLevel = 'high'
-      overrides.push('ROAS 低于硬阈值，暂停所有放量动作并优先止损')
-      if (watching > needsDecision) overrides.push('从观察池提取低风险素材小流量验证')
-    } else if (avgRoas < 1.0 && avgRoas > 0) {
-      riskLevel = 'medium'
-      overrides.push('ROAS 接近阈值，控制学习期广告占比')
+    const goalAnalysis: string[] = []
+
+    for (const g of a4Goals) {
+      const goal = g.goal || {}
+      const prod = globalProducts.find(p => p.product.toLowerCase().includes((goal.product || '').toLowerCase()))
+      const prodSpend = prod?.spend || totalSpend
+      const prodRoas = prod?.roas || globalRoas
+      const spendTarget = goal.dailySpendTarget || 0
+      const roasFloor = goal.roasFloor || 0
+      const spendPct = spendTarget > 0 ? Math.round((prodSpend / spendTarget) * 100) : 0
+
+      goalAnalysis.push(`**${goal.product || g.name}**: 花费 $${prodSpend.toFixed(2)}/${spendTarget}目标(${spendPct}%) | ROAS ${prodRoas.toFixed(2)}/${roasFloor}底线`)
+
+      if (roasFloor > 0 && prodRoas < roasFloor && prodRoas > 0) {
+        if (goal.priority === 'roas_first') {
+          riskLevel = 'high'
+          overrides.push(`${goal.product} ROAS ${prodRoas.toFixed(2)} 低于底线 ${roasFloor}，止损优先`)
+        } else {
+          riskLevel = riskLevel === 'high' ? 'high' : 'medium'
+          overrides.push(`${goal.product} ROAS 偏低但冲量优先，控制亏损幅度`)
+        }
+      }
+      if (spendTarget > 0 && prodSpend < spendTarget * 0.5 && dayjs().hour() > 12) {
+        overrides.push(`${goal.product} 消耗进度 ${spendPct}% 偏低，考虑补量`)
+      }
     }
+
+    if (a4Goals.length === 0) {
+      if (globalRoas > 0 && globalRoas < 0.8) riskLevel = 'high'
+      else if (globalRoas > 0 && globalRoas < 1.0) riskLevel = 'medium'
+    }
+
     const riskLabel = riskLevel === 'high' ? '🔴 高风险' : riskLevel === 'medium' ? '🟡 中风险' : '🟢 低风险'
-    const goalLine = overrides.length > 0 ? `**纠偏指令**:\n${overrides.map(o => `• ${o}`).join('\n')}` : `ROAS ${avgRoas.toFixed(2)} 达标，本轮动作符合全局目标`
+
+    const a4Elements: any[] = [
+      { tag: 'div', fields: [
+        { is_short: true, text: { content: `**全局花费**\n$${totalSpend.toFixed(2)}`, tag: 'lark_md' } },
+        { is_short: true, text: { content: `**全局收入**\n$${globalRevenue.toFixed(2)}`, tag: 'lark_md' } },
+        { is_short: true, text: { content: `**全局ROAS**\n${globalRoas.toFixed(2)}`, tag: 'lark_md' } },
+        { is_short: true, text: { content: `**风险**\n${riskLabel}`, tag: 'lark_md' } },
+      ]},
+    ]
+
+    if (goalAnalysis.length > 0) {
+      a4Elements.push({ tag: 'hr' })
+      a4Elements.push({ tag: 'div', text: { content: `**产品目标对比**:\n${goalAnalysis.join('\n')}`, tag: 'lark_md' } })
+    }
+
+    if (overrides.length > 0) {
+      a4Elements.push({ tag: 'hr' })
+      a4Elements.push({ tag: 'div', text: { content: `**纠偏指令**:\n${overrides.map(o => `• ${o}`).join('\n')}`, tag: 'lark_md' } })
+    } else {
+      a4Elements.push({ tag: 'div', text: { content: '本轮动作符合全局目标，无需纠偏', tag: 'lark_md' } })
+    }
+
+    if (a4Experiences.length > 0) {
+      a4Elements.push({
+        tag: 'collapsible_panel', expanded: false,
+        header: { title: { tag: 'plain_text', content: `A4 策略经验 (${a4Experiences.length})` } },
+        border: { color: 'red' }, vertical_spacing: '4px',
+        elements: a4Experiences.map((e: any) => ({
+          tag: 'div' as const,
+          text: { content: `• **${e.name}**: ${e.experience?.lesson || '-'}`, tag: 'lark_md' as const },
+        })),
+      })
+    }
+
+    a4Elements.push({ tag: 'note', elements: [{ tag: 'plain_text', content: `TraceId: ${traceId} | 数据源: Metabase#3822(收入) + A1(花费) | @A4全局控制 可修改目标` }] })
 
     const a4Card = {
       config: { wide_screen_mode: true },
-      header: { template: riskLevel === 'high' ? 'red' : riskLevel === 'medium' ? 'orange' : 'green', title: { content: `[A4 全局治理] ${riskLabel} | ROAS ${avgRoas.toFixed(2)}`, tag: 'plain_text' } },
-      elements: [
-        { tag: 'div', text: { content: `**风险评估**: ${riskLabel}\n**均值 ROAS**: ${avgRoas.toFixed(2)}\n${goalLine}`, tag: 'lark_md' } },
-        { tag: 'note', elements: [{ tag: 'plain_text', content: `TraceId: ${traceId} | 治理结论已交付 → A5 知识管理` }] },
-      ],
+      header: { template: riskLevel === 'high' ? 'red' : riskLevel === 'medium' ? 'orange' : 'green', title: { content: `[A4 全局治理] ${riskLabel} | ROAS ${globalRoas.toFixed(2)} | $${totalSpend.toFixed(0)}/$${a4Goals[0]?.goal?.dailySpendTarget || '?'}`, tag: 'plain_text' } },
+      elements: a4Elements,
     }
     const a4MessageId = await replyBotMessage('a4_governor', mbConfig, a1MessageId, a4Card)
     log.info(`[AutoPilot] A4 全局治理 replied: ${a4MessageId}`)
