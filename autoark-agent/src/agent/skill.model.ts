@@ -16,7 +16,7 @@ const conditionSchema = new mongoose.Schema({
 
 const skillSchema = new mongoose.Schema({
   name: { type: String, required: true },
-  agentId: { type: String, enum: ['screener', 'decision', 'executor', 'auditor'], required: true },
+  agentId: { type: String, enum: ['screener', 'decision', 'executor', 'auditor', 'data_fusion'], required: true },
   description: { type: String, default: '' },
 
   // ========== 匹配条件：哪些 campaign 适用此 Skill ==========
@@ -117,7 +117,7 @@ export interface DecisionSkillData {
 export interface AgentSkillDoc {
   _id: any
   name: string
-  agentId: 'screener' | 'decision' | 'executor' | 'auditor'
+  agentId: 'screener' | 'decision' | 'executor' | 'auditor' | 'data_fusion'
   description: string
   match: {
     packagePatterns: string[]

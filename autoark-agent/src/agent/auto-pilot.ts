@@ -40,17 +40,38 @@ export async function runAutoPilot(): Promise<{ actions: any[]; campaigns: numbe
   const fbToken = process.env.FB_ACCESS_TOKEN
   if (!fbToken) return { actions: [], campaigns: 0 }
 
-  const config = await getAgentConfig('executor')
-  const autoOptimizers: string[] = (config?.executor?.scope?.optimizers || []).map((o: string) => o.toLowerCase())
+  // 从 A1 data_fusion Skills 读取配置（可通过 @A1 在群里修改）
+  const fusionSkills = await Skill.find({ agentId: 'data_fusion', enabled: true }).lean() as any[]
+
+  const optimizerSkill = fusionSkills.find(s => s.name === 'A1 优化师范围')
+  const sourceSkill = fusionSkills.find(s => s.name === 'A1 数据源配置')
+  const prioritySkill = fusionSkills.find(s => s.name === 'A1 字段优先级')
+  const thresholdSkill = fusionSkills.find(s => s.name === 'A1 冲突与过滤阈值')
+
+  const autoOptimizers: string[] = (optimizerSkill?.decision?.params?.optimizers || []).map((o: string) => o.toLowerCase())
+
+  // 兜底：如果 A1 Skills 没配，读旧的 executor config
+  if (autoOptimizers.length === 0) {
+    const config = await getAgentConfig('executor')
+    const fallback: string[] = (config?.executor?.scope?.optimizers || []).map((o: string) => o.toLowerCase())
+    if (fallback.length > 0) {
+      autoOptimizers.push(...fallback)
+      log.info(`[AutoPilot] Using fallback optimizers from executor config: ${fallback.join(', ')}`)
+    }
+  }
 
   if (autoOptimizers.length === 0) return { actions: [], campaigns: 0 }
 
-  log.info(`[AutoPilot] Starting cycle for optimizers: ${autoOptimizers.join(', ')}`)
+  const fbEnabled = sourceSkill?.decision?.params?.facebook_enabled !== false
+  const mbEnabled = sourceSkill?.decision?.params?.metabase_enabled !== false
+  const minSpend = thresholdSkill?.decision?.params?.min_spend_filter ?? 5
 
-  // Step 1: 并行拉取 FB + Metabase（均按优化师过滤）
+  log.info(`[AutoPilot] Starting cycle: optimizers=[${autoOptimizers.join(',')}] sources=[${fbEnabled ? 'FB' : ''}${mbEnabled ? '+MB' : ''}] minSpend=$${minSpend}`)
+
+  // Step 1: 按 Skills 配置并行拉取数据源
   const [fbRaw, mbRawAll] = await Promise.all([
-    fetchFBData(fbToken, autoOptimizers),
-    fetchMBData(),
+    fbEnabled ? fetchFBData(fbToken, autoOptimizers) : Promise.resolve([]),
+    mbEnabled ? fetchMBData() : Promise.resolve([]),
   ])
   const mbRaw = mbRawAll.filter(m => {
     const opt = (m.optimizer || m.campaignName?.split('_')[0] || '').toLowerCase()
@@ -129,7 +150,14 @@ export async function runAutoPilot(): Promise<{ actions: any[]; campaigns: numbe
   }
 
   // Step 4: 飞书推送（每次都推，展示全部 campaign 数据）
-  await notifyAutoPilot(verdicts, campaigns.length, snapshot)
+  await notifyAutoPilot(verdicts, campaigns.length, snapshot, {
+    autoOptimizers,
+    fbEnabled,
+    mbEnabled,
+    minSpend,
+    spendPriority: prioritySkill?.decision?.params?.spend_priority || 'facebook',
+    roasPriority: prioritySkill?.decision?.params?.roas_priority || 'metabase',
+  })
 
   const executedCount = verdicts.filter(v => v.execResult === 'executed').length
   log.info(`[AutoPilot] Cycle complete: ${campaigns.length} campaigns, ${actions.length} actions, ${executedCount} executed`)
@@ -367,7 +395,16 @@ async function makeSkillDecisions(campaigns: FBCampaignData[]): Promise<{ verdic
 
 // ==================== 飞书推送（5 Bot 独立发言 + 跟帖）====================
 
-async function notifyAutoPilot(verdicts: CampaignVerdict[], totalCampaigns: number, snapshot?: any): Promise<void> {
+interface FusionConfig {
+  autoOptimizers: string[]
+  fbEnabled: boolean
+  mbEnabled: boolean
+  minSpend: number
+  spendPriority: string
+  roasPriority: string
+}
+
+async function notifyAutoPilot(verdicts: CampaignVerdict[], totalCampaigns: number, snapshot?: any, fusionCfg?: FusionConfig): Promise<void> {
   try {
     const { loadMultiBotConfig, sendBotMessage, replyBotMessage } = await import('../platform/feishu/multi-bot')
     const mbConfig = await loadMultiBotConfig()
@@ -443,7 +480,7 @@ async function notifyAutoPilot(verdicts: CampaignVerdict[], totalCampaigns: numb
           { is_short: true, text: { content: `**数据风险**\n${dataRiskLabel}`, tag: 'lark_md' } },
         ]},
         { tag: 'hr' },
-        { tag: 'div', text: { content: `**融合策略**\n• 花费: FB API 优先（实时），为0时取 Metabase\n• ROAS: Metabase 后端归因优先，为0时取 FB purchase_roas\n• 安装: FB 前端事件优先，为0时取 Metabase 首日UV\n• 收入/付费率/ARPU: Metabase 独占`, tag: 'lark_md' } },
+        { tag: 'div', text: { content: `**融合策略** (来自 A1 Skills，可 @A1 修改)\n• 优化师: ${fusionCfg?.autoOptimizers?.join(', ') || 'N/A'}\n• 数据源: ${fusionCfg?.fbEnabled ? 'FB(启用)' : 'FB(关闭)'} ${fusionCfg?.mbEnabled ? 'MB(启用)' : 'MB(关闭)'}\n• 花费优先: ${fusionCfg?.spendPriority || 'facebook'}\n• ROAS优先: ${fusionCfg?.roasPriority || 'metabase'}\n• 最低花费: $${fusionCfg?.minSpend ?? 5}`, tag: 'lark_md' } },
         { tag: 'div', text: { content: `**融合诊断**\n• 质量分: **${qualityScore}** | ROAS覆盖: ${roasCov}% | 安装覆盖: ${installCov}%\n• 来源: 双源合并 ${mergedCount} | 仅FB ${fbOnly} | 仅MB ${mbOnly}\n• 冲突: 花费偏差 ${spendConf} 条 | ROAS偏差 ${roasConf} 条\n• ${conflictDetails}`, tag: 'lark_md' } },
         { tag: 'hr' },
         { tag: 'collapsible_panel', expanded: false, header: { title: { tag: 'plain_text', content: `Campaign 融合快照 (Top ${Math.min(8, verdicts.length)})` } }, border: { color: 'blue' }, vertical_spacing: '8px',

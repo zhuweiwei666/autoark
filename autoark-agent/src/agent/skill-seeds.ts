@@ -317,11 +317,129 @@ const DECISION_SEEDS = [
   },
 ]
 
+const DATA_FUSION_SEEDS = [
+  {
+    name: 'A1 优化师范围',
+    agentId: 'data_fusion',
+    description: '控制 A1 数据融合覆盖哪些优化师，不在列表内的数据会被过滤',
+    screening: {
+      conditions: [{ field: 'optimizers', operator: '==', value: 'wwz' }],
+      conditionLogic: 'AND',
+      verdict: 'needs_decision',
+      priority: 'normal',
+      reasonTemplate: '当前管理优化师: {optimizers}',
+    },
+    decision: {
+      triggerLabels: [],
+      conditions: [],
+      conditionLogic: 'AND',
+      action: 'pause',
+      auto: false,
+      params: {
+        budgetChangePct: 0,
+        optimizers: ['wwz'],
+      },
+      reasonTemplate: '',
+      llmContext: '管理的优化师列表，可通过 @A1 修改',
+      llmRules: [],
+    },
+    order: 1,
+  },
+  {
+    name: 'A1 数据源配置',
+    agentId: 'data_fusion',
+    description: '控制启用哪些数据源及其优先级',
+    screening: {
+      conditions: [],
+      conditionLogic: 'AND',
+      verdict: 'watch',
+      priority: 'normal',
+      reasonTemplate: 'fb={facebook_enabled} mb={metabase_enabled} tt={toptou_enabled}',
+    },
+    decision: {
+      triggerLabels: [],
+      conditions: [],
+      conditionLogic: 'AND',
+      action: 'pause',
+      auto: false,
+      params: {
+        budgetChangePct: 0,
+        facebook_enabled: true,
+        metabase_enabled: true,
+        toptou_enabled: false,
+      },
+      reasonTemplate: '',
+      llmContext: '数据源开关：facebook/metabase/toptou',
+      llmRules: [],
+    },
+    order: 2,
+  },
+  {
+    name: 'A1 字段优先级',
+    agentId: 'data_fusion',
+    description: '控制各指标的主数据源：spend用FB还是MB，ROAS用MB还是FB',
+    screening: {
+      conditions: [],
+      conditionLogic: 'AND',
+      verdict: 'watch',
+      priority: 'normal',
+      reasonTemplate: 'spend={spend_priority} roas={roas_priority}',
+    },
+    decision: {
+      triggerLabels: [],
+      conditions: [],
+      conditionLogic: 'AND',
+      action: 'pause',
+      auto: false,
+      params: {
+        budgetChangePct: 0,
+        spend_priority: 'facebook',
+        roas_priority: 'metabase',
+        installs_priority: 'facebook',
+        revenue_priority: 'metabase',
+      },
+      reasonTemplate: '',
+      llmContext: '字段级数据源优先级配置',
+      llmRules: [],
+    },
+    order: 3,
+  },
+  {
+    name: 'A1 冲突与过滤阈值',
+    agentId: 'data_fusion',
+    description: '花费偏差超过多少算冲突，最低花费门槛',
+    screening: {
+      conditions: [{ field: 'spend_conflict_threshold', operator: '==', value: 0.3 }],
+      conditionLogic: 'AND',
+      verdict: 'watch',
+      priority: 'normal',
+      reasonTemplate: '花费冲突阈值={spend_conflict_threshold} 最低花费={min_spend_filter}',
+    },
+    decision: {
+      triggerLabels: [],
+      conditions: [],
+      conditionLogic: 'AND',
+      action: 'pause',
+      auto: false,
+      params: {
+        budgetChangePct: 0,
+        spend_conflict_threshold: 0.3,
+        roas_conflict_threshold: 0.5,
+        min_spend_filter: 5,
+      },
+      reasonTemplate: '',
+      llmContext: '冲突检测阈值与最低花费过滤',
+      llmRules: [],
+    },
+    order: 4,
+  },
+]
+
 /**
  * 初始化预置 Skills（幂等：同名跳过）
  */
 export async function seedSkills(): Promise<void> {
-  const all = [...SCREENER_SEEDS, ...DECISION_SEEDS]
+  const all = [...SCREENER_SEEDS, ...DECISION_SEEDS, ...DATA_FUSION_SEEDS]
   let created = 0
 
   for (const seed of all) {
@@ -332,6 +450,6 @@ export async function seedSkills(): Promise<void> {
   }
 
   if (created > 0) {
-    log.info(`[SkillSeeds] Created ${created} preset skills (${SCREENER_SEEDS.length} screener + ${DECISION_SEEDS.length} decision)`)
+    log.info(`[SkillSeeds] Created ${created} preset skills`)
   }
 }

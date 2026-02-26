@@ -29,7 +29,7 @@ export interface SkillDiff {
 }
 
 const AGENT_ROLE_TO_SKILL_AGENT: Record<string, string> = {
-  a1_fusion: 'screener',
+  a1_fusion: 'data_fusion',
   a2_decision: 'decision',
   a3_executor: 'executor',
   a4_governor: 'screener',
