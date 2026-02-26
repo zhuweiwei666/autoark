@@ -112,6 +112,8 @@ export async function runAutoPilot(): Promise<{ actions: any[]; campaigns: numbe
     pkgName: f.pkgName,
   }))
 
+  applyFusedHighWaterMark(campaigns)
+
   // Step 2: 加载最近操作历史（冷却期 + LLM 上下文）
   const recentActions = await Action.find({
     status: { $in: ['executed', 'approved'] },
@@ -388,30 +390,36 @@ async function fetchMBData(): Promise<MBSourceRecord[]> {
   }
 }
 
-// ==================== Facebook Spend 高水位缓存（防 FB pipeline 刷新导致花费临时归零）====================
+// ==================== 融合后 Spend 高水位缓存（防 FB Insights 间歇性返回空数据）====================
 
-const spendHighWaterMark = new Map<string, { spend: number; date: string }>()
+const fusedSpendHWM = new Map<string, { spend: number; roas: number; date: string }>()
 
-function applyHighWaterMark(records: FBSourceRecord[]): FBSourceRecord[] {
+function applyFusedHighWaterMark(campaigns: FBCampaignData[]): void {
   const today = dayjs().format('YYYY-MM-DD')
+  let corrections = 0
 
-  for (const r of records) {
-    const cached = spendHighWaterMark.get(r.campaignId)
+  for (const c of campaigns) {
+    const cached = fusedSpendHWM.get(c.campaignId)
 
     if (cached && cached.date === today) {
-      if (r.spend < cached.spend * 0.7) {
-        log.info(`[HWM] ${r.campaignName}: FB spend $${r.spend.toFixed(2)} < cached $${cached.spend.toFixed(2)}, using cached`)
-        r.spend = cached.spend
-        if (r.conversions > 0 && r.spend > 0) r.cpi = r.spend / r.conversions
-      } else if (r.spend >= cached.spend) {
-        cached.spend = r.spend
+      if (c.spend < cached.spend * 0.5 && cached.spend > 3) {
+        log.info(`[HWM] ${c.campaignName}: fused spend $${c.spend.toFixed(2)} < 50% of cached $${cached.spend.toFixed(2)}, using cached`)
+        c.spend = cached.spend
+        c.roas = cached.roas
+        if (c.conversions > 0 && c.spend > 0) c.cpi = c.spend / c.conversions
+        corrections++
+      } else if (c.spend >= cached.spend) {
+        cached.spend = c.spend
+        cached.roas = c.roas
       }
     } else {
-      spendHighWaterMark.set(r.campaignId, { spend: r.spend, date: today })
+      fusedSpendHWM.set(c.campaignId, { spend: c.spend, roas: c.roas, date: today })
     }
   }
 
-  return records
+  if (corrections > 0) {
+    log.info(`[HWM] Applied ${corrections} spend corrections this cycle`)
+  }
 }
 
 // ==================== Facebook 数据拉取 ====================
@@ -510,7 +518,7 @@ async function fetchFBData(fbToken: string, optimizers: string[]): Promise<FBSou
     }
   }
 
-  return applyHighWaterMark(result)
+  return result
 }
 
 // ==================== 推理记录 ====================
