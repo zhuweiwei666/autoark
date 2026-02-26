@@ -636,23 +636,12 @@ ${recentOpsText}
 - 同一个 campaign 不要连续多轮加预算，防止预算失控
 
 ## 待分析 Campaign (${campaignData.length} 个)
-${JSON.stringify(campaignData, null, 2)}`
+${JSON.stringify(campaignData)}`
 
     log.info(`[A2] LLM input: ${activeCandidates.length} candidates (${activeCandidates.filter(c => (c as any).status === 'ACTIVE').length} ACTIVE, ${activeCandidates.filter(c => (c as any).status === 'PAUSED').length} PAUSED), userMsg ${userMessage.length} chars`)
 
     try {
-      const res = await axios.post(
-        `${env.LLM_BASE_URL}/chat/completions`,
-        {
-          model: env.LLM_MODEL,
-          messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userMessage }],
-          temperature: 0.2,
-          max_tokens: 8192,
-        },
-        { headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.LLM_API_KEY}` }, timeout: 120000 },
-      )
-
-      const content = res.data.choices?.[0]?.message?.content || ''
+      const content = await callLLMWithStream(systemPrompt, userMessage)
       log.info(`[A2] LLM raw response (${content.length} chars): ${content.substring(0, 200)}...`)
       const jsonMatch = content.match(/\{[\s\S]*\}/)
       if (jsonMatch) {
@@ -761,6 +750,90 @@ ${JSON.stringify(campaignData, null, 2)}`
   }
 
   return { verdicts, actions, llmSummary, llmReasoning, decisionSource }
+}
+
+// ==================== A2 LLM Streaming + Retry ====================
+
+async function callLLMWithStream(
+  systemPrompt: string,
+  userMessage: string,
+  maxRetries = 3,
+): Promise<string> {
+  const headers = {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${env.LLM_API_KEY}`,
+  }
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const res = await axios.post(
+        `${env.LLM_BASE_URL}/chat/completions`,
+        {
+          model: env.LLM_MODEL,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userMessage },
+          ],
+          temperature: 0.2,
+          max_tokens: 4096,
+          stream: true,
+        },
+        { headers, timeout: 180000, responseType: 'stream' },
+      )
+
+      return await new Promise<string>((resolve, reject) => {
+        let content = ''
+        let buffer = ''
+        const stream = res.data
+
+        stream.on('data', (chunk: Buffer) => {
+          buffer += chunk.toString()
+          const lines = buffer.split('\n')
+          buffer = lines.pop() || ''
+          for (const line of lines) {
+            const trimmed = line.trim()
+            if (!trimmed || !trimmed.startsWith('data: ')) continue
+            const payload = trimmed.slice(6)
+            if (payload === '[DONE]') continue
+            try {
+              const parsed = JSON.parse(payload)
+              const delta = parsed.choices?.[0]?.delta?.content
+              if (delta) content += delta
+            } catch { /* partial JSON chunk, skip */ }
+          }
+        })
+
+        stream.on('end', () => {
+          if (buffer.trim().startsWith('data: ')) {
+            const payload = buffer.trim().slice(6)
+            if (payload !== '[DONE]') {
+              try {
+                const parsed = JSON.parse(payload)
+                const delta = parsed.choices?.[0]?.delta?.content
+                if (delta) content += delta
+              } catch { /* ignore */ }
+            }
+          }
+          resolve(content)
+        })
+
+        stream.on('error', reject)
+      })
+    } catch (e: any) {
+      const is504 = e.response?.status === 504 || e.message?.includes('504')
+      const isTimeout = e.code === 'ECONNABORTED'
+
+      if ((is504 || isTimeout) && attempt < maxRetries) {
+        const waitSec = attempt * 3
+        log.warn(`[A2] LLM attempt ${attempt}/${maxRetries} failed (${is504 ? '504 Gateway Timeout' : 'connection timeout'}), retrying in ${waitSec}s...`)
+        await new Promise(r => setTimeout(r, waitSec * 1000))
+        continue
+      }
+      throw e
+    }
+  }
+
+  throw new Error('[A2] All LLM retries exhausted')
 }
 
 // ==================== 飞书推送（5 Bot 独立发言 + 跟帖）====================
