@@ -251,7 +251,95 @@ export async function runAutoPilot(): Promise<{ actions: any[]; campaigns: numbe
     }
   }
 
-  // Step 4: 飞书推送（每次都推，展示全部 campaign 数据）
+  // Step 6: A4 纠偏执行（补量 + 止损学习期）
+  const a4Actions: string[] = []
+  if (a4BlockScaling && a4BlockReason) {
+    const spendTarget = (await Skill.findOne({ agentId: 'a4_governor', skillType: 'goal', enabled: true }).lean() as any)?.goal?.dailySpendTarget || 0
+    const totalSpendNow2 = fused.reduce((s, c) => s + c.spend, 0)
+    const spendPct = spendTarget > 0 ? totalSpendNow2 / spendTarget : 0
+
+    // 补量：如果消耗进度 < 50% 且当前时间过了一半（UTC 6h = 北京 14h）
+    if (spendPct < 0.5 && dayjs().hour() >= 6) {
+      // 找表现最好的 campaign 复制
+      const bestCampaign = fused
+        .filter(f => f.roas > 1.0 && f.spend > 5 && f.installs > 2)
+        .sort((a, b) => b.roas - a.roas)[0]
+
+      if (bestCampaign) {
+        try {
+          const copyRes = await axios.post(`${FB_GRAPH}/${bestCampaign.campaignId}/copies`, null, {
+            params: { access_token: fbToken, status_option: 'PAUSED' },
+            timeout: 15000,
+          })
+          const newCampId = copyRes.data?.copied_campaign_id
+          if (newCampId) {
+            // 激活新复制的 campaign
+            await axios.post(`${FB_GRAPH}/${newCampId}`, null, {
+              params: { access_token: fbToken, status: 'ACTIVE' },
+              timeout: 15000,
+            })
+            const msg = `补量: 复制 ${bestCampaign.campaignName}(ROAS ${bestCampaign.roas.toFixed(2)}) → 新campaign ${newCampId} 已激活`
+            a4Actions.push(msg)
+            log.info(`[A4 Execute] ${msg}`)
+
+            await Action.create({
+              type: 'copy_campaign',
+              platform: 'facebook',
+              accountId: bestCampaign.accountId,
+              entityId: newCampId,
+              entityName: `copy_of_${bestCampaign.campaignName}`,
+              params: { source: 'a4_governor', sourceCampaignId: bestCampaign.campaignId, roas: bestCampaign.roas },
+              reason: `[A4 补量] 消耗进度${(spendPct * 100).toFixed(0)}%偏低，复制最优campaign`,
+              status: 'executed',
+              executedAt: new Date(),
+            })
+          }
+        } catch (e: any) {
+          log.warn(`[A4 Execute] Campaign copy failed: ${e.response?.data?.error?.message || e.message}`)
+          a4Actions.push(`补量失败: ${e.response?.data?.error?.message || e.message}`)
+        }
+      }
+    }
+
+    // 止损学习期：关停花费高但 ROAS=0 且 ACTIVE 的广告
+    const learningRisk = fused
+      .filter(f => f.status === 'ACTIVE' && f.spend > 10 && f.roas === 0 && f.installs <= 1)
+      .sort((a, b) => b.spend - a.spend)
+
+    const activeCount = fused.filter(f => f.status === 'ACTIVE').length
+    const learningPct = activeCount > 0 ? learningRisk.length / activeCount : 0
+
+    if (learningPct > 0.3 && learningRisk.length > 0) {
+      const toPause = learningRisk.slice(0, 3)
+      for (const c of toPause) {
+        try {
+          await axios.post(`${FB_GRAPH}/${c.campaignId}`, null, {
+            params: { access_token: fbToken, status: 'PAUSED' },
+            timeout: 15000,
+          })
+          const msg = `止损: 暂停学习期广告 ${c.campaignName}(花费$${c.spend.toFixed(2)}, ROAS=0)`
+          a4Actions.push(msg)
+          log.info(`[A4 Execute] ${msg}`)
+
+          await Action.create({
+            type: 'pause',
+            platform: 'facebook',
+            accountId: c.accountId,
+            entityId: c.campaignId,
+            entityName: c.campaignName,
+            params: { source: 'a4_governor', learningPct: (learningPct * 100).toFixed(0) },
+            reason: `[A4 止损] 学习期占比${(learningPct * 100).toFixed(0)}% > 30%，ROAS=0 花费$${c.spend.toFixed(2)}`,
+            status: 'executed',
+            executedAt: new Date(),
+          })
+        } catch (e: any) {
+          log.warn(`[A4 Execute] Pause learning campaign failed: ${e.message}`)
+        }
+      }
+    }
+  }
+
+  // Step 7: 飞书推送（每次都推，展示全部 campaign 数据）
   await notifyAutoPilot(verdicts, campaigns.length, snapshot, {
     autoOptimizers,
     fbEnabled,
@@ -259,7 +347,7 @@ export async function runAutoPilot(): Promise<{ actions: any[]; campaigns: numbe
     minSpend,
     spendPriority: prioritySkill?.decision?.params?.spend_priority || 'facebook',
     roasPriority: prioritySkill?.decision?.params?.roas_priority || 'metabase',
-  }, fusionSkills, decisionResult)
+  }, fusionSkills, decisionResult, a4Actions)
 
   const executedCount = verdicts.filter(v => v.execResult === 'executed').length
   log.info(`[AutoPilot] Cycle complete: ${campaigns.length} campaigns, ${actions.length} actions, ${executedCount} executed`)
@@ -686,7 +774,7 @@ interface FusionConfig {
   roasPriority: string
 }
 
-async function notifyAutoPilot(verdicts: CampaignVerdict[], totalCampaigns: number, snapshot?: any, fusionCfg?: FusionConfig, fusionSkillsList?: any[], decisionResult?: A2DecisionResult): Promise<void> {
+async function notifyAutoPilot(verdicts: CampaignVerdict[], totalCampaigns: number, snapshot?: any, fusionCfg?: FusionConfig, fusionSkillsList?: any[], decisionResult?: A2DecisionResult, a4ExecutedActions?: string[]): Promise<void> {
   try {
     const { loadMultiBotConfig, sendBotMessage, replyBotMessage } = await import('../platform/feishu/multi-bot')
     const mbConfig = await loadMultiBotConfig()
@@ -978,6 +1066,11 @@ async function notifyAutoPilot(verdicts: CampaignVerdict[], totalCampaigns: numb
       a4Elements.push({ tag: 'div', text: { content: `**纠偏指令**:\n${overrides.map(o => `• ${o}`).join('\n')}`, tag: 'lark_md' } })
     } else {
       a4Elements.push({ tag: 'div', text: { content: '本轮动作符合全局目标，无需纠偏', tag: 'lark_md' } })
+    }
+
+    if (a4ExecutedActions && a4ExecutedActions.length > 0) {
+      a4Elements.push({ tag: 'hr' })
+      a4Elements.push({ tag: 'div', text: { content: `**已执行纠偏**:\n${a4ExecutedActions.map(a => `✅ ${a}`).join('\n')}`, tag: 'lark_md' } })
     }
 
     if (a4Experiences.length > 0) {
