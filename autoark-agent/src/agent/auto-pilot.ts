@@ -115,6 +115,15 @@ export async function runAutoPilot(): Promise<{ actions: any[]; campaigns: numbe
   // Step 3: 直接执行 (Facebook API)
   for (const action of actions) {
     const v = verdicts.find(vv => vv.campaign.campaignId === action.campaignId)
+
+    // 已暂停的 campaign 不重复执行暂停
+    const campStatus = (v?.campaign as any)?.status || ''
+    if (action.type === 'pause' && campStatus === 'PAUSED') {
+      if (v) { v.execResult = 'skipped'; v.execError = '已是 PAUSED 状态，跳过' }
+      log.info(`[AutoPilot] Skipped: ${action.campaignName} already PAUSED`)
+      continue
+    }
+
     try {
       const fbParams: any = { access_token: fbToken }
       if (action.type === 'pause') fbParams.status = 'PAUSED'
@@ -209,7 +218,7 @@ async function fetchFBData(fbToken: string, optimizers: string[]): Promise<FBSou
   for (const acc of accountsRes.data?.data || []) {
     try {
       const campRes = await axios.get(`${FB_GRAPH}/${acc.id}/campaigns`, {
-        params: { fields: 'id,name,status,daily_budget', filtering: JSON.stringify([{ field: 'effective_status', operator: 'IN', value: ['ACTIVE'] }]), limit: 500, access_token: fbToken },
+        params: { fields: 'id,name,status,daily_budget,effective_status', filtering: JSON.stringify([{ field: 'effective_status', operator: 'IN', value: ['ACTIVE', 'PAUSED'] }]), limit: 500, access_token: fbToken },
         timeout: 15000,
       })
       for (const camp of campRes.data?.data || []) {
@@ -240,22 +249,30 @@ async function fetchFBData(fbToken: string, optimizers: string[]): Promise<FBSou
           impressions = Number(ins.impressions || 0)
           clicks = Number(ins.clicks || 0)
 
-          const instAction = (ins.actions || []).find((a: any) => a.action_type === 'app_install' || a.action_type === 'omni_app_install')
-          conversions = instAction ? Number(instAction.value || 0) : 0
+            // 转化事件优先级：app_install > lead > omni_purchase
+            const instAction = (ins.actions || []).find((a: any) =>
+              a.action_type === 'app_install' || a.action_type === 'omni_app_install'
+            )
+            conversions = instAction ? Number(instAction.value || 0) : 0
 
-          const purchaseRoas = ins.purchase_roas?.find((a: any) => a.action_type === 'omni_purchase')
-          if (purchaseRoas) roas = Number(purchaseRoas.value || 0)
+            if (conversions === 0) {
+              const leadAction = (ins.actions || []).find((a: any) => a.action_type === 'lead')
+              if (leadAction) conversions = Number(leadAction.value || 0)
+            }
 
-          const purchaseValue = (ins.action_values || []).find((a: any) => a.action_type === 'omni_purchase')
-          if (purchaseValue) {
-            revenue = Number(purchaseValue.value || 0)
-            if (roas === 0 && spend > 0) roas = revenue / spend
-          }
+            if (conversions === 0) {
+              const purchaseAction = (ins.actions || []).find((a: any) => a.action_type === 'omni_purchase' || a.action_type === 'purchase')
+              if (purchaseAction) conversions = Number(purchaseAction.value || 0)
+            }
 
-          if (conversions === 0) {
-            const purchaseAction = (ins.actions || []).find((a: any) => a.action_type === 'omni_purchase' || a.action_type === 'purchase')
-            if (purchaseAction) conversions = Number(purchaseAction.value || 0)
-          }
+            const purchaseRoas = ins.purchase_roas?.find((a: any) => a.action_type === 'omni_purchase')
+            if (purchaseRoas) roas = Number(purchaseRoas.value || 0)
+
+            const purchaseValue = (ins.action_values || []).find((a: any) => a.action_type === 'omni_purchase')
+            if (purchaseValue) {
+              revenue = Number(purchaseValue.value || 0)
+              if (roas === 0 && spend > 0) roas = revenue / spend
+            }
         }
       } catch { /* new campaign, no insights yet */ }
 
@@ -263,7 +280,7 @@ async function fetchFBData(fbToken: string, optimizers: string[]): Promise<FBSou
         campaignId: camp.id,
         campaignName: camp.name,
         accountId: acc.account_id,
-        status: camp.status,
+        status: camp.effective_status || camp.status,
         dailyBudget: Number(camp.daily_budget || 0) / 100,
         spend,
         impressions,

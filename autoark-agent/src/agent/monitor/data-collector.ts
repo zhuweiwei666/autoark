@@ -94,7 +94,7 @@ export async function collectData(startDate: string, endDate: string): Promise<R
 // ==================== Facebook API: 发现新 campaign ====================
 
 /**
- * 只拉 ACTIVE campaign 列表（不查 insights），用于发现 Metabase 中还没有的新广告
+ * 拉 ACTIVE + PAUSED campaign 列表（不查 insights），用于发现 Metabase 中还没有的广告
  */
 async function collectNewCampaignsFromFB(): Promise<RawCampaign[]> {
   const fbToken = process.env.FB_ACCESS_TOKEN
@@ -116,7 +116,7 @@ async function collectNewCampaignsFromFB(): Promise<RawCampaign[]> {
       })
 
       for (const camp of res.data?.data || []) {
-        if (camp.status !== 'ACTIVE') continue
+        if (camp.status !== 'ACTIVE' && camp.status !== 'PAUSED') continue
 
         const parts = camp.name.split('_')
         const optimizer = parts[0] || ''
