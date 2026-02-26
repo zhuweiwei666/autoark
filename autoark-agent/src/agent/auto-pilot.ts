@@ -13,6 +13,8 @@ import { Skill, AgentSkillDoc, matchesCampaign, evaluateConditions, fillReasonTe
 import { Action } from '../action/action.model'
 import { createDecisionTrace, appendTraceStep } from './collab/types'
 import { fuseRecords, buildUnifiedSnapshot, FBSourceRecord, MBSourceRecord } from './data-fusion'
+import { buildDynamicContext } from './context'
+import { fetchExperiencesFromPython } from './bridge/python-bridge'
 
 const FB_GRAPH = 'https://graph.facebook.com/v21.0'
 
@@ -507,6 +509,9 @@ interface A2DecisionResult {
 }
 
 async function makeSkillDecisions(campaigns: FBCampaignData[], recentActions: any[] = []): Promise<A2DecisionResult> {
+  // Step 0: 即时反思 — 对上一轮(10-60min 前)执行的操作做快速评估
+  await inlineReflect(campaigns)
+
   // 加载硬护栏（rule 类型）和经验（experience 类型）
   const hardRules = await Skill.find({ agentId: 'a2_decision', skillType: 'rule', enabled: true }).sort({ order: 1 }).lean() as any[]
   const experiences = await Skill.find({ agentId: 'a2_decision', skillType: 'experience', enabled: true }).sort({ 'experience.confidence': -1 }).lean() as any[]
@@ -576,10 +581,20 @@ async function makeSkillDecisions(campaigns: FBCampaignData[], recentActions: an
 
   // Step 2: LLM 推理（用经验做 context，让 LLM 自己决策）
   if (needsLLM.length > 0 && env.LLM_API_KEY) {
-    const experienceContext = experiences.map((e: any, i: number) => {
+    // 合并 Skill 经验 + Python 向量库经验
+    const skillExpLines = experiences.map((e: any, i: number) => {
       const exp = e.experience || {}
       return `经验${i + 1} [置信${exp.confidence || 0.5}]: 场景: ${exp.scenario || ''} → 教训: ${exp.lesson || ''}`
-    }).join('\n')
+    })
+
+    const pythonExps = await fetchExperiencesFromPython(
+      `广告投放决策 ${needsLLM.map(c => c.campaignName).slice(0, 3).join(' ')}`,
+    )
+    const pythonExpLines = pythonExps
+      .filter(e => e.confidence >= 0.5)
+      .map((e, i) => `向量库${i + 1} [置信${e.confidence.toFixed(1)}]: ${e.scenario} → ${e.lesson}`)
+
+    const experienceContext = [...skillExpLines, ...pythonExpLines].join('\n')
 
     // 给 LLM 看有花费的 campaign（含 PAUSED，评估是否应恢复或确认暂停正确）
     const activeCandidates = needsLLM.filter(c => c.spend > 0)
@@ -621,15 +636,11 @@ ${experienceContext || '暂无历史经验，请根据数据独立判断。'}
 输出严格 JSON（不要多余文字）:
 {"decisions":[{"campaignId":"...","action":"pause","reason":"...","confidence":0.8}],"summary":"..."}`
 
-    // 注入最近操作历史，避免 LLM 重复决策
-    const recentOpsText = recentActions.length > 0
-      ? recentActions.slice(0, 10).map((a: any) => `${a.entityName?.substring(0, 40)}: ${a.type} @ ${dayjs(a.executedAt).format('HH:mm')}`).join('\n')
-      : '无'
+    const dynamicContext = await buildDynamicContext()
 
-    const userMessage = `当前时间: ${dayjs().format('YYYY-MM-DD HH:mm')}
+    const userMessage = `${dynamicContext}
 
-## 最近 2 小时操作记录（已执行，不要重复操作）
-${recentOpsText}
+---
 
 ## 重要：冷却期规则
 - 最近 30 分钟内已操作过的 campaign 不要再操作
@@ -750,6 +761,86 @@ ${JSON.stringify(campaignData)}`
   }
 
   return { verdicts, actions, llmSummary, llmReasoning, decisionSource }
+}
+
+// ==================== A2 即时反思（缩短反馈延迟到 1 轮循环）====================
+
+async function inlineReflect(campaigns: FBCampaignData[]): Promise<void> {
+  try {
+    const recentExecuted = await Action.find({
+      status: 'executed',
+      executedAt: {
+        $gte: dayjs().subtract(60, 'minute').toDate(),
+        $lte: dayjs().subtract(10, 'minute').toDate(),
+      },
+      'params.reflected': { $ne: true },
+    }).limit(10).lean()
+
+    if (recentExecuted.length === 0) return
+
+    const campaignMap = new Map(campaigns.map(c => [c.campaignId, c]))
+    let reflectedCount = 0
+
+    for (const action of recentExecuted) {
+      const a = action as any
+      const campaignId = a.entityId
+      if (!campaignId) continue
+
+      const current = campaignMap.get(campaignId)
+      const beforeRoas = a.params?.roasAtDecision || 0
+      const beforeSpend = a.params?.spendAtDecision || 0
+      let assessment: 'correct' | 'wrong' | 'unclear' = 'unclear'
+      let lesson = ''
+
+      if (a.type === 'pause') {
+        if (beforeRoas < 0.5 && beforeSpend > 20) {
+          assessment = 'correct'
+          lesson = `ROAS ${beforeRoas.toFixed(2)} < 0.5 且花费 > $20 时关停正确`
+        } else if (beforeRoas >= 1.0) {
+          assessment = 'wrong'
+          lesson = `ROAS ${beforeRoas.toFixed(2)} >= 1.0 时不应关停`
+        }
+      } else if (a.type === 'adjust_budget' || a.type === 'increase_budget') {
+        if (current && beforeRoas > 0) {
+          const afterRoas = current.roas || 0
+          if (afterRoas >= beforeRoas * 0.8) {
+            assessment = 'correct'
+            lesson = `加预算后 ROAS 维持 (${afterRoas.toFixed(2)}/${beforeRoas.toFixed(2)})`
+          } else if (afterRoas < beforeRoas * 0.6) {
+            assessment = 'wrong'
+            lesson = `加预算后 ROAS 大幅下降 (${afterRoas.toFixed(2)}/${beforeRoas.toFixed(2)})`
+          }
+        }
+      }
+
+      if (assessment === 'unclear') continue
+
+      await Action.updateOne(
+        { _id: a._id },
+        { $set: { 'params.reflected': true, 'params.reflection': { assessment, lesson } } }
+      )
+
+      const skillName = a.params?.skillName
+      if (skillName) {
+        const update: any = {}
+        if (assessment === 'correct') {
+          update.$inc = { 'stats.correct': 1 }
+        } else {
+          update.$inc = { 'stats.wrong': 1 }
+          update.$push = { learnedNotes: { $each: [lesson], $slice: -10 } }
+        }
+        await Skill.updateOne({ name: skillName }, update)
+      }
+
+      reflectedCount++
+    }
+
+    if (reflectedCount > 0) {
+      log.info(`[A2] Inline reflection: ${reflectedCount}/${recentExecuted.length} actions assessed`)
+    }
+  } catch (e: any) {
+    log.warn(`[A2] Inline reflection failed (non-critical): ${e.message}`)
+  }
 }
 
 // ==================== A2 LLM Streaming + Retry ====================

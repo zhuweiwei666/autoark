@@ -315,6 +315,9 @@ export async function reflectAll(
     log.info(`[Reflection] ${result.campaignId}: ${result.assessment} - ${result.reason}${skillName ? ` (skill: ${skillName})` : ''}`)
   }
 
+  // 从高置信度的反思中自动创建 experience Skills，让 A2 主循环能读取
+  await synthesizeExperienceSkills(results)
+
   return results
 }
 
@@ -341,4 +344,68 @@ export async function getReflectionStats(days = 7): Promise<{
 
   const total = correct + wrong + unclear
   return { total, correct, wrong, unclear, accuracy: total > 0 ? Math.round(correct / (correct + wrong || 1) * 100) : 0 }
+}
+
+// ==================== Experience Skill 自动创建 ====================
+
+/**
+ * 从反思结果中识别重复出现的模式，自动创建 experience Skills。
+ * 这样 auto-pilot.ts A2 主循环加载 experience Skills 时就有数据可用。
+ */
+async function synthesizeExperienceSkills(results: ReflectionResult[]): Promise<void> {
+  const definitive = results.filter(r => r.assessment !== 'unclear' && r.lesson)
+  if (definitive.length === 0) return
+
+  // 按操作类型分组统计
+  const patterns = new Map<string, { lessons: string[]; count: number; assessment: string }>()
+  for (const r of definitive) {
+    const key = `${r.type}:${r.assessment}`
+    const existing = patterns.get(key) || { lessons: [], count: 0, assessment: r.assessment }
+    existing.lessons.push(r.lesson)
+    existing.count++
+    patterns.set(key, existing)
+  }
+
+  for (const [key, pattern] of patterns) {
+    if (pattern.count < 2) continue
+
+    const [actionType] = key.split(':')
+    const scenario = `${actionType} 操作${pattern.assessment === 'correct' ? '成功' : '失误'}模式`
+    const bestLesson = pattern.lessons[pattern.lessons.length - 1]
+    const confidence = Math.min(0.5 + pattern.count * 0.1, 0.9)
+    const skillName = `经验: ${scenario} (${dayjs().format('MMDD')})`
+
+    const exists = await Skill.findOne({
+      agentId: 'a2_decision',
+      skillType: 'experience',
+      'experience.scenario': { $regex: scenario.substring(0, 20), $options: 'i' },
+    })
+
+    if (exists) {
+      await Skill.updateOne(
+        { _id: (exists as any)._id },
+        {
+          $set: { 'experience.confidence': confidence, 'experience.lesson': bestLesson },
+          $inc: { 'experience.validatedCount': pattern.count },
+        }
+      )
+      continue
+    }
+
+    await Skill.create({
+      name: skillName,
+      agentId: 'a2_decision',
+      skillType: 'experience',
+      enabled: true,
+      experience: {
+        scenario,
+        lesson: bestLesson,
+        confidence,
+        validatedCount: pattern.count,
+      },
+      proposedBy: 'reflection_auto',
+      order: 200,
+    })
+    log.info(`[Reflection] Auto-created experience Skill: "${skillName}" (confidence: ${confidence})`)
+  }
 }

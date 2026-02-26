@@ -1,0 +1,34 @@
+---
+description: AutoArk AI 广告模型训练项目上下文 — 在涉及 autoark-ml/ 目录或广告模型训练相关工作时自动加载
+globs: autoark-ml/**
+---
+
+# AutoArk AI 广告模型训练上下文
+
+## 项目背景
+AutoArk 是一个 Facebook/TikTok 广告自动化投放平台。正在构建专属 AI 广告模型，包括：
+- ML 预测模型（LightGBM/XGBoost）：ROI 预测、预算优化、异常检测、Campaign 分类
+- 微调 LLM（Qwen2.5-14B + QLoRA）：综合投放决策引擎
+
+## 数据源
+唯一数据源是 Metabase API，无法直连底层数据库。
+- Card 7726（Campaign 聚合报表）：campaign_id, date, spend, installs, CPI, CPA, revenue, ROI, pay_rate, ARPU, CTR
+- Card 7786（Ad 花费明细）：ad_id, date, spend, impressions, clicks
+- 转化数据只到 Campaign 级别，Ad 级别只有花费数据
+
+## 硬件环境
+- GPU: RTX 5090 32GB GDDR7
+- CPU: AMD 9950X 16C/32T
+- RAM: 192GB DDR5
+- SSD: 4TB PCIe 5.0
+- 全部本地训练，无需云端
+
+## 关键领域知识
+- ROAS = 收入/花费，>1 盈利
+- 7 个 Campaign 标签：observing, loss_severe, loss_mild, declining, high_potential, stable_good, stable_normal
+- 决策类型：pause, increase_budget, decrease_budget, resume, no_action
+- 冷却期：同一 Campaign 24h 内不重复操作
+- 预算调整幅度限制：单次不超过 30%
+
+## 完整项目知识文档
+详见 `autoark-ml/PROJECT_CONTEXT.md`，包含完整的数据结构、分类规则、决策逻辑、提示词等。

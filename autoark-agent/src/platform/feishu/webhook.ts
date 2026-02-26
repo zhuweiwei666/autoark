@@ -262,25 +262,27 @@ router.post('/event', async (req: Request, res: Response) => {
 
     log.info(`[FeishuEvent] From ${senderId}: "${text.substring(0, 80)}" target=${targetRole || 'none'}`)
 
-    // ── @Agent 指令：走 Skill 编辑流程 ──
+    // ── 所有 @Agent 指令统一由 A5 处理 Skill 编辑 ──
     if (targetRole) {
+      const replyAs: BotRole = 'a5_knowledge'
       try {
         const mbConfig = await loadMultiBotConfig()
         if (!mbConfig) return
 
-        const intent = await parseSkillIntent(text, targetRole)
+        // A5 统一管理所有 Agent 的 Skill，从文本推断目标 Agent
+        const intent = await parseSkillIntent(text, targetRole !== 'a5_knowledge' ? targetRole : undefined)
 
         if (intent.action === 'list') {
-          const skillsText = await listSkills(targetRole)
-          await replyBotMessage(targetRole, mbConfig, messageId, JSON.stringify({ text: skillsText }), 'text')
+          const skillsText = await listSkills(intent.targetAgent || (targetRole !== 'a5_knowledge' ? targetRole : undefined))
+          await replyBotMessage(replyAs, mbConfig, messageId, JSON.stringify({ text: skillsText }), 'text')
           return
         }
 
         if (intent.action === 'modify' || intent.action === 'toggle') {
-          const diff = await buildDiff(intent, targetRole)
+          const diff = await buildDiff(intent)
           if (!diff) {
-            await replyBotMessage(targetRole, mbConfig, messageId,
-              JSON.stringify({ text: `未找到匹配的 Skill "${intent.skillName || ''}"，请检查名称。\n\n发送 "列出skills" 查看当前列表。` }),
+            await replyBotMessage(replyAs, mbConfig, messageId,
+              JSON.stringify({ text: `未找到匹配的 Skill "${intent.skillName || ''}"，请检查名称。\n\n@A5知识管理 列出skills 查看所有 Skill` }),
               'text',
             )
             return
@@ -290,7 +292,7 @@ router.post('/event', async (req: Request, res: Response) => {
           pendingSkillEdits.set(editId, {
             skillId: diff.skillId,
             changes: intent.changes!,
-            agentRole: targetRole,
+            agentRole: replyAs,
             summary: diff.summary,
             expiresAt: Date.now() + 5 * 60 * 1000,
           })
@@ -302,10 +304,10 @@ router.post('/event', async (req: Request, res: Response) => {
             config: { wide_screen_mode: true },
             header: {
               template: 'orange',
-              title: { content: `Skill 修改预览 | ${diff.skillName}`, tag: 'plain_text' },
+              title: { content: `[A5] Skill 修改预览 | ${diff.skillName}`, tag: 'plain_text' },
             },
             elements: [
-              { tag: 'div', text: { content: `**Skill**: ${diff.skillName}\n**Agent**: ${targetRole}\n**操作**: ${diff.summary}`, tag: 'lark_md' } },
+              { tag: 'div', text: { content: `**Skill**: ${diff.skillName}\n**所属 Agent**: ${diff.agentId}\n**操作**: ${diff.summary}`, tag: 'lark_md' } },
               { tag: 'hr' },
               { tag: 'div', text: { content: `**修改前**:\n${beforeLines}`, tag: 'lark_md' } },
               { tag: 'div', text: { content: `**修改后**:\n${afterLines}`, tag: 'lark_md' } },
@@ -331,35 +333,37 @@ router.post('/event', async (req: Request, res: Response) => {
             ],
           }
 
-          await replyBotMessage(targetRole, mbConfig, messageId, diffCard)
-          log.info(`[SkillEdit] Diff card sent for ${diff.skillName}, editId=${editId}`)
+          await replyBotMessage(replyAs, mbConfig, messageId, diffCard)
+          log.info(`[SkillEdit] Diff card sent for ${diff.skillName} (agent: ${diff.agentId}), editId=${editId}`)
           return
         }
 
         if (intent.action === 'create') {
-          await replyBotMessage(targetRole, mbConfig, messageId,
-            JSON.stringify({ text: `创建新 Skill 功能开发中。请描述你想要的规则，我会在下个版本支持。\n\n你的描述: ${intent.description || text}` }),
+          await replyBotMessage(replyAs, mbConfig, messageId,
+            JSON.stringify({ text: `创建新 Skill 功能开发中。\n\n你的描述: ${intent.description || text}` }),
             'text',
           )
           return
         }
 
         if (intent.action === 'delete') {
-          await replyBotMessage(targetRole, mbConfig, messageId,
-            JSON.stringify({ text: `删除 Skill 需要谨慎。建议先禁用而非删除。\n发送: "@Agent 禁用 ${intent.skillName}" 来禁用它。` }),
+          await replyBotMessage(replyAs, mbConfig, messageId,
+            JSON.stringify({ text: `建议先禁用而非删除。\n发送: "@A5知识管理 禁用 ${intent.skillName}" 来禁用它。` }),
             'text',
           )
           return
         }
       } catch (skillErr: any) {
         log.error(`[SkillEdit] Error: ${skillErr.message}`)
-        const mbConfig = await loadMultiBotConfig()
-        if (mbConfig && targetRole) {
-          await replyBotMessage(targetRole, mbConfig, messageId,
-            JSON.stringify({ text: `处理指令出错: ${skillErr.message}` }),
-            'text',
-          )
-        }
+        try {
+          const mbConfig = await loadMultiBotConfig()
+          if (mbConfig) {
+            await replyBotMessage(replyAs, mbConfig, messageId,
+              JSON.stringify({ text: `[A5] 处理指令出错: ${skillErr.message}` }),
+              'text',
+            )
+          }
+        } catch { /* last resort, ignore */ }
       }
       return
     }

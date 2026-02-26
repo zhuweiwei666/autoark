@@ -118,16 +118,70 @@ export async function runEvolution(): Promise<EvolutionProposal[]> {
     }
   }
 
+  // 自动应用低风险的 adjust_threshold 提议
+  const applied = await autoApplyThresholdAdjustments(proposals, actions)
+
   // 存入记忆
   if (proposals.length > 0) {
     const stats = await getReflectionStats(7)
     await memory.rememberShort('evolution', `week_${dayjs().format('YYYYWW')}`, {
       proposals,
       stats,
-      summary: `${proposals.length} 条优化建议，7天准确率 ${stats.accuracy}%`,
+      applied,
+      summary: `${proposals.length} 条优化建议 (${applied.length} 条已自动应用)，7天准确率 ${stats.accuracy}%`,
     })
-    log.info(`[Evolution] Generated ${proposals.length} proposals`)
+    log.info(`[Evolution] Generated ${proposals.length} proposals, auto-applied ${applied.length}`)
   }
 
   return proposals
+}
+
+/**
+ * 自动应用 adjust_threshold 类提议：
+ * 对高错误率的操作类型，收紧对应 Skill 的触发条件。
+ */
+async function autoApplyThresholdAdjustments(
+  proposals: EvolutionProposal[],
+  allActions: any[],
+): Promise<string[]> {
+  const applied: string[] = []
+  const thresholdProposals = proposals.filter(p => p.type === 'adjust_threshold' && p.confidence >= 0.7)
+
+  for (const proposal of thresholdProposals) {
+    const actionType = proposal.description.match(/"(\w+)"/)?.[1]
+    if (!actionType) continue
+
+    // 找到触发该操作类型的所有 Skills
+    const relatedSkills = await Skill.find({
+      enabled: true,
+      $or: [
+        { 'decision.action': actionType },
+        { 'decision.action': actionType === 'increase_budget' ? 'adjust_budget' : actionType },
+      ],
+    }).lean() as any[]
+
+    for (const skill of relatedSkills) {
+      const stats = skill.stats || {}
+      const total = (stats.correct || 0) + (stats.wrong || 0)
+      if (total < 3) continue
+
+      const accuracy = total > 0 ? (stats.correct || 0) / total : 1
+
+      if (accuracy < 0.5) {
+        // 准确率 < 50%: 禁用 Skill
+        await Skill.updateOne({ _id: skill._id }, { $set: { enabled: false } })
+        const msg = `禁用 Skill "${skill.name}": ${actionType} 准确率 ${Math.round(accuracy * 100)}%`
+        applied.push(msg)
+        log.warn(`[Evolution] Auto-applied: ${msg}`)
+      } else if (accuracy < 0.7 && skill.decision?.auto) {
+        // 准确率 50-70%: 从自动执行降级为需审批
+        await Skill.updateOne({ _id: skill._id }, { $set: { 'decision.auto': false } })
+        const msg = `Skill "${skill.name}" 降级为需审批: ${actionType} 准确率 ${Math.round(accuracy * 100)}%`
+        applied.push(msg)
+        log.info(`[Evolution] Auto-applied: ${msg}`)
+      }
+    }
+  }
+
+  return applied
 }
