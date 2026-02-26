@@ -373,6 +373,30 @@ async function notifyAutoPilot(verdicts: CampaignVerdict[], totalCampaigns: numb
     const mbConfig = await loadMultiBotConfig()
     if (!mbConfig) return
 
+    // 加载 skills 用于卡片展示
+    const [screenerSkills, decisionSkills] = await Promise.all([
+      Skill.find({ agentId: 'screener', enabled: true }).sort({ order: 1 }).lean() as Promise<AgentSkillDoc[]>,
+      Skill.find({ agentId: 'decision', enabled: true }).sort({ order: 1 }).lean() as Promise<AgentSkillDoc[]>,
+    ])
+
+    const formatSkillsSummary = (skills: AgentSkillDoc[], type: 'screener' | 'decision') => {
+      if (skills.length === 0) return '暂无启用的 Skills'
+      return skills.map(s => {
+        const stats = `命中${s.stats?.triggered || 0} 准确${s.stats?.accuracy || 0}%`
+        if (type === 'screener' && s.screening?.conditions?.length) {
+          const conds = s.screening.conditions.map(c => `${c.field}${c.operator}${c.value}`).join(' & ')
+          return `• **${s.name}** [${stats}]\n  ${conds} → ${s.screening.verdict}`
+        }
+        if (type === 'decision' && s.decision?.action) {
+          const conds = s.decision.conditions?.length
+            ? s.decision.conditions.map(c => `${c.field}${c.operator}${c.value}`).join(' & ')
+            : '标签触发'
+          return `• **${s.name}** [${stats}]\n  ${conds} → ${s.decision.action}(${s.decision.auto ? '自动' : '审批'})`
+        }
+        return `• **${s.name}** [${stats}]`
+      }).join('\n')
+    }
+
     const totalSpend = verdicts.reduce((s, v) => s + v.campaign.spend, 0)
     const executedCount = verdicts.filter(v => v.execResult === 'executed').length
     const failedCount = verdicts.filter(v => v.execResult === 'failed').length
@@ -447,6 +471,16 @@ async function notifyAutoPilot(verdicts: CampaignVerdict[], totalCampaigns: numb
       elements: [
         { tag: 'div', text: { content: `**筛选结果**: 需决策 **${needsDecision}** | 观察 ${watching} | 跳过 ${skipped}`, tag: 'lark_md' } },
         ...(decisionLines ? [{ tag: 'hr' }, { tag: 'div', text: { content: decisionLines, tag: 'lark_md' } }] : [{ tag: 'div', text: { content: '本轮所有 campaign 在安全范围内，无需干预', tag: 'lark_md' } }]),
+        { tag: 'collapsible_panel', expanded: false,
+          header: { title: { tag: 'plain_text', content: `当前 Skills: 筛选 ${screenerSkills.length} + 决策 ${decisionSkills.length}` } },
+          border: { color: 'orange' }, vertical_spacing: '4px',
+          elements: [
+            { tag: 'div', text: { content: `**筛选 Skills**:\n${formatSkillsSummary(screenerSkills, 'screener')}`, tag: 'lark_md' } },
+            { tag: 'hr' },
+            { tag: 'div', text: { content: `**决策 Skills**:\n${formatSkillsSummary(decisionSkills, 'decision')}`, tag: 'lark_md' } },
+            { tag: 'note', elements: [{ tag: 'plain_text', content: `@A2决策分析 + 指令可修改 Skills` }] },
+          ],
+        },
         { tag: 'note', elements: [{ tag: 'plain_text', content: `TraceId: ${traceId} | 决策已交付 → A3 执行路由` }] },
       ],
     }
@@ -515,6 +549,16 @@ async function notifyAutoPilot(verdicts: CampaignVerdict[], totalCampaigns: numb
         { tag: 'div', text: { content: `**Skill 命中统计**:\n${skillSummary}`, tag: 'lark_md' } },
         { tag: 'div', text: { content: `**经验沉淀**: ${executedCount > 0 ? `${executedCount} 条执行结果已记录，供下轮复用` : '本轮无新增经验'}`, tag: 'lark_md' } },
         { tag: 'div', text: { content: `**闭环状态**: A1数据→A2决策→A3执行→A4治理→A5沉淀 ✓\n本轮协作完成`, tag: 'lark_md' } },
+        { tag: 'collapsible_panel', expanded: false,
+          header: { title: { tag: 'plain_text', content: `Skills 总览 (${screenerSkills.length + decisionSkills.length} 条启用)` } },
+          border: { color: 'purple' }, vertical_spacing: '4px',
+          elements: [
+            { tag: 'div', text: { content: `**筛选 Skills** (${screenerSkills.length}):\n${formatSkillsSummary(screenerSkills, 'screener')}`, tag: 'lark_md' } },
+            { tag: 'hr' },
+            { tag: 'div', text: { content: `**决策 Skills** (${decisionSkills.length}):\n${formatSkillsSummary(decisionSkills, 'decision')}`, tag: 'lark_md' } },
+            { tag: 'note', elements: [{ tag: 'plain_text', content: `@任意Agent + 指令即可修改 Skills | 支持: 修改/启用/禁用/列出` }] },
+          ],
+        },
         { tag: 'note', elements: [{ tag: 'plain_text', content: `TraceId: ${traceId} | 闭环完成` }] },
       ],
     }
