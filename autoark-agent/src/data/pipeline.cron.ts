@@ -7,10 +7,12 @@ import { dailySummary, weeklyEvolution, decayKnowledge, manageSkillLifecycle } f
 export function initPipelineCron() {
   // 5-Agent 协作循环（唯一主链路），每 10 分钟
   cron.schedule('*/10 * * * *', async () => {
+    log.info('[Cron] AutoPilot cycle triggered')
     try {
-      await runAutoPilot()
+      const result = await runAutoPilot()
+      log.info(`[Cron] AutoPilot cycle done: ${result.campaigns} campaigns, ${result.actions.length} actions`)
     } catch (err: any) {
-      log.error('[AutoPilot] Failed:', err.message)
+      log.error('[AutoPilot] Cron failed:', err.message, err.stack?.substring(0, 200))
     }
   })
 
