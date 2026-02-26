@@ -390,44 +390,43 @@ async function makeSkillDecisions(campaigns: FBCampaignData[]): Promise<{ verdic
       return `经验${i + 1} [置信${exp.confidence || 0.5}]: 场景: ${exp.scenario || ''} → 教训: ${exp.lesson || ''}`
     }).join('\n')
 
-    const campaignData = needsLLM.map(c => ({
+    // 只给 LLM 看 ACTIVE 且有花费的 campaign（已暂停的不需要决策）
+    const activeCandidates = needsLLM.filter(c => {
+      const status = (c as any).status || 'ACTIVE'
+      return status === 'ACTIVE' && c.spend > 0
+    })
+
+    const campaignData = activeCandidates.map(c => ({
       id: c.campaignId,
       name: c.campaignName,
-      spend: c.spend,
-      roas: c.roas,
+      status: (c as any).status || 'ACTIVE',
+      spend: Number(c.spend.toFixed(2)),
+      roas: Number(c.roas.toFixed(2)),
       installs: c.conversions,
-      cpi: c.cpi,
-      platform: (c as any).platform || 'FB',
+      cpi: Number(c.cpi.toFixed(2)),
     }))
 
-    const systemPrompt = `你是一个广告投放决策专家。基于数据和历史经验，独立分析每个 campaign 并给出操作建议。
+    const systemPrompt = `你是一个广告投放决策专家。分析 campaign 数据，只对需要操作的广告给出建议，其余默认观察。
 
-## 你的历史经验
+## 历史经验
 ${experienceContext || '暂无历史经验，请根据数据独立判断。'}
 
-## 硬约束（不可违反）
-- 花费 > $50 且 ROAS < 0.2 的必须暂停
-- 花费 < $5 的不做判断
+## 硬约束
+- 花费 > $50 且 ROAS < 0.2 → 必须暂停
+- ROAS > 1.0 → 不允许暂停
+- 花费 < $5 → 跳过不判断
 
-## 你可以做的操作
-- pause: 暂停广告
-- increase_budget: 加预算
-- decrease_budget: 降预算
-- watch: 继续观察（不做操作）
+## 操作类型
+pause / increase_budget / decrease_budget
 
 ## 思考要求
-1. 看数据趋势，不要只看单一指标
-2. 参考经验但不被经验绑架
-3. 每个决策给出具体理由
-4. 不确定时选择观察而非行动
+1. 综合花费、ROAS、安装量、CPI 多维度判断
+2. 不确定时不操作（默认观察）
+3. 已暂停的广告不需要重复暂停
 
-输出严格 JSON:
-{
-  "decisions": [
-    { "campaignId": "...", "action": "pause|increase_budget|decrease_budget|watch", "reason": "具体推理过程", "confidence": 0.8 }
-  ],
-  "summary": "整体判断摘要"
-}`
+重要：只输出需要操作的 campaign，不需要操作的不要包含在 JSON 里。
+输出严格 JSON（不要多余文字）:
+{"decisions":[{"campaignId":"...","action":"pause","reason":"...","confidence":0.8}],"summary":"..."}`
 
     const userMessage = `当前时间: ${dayjs().format('YYYY-MM-DD HH:mm')}\n\n## 待分析 Campaign (${campaignData.length} 个)\n${JSON.stringify(campaignData, null, 2)}`
 
@@ -438,9 +437,9 @@ ${experienceContext || '暂无历史经验，请根据数据独立判断。'}
           model: env.LLM_MODEL,
           messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userMessage }],
           temperature: 0.2,
-          max_tokens: 2048,
+          max_tokens: 8192,
         },
-        { headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.LLM_API_KEY}` }, timeout: 60000 },
+        { headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.LLM_API_KEY}` }, timeout: 120000 },
       )
 
       const content = res.data.choices?.[0]?.message?.content || ''
@@ -450,7 +449,7 @@ ${experienceContext || '暂无历史经验，请根据数据独立判断。'}
         for (const d of llmResult.decisions || []) {
           if (!d.campaignId || d.action === 'watch') continue
 
-          const c = needsLLM.find(x => x.campaignId === d.campaignId)
+          const c = activeCandidates.find(x => x.campaignId === d.campaignId)
           if (!c) continue
 
           // 护栏兜底：ROAS > 1 不允许暂停
