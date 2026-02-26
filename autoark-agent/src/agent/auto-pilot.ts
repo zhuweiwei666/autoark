@@ -10,6 +10,7 @@ import { log } from '../platform/logger'
 import { getAgentConfig } from './agent-config.model'
 import { Skill, AgentSkillDoc, matchesCampaign, evaluateConditions, fillReasonTemplate } from './skill.model'
 import { Action } from '../action/action.model'
+import { createDecisionTrace, appendTraceStep } from './collab/types'
 
 const FB_GRAPH = 'https://graph.facebook.com/v21.0'
 
@@ -342,7 +343,7 @@ async function makeSkillDecisions(campaigns: FBCampaignData[]): Promise<{ verdic
   return { verdicts, actions }
 }
 
-// ==================== 飞书推送 ====================
+// ==================== 飞书推送（5-Agent 协作视图）====================
 
 async function notifyAutoPilot(verdicts: CampaignVerdict[], totalCampaigns: number): Promise<void> {
   try {
@@ -364,6 +365,64 @@ async function notifyAutoPilot(verdicts: CampaignVerdict[], totalCampaigns: numb
     const needsDecision = verdicts.filter(v => v.screenVerdict === 'needs_decision').length
     const watching = verdicts.filter(v => v.screenVerdict === 'watch').length
     const skipped = verdicts.filter(v => v.screenVerdict === 'skip').length
+    const avgRoas = verdicts.filter(v => v.campaign.roas > 0).length > 0
+      ? verdicts.filter(v => v.campaign.roas > 0).reduce((s, v) => s + v.campaign.roas, 0) / verdicts.filter(v => v.campaign.roas > 0).length
+      : 0
+
+    const trace = createDecisionTrace(`ap-${dayjs().format('YYMMDDHHmm')}`, 'cron')
+    appendTraceStep(trace, {
+      agentId: 'agent1_data_fusion',
+      title: '[A1] 数据融合',
+      conclusion: `Facebook API 拉取 ${totalCampaigns} 个 campaign，Metabase 补充 ROAS/CPI`,
+      confidence: 0.88,
+    })
+    appendTraceStep(trace, {
+      agentId: 'agent2_decision',
+      title: '[A2] 决策推理',
+      conclusion: `Skill 筛选: ${needsDecision} 需决策 / ${watching} 观察 / ${skipped} 跳过，产出 ${executedCount + failedCount} 条动作`,
+      confidence: needsDecision > 0 ? 0.82 : 0.75,
+      details: verdicts.filter(v => v.action).slice(0, 3).map(v =>
+        `${v.screenSkill} → ${v.action!.skillName}: ${v.action!.type} ${v.campaign.campaignName}`
+      ),
+    })
+    appendTraceStep(trace, {
+      agentId: 'agent3_executor',
+      title: '[A3] 执行路由',
+      conclusion: `全部走 Facebook API：成功 ${executedCount}，失败 ${failedCount}`,
+      confidence: executedCount > 0 ? 0.9 : 0.7,
+      details: verdicts.filter(v => v.execResult).slice(0, 3).map(v =>
+        `${v.campaign.campaignName}: ${v.execResult}${v.execError ? ` (${v.execError.substring(0, 40)})` : ''}`
+      ),
+    })
+
+    let governorRisk: 'low' | 'medium' | 'high' = 'low'
+    const governorOverrides: string[] = []
+    if (avgRoas < 0.8 && avgRoas > 0) {
+      governorRisk = 'high'
+      governorOverrides.push('ROAS低于硬阈值，建议暂停放量类动作')
+    } else if (avgRoas < 1.0 && avgRoas > 0) {
+      governorRisk = 'medium'
+      governorOverrides.push('ROAS接近阈值，控制学习期占比')
+    }
+
+    appendTraceStep(trace, {
+      agentId: 'agent4_governor',
+      title: '[A4] 全局治理',
+      conclusion: governorRisk === 'high'
+        ? `ROAS硬约束触发（均值${avgRoas.toFixed(2)}），止损优先`
+        : governorRisk === 'medium'
+          ? `ROAS接近阈值（均值${avgRoas.toFixed(2)}），稳健执行`
+          : `ROAS健康（均值${avgRoas.toFixed(2)}），常规协同`,
+      confidence: governorRisk === 'high' ? 0.92 : 0.78,
+    })
+    appendTraceStep(trace, {
+      agentId: 'agent5_skill_kb',
+      title: '[A5] 知识沉淀',
+      conclusion: executedCount > 0
+        ? `${executedCount} 条执行结果将回流经验库`
+        : '本轮无新增经验',
+      confidence: 0.8,
+    })
 
     const elements: any[] = []
 
@@ -373,95 +432,130 @@ async function notifyAutoPilot(verdicts: CampaignVerdict[], totalCampaigns: numb
       fields: [
         { is_short: true, text: { content: `**Campaign**\n${totalCampaigns}`, tag: 'lark_md' } },
         { is_short: true, text: { content: `**总花费**\n$${totalSpend.toFixed(2)}`, tag: 'lark_md' } },
-        { is_short: true, text: { content: `**需决策**\n${needsDecision}`, tag: 'lark_md' } },
-        { is_short: true, text: { content: `**已执行**\n${executedCount}${failedCount > 0 ? ` (${failedCount}失败)` : ''}`, tag: 'lark_md' } },
+        { is_short: true, text: { content: `**均值ROAS**\n${avgRoas.toFixed(2)}`, tag: 'lark_md' } },
+        { is_short: true, text: { content: `**操作**\n${executedCount} 执行${failedCount > 0 ? ` / ${failedCount} 失败` : ''}`, tag: 'lark_md' } },
       ],
     })
-
-    elements.push({ tag: 'div', text: { content: `筛选: 需决策 **${needsDecision}** | 观察 ${watching} | 跳过 ${skipped}`, tag: 'lark_md' } })
     elements.push({ tag: 'hr' })
 
-    // 已执行的操作（展开）
-    const executed = verdicts.filter(v => v.execResult)
-    if (executed.length > 0) {
-      const execRows = executed.map(v => {
-        const c = v.campaign
-        const actionLabel = v.action?.type === 'pause' ? '⏸ 已暂停' : v.action?.type === 'increase_budget' ? '📈 已加预算' : v.action?.type || '?'
-        const statusIcon = v.execResult === 'executed' ? '✅' : '❌'
-        return {
-          tag: 'div' as const,
-          text: {
-            content: `${statusIcon} ${actionLabel} **${c.campaignName}**\n花费 $${c.spend.toFixed(2)} | ROAS ${c.roas.toFixed(2)} | 安装 ${c.conversions} | CPI $${c.cpi.toFixed(2)}\n推理: ${v.screenSkill} → ${v.action?.skillName}\n原因: ${v.action?.reason}${v.execError ? `\n错误: ${v.execError}` : ''}`,
-            tag: 'lark_md' as const,
-          },
-        }
-      })
+    // [A1] 数据融合
+    elements.push({
+      tag: 'div',
+      text: {
+        content: `**[A1] 数据融合**\nFacebook API 拉取 ${totalCampaigns} 条 | Metabase 补充后端 ROAS/CPI\n数据源: fb:实时 | mb:补充 | 融合策略: Facebook优先`,
+        tag: 'lark_md',
+      },
+    })
 
+    // [A2] 决策推理
+    const decisionDetails = verdicts.filter(v => v.action).slice(0, 5).map(v => {
+      const c = v.campaign
+      return `${c.campaignName}: ${v.screenSkill} → ${v.action!.type}（ROAS ${c.roas.toFixed(2)}, 花费 $${c.spend.toFixed(2)}）`
+    }).join('\n')
+    elements.push({
+      tag: 'div',
+      text: {
+        content: `**[A2] 决策推理**\n筛选: 需决策 **${needsDecision}** | 观察 ${watching} | 跳过 ${skipped}\n${decisionDetails || '本轮无需决策动作'}`,
+        tag: 'lark_md',
+      },
+    })
+
+    // [A3] 执行路由
+    const execDetails = verdicts.filter(v => v.execResult).slice(0, 5).map(v => {
+      const c = v.campaign
+      const icon = v.execResult === 'executed' ? '✅' : '❌'
+      const actionLabel = v.action?.type === 'pause' ? '暂停' : v.action?.type === 'increase_budget' ? '加预算' : v.action?.type || '?'
+      return `${icon} ${actionLabel} **${c.campaignName}** via facebook_api\n原因: ${v.action?.reason || '-'}${v.execError ? `\n错误: ${v.execError}` : ''}`
+    }).join('\n')
+    if (execDetails) {
       elements.push({
         tag: 'collapsible_panel',
-        expanded: true,
-        header: { title: { tag: 'plain_text', content: `操作执行 (${executed.length})` } },
+        expanded: executedCount > 0,
+        header: { title: { tag: 'plain_text', content: `[A3] 执行路由 (${executedCount + failedCount})` } },
         border: { color: executedCount > 0 ? 'green' : 'red' },
         vertical_spacing: '8px',
-        elements: execRows,
+        elements: [{ tag: 'div', text: { content: execDetails, tag: 'lark_md' } }],
       })
     }
 
-    // 观察中的 campaign（折叠）
+    // [A4] 全局治理
+    const riskLabel = governorRisk === 'high' ? '高风险' : governorRisk === 'medium' ? '中风险' : '低风险'
+    elements.push({
+      tag: 'div',
+      text: {
+        content: `**[A4] 全局治理** | 风险: ${riskLabel}\n${governorOverrides.length > 0 ? `纠偏: ${governorOverrides.join('；')}` : `ROAS ${avgRoas.toFixed(2)} 达标，按常规执行`}`,
+        tag: 'lark_md',
+      },
+    })
+
+    // [A5] 知识沉淀
+    elements.push({
+      tag: 'div',
+      text: {
+        content: `**[A5] 知识沉淀**\n${executedCount > 0 ? `${executedCount} 条执行结果回流经验库` : '本轮无新增经验'}`,
+        tag: 'lark_md',
+      },
+    })
+
+    // 观察中（折叠）
     const watchList = verdicts.filter(v => v.screenVerdict === 'watch' || (v.screenVerdict === 'needs_decision' && !v.execResult))
     if (watchList.length > 0) {
-      const watchRows = watchList.map(v => {
-        const c = v.campaign
-        return {
-          tag: 'div' as const,
-          text: {
-            content: `**${c.campaignName}**\n花费 $${c.spend.toFixed(2)} | ROAS ${c.roas.toFixed(2)} | 安装 ${c.conversions} | CPI $${c.cpi.toFixed(2)}\n${v.screenSkill || '观察中'}: ${v.screenReason || '未触发规则'}`,
-            tag: 'lark_md' as const,
-          },
-        }
-      })
-
       elements.push({
         tag: 'collapsible_panel',
         expanded: false,
         header: { title: { tag: 'plain_text', content: `观察中 (${watchList.length})` } },
         border: { color: 'blue' },
         vertical_spacing: '8px',
-        elements: watchRows,
+        elements: watchList.slice(0, 15).map(v => ({
+          tag: 'div' as const,
+          text: {
+            content: `**${v.campaign.campaignName}**\n花费 $${v.campaign.spend.toFixed(2)} | ROAS ${v.campaign.roas.toFixed(2)} | 安装 ${v.campaign.conversions}\n${v.screenSkill || '观察中'}: ${v.screenReason || '未触发规则'}`,
+            tag: 'lark_md' as const,
+          },
+        })),
       })
     }
 
-    // 跳过的（折叠）
+    // 跳过（折叠）
     const skipList = verdicts.filter(v => v.screenVerdict === 'skip')
     if (skipList.length > 0) {
-      const skipRows = skipList.slice(0, 20).map(v => {
-        const c = v.campaign
-        return {
-          tag: 'div' as const,
-          text: {
-            content: `${c.campaignName}: 花费 $${c.spend.toFixed(2)} | ${v.screenReason}`,
-            tag: 'lark_md' as const,
-          },
-        }
-      })
-      if (skipList.length > 20) {
-        skipRows.push({ tag: 'div' as const, text: { content: `... 还有 ${skipList.length - 20} 个`, tag: 'lark_md' as const } })
-      }
-
       elements.push({
         tag: 'collapsible_panel',
         expanded: false,
         header: { title: { tag: 'plain_text', content: `跳过 (${skipList.length})` } },
         border: { color: 'grey' },
         vertical_spacing: '8px',
-        elements: skipRows,
+        elements: skipList.slice(0, 20).map(v => ({
+          tag: 'div' as const,
+          text: { content: `${v.campaign.campaignName}: $${v.campaign.spend.toFixed(2)} | ${v.screenReason}`, tag: 'lark_md' as const },
+        })),
       })
     }
+
+    // 协作推理步骤（折叠）
+    elements.push({
+      tag: 'collapsible_panel',
+      expanded: false,
+      header: { title: { tag: 'plain_text', content: `协作推理步骤 (${trace.steps.length})` } },
+      border: { color: 'grey' },
+      vertical_spacing: '8px',
+      elements: trace.steps.map(step => ({
+        tag: 'div' as const,
+        text: {
+          content: `**${step.title}**\n${step.conclusion}${step.details?.length ? `\n${step.details.slice(0, 3).join('；')}` : ''}`,
+          tag: 'lark_md' as const,
+        },
+      })),
+    })
+    elements.push({
+      tag: 'note',
+      elements: [{ tag: 'plain_text', content: `TraceId: ${trace.traceId} | Trigger: ${trace.trigger}` }],
+    })
 
     const card = {
       config: { wide_screen_mode: true },
       header: {
-        template: executedCount > 0 ? 'violet' : 'turquoise',
+        template: governorRisk === 'high' ? 'red' : executedCount > 0 ? 'violet' : 'turquoise',
         title: { content: `AutoPilot | ${dayjs().format('MM-DD HH:mm')} | ${totalCampaigns} campaign | ${executedCount} 操作`, tag: 'plain_text' },
       },
       elements,
@@ -472,7 +566,7 @@ async function notifyAutoPilot(verdicts: CampaignVerdict[], totalCampaigns: numb
       { receive_id: config.receiveId, msg_type: 'interactive', content: JSON.stringify(card) },
       { headers: { Authorization: `Bearer ${token}` } }
     )
-    log.info(`[AutoPilot] Feishu notification sent: ${totalCampaigns} campaigns, ${executedCount} executed`)
+    log.info(`[AutoPilot] Feishu collab card sent: ${totalCampaigns} campaigns, ${executedCount} executed`)
   } catch (e: any) {
     log.warn(`[AutoPilot] Feishu notification failed: ${e.message}`)
   }
