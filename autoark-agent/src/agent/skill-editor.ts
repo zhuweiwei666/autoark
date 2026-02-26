@@ -28,20 +28,20 @@ export interface SkillDiff {
   summary: string
 }
 
-const AGENT_ROLE_TO_SKILL_AGENT: Record<string, string> = {
-  a1_fusion: 'data_fusion',
-  a2_decision: 'decision',
-  a3_executor: 'executor',
-  a4_governor: 'screener',
-  a5_knowledge: 'auditor',
+const AGENT_ROLE_TO_SKILL_AGENT: Record<string, string[]> = {
+  a1_fusion: ['a1_fusion'],
+  a2_decision: ['a2_decision', 'screener', 'decision'],
+  a3_executor: ['a3_executor', 'executor'],
+  a4_governor: ['a4_governor'],
+  a5_knowledge: ['a5_knowledge', 'auditor'],
 }
 
 /**
  * 用 LLM 解析用户的自然语言指令
  */
 export async function parseSkillIntent(text: string, agentRole: string): Promise<SkillIntent> {
-  const skillAgentId = AGENT_ROLE_TO_SKILL_AGENT[agentRole] || 'decision'
-  const skills = await Skill.find({ agentId: skillAgentId }).lean() as AgentSkillDoc[]
+  const skillAgentIds = AGENT_ROLE_TO_SKILL_AGENT[agentRole] || ['decision']
+  const skills = await Skill.find({ agentId: { $in: skillAgentIds } }).lean() as AgentSkillDoc[]
 
   const skillList = skills.map(s => {
     const parts = [`name="${s.name}"`, `enabled=${s.enabled}`]
@@ -113,27 +113,31 @@ ${skillList || '(暂无 skills)'}
  * 列出指定 Agent 角色的 Skills（格式化文本）
  */
 export async function listSkills(agentRole: string): Promise<string> {
-  const skillAgentId = AGENT_ROLE_TO_SKILL_AGENT[agentRole] || 'decision'
-  const skills = await Skill.find({ agentId: skillAgentId }).sort({ order: 1 }).lean() as AgentSkillDoc[]
+  const skillAgentIds = AGENT_ROLE_TO_SKILL_AGENT[agentRole] || ['decision']
+  const skills = await Skill.find({ agentId: { $in: skillAgentIds } }).sort({ order: 1 }).lean() as AgentSkillDoc[]
 
   if (skills.length === 0) return '当前没有配置任何 Skill'
 
-  return skills.map((s, i) => {
+  return skills.map((s: any, i: number) => {
     const status = s.enabled ? '启用' : '禁用'
-    const stats = s.stats ? `命中${s.stats.triggered || 0}次 准确率${s.stats.accuracy || 0}%` : ''
+    const type = s.skillType || 'rule'
     let detail = ''
 
-    if (s.screening?.conditions?.length) {
-      detail = `筛选: ${s.screening.conditions.map(c => `${c.field}${c.operator}${c.value}`).join(' & ')} → ${s.screening.verdict}`
-    }
-    if (s.decision?.action) {
-      const conds = s.decision.conditions?.length
-        ? s.decision.conditions.map(c => `${c.field}${c.operator}${c.value}`).join(' & ')
-        : '无额外条件'
-      detail = `决策: ${conds} → ${s.decision.action}(${s.decision.auto ? '自动' : '审批'})`
+    if (type === 'experience' && s.experience) {
+      const exp = s.experience
+      detail = `场景: ${exp.scenario || '-'}\n   教训: ${exp.lesson || '-'}\n   置信: ${exp.confidence || 0.5} | 验证: ${exp.validatedCount || 0}次`
+    } else if (type === 'goal' && s.goal) {
+      const g = s.goal
+      detail = `产品: ${g.product} | 目标消耗: $${g.dailySpendTarget} | ROAS底线: ${g.roasFloor}\n   优先级: ${g.priority} | 渠道: ${g.channels?.join(',') || 'ALL'}\n   备注: ${g.notes || '-'}`
+    } else if (type === 'config' && s.config) {
+      detail = `${s.config.key}: ${JSON.stringify(s.config.value).substring(0, 100)}`
+    } else if (type === 'meta' && s.experience) {
+      detail = `元规则: ${s.experience.lesson || s.description}`
+    } else if (s.screening?.conditions?.length) {
+      detail = `硬护栏: ${s.screening.conditions.map((c: any) => `${c.field}${c.operator}${c.value}`).join(' & ')} → ${s.screening.verdict}`
     }
 
-    return `${i + 1}. **${s.name}** [${status}] ${stats}\n   ${detail}\n   ${s.description || ''}`
+    return `${i + 1}. [${type}] **${s.name}** [${status}]\n   ${detail}\n   ${s.description || ''}`
   }).join('\n\n')
 }
 
@@ -143,8 +147,8 @@ export async function listSkills(agentRole: string): Promise<string> {
 export async function buildDiff(intent: SkillIntent, agentRole: string): Promise<SkillDiff | null> {
   if (!intent.skillName || !intent.changes) return null
 
-  const skillAgentId = AGENT_ROLE_TO_SKILL_AGENT[agentRole] || 'decision'
-  const skills = await Skill.find({ agentId: skillAgentId }).lean() as any[]
+  const skillAgentIds = AGENT_ROLE_TO_SKILL_AGENT[agentRole] || ['decision']
+  const skills = await Skill.find({ agentId: { $in: skillAgentIds } }).lean() as any[]
 
   const skill = skills.find(s =>
     s.name.toLowerCase().includes(intent.skillName!.toLowerCase()) ||
@@ -164,7 +168,7 @@ export async function buildDiff(intent: SkillIntent, agentRole: string): Promise
   return {
     skillId: skill._id.toString(),
     skillName: skill.name,
-    agentId: skillAgentId,
+    agentId: skill.agentId,
     before,
     after,
     summary: intent.description || `修改 ${skill.name} 的 ${Object.keys(intent.changes).join(', ')}`,

@@ -1,8 +1,15 @@
 /**
- * 统一 Skill 数据模型
+ * 统一 Skill 数据模型（V2）
  *
- * 每个 Agent（screener / decision / executor / auditor）拥有独立的 Skill 库。
- * 一条规则 = 一个 Skill，存 MongoDB，前端可编辑、可开关、可排序、可追溯效果。
+ * Skills = Agent 的进化记忆，分三种类型：
+ * - experience: 自然语言经验（场景-结果-教训），给 LLM 做 context
+ * - goal: 目标约束（产品维度的硬约束），给 A4 全局治理
+ * - meta: 元规则（衰减/提权/清理策略），给 A5
+ * - config: 基础配置（数据源/优化师范围等），给 A1
+ * - rule: 旧版条件规则（向后兼容）
+ *
+ * 核心原则：Skills 告诉 Agent "过去发生过什么" 和 "什么不能做"，
+ * 而不是告诉它 "该做什么"。决策由 LLM 推理产出。
  */
 import mongoose from 'mongoose'
 
@@ -16,18 +23,51 @@ const conditionSchema = new mongoose.Schema({
 
 const skillSchema = new mongoose.Schema({
   name: { type: String, required: true },
-  agentId: { type: String, enum: ['screener', 'decision', 'executor', 'auditor', 'data_fusion'], required: true },
+  agentId: { type: String, required: true },
   description: { type: String, default: '' },
 
-  // ========== 匹配条件：哪些 campaign 适用此 Skill ==========
+  // ========== V2: Skill 类型 ==========
+  skillType: {
+    type: String,
+    enum: ['experience', 'goal', 'meta', 'config', 'rule'],
+    default: 'rule',
+  },
+
+  // ========== V2: 自然语言经验体系 ==========
+  experience: {
+    scenario: { type: String, default: '' },
+    outcome: { type: String, default: '' },
+    lesson: { type: String, default: '' },
+    confidence: { type: Number, default: 0.5 },
+    validatedCount: { type: Number, default: 0 },
+    lastValidatedAt: { type: Date },
+    source: { type: String, enum: ['human', 'a5_auto', 'reflection'], default: 'human' },
+  },
+
+  // ========== V2: 目标约束（A4 用）==========
+  goal: {
+    product: { type: String, default: '' },
+    dailySpendTarget: { type: Number, default: 0 },
+    roasFloor: { type: Number, default: 0 },
+    priority: { type: String, enum: ['roas_first', 'spend_first', 'balanced'], default: 'roas_first' },
+    channels: { type: [String], default: [] },
+    countries: { type: [String], default: [] },
+    notes: { type: String, default: '' },
+  },
+
+  // ========== V2: 基础配置（A1 用）==========
+  config: {
+    key: { type: String, default: '' },
+    value: { type: mongoose.Schema.Types.Mixed },
+  },
+
+  // ========== 旧版兼容 ==========
   match: {
     packagePatterns: { type: [String], default: [] },
     platforms: { type: [String], default: [] },
     optimizers: { type: [String], default: [] },
     accountIds: { type: [String], default: [] },
   },
-
-  // ========== Screener Skill 专属 ==========
   screening: {
     conditions: { type: [conditionSchema], default: [] },
     conditionLogic: { type: String, enum: ['AND', 'OR'], default: 'AND' },
@@ -41,8 +81,6 @@ const skillSchema = new mongoose.Schema({
       deviationStddev: { type: Number, default: 2 },
     },
   },
-
-  // ========== Decision Skill 专属 ==========
   decision: {
     triggerLabels: { type: [String], default: [] },
     conditions: { type: [conditionSchema], default: [] },
@@ -60,7 +98,7 @@ const skillSchema = new mongoose.Schema({
   // ========== 通用 ==========
   enabled: { type: Boolean, default: true },
   order: { type: Number, default: 100 },
-  proposedBy: { type: String, enum: ['human', 'librarian'], default: 'human' },
+  proposedBy: { type: String, enum: ['human', 'librarian', 'a5_auto'], default: 'human' },
   stats: {
     triggered: { type: Number, default: 0 },
     correct: { type: Number, default: 0 },

@@ -7,6 +7,7 @@
 import axios from 'axios'
 import dayjs from 'dayjs'
 import { log } from '../platform/logger'
+import { env } from '../config/env'
 import { getAgentConfig } from './agent-config.model'
 import { Skill, AgentSkillDoc, matchesCampaign, evaluateConditions, fillReasonTemplate } from './skill.model'
 import { Action } from '../action/action.model'
@@ -298,96 +299,227 @@ interface CampaignVerdict {
   execError?: string
 }
 
-// ==================== Skill 决策 ====================
+// ==================== A2 决策（硬护栏 + LLM 推理 + 护栏兜底）====================
 
 async function makeSkillDecisions(campaigns: FBCampaignData[]): Promise<{ verdicts: CampaignVerdict[]; actions: any[] }> {
-  const screenerSkills = await Skill.find({ agentId: 'screener', enabled: true }).sort({ order: 1 }).lean() as AgentSkillDoc[]
-  const decisionSkills = await Skill.find({ agentId: 'decision', enabled: true }).sort({ order: 1 }).lean() as AgentSkillDoc[]
+  // 加载硬护栏（rule 类型）和经验（experience 类型）
+  const hardRules = await Skill.find({ agentId: 'a2_decision', skillType: 'rule', enabled: true }).sort({ order: 1 }).lean() as any[]
+  const experiences = await Skill.find({ agentId: 'a2_decision', skillType: 'experience', enabled: true }).sort({ 'experience.confidence': -1 }).lean() as any[]
+
+  // 兼容旧 skills
+  const legacyScreener = await Skill.find({ agentId: 'screener', enabled: true }).sort({ order: 1 }).lean() as AgentSkillDoc[]
+  const legacyDecision = await Skill.find({ agentId: 'decision', enabled: true }).sort({ order: 1 }).lean() as AgentSkillDoc[]
+
   const verdicts: CampaignVerdict[] = []
   const actions: any[] = []
 
-  for (const c of campaigns) {
-    const verdict: CampaignVerdict = {
-      campaign: c,
-      screenVerdict: 'watch',
-      screenSkill: '',
-      screenReason: '',
-    }
+  // Step 1: 硬护栏过滤（不经过 LLM，直接执行）
+  const needsLLM: FBCampaignData[] = []
 
+  for (const c of campaigns) {
+    const verdict: CampaignVerdict = { campaign: c, screenVerdict: 'watch', screenSkill: '', screenReason: '' }
+
+    // 冷启动保护（硬护栏）
     if (c.spend < 5) {
       verdict.screenVerdict = 'skip'
-      verdict.screenSkill = '冷启动保护'
+      verdict.screenSkill = '硬护栏-冷启动'
       verdict.screenReason = `花费 $${c.spend.toFixed(2)} < $5，数据不足`
       verdicts.push(verdict)
       continue
     }
 
-    const data: Record<string, any> = {
-      ...c,
-      todaySpend: c.spend,
-      adjustedRoi: c.roas,
-      todayRoas: c.roas,
-      installs: c.conversions,
-      estimatedDailySpend: c.spend,
-      hasPendingAction: 0,
-      belowBenchmarkP25: 0,
-      roiDropVsYesterday: 0,
-      spendTrend: 0,
-    }
-
-    // Screener
-    for (const skill of screenerSkills) {
-      if (!matchesCampaign(skill, c as any)) continue
-      const sc = skill.screening
-      if (!sc?.conditions?.length) continue
-      if (evaluateConditions(sc.conditions, sc.conditionLogic, data)) {
-        verdict.screenVerdict = sc.verdict
-        verdict.screenSkill = skill.name
-        verdict.screenReason = fillReasonTemplate(sc.reasonTemplate || skill.name, data)
+    // 检查硬护栏规则
+    let guardrailHit = false
+    const data = { ...c, todaySpend: c.spend, adjustedRoi: c.roas, todayRoas: c.roas, installs: c.conversions }
+    for (const rule of hardRules) {
+      if (rule.screening?.conditions?.length && evaluateConditions(rule.screening.conditions, rule.screening.conditionLogic, data)) {
+        verdict.screenVerdict = rule.screening.verdict || 'needs_decision'
+        verdict.screenSkill = `硬护栏-${rule.name}`
+        verdict.screenReason = fillReasonTemplate(rule.screening.reasonTemplate || rule.name, data)
+        guardrailHit = true
         break
       }
     }
 
-    if (verdict.screenVerdict !== 'needs_decision') {
-      if (!verdict.screenSkill) {
-        verdict.screenReason = '未匹配任何筛选规则，继续观察'
+    // 兼容旧 screener 规则
+    if (!guardrailHit) {
+      for (const skill of legacyScreener) {
+        if (!matchesCampaign(skill, c as any)) continue
+        const sc = skill.screening
+        if (!sc?.conditions?.length) continue
+        if (evaluateConditions(sc.conditions, sc.conditionLogic, data)) {
+          verdict.screenVerdict = sc.verdict
+          verdict.screenSkill = skill.name
+          verdict.screenReason = fillReasonTemplate(sc.reasonTemplate || skill.name, data)
+          guardrailHit = true
+          break
+        }
       }
+    }
+
+    if (guardrailHit && verdict.screenVerdict === 'skip') {
       verdicts.push(verdict)
       continue
     }
 
-    // Decision
-    for (const skill of decisionSkills) {
-      if (!matchesCampaign(skill, c as any)) continue
-      const d = skill.decision
-      if (!d?.action) continue
-      const condMatch = d.conditions?.length > 0
-        ? evaluateConditions(d.conditions, d.conditionLogic, data)
-        : true
-      if (!condMatch) continue
-
-      const reason = fillReasonTemplate(d.reasonTemplate || skill.name, data)
-      verdict.action = { type: d.action, reason, skillName: skill.name }
-
-      const action: any = {
-        type: d.action === 'increase_budget' ? 'adjust_budget' : d.action,
-        campaignId: c.campaignId,
-        campaignName: c.campaignName,
-        accountId: c.accountId,
-        reason,
-        skillName: skill.name,
-        spend: c.spend,
-        roas: c.roas,
-      }
-      if (d.action === 'increase_budget' && d.params?.budgetChangePct) {
-        action.newBudget = Math.round(c.dailyBudget * 100 * (1 + d.params.budgetChangePct / 100))
-        verdict.action.newBudget = action.newBudget
-      }
-      actions.push(action)
-      break
-    }
-
+    needsLLM.push(c)
     verdicts.push(verdict)
+  }
+
+  // Step 2: LLM 推理（用经验做 context，让 LLM 自己决策）
+  if (needsLLM.length > 0 && env.LLM_API_KEY) {
+    const experienceContext = experiences.map((e: any, i: number) => {
+      const exp = e.experience || {}
+      return `经验${i + 1} [置信${exp.confidence || 0.5}]: 场景: ${exp.scenario || ''} → 教训: ${exp.lesson || ''}`
+    }).join('\n')
+
+    const campaignData = needsLLM.map(c => ({
+      id: c.campaignId,
+      name: c.campaignName,
+      spend: c.spend,
+      roas: c.roas,
+      installs: c.conversions,
+      cpi: c.cpi,
+      platform: (c as any).platform || 'FB',
+    }))
+
+    const systemPrompt = `你是一个广告投放决策专家。基于数据和历史经验，独立分析每个 campaign 并给出操作建议。
+
+## 你的历史经验
+${experienceContext || '暂无历史经验，请根据数据独立判断。'}
+
+## 硬约束（不可违反）
+- 花费 > $50 且 ROAS < 0.2 的必须暂停
+- 花费 < $5 的不做判断
+
+## 你可以做的操作
+- pause: 暂停广告
+- increase_budget: 加预算
+- decrease_budget: 降预算
+- watch: 继续观察（不做操作）
+
+## 思考要求
+1. 看数据趋势，不要只看单一指标
+2. 参考经验但不被经验绑架
+3. 每个决策给出具体理由
+4. 不确定时选择观察而非行动
+
+输出严格 JSON:
+{
+  "decisions": [
+    { "campaignId": "...", "action": "pause|increase_budget|decrease_budget|watch", "reason": "具体推理过程", "confidence": 0.8 }
+  ],
+  "summary": "整体判断摘要"
+}`
+
+    const userMessage = `当前时间: ${dayjs().format('YYYY-MM-DD HH:mm')}\n\n## 待分析 Campaign (${campaignData.length} 个)\n${JSON.stringify(campaignData, null, 2)}`
+
+    try {
+      const res = await axios.post(
+        `${env.LLM_BASE_URL}/chat/completions`,
+        {
+          model: env.LLM_MODEL,
+          messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userMessage }],
+          temperature: 0.2,
+          max_tokens: 2048,
+        },
+        { headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.LLM_API_KEY}` }, timeout: 60000 },
+      )
+
+      const content = res.data.choices?.[0]?.message?.content || ''
+      const jsonMatch = content.match(/\{[\s\S]*\}/)
+      if (jsonMatch) {
+        const llmResult = JSON.parse(jsonMatch[0])
+        for (const d of llmResult.decisions || []) {
+          if (!d.campaignId || d.action === 'watch') continue
+
+          const c = needsLLM.find(x => x.campaignId === d.campaignId)
+          if (!c) continue
+
+          // 护栏兜底：ROAS > 1 不允许暂停
+          if (d.action === 'pause' && c.roas > 1.0) {
+            log.info(`[A2] Guardrail blocked pause for ${c.campaignName}: ROAS ${c.roas} > 1.0`)
+            continue
+          }
+
+          const verdict = verdicts.find(v => v.campaign.campaignId === d.campaignId)
+          if (verdict) {
+            verdict.screenVerdict = 'needs_decision'
+            verdict.screenSkill = 'LLM推理'
+            verdict.screenReason = d.reason
+            verdict.action = { type: d.action, reason: d.reason, skillName: 'LLM推理' }
+          }
+
+          actions.push({
+            type: d.action === 'increase_budget' ? 'adjust_budget' : d.action,
+            campaignId: d.campaignId,
+            campaignName: c.campaignName,
+            accountId: c.accountId,
+            reason: d.reason,
+            skillName: 'LLM推理',
+            spend: c.spend,
+            roas: c.roas,
+          })
+        }
+        log.info(`[A2] LLM decided: ${actions.length} actions from ${needsLLM.length} candidates`)
+      }
+    } catch (e: any) {
+      log.warn(`[A2] LLM decision failed, falling back to legacy rules: ${e.message}`)
+
+      // LLM 失败降级：用旧规则引擎
+      for (const c of needsLLM) {
+        const data = { ...c, todaySpend: c.spend, adjustedRoi: c.roas, todayRoas: c.roas, installs: c.conversions }
+        for (const skill of legacyDecision) {
+          if (!matchesCampaign(skill, c as any)) continue
+          const d = skill.decision
+          if (!d?.action) continue
+          const condMatch = d.conditions?.length > 0 ? evaluateConditions(d.conditions, d.conditionLogic, data) : true
+          if (!condMatch) continue
+
+          const reason = fillReasonTemplate(d.reasonTemplate || skill.name, data)
+          const verdict = verdicts.find(v => v.campaign.campaignId === c.campaignId)
+          if (verdict) {
+            verdict.screenVerdict = 'needs_decision'
+            verdict.screenSkill = `降级-${skill.name}`
+            verdict.screenReason = reason
+            verdict.action = { type: d.action, reason, skillName: skill.name }
+          }
+          actions.push({
+            type: d.action === 'increase_budget' ? 'adjust_budget' : d.action,
+            campaignId: c.campaignId, campaignName: c.campaignName, accountId: c.accountId,
+            reason, skillName: skill.name, spend: c.spend, roas: c.roas,
+          })
+          break
+        }
+      }
+    }
+  } else if (needsLLM.length > 0) {
+    log.warn('[A2] No LLM_API_KEY, using legacy rules only')
+    for (const c of needsLLM) {
+      const data = { ...c, todaySpend: c.spend, adjustedRoi: c.roas, todayRoas: c.roas, installs: c.conversions }
+      for (const skill of legacyDecision) {
+        if (!matchesCampaign(skill, c as any)) continue
+        const d = skill.decision
+        if (!d?.action) continue
+        const condMatch = d.conditions?.length > 0 ? evaluateConditions(d.conditions, d.conditionLogic, data) : true
+        if (!condMatch) continue
+
+        const reason = fillReasonTemplate(d.reasonTemplate || skill.name, data)
+        const verdict = verdicts.find(v => v.campaign.campaignId === c.campaignId)
+        if (verdict) {
+          verdict.screenVerdict = 'needs_decision'
+          verdict.screenSkill = skill.name
+          verdict.screenReason = reason
+          verdict.action = { type: d.action, reason, skillName: skill.name }
+        }
+        actions.push({
+          type: d.action === 'increase_budget' ? 'adjust_budget' : d.action,
+          campaignId: c.campaignId, campaignName: c.campaignName, accountId: c.accountId,
+          reason, skillName: skill.name, spend: c.spend, roas: c.roas,
+        })
+        break
+      }
+    }
   }
 
   return { verdicts, actions }
