@@ -343,21 +343,13 @@ async function makeSkillDecisions(campaigns: FBCampaignData[]): Promise<{ verdic
   return { verdicts, actions }
 }
 
-// ==================== 飞书推送（5-Agent 协作视图）====================
+// ==================== 飞书推送（5 Bot 独立发言 + 跟帖）====================
 
 async function notifyAutoPilot(verdicts: CampaignVerdict[], totalCampaigns: number): Promise<void> {
   try {
-    const { loadFeishuConfig } = await import('../platform/feishu/feishu.service')
-    const config = await (loadFeishuConfig as any)()
-    if (!config) return
-
-    const { default: axiosLib } = await import('axios')
-    const getTenantAccessToken = async (appId: string, appSecret: string) => {
-      const res = await axiosLib.post('https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal', { app_id: appId, app_secret: appSecret })
-      return res.data.tenant_access_token
-    }
-
-    const token = await getTenantAccessToken(config.appId, config.appSecret)
+    const { loadMultiBotConfig, sendBotMessage, replyBotMessage } = await import('../platform/feishu/multi-bot')
+    const mbConfig = await loadMultiBotConfig()
+    if (!mbConfig) return
 
     const totalSpend = verdicts.reduce((s, v) => s + v.campaign.spend, 0)
     const executedCount = verdicts.filter(v => v.execResult === 'executed').length
@@ -365,209 +357,128 @@ async function notifyAutoPilot(verdicts: CampaignVerdict[], totalCampaigns: numb
     const needsDecision = verdicts.filter(v => v.screenVerdict === 'needs_decision').length
     const watching = verdicts.filter(v => v.screenVerdict === 'watch').length
     const skipped = verdicts.filter(v => v.screenVerdict === 'skip').length
-    const avgRoas = verdicts.filter(v => v.campaign.roas > 0).length > 0
-      ? verdicts.filter(v => v.campaign.roas > 0).reduce((s, v) => s + v.campaign.roas, 0) / verdicts.filter(v => v.campaign.roas > 0).length
-      : 0
+    const roasArr = verdicts.filter(v => v.campaign.roas > 0)
+    const avgRoas = roasArr.length > 0 ? roasArr.reduce((s, v) => s + v.campaign.roas, 0) / roasArr.length : 0
+    const traceId = `ap-${dayjs().format('YYMMDDHHmm')}`
+    const now = dayjs().format('MM-DD HH:mm')
 
-    const trace = createDecisionTrace(`ap-${dayjs().format('YYMMDDHHmm')}`, 'cron')
-    appendTraceStep(trace, {
-      agentId: 'agent1_data_fusion',
-      title: '[A1] 数据融合',
-      conclusion: `Facebook API 拉取 ${totalCampaigns} 个 campaign，Metabase 补充 ROAS/CPI`,
-      confidence: 0.88,
-    })
-    appendTraceStep(trace, {
-      agentId: 'agent2_decision',
-      title: '[A2] 决策推理',
-      conclusion: `Skill 筛选: ${needsDecision} 需决策 / ${watching} 观察 / ${skipped} 跳过，产出 ${executedCount + failedCount} 条动作`,
-      confidence: needsDecision > 0 ? 0.82 : 0.75,
-      details: verdicts.filter(v => v.action).slice(0, 3).map(v =>
-        `${v.screenSkill} → ${v.action!.skillName}: ${v.action!.type} ${v.campaign.campaignName}`
-      ),
-    })
-    appendTraceStep(trace, {
-      agentId: 'agent3_executor',
-      title: '[A3] 执行路由',
-      conclusion: `全部走 Facebook API：成功 ${executedCount}，失败 ${failedCount}`,
-      confidence: executedCount > 0 ? 0.9 : 0.7,
-      details: verdicts.filter(v => v.execResult).slice(0, 3).map(v =>
-        `${v.campaign.campaignName}: ${v.execResult}${v.execError ? ` (${v.execError.substring(0, 40)})` : ''}`
-      ),
-    })
-
-    let governorRisk: 'low' | 'medium' | 'high' = 'low'
-    const governorOverrides: string[] = []
-    if (avgRoas < 0.8 && avgRoas > 0) {
-      governorRisk = 'high'
-      governorOverrides.push('ROAS低于硬阈值，建议暂停放量类动作')
-    } else if (avgRoas < 1.0 && avgRoas > 0) {
-      governorRisk = 'medium'
-      governorOverrides.push('ROAS接近阈值，控制学习期占比')
-    }
-
-    appendTraceStep(trace, {
-      agentId: 'agent4_governor',
-      title: '[A4] 全局治理',
-      conclusion: governorRisk === 'high'
-        ? `ROAS硬约束触发（均值${avgRoas.toFixed(2)}），止损优先`
-        : governorRisk === 'medium'
-          ? `ROAS接近阈值（均值${avgRoas.toFixed(2)}），稳健执行`
-          : `ROAS健康（均值${avgRoas.toFixed(2)}），常规协同`,
-      confidence: governorRisk === 'high' ? 0.92 : 0.78,
-    })
-    appendTraceStep(trace, {
-      agentId: 'agent5_skill_kb',
-      title: '[A5] 知识沉淀',
-      conclusion: executedCount > 0
-        ? `${executedCount} 条执行结果将回流经验库`
-        : '本轮无新增经验',
-      confidence: 0.8,
-    })
-
-    const elements: any[] = []
-
-    // 概览
-    elements.push({
-      tag: 'div',
-      fields: [
-        { is_short: true, text: { content: `**Campaign**\n${totalCampaigns}`, tag: 'lark_md' } },
-        { is_short: true, text: { content: `**总花费**\n$${totalSpend.toFixed(2)}`, tag: 'lark_md' } },
-        { is_short: true, text: { content: `**均值ROAS**\n${avgRoas.toFixed(2)}`, tag: 'lark_md' } },
-        { is_short: true, text: { content: `**操作**\n${executedCount} 执行${failedCount > 0 ? ` / ${failedCount} 失败` : ''}`, tag: 'lark_md' } },
-      ],
-    })
-    elements.push({ tag: 'hr' })
-
-    // [A1] 数据融合
-    elements.push({
-      tag: 'div',
-      text: {
-        content: `**[A1] 数据融合**\nFacebook API 拉取 ${totalCampaigns} 条 | Metabase 补充后端 ROAS/CPI\n数据源: fb:实时 | mb:补充 | 融合策略: Facebook优先`,
-        tag: 'lark_md',
-      },
-    })
-
-    // [A2] 决策推理
-    const decisionDetails = verdicts.filter(v => v.action).slice(0, 5).map(v => {
+    // ── A1 数据融合：发主消息 ──
+    const topCampaigns = verdicts.slice(0, 8).map(v => {
       const c = v.campaign
-      return `${c.campaignName}: ${v.screenSkill} → ${v.action!.type}（ROAS ${c.roas.toFixed(2)}, 花费 $${c.spend.toFixed(2)}）`
+      return `${c.campaignName}: 花费 $${c.spend.toFixed(2)} | ROAS ${c.roas.toFixed(2)} | 安装 ${c.conversions}`
     }).join('\n')
-    elements.push({
-      tag: 'div',
-      text: {
-        content: `**[A2] 决策推理**\n筛选: 需决策 **${needsDecision}** | 观察 ${watching} | 跳过 ${skipped}\n${decisionDetails || '本轮无需决策动作'}`,
-        tag: 'lark_md',
-      },
-    })
 
-    // [A3] 执行路由
-    const execDetails = verdicts.filter(v => v.execResult).slice(0, 5).map(v => {
+    const a1Card = {
+      config: { wide_screen_mode: true },
+      header: { template: 'blue', title: { content: `[A1 数据融合] ${now} | ${totalCampaigns} campaign | $${totalSpend.toFixed(2)}`, tag: 'plain_text' } },
+      elements: [
+        { tag: 'div', fields: [
+          { is_short: true, text: { content: `**Campaign**\n${totalCampaigns}`, tag: 'lark_md' } },
+          { is_short: true, text: { content: `**总花费**\n$${totalSpend.toFixed(2)}`, tag: 'lark_md' } },
+          { is_short: true, text: { content: `**均值ROAS**\n${avgRoas.toFixed(2)}`, tag: 'lark_md' } },
+          { is_short: true, text: { content: `**有ROAS数据**\n${roasArr.length}/${totalCampaigns}`, tag: 'lark_md' } },
+        ]},
+        { tag: 'div', text: { content: `**数据源**: Facebook API（实时） + Metabase（后端补充）\n**融合策略**: Facebook 花费/状态优先，Metabase ROAS/CPI 补充\n**数据质量**: ${roasArr.length}/${totalCampaigns} 有 ROAS 数据`, tag: 'lark_md' } },
+        { tag: 'hr' },
+        { tag: 'collapsible_panel', expanded: false, header: { title: { tag: 'plain_text', content: `Campaign 快照 (Top ${Math.min(8, verdicts.length)})` } }, border: { color: 'blue' }, vertical_spacing: '8px',
+          elements: [{ tag: 'div', text: { content: topCampaigns || '暂无数据', tag: 'lark_md' } }],
+        },
+        { tag: 'note', elements: [{ tag: 'plain_text', content: `TraceId: ${traceId} | 数据已交付 → A2 决策分析` }] },
+      ],
+    }
+    const a1MessageId = await sendBotMessage('a1_fusion', mbConfig, a1Card)
+    if (!a1MessageId) {
+      log.warn('[AutoPilot] A1 message failed, aborting multi-bot flow')
+      return
+    }
+    log.info(`[AutoPilot] A1 数据融合 sent: ${a1MessageId}`)
+
+    // ── A2 决策分析：跟帖回复 ──
+    const decisionLines = verdicts.filter(v => v.action).slice(0, 5).map(v => {
+      const c = v.campaign
+      return `**${c.campaignName}**\n筛选: ${v.screenSkill} → 决策: ${v.action!.type}\nROAS ${c.roas.toFixed(2)} | 花费 $${c.spend.toFixed(2)} | 原因: ${v.action!.reason}`
+    }).join('\n---\n')
+
+    const a2Card = {
+      config: { wide_screen_mode: true },
+      header: { template: 'orange', title: { content: `[A2 决策分析] ${needsDecision} 需决策 | ${executedCount + failedCount} 条动作`, tag: 'plain_text' } },
+      elements: [
+        { tag: 'div', text: { content: `**筛选结果**: 需决策 **${needsDecision}** | 观察 ${watching} | 跳过 ${skipped}`, tag: 'lark_md' } },
+        ...(decisionLines ? [{ tag: 'hr' }, { tag: 'div', text: { content: decisionLines, tag: 'lark_md' } }] : [{ tag: 'div', text: { content: '本轮所有 campaign 在安全范围内，无需干预', tag: 'lark_md' } }]),
+        { tag: 'note', elements: [{ tag: 'plain_text', content: `TraceId: ${traceId} | 决策已交付 → A3 执行路由` }] },
+      ],
+    }
+    const a2MessageId = await replyBotMessage('a2_decision', mbConfig, a1MessageId, a2Card)
+    log.info(`[AutoPilot] A2 决策分析 replied: ${a2MessageId}`)
+
+    // ── A3 执行路由：跟帖回复 ──
+    const execLines = verdicts.filter(v => v.execResult).slice(0, 5).map(v => {
       const c = v.campaign
       const icon = v.execResult === 'executed' ? '✅' : '❌'
-      const actionLabel = v.action?.type === 'pause' ? '暂停' : v.action?.type === 'increase_budget' ? '加预算' : v.action?.type || '?'
-      return `${icon} ${actionLabel} **${c.campaignName}** via facebook_api\n原因: ${v.action?.reason || '-'}${v.execError ? `\n错误: ${v.execError}` : ''}`
-    }).join('\n')
-    if (execDetails) {
-      elements.push({
-        tag: 'collapsible_panel',
-        expanded: executedCount > 0,
-        header: { title: { tag: 'plain_text', content: `[A3] 执行路由 (${executedCount + failedCount})` } },
-        border: { color: executedCount > 0 ? 'green' : 'red' },
-        vertical_spacing: '8px',
-        elements: [{ tag: 'div', text: { content: execDetails, tag: 'lark_md' } }],
-      })
-    }
+      const label = v.action?.type === 'pause' ? '暂停' : v.action?.type === 'increase_budget' ? '加预算' : v.action?.type || '?'
+      return `${icon} **${label}** ${c.campaignName}\n路由: facebook_api | 原因: ${v.action?.reason || '-'}${v.execError ? `\n错误: ${v.execError}` : ''}`
+    }).join('\n---\n')
 
-    // [A4] 全局治理
-    const riskLabel = governorRisk === 'high' ? '高风险' : governorRisk === 'medium' ? '中风险' : '低风险'
-    elements.push({
-      tag: 'div',
-      text: {
-        content: `**[A4] 全局治理** | 风险: ${riskLabel}\n${governorOverrides.length > 0 ? `纠偏: ${governorOverrides.join('；')}` : `ROAS ${avgRoas.toFixed(2)} 达标，按常规执行`}`,
-        tag: 'lark_md',
-      },
-    })
-
-    // [A5] 知识沉淀
-    elements.push({
-      tag: 'div',
-      text: {
-        content: `**[A5] 知识沉淀**\n${executedCount > 0 ? `${executedCount} 条执行结果回流经验库` : '本轮无新增经验'}`,
-        tag: 'lark_md',
-      },
-    })
-
-    // 观察中（折叠）
-    const watchList = verdicts.filter(v => v.screenVerdict === 'watch' || (v.screenVerdict === 'needs_decision' && !v.execResult))
-    if (watchList.length > 0) {
-      elements.push({
-        tag: 'collapsible_panel',
-        expanded: false,
-        header: { title: { tag: 'plain_text', content: `观察中 (${watchList.length})` } },
-        border: { color: 'blue' },
-        vertical_spacing: '8px',
-        elements: watchList.slice(0, 15).map(v => ({
-          tag: 'div' as const,
-          text: {
-            content: `**${v.campaign.campaignName}**\n花费 $${v.campaign.spend.toFixed(2)} | ROAS ${v.campaign.roas.toFixed(2)} | 安装 ${v.campaign.conversions}\n${v.screenSkill || '观察中'}: ${v.screenReason || '未触发规则'}`,
-            tag: 'lark_md' as const,
-          },
-        })),
-      })
-    }
-
-    // 跳过（折叠）
-    const skipList = verdicts.filter(v => v.screenVerdict === 'skip')
-    if (skipList.length > 0) {
-      elements.push({
-        tag: 'collapsible_panel',
-        expanded: false,
-        header: { title: { tag: 'plain_text', content: `跳过 (${skipList.length})` } },
-        border: { color: 'grey' },
-        vertical_spacing: '8px',
-        elements: skipList.slice(0, 20).map(v => ({
-          tag: 'div' as const,
-          text: { content: `${v.campaign.campaignName}: $${v.campaign.spend.toFixed(2)} | ${v.screenReason}`, tag: 'lark_md' as const },
-        })),
-      })
-    }
-
-    // 协作推理步骤（折叠）
-    elements.push({
-      tag: 'collapsible_panel',
-      expanded: false,
-      header: { title: { tag: 'plain_text', content: `协作推理步骤 (${trace.steps.length})` } },
-      border: { color: 'grey' },
-      vertical_spacing: '8px',
-      elements: trace.steps.map(step => ({
-        tag: 'div' as const,
-        text: {
-          content: `**${step.title}**\n${step.conclusion}${step.details?.length ? `\n${step.details.slice(0, 3).join('；')}` : ''}`,
-          tag: 'lark_md' as const,
-        },
-      })),
-    })
-    elements.push({
-      tag: 'note',
-      elements: [{ tag: 'plain_text', content: `TraceId: ${trace.traceId} | Trigger: ${trace.trigger}` }],
-    })
-
-    const card = {
+    const a3Card = {
       config: { wide_screen_mode: true },
-      header: {
-        template: governorRisk === 'high' ? 'red' : executedCount > 0 ? 'violet' : 'turquoise',
-        title: { content: `AutoPilot | ${dayjs().format('MM-DD HH:mm')} | ${totalCampaigns} campaign | ${executedCount} 操作`, tag: 'plain_text' },
-      },
-      elements,
+      header: { template: executedCount > 0 ? 'green' : 'turquoise', title: { content: `[A3 执行路由] 成功 ${executedCount} | 失败 ${failedCount}`, tag: 'plain_text' } },
+      elements: [
+        { tag: 'div', text: { content: execLines || '本轮无执行动作，所有 campaign 维持当前状态', tag: 'lark_md' } },
+        { tag: 'note', elements: [{ tag: 'plain_text', content: `TraceId: ${traceId} | 执行结果已交付 → A4 全局治理` }] },
+      ],
     }
+    const a3MessageId = await replyBotMessage('a3_executor', mbConfig, a1MessageId, a3Card)
+    log.info(`[AutoPilot] A3 执行路由 replied: ${a3MessageId}`)
 
-    await axiosLib.post(
-      `https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=${config.receiveIdType || 'chat_id'}`,
-      { receive_id: config.receiveId, msg_type: 'interactive', content: JSON.stringify(card) },
-      { headers: { Authorization: `Bearer ${token}` } }
-    )
-    log.info(`[AutoPilot] Feishu collab card sent: ${totalCampaigns} campaigns, ${executedCount} executed`)
+    // ── A4 全局治理：跟帖回复 ──
+    let riskLevel: 'low' | 'medium' | 'high' = 'low'
+    const overrides: string[] = []
+    if (avgRoas < 0.8 && avgRoas > 0) {
+      riskLevel = 'high'
+      overrides.push('ROAS 低于硬阈值，暂停所有放量动作并优先止损')
+      if (watching > needsDecision) overrides.push('从观察池提取低风险素材小流量验证')
+    } else if (avgRoas < 1.0 && avgRoas > 0) {
+      riskLevel = 'medium'
+      overrides.push('ROAS 接近阈值，控制学习期广告占比')
+    }
+    const riskLabel = riskLevel === 'high' ? '🔴 高风险' : riskLevel === 'medium' ? '🟡 中风险' : '🟢 低风险'
+    const goalLine = overrides.length > 0 ? `**纠偏指令**:\n${overrides.map(o => `• ${o}`).join('\n')}` : `ROAS ${avgRoas.toFixed(2)} 达标，本轮动作符合全局目标`
+
+    const a4Card = {
+      config: { wide_screen_mode: true },
+      header: { template: riskLevel === 'high' ? 'red' : riskLevel === 'medium' ? 'orange' : 'green', title: { content: `[A4 全局治理] ${riskLabel} | ROAS ${avgRoas.toFixed(2)}`, tag: 'plain_text' } },
+      elements: [
+        { tag: 'div', text: { content: `**风险评估**: ${riskLabel}\n**均值 ROAS**: ${avgRoas.toFixed(2)}\n${goalLine}`, tag: 'lark_md' } },
+        { tag: 'note', elements: [{ tag: 'plain_text', content: `TraceId: ${traceId} | 治理结论已交付 → A5 知识管理` }] },
+      ],
+    }
+    const a4MessageId = await replyBotMessage('a4_governor', mbConfig, a1MessageId, a4Card)
+    log.info(`[AutoPilot] A4 全局治理 replied: ${a4MessageId}`)
+
+    // ── A5 知识管理：跟帖回复（总结）──
+    const skillHits = new Map<string, number>()
+    for (const v of verdicts) {
+      if (v.screenSkill && v.screenSkill !== '冷启动保护') {
+        skillHits.set(v.screenSkill, (skillHits.get(v.screenSkill) || 0) + 1)
+      }
+    }
+    const skillSummary = skillHits.size > 0
+      ? [...skillHits.entries()].map(([k, v]) => `${k}: 命中 ${v} 次`).join('\n')
+      : '无 Skill 命中'
+
+    const a5Card = {
+      config: { wide_screen_mode: true },
+      header: { template: 'purple', title: { content: `[A5 知识管理] 本轮总结`, tag: 'plain_text' } },
+      elements: [
+        { tag: 'div', text: { content: `**Skill 命中统计**:\n${skillSummary}`, tag: 'lark_md' } },
+        { tag: 'div', text: { content: `**经验沉淀**: ${executedCount > 0 ? `${executedCount} 条执行结果已记录，供下轮复用` : '本轮无新增经验'}`, tag: 'lark_md' } },
+        { tag: 'div', text: { content: `**闭环状态**: A1数据→A2决策→A3执行→A4治理→A5沉淀 ✓\n本轮协作完成`, tag: 'lark_md' } },
+        { tag: 'note', elements: [{ tag: 'plain_text', content: `TraceId: ${traceId} | 闭环完成` }] },
+      ],
+    }
+    await replyBotMessage('a5_knowledge', mbConfig, a1MessageId, a5Card)
+    log.info(`[AutoPilot] A5 知识管理 replied, multi-bot cycle complete`)
   } catch (e: any) {
-    log.warn(`[AutoPilot] Feishu notification failed: ${e.message}`)
+    log.warn(`[AutoPilot] Multi-bot notification failed: ${e.message}`)
   }
 }
