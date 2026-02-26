@@ -28,6 +28,7 @@ const knowledgeSchema = new mongoose.Schema({
   tags: { type: [String], default: [], index: true },
   archived: { type: Boolean, default: false },
   lastValidatedAt: { type: Date, default: Date.now },
+  traceRef: { type: String, default: '', index: true },
 }, { timestamps: true })
 
 knowledgeSchema.index({ category: 1, confidence: -1 })

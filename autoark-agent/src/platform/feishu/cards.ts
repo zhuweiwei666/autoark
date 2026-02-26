@@ -12,7 +12,17 @@ import type { MarketBenchmark } from '../../agent/brain'
  * 每轮决策摘要卡片（包含 campaign 明细）
  */
 export function buildSummaryCard(params: NotifyFeishuParams) {
-  const { screening, actions, events, benchmarks, classSummary, screenedCampaigns } = params
+  const {
+    screening,
+    actions,
+    events,
+    benchmarks,
+    classSummary,
+    screenedCampaigns,
+    decisionTrace,
+    fusionSummary,
+    governorSummary,
+  } = params
   const now = dayjs().format('MM-DD HH:mm')
   const criticalCount = events.filter((e: any) => e.type === 'spend_spike' || e.type === 'roas_crash').length
 
@@ -115,6 +125,75 @@ export function buildSummaryCard(params: NotifyFeishuParams) {
         tag: 'plain_text',
         content: `Skills: ${Object.entries(screening.skillHits).map(([k, v]) => `${k}(${v})`).join(' | ')}`,
       }],
+    })
+  }
+
+  // Agent1 数据融合质量
+  if (fusionSummary) {
+    const freshnessText = fusionSummary.freshness
+      .map(f => `${f.source}:${f.status}(${f.freshnessSec}s)`)
+      .join(' | ')
+    const conflictText = fusionSummary.conflictFlags.length > 0
+      ? fusionSummary.conflictFlags.slice(0, 2).join('；')
+      : '无显著冲突'
+    const riskText = fusionSummary.dataRisk ? '高' : '低'
+
+    elements.push({ tag: 'hr' })
+    elements.push({
+      tag: 'div',
+      text: {
+        content: `**Agent1 数据融合**\n质量分: **${fusionSummary.qualityScore}** | 数据风险: ${riskText} | 新鲜度: ${freshnessText}\n冲突: ${conflictText}`,
+        tag: 'lark_md',
+      },
+    })
+  }
+
+  // Agent4 全局治理结论
+  if (governorSummary) {
+    const riskText = governorSummary.riskLevel === 'high'
+      ? '高风险'
+      : governorSummary.riskLevel === 'medium'
+        ? '中风险'
+        : '低风险'
+    elements.push({
+      tag: 'div',
+      text: {
+        content: `**Agent4 全局治理**\n结论: ${governorSummary.summary}\n风险: ${riskText}${governorSummary.overrides.length > 0 ? `\n纠偏: ${governorSummary.overrides.join('；')}` : ''}`,
+        tag: 'lark_md',
+      },
+    })
+  }
+
+  // 5-Agent 协作推理步骤（详细）
+  if (decisionTrace?.steps?.length) {
+    const maxSteps = 8
+    elements.push({
+      tag: 'collapsible_panel',
+      expanded: false,
+      header: {
+        title: {
+          tag: 'plain_text',
+          content: `协作推理步骤 (${Math.min(decisionTrace.steps.length, maxSteps)}/${decisionTrace.steps.length})`,
+        },
+      },
+      border: { color: 'grey' },
+      vertical_spacing: '8px',
+      elements: decisionTrace.steps.slice(0, maxSteps).map((step: any) => ({
+        tag: 'div',
+        text: {
+          content: `**${step.agentId} | ${step.title}**\n结论: ${step.conclusion}\n置信度: ${step.confidence}${step.evidence?.length ? `\n证据: ${step.evidence.join(' | ')}` : ''}${step.details?.length ? `\n步骤: ${step.details.slice(0, 3).join('；')}` : ''}`,
+          tag: 'lark_md',
+        },
+      })),
+    })
+    elements.push({
+      tag: 'note',
+      elements: [
+        {
+          tag: 'plain_text',
+          content: `TraceId: ${decisionTrace.traceId} | Trigger: ${decisionTrace.trigger}`,
+        },
+      ],
     })
   }
 

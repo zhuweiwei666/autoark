@@ -66,6 +66,11 @@ async function updateSkillFromFinding(f: AuditFinding): Promise<void> {
     const total = (skill.stats.correct || 0) + (skill.stats.wrong || 0)
     const accuracy = total > 0 ? Math.round((skill.stats.correct || 0) / total * 100) : 0
     await Skill.updateOne({ name: f.skillName }, { $set: { 'stats.accuracy': accuracy } })
+
+    // 低准确率保护：自动回滚到保守模式
+    if (total >= 12 && accuracy < 35) {
+      await rollbackSkillToConservative(f.skillName, `accuracy=${accuracy}% total=${total}`)
+    }
   }
 }
 
@@ -103,11 +108,44 @@ async function sinkKnowledge(f: AuditFinding): Promise<void> {
       relatedSkills: f.skillName ? [f.skillName] : [],
       tags: [f.type, f.severity],
       lastValidatedAt: new Date(),
+      traceRef: (f as any).traceId || '',
       $inc: { validations: 1 },
       $setOnInsert: { confidence: 0.6 },
     },
     { upsert: true }
   )
+}
+
+async function rollbackSkillToConservative(skillName: string, reason: string): Promise<void> {
+  const skill = await Skill.findOne({ name: skillName })
+  if (!skill) return
+
+  const update: Record<string, any> = {
+    'rollback.lastRollbackAt': new Date(),
+    'rollback.rollbackReason': reason,
+    'rollback.version': ((skill as any).rollback?.version || 1) + 1,
+    order: Math.max(100, (skill as any).order || 100),
+    enabled: true,
+  }
+
+  // 决策类技能回滚为保守（不自动执行）
+  if ((skill as any).agentId === 'decision') {
+    update['decision.auto'] = false
+  }
+
+  await Skill.updateOne({ _id: (skill as any)._id }, { $set: update })
+  await Knowledge.create({
+    category: 'skill_insight',
+    key: `skill_rollback:${skillName}:${dayjs().format('YYYYMMDD_HHmmss')}`,
+    content: `Skill "${skillName}" 已回滚到保守模式: ${reason}`,
+    data: { skillName, reason },
+    source: 'evolution',
+    confidence: 0.9,
+    relatedSkills: [skillName],
+    tags: ['skill_rollback', (skill as any).agentId || 'unknown'],
+    traceRef: '',
+  })
+  log.warn(`[Librarian] Skill rollback applied: ${skillName}, reason=${reason}`)
 }
 
 // ==================== 2. Skill 生命周期管理 ====================

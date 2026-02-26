@@ -12,6 +12,8 @@ import { getAgentConfig } from '../../agent/agent-config.model'
 import { buildSummaryCard, buildAutoExecutedCard, buildApprovalCard } from './cards'
 import type { ScreeningSummary } from '../../agent/screener'
 import type { MarketBenchmark } from '../../agent/brain'
+import type { DecisionTrace } from '../../agent/collab/types'
+import type { SourceFreshness } from '../../agent/data-fusion'
 
 // ==================== Token 管理 ====================
 
@@ -107,6 +109,18 @@ export interface NotifyFeishuParams {
   summary: string
   classSummary?: Record<string, number>
   screenedCampaigns: any[]
+  decisionTrace?: DecisionTrace
+  fusionSummary?: {
+    qualityScore: number
+    dataRisk?: boolean
+    conflictFlags: string[]
+    freshness: SourceFreshness[]
+  }
+  governorSummary?: {
+    riskLevel: 'low' | 'medium' | 'high'
+    summary: string
+    overrides: string[]
+  }
 }
 
 /**

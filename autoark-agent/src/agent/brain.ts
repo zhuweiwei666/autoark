@@ -27,6 +27,11 @@ import { Action } from '../action/action.model'
 import * as toptouApi from '../platform/toptou/api'
 import { getTopTouToken } from '../platform/toptou/client'
 import { notifyFeishu } from '../platform/feishu/feishu.service'
+import { getAgentConfig } from './agent-config.model'
+import { buildUnifiedCampaignSnapshot } from './data-fusion'
+import { appendTraceStep, createDecisionTrace, DecisionTrace } from './collab/types'
+import { pushExperienceToPython } from './bridge/python-bridge'
+import { evaluateGlobalGuardrail } from './governor'
 
 export interface MarketBenchmark {
   totalCampaigns: number
@@ -48,6 +53,7 @@ export interface BrainCycleResult {
   reflections: any[]
   actions: any[]
   screening?: ScreeningSummary
+  decisionTrace?: DecisionTrace
   summary: string
   durationMs: number
 }
@@ -107,6 +113,8 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
     snapshotId: snapshot._id.toString(),
     phase: '', events: [], reflections: [], actions: [], summary: '', durationMs: 0,
   }
+  const decisionTrace = createDecisionTrace(result.snapshotId, trigger)
+  result.decisionTrace = decisionTrace
 
   try {
     // ==================== Phase 0: Corrective 纠正指令 ====================
@@ -115,6 +123,14 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
     if (corrective.length > 0) {
       log.info(`[Brain] Phase 0: ${corrective.length} corrective actions from Auditor: ${corrective.map(c => `${c.action}:${c.campaignId}`).join(', ')}`)
     }
+    appendTraceStep(decisionTrace, {
+      agentId: 'agent5_skill_kb',
+      title: 'Agent5 纠正输入',
+      conclusion: corrective.length > 0 ? `收到 ${corrective.length} 条纠正指令并优先处理` : '本轮无纠正指令',
+      confidence: 0.9,
+      evidence: [`corrective_count=${corrective.length}`],
+      details: corrective.slice(0, 3).map(c => `${c.action}:${c.campaignId}`),
+    })
 
     // ==================== Phase 1: Monitor 感知 ====================
     result.phase = 'perception'
@@ -131,7 +147,7 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
     }
     result.events = events
 
-    const allCampaigns: CampaignMetrics[] = monitorData.campaigns.map(c => ({
+    let allCampaigns: CampaignMetrics[] = monitorData.campaigns.map(c => ({
       campaignId: c.id, campaignName: c.name, accountId: c.accountId || '', accountName: '',
       platform: c.platform, optimizer: c.optimizer, pkgName: c.pkgName,
       todaySpend: c.spend,
@@ -149,9 +165,23 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
       trendSummary: c.trendSummary || '',
       dailyData: [],
     }))
+    const unifiedSnapshot = buildUnifiedCampaignSnapshot(allCampaigns, result.snapshotId)
+    allCampaigns = unifiedSnapshot.campaigns
 
     const benchmarks = computeBenchmarks(allCampaigns)
     log.info(`[Brain] Benchmarks: ${benchmarks.totalCampaigns} campaigns, $${benchmarks.totalSpend} spend, weighted ROAS ${benchmarks.weightedRoas}, ROI P25/P50/P75: ${benchmarks.p25Roi}/${benchmarks.medianRoi}/${benchmarks.p75Roi}`)
+    appendTraceStep(decisionTrace, {
+      agentId: 'agent1_data_fusion',
+      title: 'Agent1 多源融合',
+      conclusion: `输出 ${allCampaigns.length} 条可信快照，质量分 ${unifiedSnapshot.qualityScore}`,
+      confidence: unifiedSnapshot.qualityScore,
+      evidence: [
+        `source_priority=${unifiedSnapshot.sourcePriority}`,
+        `conflict_count=${unifiedSnapshot.conflictFlags.length}`,
+        `weighted_roas=${benchmarks.weightedRoas}`,
+      ],
+      details: unifiedSnapshot.conflictFlags.length > 0 ? unifiedSnapshot.conflictFlags : ['未检测到显著跨源冲突'],
+    })
 
     // ==================== Phase 2: Screener 筛选 ====================
     result.phase = 'screening'
@@ -185,6 +215,28 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
     result.phase = 'decision'
     log.info(`[Brain] Phase 4: Decision on ${classified.length} campaigns...`)
     const decisions = await makeDecisions(classified, benchmarks)
+    if (unifiedSnapshot.dataRisk) {
+      decisions.actions = decisions.actions.filter((a: any) => a.type === 'pause')
+      decisions.reasoningSteps = [
+        `数据风险触发（quality=${unifiedSnapshot.qualityScore}），决策降级为止损优先`,
+        ...(decisions.reasoningSteps || []),
+      ]
+    }
+    appendTraceStep(decisionTrace, {
+      agentId: 'agent2_decision',
+      title: 'Agent2 分析与决策',
+      conclusion: `完成 ${classified.length} 个 campaign 分析，产出 ${decisions.actions.length} 条动作建议`,
+      confidence: classified.length > 0 ? 0.82 : 0.7,
+      evidence: [
+        `screening_needs_decision=${screening.needsDecision}`,
+        `classified_count=${classified.length}`,
+        `decision_actions=${decisions.actions.length}`,
+      ],
+      details: [
+        ...(decisions.reasoningSteps || []),
+        ...((decisions.candidateActions || []).slice(0, 3).map((c: any) => `候选:${c.action}:${c.campaignName || c.campaignId}|conf=${c.confidence}`)),
+      ],
+    })
 
     // ==================== Phase 5: Executor（auto 直接执行 / 非 auto 存 pending 待审批）====================
     result.phase = 'execution'
@@ -205,10 +257,24 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
     let skippedDuplicate = 0
     let autoExecuted = 0
     let pendingCreated = 0
+    let skippedByGovernor = 0
 
     for (const action of decisions.actions) {
       try {
         if (!action?.campaignId || !action?.type) continue
+        // ROAS 硬约束：低于阈值时禁止放量类动作
+        if (benchmarks.weightedRoas < 0.8 && (action.type === 'increase_budget' || action.type === 'resume')) {
+          skippedByGovernor++
+          result.actions.push({
+            ...action,
+            executed: false,
+            finalStatus: 'governor_blocked',
+            routeReason: 'roas_hard_guardrail_block',
+            retryTrace: [],
+            latencyMs: 0,
+          })
+          continue
+        }
         const dbType = action.type === 'increase_budget' ? 'adjust_budget' : action.type
         const key = `${action.campaignId}:${dbType}`
         if (pendingKeys.has(key)) { skippedDuplicate++; continue }
@@ -241,15 +307,39 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
           if (execResult?.executed) {
             await Action.updateOne({ _id: actionDoc._id }, { $set: { status: 'executed', executedAt: new Date(), result: execResult.result } })
             log.info(`[Executor] Auto-executed: ${action.type} ${action.campaignName} (${action.skillName || 'rule'})${isAutoManaged ? ' [AI接管]' : ''}`)
-            result.actions.push({ ...action, auto: true, executed: true })
+            result.actions.push({
+              ...action,
+              auto: true,
+              executed: true,
+              via: execResult?.via || 'facebook_api',
+              routeReason: execResult?.routeReason || '',
+              retryTrace: execResult?.retryTrace || [],
+              latencyMs: execResult?.latencyMs || 0,
+              finalStatus: execResult?.finalStatus || 'executed',
+            })
             autoExecuted++
           } else {
             await Action.updateOne({ _id: actionDoc._id }, { $set: { status: 'failed', result: { error: execResult?.error } } })
             log.warn(`[Executor] Auto-execute failed: ${action.campaignName} - ${execResult?.error}`)
-            result.actions.push({ ...action, executed: false })
+            result.actions.push({
+              ...action,
+              executed: false,
+              via: execResult?.via || 'unknown',
+              routeReason: execResult?.routeReason || '',
+              retryTrace: execResult?.retryTrace || [],
+              latencyMs: execResult?.latencyMs || 0,
+              finalStatus: execResult?.finalStatus || 'failed',
+            })
           }
         } else {
-          result.actions.push({ ...action, executed: false })
+          result.actions.push({
+            ...action,
+            executed: false,
+            finalStatus: 'pending',
+            routeReason: 'awaiting_manual_approval',
+            retryTrace: [],
+            latencyMs: 0,
+          })
           pendingCreated++
         }
       } catch (actionErr: any) {
@@ -260,6 +350,36 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
     if (skippedDuplicate > 0) log.info(`[Brain] Skipped ${skippedDuplicate} duplicate pending`)
     if (autoExecuted > 0) log.info(`[Brain] Auto-executed: ${autoExecuted} actions`)
     if (pendingCreated > 0) log.info(`[Brain] Pending approval: ${pendingCreated} actions`)
+    if (skippedByGovernor > 0) log.info(`[Brain] Governor blocked ${skippedByGovernor} risky scaling actions`)
+    appendTraceStep(decisionTrace, {
+      agentId: 'agent3_executor',
+      title: 'Agent3 执行路由',
+      conclusion: `执行完成：自动 ${autoExecuted}，待审批 ${pendingCreated}，去重跳过 ${skippedDuplicate}`,
+      confidence: result.actions.length > 0 ? 0.85 : 0.78,
+      evidence: [
+        `actions_total=${result.actions.length}`,
+        `auto_executed=${autoExecuted}`,
+        `pending_created=${pendingCreated}`,
+        `governor_blocked=${skippedByGovernor}`,
+      ],
+      details: result.actions.slice(0, 5).map((a: any) => {
+        const route = a.via ? `via=${a.via}` : 'via=pending'
+        return `${a.type}:${a.campaignName || a.campaignId}:${a.finalStatus || (a.executed ? 'executed' : 'pending')}|${route}|reason=${a.routeReason || ''}`
+      }),
+    })
+    const governorDecision = evaluateGlobalGuardrail(benchmarks, result.actions, screening)
+    appendTraceStep(decisionTrace, {
+      agentId: 'agent4_governor',
+      title: 'Agent4 全局治理',
+      conclusion: governorDecision.summary,
+      confidence: governorDecision.riskLevel === 'high' ? 0.88 : 0.76,
+      evidence: [
+        `roas=${benchmarks.weightedRoas}`,
+        `risk=${governorDecision.riskLevel}`,
+        `override_count=${governorDecision.overrides.length}`,
+      ],
+      details: governorDecision.overrides.length > 0 ? governorDecision.overrides : ['本轮无需全局覆盖指令'],
+    })
 
     // ==================== Phase 6: Feishu 飞书通知 ====================
     result.phase = 'notification'
@@ -274,6 +394,14 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
         summary: '',
         classSummary,
         screenedCampaigns,
+        decisionTrace,
+        fusionSummary: {
+          qualityScore: unifiedSnapshot.qualityScore,
+          dataRisk: unifiedSnapshot.dataRisk,
+          conflictFlags: unifiedSnapshot.conflictFlags,
+          freshness: unifiedSnapshot.freshness,
+        },
+        governorSummary: governorDecision,
       })
     } catch (e: any) {
       log.warn(`[Brain] Feishu notification failed: ${e.message}`)
@@ -311,6 +439,31 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
         summary: `反思 ${reflections.length} 个决策: ${stats.correct} 正确, ${stats.wrong} 错误, 准确率 ${stats.accuracy}%`,
         stats,
       })
+    }
+    appendTraceStep(decisionTrace, {
+      agentId: 'agent5_skill_kb',
+      title: 'Agent5 技能与知识沉淀',
+      conclusion: `完成反思 ${reflections.length} 条并写入知识沉淀流程`,
+      confidence: reflections.length > 0 ? 0.86 : 0.72,
+      evidence: [`reflection_count=${reflections.length}`],
+      details: reflections.slice(0, 3).map((r: any) => `${r.campaignId}:${r.assessment}`),
+    })
+    if (reflections.length > 0) {
+      for (const r of reflections.slice(0, 10)) {
+        await pushExperienceToPython({
+          traceId: decisionTrace.traceId,
+          scenario: `campaign=${r.campaignId}, phase=audit`,
+          decision: r.reason || 'no_reason',
+          outcome: r.assessment === 'correct' ? 'success' : r.assessment === 'wrong' ? 'failure' : 'partial',
+          lesson: r.lesson || '',
+          evidence: [result.summary, `assessment=${r.assessment}`],
+          metadata: {
+            campaignId: r.campaignId,
+            assessment: r.assessment,
+            trigger,
+          },
+        })
+      }
     }
 
     // ==================== Recording ====================
@@ -367,6 +520,8 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
  * 优先 Facebook API，失败降级 TopTou
  */
 export async function executeWithRetry(action: DecisionAction, maxRetries = 3): Promise<any> {
+  const retryTrace: string[] = []
+  const startedAt = Date.now()
   // 第一优先：Facebook API
   const fbToken = process.env.FB_ACCESS_TOKEN
   if (fbToken && action.campaignId) {
@@ -379,15 +534,36 @@ export async function executeWithRetry(action: DecisionAction, maxRetries = 3): 
       const axios = (await import('axios')).default
       await axios.post(`https://graph.facebook.com/v21.0/${action.campaignId}`, null, { params: fbParams, timeout: 15000 })
       log.info(`[Executor] Facebook API: ${action.type} ${action.campaignName} (${action.campaignId})`)
-      return { ...action, executed: true, attempt: 1, via: 'facebook_api' }
+      return {
+        ...action,
+        executed: true,
+        attempt: 1,
+        via: 'facebook_api',
+        routeReason: 'facebook_first_default',
+        latencyMs: Date.now() - startedAt,
+        retryTrace,
+        finalStatus: 'executed',
+      }
     } catch (fbErr: any) {
+      retryTrace.push(`facebook_api_failed:${fbErr.response?.data?.error?.message || fbErr.message}`)
       log.warn(`[Executor] Facebook API failed for ${action.campaignId}, falling back to TopTou: ${fbErr.response?.data?.error?.message || fbErr.message}`)
     }
+  } else {
+    retryTrace.push('facebook_api_skipped:no_token_or_campaign_id')
   }
 
   // 降级：TopTou
   if (!getTopTouToken()) {
-    return { ...action, executed: false, error: 'Both Facebook API and TopTou unavailable' }
+    retryTrace.push('toptou_unavailable:no_token')
+    return {
+      ...action,
+      executed: false,
+      error: 'Both Facebook API and TopTou unavailable',
+      routeReason: 'fallback_required_but_unavailable',
+      latencyMs: Date.now() - startedAt,
+      retryTrace,
+      finalStatus: 'failed',
+    }
   }
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -410,13 +586,33 @@ export async function executeWithRetry(action: DecisionAction, maxRetries = 3): 
         })
       }
       log.info(`[Executor] TopTou fallback: ${action.type} ${action.campaignName}`)
-      return { ...action, executed: true, attempt, via: 'toptou', result: apiResult }
+      retryTrace.push(`toptou_attempt_${attempt}:success`)
+      return {
+        ...action,
+        executed: true,
+        attempt,
+        via: 'toptou',
+        result: apiResult,
+        routeReason: 'facebook_failed_fallback_toptou',
+        latencyMs: Date.now() - startedAt,
+        retryTrace,
+        finalStatus: 'executed',
+      }
     } catch (err: any) {
+      retryTrace.push(`toptou_attempt_${attempt}:failed:${err.message}`)
       log.warn(`[Executor] TopTou attempt ${attempt}/${maxRetries} failed for ${action.campaignId}: ${err.message}`)
       if (attempt < maxRetries) {
         await new Promise(r => setTimeout(r, 30000 * attempt))
       } else {
-        return { ...action, executed: false, error: `Failed after ${maxRetries} attempts: ${err.message}` }
+        return {
+          ...action,
+          executed: false,
+          error: `Failed after ${maxRetries} attempts: ${err.message}`,
+          routeReason: 'fallback_exhausted',
+          latencyMs: Date.now() - startedAt,
+          retryTrace,
+          finalStatus: 'failed',
+        }
       }
     }
   }

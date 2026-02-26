@@ -10,6 +10,7 @@ import metabaseRoutes from './monitor/metabase.controller'
 import pipelineRoutes from './monitor/pipeline.controller'
 import skillRoutes from './monitor/skill.controller'
 import agentConfigRoutes from './monitor/agent-config.controller'
+import governanceRoutes from './monitor/governance.controller'
 import feishuWebhook from './platform/feishu/webhook'
 
 const app = express()
@@ -25,6 +26,7 @@ app.use('/api/metabase', metabaseRoutes)
 app.use('/api/pipeline', pipelineRoutes)
 app.use('/api/skills', skillRoutes)
 app.use('/api/agent-config', agentConfigRoutes)
+app.use('/api/governance', governanceRoutes)
 app.use('/api/webhooks/feishu', feishuWebhook)
 
 // 静态文件（前端）

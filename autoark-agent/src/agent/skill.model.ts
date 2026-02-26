@@ -69,6 +69,11 @@ const skillSchema = new mongoose.Schema({
     lastTriggeredAt: { type: Date },
   },
   learnedNotes: { type: [String], default: [] },
+  rollback: {
+    version: { type: Number, default: 1 },
+    lastRollbackAt: { type: Date },
+    rollbackReason: { type: String, default: '' },
+  },
 }, { timestamps: true })
 
 skillSchema.index({ agentId: 1, enabled: 1, order: 1 })

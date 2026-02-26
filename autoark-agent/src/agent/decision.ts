@@ -30,6 +30,14 @@ export interface DecisionResult {
   actions: DecisionAction[]
   summary: string
   alerts: string[]
+  reasoningSteps?: string[]
+  candidateActions?: Array<{
+    campaignId: string
+    campaignName: string
+    action: string
+    reason: string
+    confidence: number
+  }>
 }
 
 /**
@@ -75,12 +83,35 @@ export async function makeDecisions(
     }))
 
   if (inputData.length === 0) {
-    return { actions: normalizeActions(ruleActions, campaigns), summary: '无需审查的 campaign', alerts: [] }
+    return {
+      actions: normalizeActions(ruleActions, campaigns),
+      summary: '无需审查的 campaign',
+      alerts: [],
+      reasoningSteps: ['无可决策 campaign，维持当前策略'],
+      candidateActions: [],
+    }
   }
 
   if (!env.LLM_API_KEY) {
     log.warn('[Decision] No LLM_API_KEY, using skill-based rules only')
-    return { actions: normalizeActions(ruleActions, campaigns), summary: `规则引擎: ${ruleActions.length} 个操作`, alerts: [] }
+    const normalized = normalizeActions(ruleActions, campaigns)
+    return {
+      actions: normalized,
+      summary: `规则引擎: ${normalized.length} 个操作`,
+      alerts: [],
+      reasoningSteps: [
+        'LLM 不可用，降级为规则引擎',
+        `从 skills 命中 ${normalized.length} 条候选动作`,
+        '按 campaign 去重后输出最终动作',
+      ],
+      candidateActions: normalized.map(a => ({
+        campaignId: a.campaignId,
+        campaignName: a.campaignName,
+        action: a.type,
+        reason: a.reason,
+        confidence: a.auto ? 0.82 : 0.72,
+      })),
+    }
   }
 
   const systemPrompt = buildSkillDrivenPrompt(decisionSkills, benchmarks)
@@ -130,16 +161,60 @@ ${JSON.stringify(inputData, null, 2)}
     const jsonMatch = content.match(/\{[\s\S]*\}/)
     if (!jsonMatch) {
       log.warn('[Decision] LLM did not return valid JSON, using rule-based decisions')
-      return { actions: normalizeActions(ruleActions, campaigns), summary: 'LLM 无效输出，降级为规则引擎', alerts: [] }
+      const normalized = normalizeActions(ruleActions, campaigns)
+      return {
+        actions: normalized,
+        summary: 'LLM 无效输出，降级为规则引擎',
+        alerts: [],
+        reasoningSteps: [
+          'LLM 输出不可解析',
+          '回退规则引擎结果以保证稳定性',
+        ],
+        candidateActions: normalized.map(a => ({
+          campaignId: a.campaignId,
+          campaignName: a.campaignName,
+          action: a.type,
+          reason: a.reason,
+          confidence: a.auto ? 0.8 : 0.7,
+        })),
+      }
     }
 
     const decision = JSON.parse(jsonMatch[0]) as DecisionResult
     decision.actions = normalizeActions(decision.actions || [], campaigns)
+    decision.reasoningSteps = decision.reasoningSteps || [
+      `规则引擎初筛 ${ruleActions.length} 条候选`,
+      `LLM 审核并调整为 ${decision.actions.length} 条动作`,
+      '最终按动作类型与 campaign 去重输出',
+    ]
+    decision.candidateActions = decision.candidateActions || decision.actions.map(a => ({
+      campaignId: a.campaignId,
+      campaignName: a.campaignName,
+      action: a.type,
+      reason: a.reason,
+      confidence: a.auto ? 0.84 : 0.74,
+    }))
     log.info(`[Decision] LLM: ${decision.actions.length} actions (rules had ${ruleActions.length})`)
     return decision
   } catch (err: any) {
     log.error('[Decision] LLM call failed:', err.response?.data?.error?.message || err.message)
-    return { actions: normalizeActions(ruleActions, campaigns), summary: `LLM 失败，降级规则引擎: ${ruleActions.length} 个操作`, alerts: [] }
+    const normalized = normalizeActions(ruleActions, campaigns)
+    return {
+      actions: normalized,
+      summary: `LLM 失败，降级规则引擎: ${normalized.length} 个操作`,
+      alerts: [],
+      reasoningSteps: [
+        'LLM 调用失败',
+        '按规则引擎继续执行，确保链路不中断',
+      ],
+      candidateActions: normalized.map(a => ({
+        campaignId: a.campaignId,
+        campaignName: a.campaignName,
+        action: a.type,
+        reason: a.reason,
+        confidence: a.auto ? 0.78 : 0.68,
+      })),
+    }
   }
 }
 
