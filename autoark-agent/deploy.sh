@@ -4,7 +4,7 @@ set -e
 PROJECT="/root/autoark/autoark-agent"
 LOG_DIR="$PROJECT/logs"
 DEPLOY_LOG="$LOG_DIR/deploy.log"
-HEALTH_URL="http://localhost:3002/api/health"
+HEALTH_URL="http://localhost:3002/api/governance/health"
 ROLLBACK_FILE="$PROJECT/.last-good-commit"
 
 mkdir -p "$LOG_DIR"
