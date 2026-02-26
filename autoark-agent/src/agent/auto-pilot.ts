@@ -11,6 +11,7 @@ import { getAgentConfig } from './agent-config.model'
 import { Skill, AgentSkillDoc, matchesCampaign, evaluateConditions, fillReasonTemplate } from './skill.model'
 import { Action } from '../action/action.model'
 import { createDecisionTrace, appendTraceStep } from './collab/types'
+import { fuseRecords, buildUnifiedSnapshot, FBSourceRecord, MBSourceRecord } from './data-fusion'
 
 const FB_GRAPH = 'https://graph.facebook.com/v21.0'
 
@@ -35,7 +36,7 @@ interface FBCampaignData {
 /**
  * Auto-Pilot 主循环
  */
-export async function runAutoPilot(): Promise<{ actions: any[]; campaigns: number }> {
+export async function runAutoPilot(): Promise<{ actions: any[]; campaigns: number; snapshot?: any }> {
   const fbToken = process.env.FB_ACCESS_TOKEN
   if (!fbToken) return { actions: [], campaigns: 0 }
 
@@ -46,22 +47,41 @@ export async function runAutoPilot(): Promise<{ actions: any[]; campaigns: numbe
 
   log.info(`[AutoPilot] Starting cycle for optimizers: ${autoOptimizers.join(', ')}`)
 
-  // Step 1: 拉取 Facebook API 数据
-  const campaigns = await fetchFBData(fbToken, autoOptimizers)
-  if (campaigns.length === 0) {
-    log.info('[AutoPilot] No active campaigns for managed optimizers')
+  // Step 1: 并行拉取 FB + Metabase
+  const [fbRaw, mbRaw] = await Promise.all([
+    fetchFBData(fbToken, autoOptimizers),
+    fetchMBData(),
+  ])
+
+  if (fbRaw.length === 0 && mbRaw.length === 0) {
+    log.info('[AutoPilot] No campaigns from any source')
     return { actions: [], campaigns: 0 }
   }
 
-  // Step 1.5: 从 Metabase 补充 ROAS 和 CPI（FB API 没有 revenue 时）
-  await enrichWithMetabase(campaigns)
+  // Step 2: 字段级融合
+  const { fused, diagnostics } = fuseRecords(fbRaw, mbRaw)
+  const snapshot = buildUnifiedSnapshot(fused, diagnostics, `ap-${dayjs().format('YYMMDDHHmm')}`)
 
-  // 按花费从高到低排序
-  campaigns.sort((a, b) => b.spend - a.spend)
+  log.info(`[AutoPilot] Fused: ${fused.length} campaigns, ROAS覆盖 ${diagnostics.roasCoverage}%, 冲突 ${diagnostics.spendConflicts}花费/${diagnostics.roasConflicts}ROAS, 质量分 ${snapshot.qualityScore}`)
 
-  const totalSpend = campaigns.reduce((s, c) => s + c.spend, 0)
-  const withRoas = campaigns.filter(c => c.roas > 0).length
-  log.info(`[AutoPilot] Fetched ${campaigns.length} campaigns, spend $${totalSpend.toFixed(2)}, ${withRoas} with ROAS data`)
+  // 转为旧格式供 skill 决策使用
+  const campaigns: FBCampaignData[] = fused.map(f => ({
+    campaignId: f.campaignId,
+    campaignName: f.campaignName,
+    accountId: f.accountId,
+    accountName: '',
+    status: f.status || 'ACTIVE',
+    dailyBudget: f.dailyBudget || 0,
+    spend: f.spend,
+    impressions: f.impressions || 0,
+    clicks: f.clicks || 0,
+    conversions: f.installs,
+    roas: f.roas,
+    cpi: f.cpi,
+    ctr: f.ctr || 0,
+    optimizer: f.optimizer,
+    pkgName: f.pkgName,
+  }))
 
   // Step 2: Skill 决策
   const { verdicts, actions } = await makeSkillDecisions(campaigns)
@@ -105,64 +125,53 @@ export async function runAutoPilot(): Promise<{ actions: any[]; campaigns: numbe
   }
 
   // Step 4: 飞书推送（每次都推，展示全部 campaign 数据）
-  await notifyAutoPilot(verdicts, campaigns.length)
+  await notifyAutoPilot(verdicts, campaigns.length, snapshot)
 
   const executedCount = verdicts.filter(v => v.execResult === 'executed').length
   log.info(`[AutoPilot] Cycle complete: ${campaigns.length} campaigns, ${actions.length} actions, ${executedCount} executed`)
-  return { actions: actions.filter((_, i) => verdicts.find(v => v.campaign.campaignId === actions[i]?.campaignId)?.execResult === 'executed'), campaigns: campaigns.length }
+  return { actions: actions.filter((_, i) => verdicts.find(v => v.campaign.campaignId === actions[i]?.campaignId)?.execResult === 'executed'), campaigns: campaigns.length, snapshot }
 }
 
-// ==================== Metabase 补充 ROAS/CPI ====================
+// ==================== Metabase 数据拉取 ====================
 
-async function enrichWithMetabase(campaigns: FBCampaignData[]): Promise<void> {
+async function fetchMBData(): Promise<MBSourceRecord[]> {
   try {
     const today = dayjs().format('YYYY-MM-DD')
     const { collectData } = await import('./monitor/data-collector')
-    const mbData = await collectData(today, today)
-
-    const mbMap = new Map<string, any>()
-    for (const m of mbData) {
-      mbMap.set(m.campaignId, m)
-    }
-
-    let enriched = 0
-    for (const c of campaigns) {
-      const mb = mbMap.get(c.campaignId)
-      if (!mb) continue
-
-      // ROAS: FB API 优先（purchase_roas），没有时用 Metabase
-      if (c.roas === 0) {
-        if (mb.adjustedRoi > 0) c.roas = mb.adjustedRoi
-        else if (mb.firstDayRoi > 0) c.roas = mb.firstDayRoi
-      }
-
-      // CPI: FB API 优先，没有时用 Metabase（首日UV 口径）
-      if (c.cpi === 0 && mb.cpi > 0) c.cpi = mb.cpi
-
-      // 安装量: FB API 优先，没有时用 Metabase 首日UV
-      if (c.conversions === 0 && mb.installs > 0) c.conversions = mb.installs
-
-      // 花费: 取较大值
-      if (mb.spend > c.spend) c.spend = mb.spend
-
-      enriched++
-    }
-
-    log.info(`[AutoPilot] Metabase enriched: ${enriched}/${campaigns.length} campaigns with ROAS/CPI`)
+    const raw = await collectData(today, today)
+    return raw.map(r => ({
+      campaignId: r.campaignId,
+      campaignName: r.campaignName,
+      accountId: r.accountId,
+      platform: r.platform,
+      optimizer: r.optimizer,
+      pkgName: r.pkgName,
+      spend: r.spend,
+      installs: r.installs,
+      cpi: r.cpi,
+      revenue: r.revenue,
+      firstDayRoi: r.firstDayRoi,
+      adjustedRoi: r.adjustedRoi,
+      day3Roi: r.day3Roi,
+      payRate: r.payRate,
+      arpu: r.arpu,
+      ctr: r.ctr,
+    }))
   } catch (e: any) {
-    log.warn(`[AutoPilot] Metabase enrichment failed (using FB data only): ${e.message}`)
+    log.warn(`[AutoPilot] Metabase fetch failed: ${e.message}`)
+    return []
   }
 }
 
 // ==================== Facebook 数据拉取 ====================
 
-async function fetchFBData(fbToken: string, optimizers: string[]): Promise<FBCampaignData[]> {
+async function fetchFBData(fbToken: string, optimizers: string[]): Promise<FBSourceRecord[]> {
   const accountsRes = await axios.get(`${FB_GRAPH}/me/adaccounts`, {
     params: { fields: 'id,account_id,name', limit: 200, access_token: fbToken },
     timeout: 15000,
   })
 
-  const result: FBCampaignData[] = []
+  const pendingCampaigns: Array<{ camp: any; acc: any; optimizer: string; pkgName: string }> = []
 
   for (const acc of accountsRes.data?.data || []) {
     try {
@@ -170,67 +179,76 @@ async function fetchFBData(fbToken: string, optimizers: string[]): Promise<FBCam
         params: { fields: 'id,name,status,daily_budget', filtering: JSON.stringify([{ field: 'effective_status', operator: 'IN', value: ['ACTIVE'] }]), limit: 500, access_token: fbToken },
         timeout: 15000,
       })
-
       for (const camp of campRes.data?.data || []) {
         const parts = camp.name.split('_')
         const optimizer = (parts[0] || '').toLowerCase()
         if (!optimizers.includes(optimizer)) continue
-
-        let spend = 0, impressions = 0, clicks = 0, conversions = 0, roas = 0, revenue = 0
-        try {
-          const insRes = await axios.get(`${FB_GRAPH}/${camp.id}/insights`, {
-            params: { fields: 'spend,impressions,clicks,actions,action_values,purchase_roas', date_preset: 'today', access_token: fbToken },
-            timeout: 10000,
-          })
-          const ins = insRes.data?.data?.[0]
-          if (ins) {
-            spend = Number(ins.spend || 0)
-            impressions = Number(ins.impressions || 0)
-            clicks = Number(ins.clicks || 0)
-
-            const instAction = (ins.actions || []).find((a: any) => a.action_type === 'app_install' || a.action_type === 'omni_app_install')
-            conversions = instAction ? Number(instAction.value || 0) : 0
-
-            // ROAS: 优先用 purchase_roas，否则从 action_values 算
-            const purchaseRoas = ins.purchase_roas?.find((a: any) => a.action_type === 'omni_purchase')
-            if (purchaseRoas) {
-              roas = Number(purchaseRoas.value || 0)
-            }
-
-            // Revenue: 从 action_values 的 omni_purchase 取
-            const purchaseValue = (ins.action_values || []).find((a: any) => a.action_type === 'omni_purchase')
-            if (purchaseValue) {
-              revenue = Number(purchaseValue.value || 0)
-              if (roas === 0 && spend > 0) roas = revenue / spend
-            }
-
-            // 购买次数作为转化（如果没有 install 数据）
-            if (conversions === 0) {
-              const purchaseAction = (ins.actions || []).find((a: any) => a.action_type === 'omni_purchase' || a.action_type === 'purchase')
-              if (purchaseAction) conversions = Number(purchaseAction.value || 0)
-            }
-          }
-        } catch { /* new campaign, no insights yet */ }
-
-        result.push({
-          campaignId: camp.id,
-          campaignName: camp.name,
-          accountId: acc.account_id,
-          accountName: acc.name,
-          status: camp.status,
-          dailyBudget: Number(camp.daily_budget || 0) / 100,
-          spend,
-          impressions,
-          clicks,
-          conversions,
-          roas,
-          cpi: conversions > 0 ? spend / conversions : 0,
-          ctr: impressions > 0 ? (clicks / impressions) * 100 : 0,
-          optimizer,
-          pkgName: parts.length >= 3 ? parts[2] : '',
-        })
+        pendingCampaigns.push({ camp, acc, optimizer, pkgName: parts.length >= 3 ? parts[2] : '' })
       }
     } catch { /* skip account */ }
+  }
+
+  // 并发拉 insights（5路并发，避免 FB rate limit）
+  const CONCURRENCY = 5
+  const result: FBSourceRecord[] = []
+
+  for (let i = 0; i < pendingCampaigns.length; i += CONCURRENCY) {
+    const batch = pendingCampaigns.slice(i, i + CONCURRENCY)
+    const batchResults = await Promise.allSettled(batch.map(async ({ camp, acc, optimizer, pkgName }) => {
+      let spend = 0, impressions = 0, clicks = 0, conversions = 0, roas = 0, revenue = 0
+      try {
+        const insRes = await axios.get(`${FB_GRAPH}/${camp.id}/insights`, {
+          params: { fields: 'spend,impressions,clicks,actions,action_values,purchase_roas', date_preset: 'today', access_token: fbToken },
+          timeout: 10000,
+        })
+        const ins = insRes.data?.data?.[0]
+        if (ins) {
+          spend = Number(ins.spend || 0)
+          impressions = Number(ins.impressions || 0)
+          clicks = Number(ins.clicks || 0)
+
+          const instAction = (ins.actions || []).find((a: any) => a.action_type === 'app_install' || a.action_type === 'omni_app_install')
+          conversions = instAction ? Number(instAction.value || 0) : 0
+
+          const purchaseRoas = ins.purchase_roas?.find((a: any) => a.action_type === 'omni_purchase')
+          if (purchaseRoas) roas = Number(purchaseRoas.value || 0)
+
+          const purchaseValue = (ins.action_values || []).find((a: any) => a.action_type === 'omni_purchase')
+          if (purchaseValue) {
+            revenue = Number(purchaseValue.value || 0)
+            if (roas === 0 && spend > 0) roas = revenue / spend
+          }
+
+          if (conversions === 0) {
+            const purchaseAction = (ins.actions || []).find((a: any) => a.action_type === 'omni_purchase' || a.action_type === 'purchase')
+            if (purchaseAction) conversions = Number(purchaseAction.value || 0)
+          }
+        }
+      } catch { /* new campaign, no insights yet */ }
+
+      return {
+        campaignId: camp.id,
+        campaignName: camp.name,
+        accountId: acc.account_id,
+        status: camp.status,
+        dailyBudget: Number(camp.daily_budget || 0) / 100,
+        spend,
+        impressions,
+        clicks,
+        conversions,
+        roas,
+        revenue,
+        cpi: conversions > 0 ? spend / conversions : 0,
+        ctr: impressions > 0 ? (clicks / impressions) * 100 : 0,
+        optimizer,
+        pkgName,
+        platform: 'FB',
+      } as FBSourceRecord
+    }))
+
+    for (const r of batchResults) {
+      if (r.status === 'fulfilled') result.push(r.value)
+    }
   }
 
   return result
@@ -345,7 +363,7 @@ async function makeSkillDecisions(campaigns: FBCampaignData[]): Promise<{ verdic
 
 // ==================== 飞书推送（5 Bot 独立发言 + 跟帖）====================
 
-async function notifyAutoPilot(verdicts: CampaignVerdict[], totalCampaigns: number): Promise<void> {
+async function notifyAutoPilot(verdicts: CampaignVerdict[], totalCampaigns: number, snapshot?: any): Promise<void> {
   try {
     const { loadMultiBotConfig, sendBotMessage, replyBotMessage } = await import('../platform/feishu/multi-bot')
     const mbConfig = await loadMultiBotConfig()
@@ -363,27 +381,47 @@ async function notifyAutoPilot(verdicts: CampaignVerdict[], totalCampaigns: numb
     const now = dayjs().format('MM-DD HH:mm')
 
     // ── A1 数据融合：发主消息 ──
+    const diag = snapshot?.diagnostics
+    const roasCov = diag?.roasCoverage ?? Math.round((roasArr.length / Math.max(totalCampaigns, 1)) * 100)
+    const installCov = diag?.installCoverage ?? 0
+    const spendConf = diag?.spendConflicts ?? 0
+    const roasConf = diag?.roasConflicts ?? 0
+    const qualityScore = snapshot?.qualityScore ?? 'N/A'
+    const dataRiskLabel = snapshot?.dataRisk ? '⚠️ 高' : '✅ 低'
+    const mergedCount = diag?.mergedCount ?? 0
+    const fbOnly = diag?.fbOnlyCount ?? 0
+    const mbOnly = diag?.mbOnlyCount ?? 0
+
     const topCampaigns = verdicts.slice(0, 8).map(v => {
       const c = v.campaign
-      return `${c.campaignName}: 花费 $${c.spend.toFixed(2)} | ROAS ${c.roas.toFixed(2)} | 安装 ${c.conversions}`
-    }).join('\n')
+      const fused = snapshot?.fusedCampaigns?.find((f: any) => f.campaignId === c.campaignId)
+      const src = fused?.fusionSource === 'facebook_only' ? '[FB]' : fused?.fusionSource === 'metabase_only' ? '[MB]' : '[合并]'
+      const conflictTag = fused?.conflicts?.length > 0 ? ` ⚠️${fused.conflicts.length}冲突` : ''
+      return `${src} **${c.campaignName}**\n花费 $${c.spend.toFixed(2)} | ROAS ${c.roas.toFixed(2)} | 安装 ${c.conversions}${conflictTag}`
+    }).join('\n---\n')
+
+    const conflictDetails = snapshot?.conflictFlags?.length > 0
+      ? snapshot.conflictFlags.join('\n')
+      : '无显著跨源冲突'
 
     const a1Card = {
       config: { wide_screen_mode: true },
-      header: { template: 'blue', title: { content: `[A1 数据融合] ${now} | ${totalCampaigns} campaign | $${totalSpend.toFixed(2)}`, tag: 'plain_text' } },
+      header: { template: snapshot?.dataRisk ? 'red' : 'blue', title: { content: `[A1 数据融合] ${now} | ${totalCampaigns} campaign | 质量 ${qualityScore}`, tag: 'plain_text' } },
       elements: [
         { tag: 'div', fields: [
           { is_short: true, text: { content: `**Campaign**\n${totalCampaigns}`, tag: 'lark_md' } },
           { is_short: true, text: { content: `**总花费**\n$${totalSpend.toFixed(2)}`, tag: 'lark_md' } },
-          { is_short: true, text: { content: `**均值ROAS**\n${avgRoas.toFixed(2)}`, tag: 'lark_md' } },
-          { is_short: true, text: { content: `**有ROAS数据**\n${roasArr.length}/${totalCampaigns}`, tag: 'lark_md' } },
+          { is_short: true, text: { content: `**ROAS覆盖**\n${roasCov}%`, tag: 'lark_md' } },
+          { is_short: true, text: { content: `**数据风险**\n${dataRiskLabel}`, tag: 'lark_md' } },
         ]},
-        { tag: 'div', text: { content: `**数据源**: Facebook API（实时） + Metabase（后端补充）\n**融合策略**: Facebook 花费/状态优先，Metabase ROAS/CPI 补充\n**数据质量**: ${roasArr.length}/${totalCampaigns} 有 ROAS 数据`, tag: 'lark_md' } },
         { tag: 'hr' },
-        { tag: 'collapsible_panel', expanded: false, header: { title: { tag: 'plain_text', content: `Campaign 快照 (Top ${Math.min(8, verdicts.length)})` } }, border: { color: 'blue' }, vertical_spacing: '8px',
+        { tag: 'div', text: { content: `**融合策略**\n• 花费: FB API 优先（实时），为0时取 Metabase\n• ROAS: Metabase 后端归因优先，为0时取 FB purchase_roas\n• 安装: FB 前端事件优先，为0时取 Metabase 首日UV\n• 收入/付费率/ARPU: Metabase 独占`, tag: 'lark_md' } },
+        { tag: 'div', text: { content: `**融合诊断**\n• 质量分: **${qualityScore}** | ROAS覆盖: ${roasCov}% | 安装覆盖: ${installCov}%\n• 来源: 双源合并 ${mergedCount} | 仅FB ${fbOnly} | 仅MB ${mbOnly}\n• 冲突: 花费偏差 ${spendConf} 条 | ROAS偏差 ${roasConf} 条\n• ${conflictDetails}`, tag: 'lark_md' } },
+        { tag: 'hr' },
+        { tag: 'collapsible_panel', expanded: false, header: { title: { tag: 'plain_text', content: `Campaign 融合快照 (Top ${Math.min(8, verdicts.length)})` } }, border: { color: 'blue' }, vertical_spacing: '8px',
           elements: [{ tag: 'div', text: { content: topCampaigns || '暂无数据', tag: 'lark_md' } }],
         },
-        { tag: 'note', elements: [{ tag: 'plain_text', content: `TraceId: ${traceId} | 数据已交付 → A2 决策分析` }] },
+        { tag: 'note', elements: [{ tag: 'plain_text', content: `TraceId: ${traceId} | SnapshotId: ${snapshot?.snapshotId || traceId} | 数据已交付 → A2 决策分析` }] },
       ],
     }
     const a1MessageId = await sendBotMessage('a1_fusion', mbConfig, a1Card)
