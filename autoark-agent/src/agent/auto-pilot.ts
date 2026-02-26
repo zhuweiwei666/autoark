@@ -402,11 +402,8 @@ async function makeSkillDecisions(campaigns: FBCampaignData[]): Promise<A2Decisi
       return `经验${i + 1} [置信${exp.confidence || 0.5}]: 场景: ${exp.scenario || ''} → 教训: ${exp.lesson || ''}`
     }).join('\n')
 
-    // 只给 LLM 看 ACTIVE 且有花费的 campaign（已暂停的不需要决策）
-    const activeCandidates = needsLLM.filter(c => {
-      const status = (c as any).status || 'ACTIVE'
-      return status === 'ACTIVE' && c.spend > 0
-    })
+    // 给 LLM 看有花费的 campaign（含 PAUSED，评估是否应恢复或确认暂停正确）
+    const activeCandidates = needsLLM.filter(c => c.spend > 0)
 
     const campaignData = activeCandidates.map(c => ({
       id: c.campaignId,
@@ -429,12 +426,17 @@ ${experienceContext || '暂无历史经验，请根据数据独立判断。'}
 - 花费 < $5 → 跳过不判断
 
 ## 操作类型
-pause / increase_budget / decrease_budget
+- pause: 暂停 ACTIVE 广告
+- increase_budget: 对表现好的 ACTIVE 广告加预算
+- decrease_budget: 对表现下滑的 ACTIVE 广告降预算
+- resume: 恢复被误暂停的 PAUSED 广告（ROAS 不错但被停了）
+- watch: 继续观察（默认，不用输出）
 
 ## 思考要求
 1. 综合花费、ROAS、安装量、CPI 多维度判断
-2. 不确定时不操作（默认观察）
-3. 已暂停的广告不需要重复暂停
+2. 不确定时选择观察（不输出该 campaign）
+3. PAUSED 广告如果 ROAS > 1.0 且有安装，考虑建议 resume
+4. ACTIVE 广告花费低且数据少时优先观察
 
 重要：只输出需要操作的 campaign，不需要操作的不要包含在 JSON 里。
 输出严格 JSON（不要多余文字）:
