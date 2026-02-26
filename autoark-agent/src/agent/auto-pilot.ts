@@ -41,8 +41,8 @@ export async function runAutoPilot(): Promise<{ actions: any[]; campaigns: numbe
   const fbToken = process.env.FB_ACCESS_TOKEN
   if (!fbToken) return { actions: [], campaigns: 0 }
 
-  // 从 A1 data_fusion Skills 读取配置（可通过 @A1 在群里修改）
-  const fusionSkills = await Skill.find({ agentId: 'data_fusion', enabled: true }).lean() as any[]
+  // 从 A1 Skills 读取配置（可通过 @A1 在群里修改）
+  const fusionSkills = await Skill.find({ agentId: 'a1_fusion', enabled: true }).lean() as any[]
 
   const optimizerSkill = fusionSkills.find(s => s.name === 'A1 优化师范围')
   const sourceSkill = fusionSkills.find(s => s.name === 'A1 数据源配置')
