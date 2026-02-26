@@ -47,11 +47,15 @@ export async function runAutoPilot(): Promise<{ actions: any[]; campaigns: numbe
 
   log.info(`[AutoPilot] Starting cycle for optimizers: ${autoOptimizers.join(', ')}`)
 
-  // Step 1: 并行拉取 FB + Metabase
-  const [fbRaw, mbRaw] = await Promise.all([
+  // Step 1: 并行拉取 FB + Metabase（均按优化师过滤）
+  const [fbRaw, mbRawAll] = await Promise.all([
     fetchFBData(fbToken, autoOptimizers),
     fetchMBData(),
   ])
+  const mbRaw = mbRawAll.filter(m => {
+    const opt = (m.optimizer || m.campaignName?.split('_')[0] || '').toLowerCase()
+    return autoOptimizers.includes(opt)
+  })
 
   if (fbRaw.length === 0 && mbRaw.length === 0) {
     log.info('[AutoPilot] No campaigns from any source')
