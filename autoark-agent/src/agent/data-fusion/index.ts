@@ -168,31 +168,34 @@ export function fuseRecords(
       lineage.push({ field: 'spend', value: spend, source: 'metabase' })
     }
 
-    // ── roas: MB adjustedRoi优先（后端归因更准），为0时用FB ──
+    // ── roas: 用 MB 收入 / 融合花费（FB优先）重算，不直接用 MB 的 adjustedRoi ──
+    // MB 的 adjustedRoi 是用 MB 自己的滞后花费算的，花费偏低时 ROAS 虚高
     let roas = 0
     let adjustedRoi = 0
     let firstDayRoi = 0
-    if (mb) {
+    const mbRevenue = mb?.revenue || 0
+
+    if (mbRevenue > 0 && spend > 0) {
+      roas = mbRevenue / spend
+      adjustedRoi = roas
+      firstDayRoi = roas
+      lineage.push({ field: 'roas', value: roas, source: 'calculated',
+        alt: mb ? { source: 'metabase_raw_roi', value: mb.adjustedRoi || 0 } : undefined })
+      if (mb && mb.adjustedRoi > 0 && Math.abs(roas - mb.adjustedRoi) / Math.max(roas, mb.adjustedRoi) > 0.5) {
+        conflicts.push(`roas重算: MB原始ROI=${mb.adjustedRoi.toFixed(2)}(MB花费$${mb.spend.toFixed(2)}) → 重算=${roas.toFixed(2)}(融合花费$${spend.toFixed(2)})`)
+        roasConflicts++
+      }
+    } else if (fb && fb.roas > 0) {
+      roas = fb.roas
+      adjustedRoi = roas
+      lineage.push({ field: 'roas', value: roas, source: 'facebook' })
+    } else if (mb && (mb.adjustedRoi > 0 || mb.firstDayRoi > 0)) {
       adjustedRoi = mb.adjustedRoi || 0
       firstDayRoi = mb.firstDayRoi || 0
       roas = adjustedRoi > 0 ? adjustedRoi : firstDayRoi
-      if (roas > 0) {
-        lineage.push({ field: 'roas', value: roas, source: 'metabase', alt: fb ? { source: 'facebook', value: fb.roas } : undefined })
-      }
-    }
-    if (roas === 0 && fb && fb.roas > 0) {
-      roas = fb.roas
-      lineage.push({ field: 'roas', value: roas, source: 'facebook' })
+      lineage.push({ field: 'roas', value: roas, source: 'metabase' })
     }
     if (roas > 0) roasCovered++
-
-    if (fb && mb && fb.roas > 0 && (mb.adjustedRoi > 0 || mb.firstDayRoi > 0)) {
-      const mbRoas = mb.adjustedRoi > 0 ? mb.adjustedRoi : mb.firstDayRoi
-      if (Math.abs(fb.roas - mbRoas) > 0.5 && spend > 20) {
-        conflicts.push(`roas偏差: FB=${fb.roas.toFixed(2)} MB=${mbRoas.toFixed(2)}`)
-        roasConflicts++
-      }
-    }
 
     // ── installs: FB优先（实时），为0时用MB首日UV ──
     let installs = 0
