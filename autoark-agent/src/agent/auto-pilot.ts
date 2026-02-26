@@ -109,8 +109,9 @@ export async function runAutoPilot(): Promise<{ actions: any[]; campaigns: numbe
     pkgName: f.pkgName,
   }))
 
-  // Step 2: Skill 决策
-  const { verdicts, actions } = await makeSkillDecisions(campaigns)
+  // Step 2: A2 决策推理
+  const decisionResult = await makeSkillDecisions(campaigns)
+  const { verdicts, actions } = decisionResult
 
   // Step 3: 直接执行 (Facebook API)
   for (const action of actions) {
@@ -167,7 +168,7 @@ export async function runAutoPilot(): Promise<{ actions: any[]; campaigns: numbe
     minSpend,
     spendPriority: prioritySkill?.decision?.params?.spend_priority || 'facebook',
     roasPriority: prioritySkill?.decision?.params?.roas_priority || 'metabase',
-  }, fusionSkills)
+  }, fusionSkills, decisionResult)
 
   const executedCount = verdicts.filter(v => v.execResult === 'executed').length
   log.info(`[AutoPilot] Cycle complete: ${campaigns.length} campaigns, ${actions.length} actions, ${executedCount} executed`)
@@ -318,7 +319,15 @@ interface CampaignVerdict {
 
 // ==================== A2 决策（硬护栏 + LLM 推理 + 护栏兜底）====================
 
-async function makeSkillDecisions(campaigns: FBCampaignData[]): Promise<{ verdicts: CampaignVerdict[]; actions: any[] }> {
+interface A2DecisionResult {
+  verdicts: CampaignVerdict[]
+  actions: any[]
+  llmSummary: string
+  llmReasoning: string[]
+  decisionSource: 'llm' | 'legacy_fallback' | 'no_candidates'
+}
+
+async function makeSkillDecisions(campaigns: FBCampaignData[]): Promise<A2DecisionResult> {
   // 加载硬护栏（rule 类型）和经验（experience 类型）
   const hardRules = await Skill.find({ agentId: 'a2_decision', skillType: 'rule', enabled: true }).sort({ order: 1 }).lean() as any[]
   const experiences = await Skill.find({ agentId: 'a2_decision', skillType: 'experience', enabled: true }).sort({ 'experience.confidence': -1 }).lean() as any[]
@@ -329,6 +338,9 @@ async function makeSkillDecisions(campaigns: FBCampaignData[]): Promise<{ verdic
 
   const verdicts: CampaignVerdict[] = []
   const actions: any[] = []
+  let llmSummary = ''
+  let llmReasoning: string[] = []
+  let decisionSource: A2DecisionResult['decisionSource'] = 'no_candidates'
 
   // Step 1: 硬护栏过滤（不经过 LLM，直接执行）
   const needsLLM: FBCampaignData[] = []
@@ -477,10 +489,15 @@ pause / increase_budget / decrease_budget
             roas: c.roas,
           })
         }
-        log.info(`[A2] LLM decided: ${actions.length} actions from ${needsLLM.length} candidates`)
+        llmSummary = llmResult.summary || ''
+        llmReasoning = (llmResult.decisions || []).map((d: any) => `${d.campaignId?.substring(0, 12)}: ${d.action} - ${d.reason}`)
+        decisionSource = 'llm'
+        log.info(`[A2] LLM decided: ${actions.length} actions from ${activeCandidates.length} candidates. Summary: ${llmSummary}`)
       }
     } catch (e: any) {
       log.warn(`[A2] LLM decision failed, falling back to legacy rules: ${e.message}`)
+      decisionSource = 'legacy_fallback'
+      llmSummary = `LLM 调用失败 (${e.message.substring(0, 50)})，降级为旧规则引擎`
 
       // LLM 失败降级：用旧规则引擎
       for (const c of needsLLM) {
@@ -510,6 +527,8 @@ pause / increase_budget / decrease_budget
       }
     }
   } else if (needsLLM.length > 0) {
+    decisionSource = 'legacy_fallback'
+    llmSummary = '无 LLM API Key，使用旧规则引擎'
     log.warn('[A2] No LLM_API_KEY, using legacy rules only')
     for (const c of needsLLM) {
       const data = { ...c, todaySpend: c.spend, adjustedRoi: c.roas, todayRoas: c.roas, installs: c.conversions }
@@ -538,7 +557,11 @@ pause / increase_budget / decrease_budget
     }
   }
 
-  return { verdicts, actions }
+  if (needsLLM.length === 0) {
+    llmSummary = '所有 campaign 花费过低或已被硬护栏过滤，无需 LLM 推理'
+  }
+
+  return { verdicts, actions, llmSummary, llmReasoning, decisionSource }
 }
 
 // ==================== 飞书推送（5 Bot 独立发言 + 跟帖）====================
@@ -552,7 +575,7 @@ interface FusionConfig {
   roasPriority: string
 }
 
-async function notifyAutoPilot(verdicts: CampaignVerdict[], totalCampaigns: number, snapshot?: any, fusionCfg?: FusionConfig, fusionSkillsList?: any[]): Promise<void> {
+async function notifyAutoPilot(verdicts: CampaignVerdict[], totalCampaigns: number, snapshot?: any, fusionCfg?: FusionConfig, fusionSkillsList?: any[], decisionResult?: A2DecisionResult): Promise<void> {
   try {
     const { loadMultiBotConfig, sendBotMessage, replyBotMessage } = await import('../platform/feishu/multi-bot')
     const mbConfig = await loadMultiBotConfig()
@@ -656,29 +679,61 @@ async function notifyAutoPilot(verdicts: CampaignVerdict[], totalCampaigns: numb
     log.info(`[AutoPilot] A1 数据融合 sent: ${a1MessageId}`)
 
     // ── A2 决策分析：跟帖回复 ──
+    const { llmSummary: a2Summary, llmReasoning: a2Reasoning, decisionSource: a2Source } = decisionResult
+    const sourceLabel = a2Source === 'llm' ? 'LLM 独立推理' : a2Source === 'legacy_fallback' ? '降级规则引擎' : '无候选'
+    const actionCount = decisionResult.actions.length
+
     const decisionLines = verdicts.filter(v => v.action).slice(0, 5).map(v => {
       const c = v.campaign
-      return `**${c.campaignName}**\n筛选: ${v.screenSkill} → 决策: ${v.action!.type}\nROAS ${c.roas.toFixed(2)} | 花费 $${c.spend.toFixed(2)} | 原因: ${v.action!.reason}`
+      return `**${c.campaignName}**\n${v.screenSkill} → ${v.action!.type}\nROAS ${c.roas.toFixed(2)} | 花费 $${c.spend.toFixed(2)}\n推理: ${v.action!.reason}`
     }).join('\n---\n')
+
+    // 加载 A2 经验 skills 用于展示
+    const a2Experiences = await Skill.find({ agentId: 'a2_decision', skillType: 'experience', enabled: true }).lean() as any[]
+    const a2ExperienceText = a2Experiences.map((e: any) => `• **${e.name}** [置信${e.experience?.confidence || 0.5}]\n  教训: ${e.experience?.lesson || '-'}`).join('\n')
+
+    const a2Elements: any[] = [
+      { tag: 'div', text: { content: `**决策来源**: ${sourceLabel}\n**LLM 判断摘要**: ${a2Summary || '(无摘要)'}`, tag: 'lark_md' } },
+      { tag: 'hr' },
+      { tag: 'div', text: { content: `**筛选结果**: 需决策 **${needsDecision}** | 观察 ${watching} | 跳过 ${skipped}\n**产出动作**: ${actionCount} 条`, tag: 'lark_md' } },
+    ]
+
+    if (decisionLines) {
+      a2Elements.push({ tag: 'hr' })
+      a2Elements.push({ tag: 'div', text: { content: decisionLines, tag: 'lark_md' } })
+    } else {
+      a2Elements.push({ tag: 'div', text: { content: '本轮 LLM 分析后认为所有 ACTIVE campaign 无需操作，继续观察', tag: 'lark_md' } })
+    }
+
+    // LLM 推理明细（折叠）
+    if (a2Reasoning.length > 0) {
+      a2Elements.push({
+        tag: 'collapsible_panel', expanded: false,
+        header: { title: { tag: 'plain_text', content: `LLM 推理明细 (${a2Reasoning.length})` } },
+        border: { color: 'orange' }, vertical_spacing: '4px',
+        elements: a2Reasoning.slice(0, 15).map(r => ({
+          tag: 'div' as const,
+          text: { content: r, tag: 'lark_md' as const },
+        })),
+      })
+    }
+
+    // A2 经验 Skills（折叠）
+    if (a2Experiences.length > 0) {
+      a2Elements.push({
+        tag: 'collapsible_panel', expanded: false,
+        header: { title: { tag: 'plain_text', content: `A2 经验库 (${a2Experiences.length} 条，供 LLM 参考)` } },
+        border: { color: 'orange' }, vertical_spacing: '4px',
+        elements: [{ tag: 'div', text: { content: a2ExperienceText, tag: 'lark_md' } }],
+      })
+    }
+
+    a2Elements.push({ tag: 'note', elements: [{ tag: 'plain_text', content: `TraceId: ${traceId} | @A2决策分析 可修改经验 | 决策已交付 → A3 执行路由` }] })
 
     const a2Card = {
       config: { wide_screen_mode: true },
-      header: { template: 'orange', title: { content: `[A2 决策分析] ${needsDecision} 需决策 | ${executedCount + failedCount} 条动作`, tag: 'plain_text' } },
-      elements: [
-        { tag: 'div', text: { content: `**筛选结果**: 需决策 **${needsDecision}** | 观察 ${watching} | 跳过 ${skipped}`, tag: 'lark_md' } },
-        ...(decisionLines ? [{ tag: 'hr' }, { tag: 'div', text: { content: decisionLines, tag: 'lark_md' } }] : [{ tag: 'div', text: { content: '本轮所有 campaign 在安全范围内，无需干预', tag: 'lark_md' } }]),
-        { tag: 'collapsible_panel', expanded: false,
-          header: { title: { tag: 'plain_text', content: `当前 Skills: 筛选 ${screenerSkills.length} + 决策 ${decisionSkills.length}` } },
-          border: { color: 'orange' }, vertical_spacing: '4px',
-          elements: [
-            { tag: 'div', text: { content: `**筛选 Skills**:\n${formatSkillsSummary(screenerSkills, 'screener')}`, tag: 'lark_md' } },
-            { tag: 'hr' },
-            { tag: 'div', text: { content: `**决策 Skills**:\n${formatSkillsSummary(decisionSkills, 'decision')}`, tag: 'lark_md' } },
-            { tag: 'note', elements: [{ tag: 'plain_text', content: `@A2决策分析 + 指令可修改 Skills` }] },
-          ],
-        },
-        { tag: 'note', elements: [{ tag: 'plain_text', content: `TraceId: ${traceId} | 决策已交付 → A3 执行路由` }] },
-      ],
+      header: { template: actionCount > 0 ? 'orange' : 'turquoise', title: { content: `[A2 决策分析] ${sourceLabel} | ${actionCount} 条动作`, tag: 'plain_text' } },
+      elements: a2Elements,
     }
     const a2MessageId = await replyBotMessage('a2_decision', mbConfig, a1MessageId, a2Card)
     log.info(`[AutoPilot] A2 决策分析 replied: ${a2MessageId}`)
