@@ -678,8 +678,9 @@ ${JSON.stringify(campaignData)}`
             verdict.action = { type: d.action, reason: d.reason, skillName: 'LLM推理' }
           }
 
-          actions.push({
-            type: d.action === 'increase_budget' ? 'adjust_budget' : d.action,
+          const normalizedType = (d.action === 'increase_budget' || d.action === 'decrease_budget') ? 'adjust_budget' : d.action
+          const actionEntry: any = {
+            type: normalizedType,
             campaignId: d.campaignId,
             campaignName: c.campaignName,
             accountId: c.accountId,
@@ -687,7 +688,17 @@ ${JSON.stringify(campaignData)}`
             skillName: 'LLM推理',
             spend: c.spend,
             roas: c.roas,
-          })
+          }
+          if (d.action === 'decrease_budget' && c.spend > 0) {
+            const pct = d.budgetChangePct || -30
+            actionEntry.currentBudget = Math.round(c.spend)
+            actionEntry.newBudget = Math.round(c.spend * (1 + pct / 100))
+          } else if (d.action === 'increase_budget' && c.spend > 0) {
+            const pct = d.budgetChangePct || 30
+            actionEntry.currentBudget = Math.round(c.spend)
+            actionEntry.newBudget = Math.round(c.spend * (1 + pct / 100))
+          }
+          actions.push(actionEntry)
         }
         llmSummary = llmResult.summary || ''
         llmReasoning = (llmResult.decisions || []).map((d: any) => `${d.campaignId?.substring(0, 12)}: ${d.action} - ${d.reason}`)
@@ -718,7 +729,7 @@ ${JSON.stringify(campaignData)}`
             verdict.action = { type: d.action, reason, skillName: skill.name }
           }
           actions.push({
-            type: d.action === 'increase_budget' ? 'adjust_budget' : d.action,
+            type: (d.action === 'increase_budget' || d.action === 'decrease_budget') ? 'adjust_budget' : d.action,
             campaignId: c.campaignId, campaignName: c.campaignName, accountId: c.accountId,
             reason, skillName: skill.name, spend: c.spend, roas: c.roas,
           })
@@ -748,7 +759,7 @@ ${JSON.stringify(campaignData)}`
           verdict.action = { type: d.action, reason, skillName: skill.name }
         }
         actions.push({
-          type: d.action === 'increase_budget' ? 'adjust_budget' : d.action,
+          type: (d.action === 'increase_budget' || d.action === 'decrease_budget') ? 'adjust_budget' : d.action,
           campaignId: c.campaignId, campaignName: c.campaignName, accountId: c.accountId,
           reason, skillName: skill.name, spend: c.spend, roas: c.roas,
         })
