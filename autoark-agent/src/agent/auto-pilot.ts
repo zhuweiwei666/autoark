@@ -109,13 +109,45 @@ export async function runAutoPilot(): Promise<{ actions: any[]; campaigns: numbe
     pkgName: f.pkgName,
   }))
 
-  // Step 2: A2 决策推理
-  const decisionResult = await makeSkillDecisions(campaigns)
+  // Step 2: 加载最近操作历史（冷却期 + LLM 上下文）
+  const recentActions = await Action.find({
+    status: { $in: ['executed', 'approved'] },
+    executedAt: { $gte: dayjs().subtract(2, 'hour').toDate() },
+    'params.source': 'auto_pilot',
+  }).lean() as any[]
+
+  const recentBycamp = new Map<string, { type: string; at: Date; count: number }>()
+  for (const a of recentActions) {
+    const key = a.entityId
+    const existing = recentBycamp.get(key)
+    if (!existing) {
+      recentBycamp.set(key, { type: a.type, at: a.executedAt, count: 1 })
+    } else {
+      existing.count++
+    }
+  }
+
+  const COOLDOWN_MINUTES = 30
+
+  // Step 3: A2 决策推理
+  const decisionResult = await makeSkillDecisions(campaigns, recentActions)
   const { verdicts, actions } = decisionResult
 
-  // Step 3: 直接执行 (Facebook API)
+  // Step 4: 执行前过滤（冷却期 + 重复保护）
+  const filteredActions: typeof actions = []
   for (const action of actions) {
     const v = verdicts.find(vv => vv.campaign.campaignId === action.campaignId)
+
+    // 冷却期：最近 N 分钟内操作过的 campaign 跳过
+    const recent = recentBycamp.get(action.campaignId)
+    if (recent) {
+      const minsSince = dayjs().diff(dayjs(recent.at), 'minute')
+      if (minsSince < COOLDOWN_MINUTES) {
+        if (v) { v.execResult = 'skipped'; v.execError = `冷却期: ${minsSince}分钟前已执行${recent.type}，需等${COOLDOWN_MINUTES}分钟` }
+        log.info(`[AutoPilot] Cooldown: ${action.campaignName} was ${recent.type} ${minsSince}m ago, skip`)
+        continue
+      }
+    }
 
     // 已暂停的 campaign 不重复执行暂停
     const campStatus = (v?.campaign as any)?.status || ''
@@ -124,6 +156,13 @@ export async function runAutoPilot(): Promise<{ actions: any[]; campaigns: numbe
       log.info(`[AutoPilot] Skipped: ${action.campaignName} already PAUSED`)
       continue
     }
+
+    filteredActions.push(action)
+  }
+
+  // Step 5: 执行
+  for (const action of filteredActions) {
+    const v = verdicts.find(vv => vv.campaign.campaignId === action.campaignId)
 
     try {
       const fbParams: any = { access_token: fbToken }
@@ -327,7 +366,7 @@ interface A2DecisionResult {
   decisionSource: 'llm' | 'legacy_fallback' | 'no_candidates'
 }
 
-async function makeSkillDecisions(campaigns: FBCampaignData[]): Promise<A2DecisionResult> {
+async function makeSkillDecisions(campaigns: FBCampaignData[], recentActions: any[] = []): Promise<A2DecisionResult> {
   // 加载硬护栏（rule 类型）和经验（experience 类型）
   const hardRules = await Skill.find({ agentId: 'a2_decision', skillType: 'rule', enabled: true }).sort({ order: 1 }).lean() as any[]
   const experiences = await Skill.find({ agentId: 'a2_decision', skillType: 'experience', enabled: true }).sort({ 'experience.confidence': -1 }).lean() as any[]
@@ -442,7 +481,22 @@ ${experienceContext || '暂无历史经验，请根据数据独立判断。'}
 输出严格 JSON（不要多余文字）:
 {"decisions":[{"campaignId":"...","action":"pause","reason":"...","confidence":0.8}],"summary":"..."}`
 
-    const userMessage = `当前时间: ${dayjs().format('YYYY-MM-DD HH:mm')}\n\n## 待分析 Campaign (${campaignData.length} 个)\n${JSON.stringify(campaignData, null, 2)}`
+    // 注入最近操作历史，避免 LLM 重复决策
+    const recentOpsText = recentActions.length > 0
+      ? recentActions.slice(0, 10).map((a: any) => `${a.entityName?.substring(0, 40)}: ${a.type} @ ${dayjs(a.executedAt).format('HH:mm')}`).join('\n')
+      : '无'
+
+    const userMessage = `当前时间: ${dayjs().format('YYYY-MM-DD HH:mm')}
+
+## 最近 2 小时操作记录（已执行，不要重复操作）
+${recentOpsText}
+
+## 重要：冷却期规则
+- 最近 30 分钟内已操作过的 campaign 不要再操作
+- 同一个 campaign 不要连续多轮加预算，防止预算失控
+
+## 待分析 Campaign (${campaignData.length} 个)
+${JSON.stringify(campaignData, null, 2)}`
 
     try {
       const res = await axios.post(
