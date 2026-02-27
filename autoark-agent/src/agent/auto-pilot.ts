@@ -117,22 +117,34 @@ export async function runAutoPilot(): Promise<{ actions: any[]; campaigns: numbe
   // Step 2: 加载最近操作历史（冷却期 + LLM 上下文）
   const recentActions = await Action.find({
     status: { $in: ['executed', 'approved'] },
-    executedAt: { $gte: dayjs().subtract(2, 'hour').toDate() },
+    executedAt: { $gte: dayjs().subtract(24, 'hour').toDate() },
     'params.source': 'auto_pilot',
   }).lean() as any[]
 
-  const recentBycamp = new Map<string, { type: string; at: Date; count: number }>()
+  // 用最新的操作时间（修复：之前用了最早时间导致冷却期失效）
+  const recentBycamp = new Map<string, { type: string; at: Date; budgetOpsToday: number }>()
+  const todayStart = dayjs().startOf('day').toDate()
   for (const a of recentActions) {
     const key = a.entityId
     const existing = recentBycamp.get(key)
+    const actionTime = new Date(a.executedAt)
+    const isBudgetOp = a.type === 'adjust_budget'
+    const isToday = actionTime >= todayStart
+
     if (!existing) {
-      recentBycamp.set(key, { type: a.type, at: a.executedAt, count: 1 })
+      recentBycamp.set(key, { type: a.type, at: actionTime, budgetOpsToday: (isBudgetOp && isToday) ? 1 : 0 })
     } else {
-      existing.count++
+      if (actionTime > existing.at) {
+        existing.type = a.type
+        existing.at = actionTime
+      }
+      if (isBudgetOp && isToday) existing.budgetOpsToday++
     }
   }
 
   const COOLDOWN_MINUTES = 30
+  const MAX_BUDGET_OPS_PER_DAY = 3
+  const MAX_DAILY_BUDGET_USD = 500
 
   // Step 3: A2 决策推理
   const decisionResult = await makeSkillDecisions(campaigns, recentActions)
@@ -195,13 +207,29 @@ export async function runAutoPilot(): Promise<{ actions: any[]; campaigns: numbe
       continue
     }
 
-    // 冷却期：最近 N 分钟内操作过的 campaign 跳过
+    // 冷却期：最近 N 分钟内操作过的 campaign 跳过（用最新时间戳）
     const recent = recentBycamp.get(action.campaignId)
     if (recent) {
       const minsSince = dayjs().diff(dayjs(recent.at), 'minute')
       if (minsSince < COOLDOWN_MINUTES) {
         if (v) { v.execResult = 'skipped'; v.execError = `冷却期: ${minsSince}分钟前已执行${recent.type}，需等${COOLDOWN_MINUTES}分钟` }
         log.info(`[AutoPilot] Cooldown: ${action.campaignName} was ${recent.type} ${minsSince}m ago, skip`)
+        continue
+      }
+
+      // 每日预算调整次数上限（防止复利失控）
+      if (action.type === 'adjust_budget' && recent.budgetOpsToday >= MAX_BUDGET_OPS_PER_DAY) {
+        if (v) { v.execResult = 'skipped'; v.execError = `今日已调预算 ${recent.budgetOpsToday} 次，上限 ${MAX_BUDGET_OPS_PER_DAY}` }
+        log.info(`[AutoPilot] Budget cap: ${action.campaignName} already ${recent.budgetOpsToday} budget ops today, max ${MAX_BUDGET_OPS_PER_DAY}`)
+        continue
+      }
+    }
+
+    // 预算绝对上限（防止天价预算）
+    if (action.type === 'adjust_budget' && action.newBudget) {
+      if (action.newBudget > MAX_DAILY_BUDGET_USD * 100) {
+        if (v) { v.execResult = 'skipped'; v.execError = `预算 $${action.newBudget / 100} 超上限 $${MAX_DAILY_BUDGET_USD}` }
+        log.warn(`[AutoPilot] Budget limit: ${action.campaignName} newBudget $${action.newBudget / 100} > max $${MAX_DAILY_BUDGET_USD}`)
         continue
       }
     }
@@ -225,7 +253,11 @@ export async function runAutoPilot(): Promise<{ actions: any[]; campaigns: numbe
       const fbParams: any = { access_token: fbToken }
       if (action.type === 'pause') fbParams.status = 'PAUSED'
       else if (action.type === 'resume') fbParams.status = 'ACTIVE'
-      else if (action.type === 'adjust_budget' && action.newBudget) fbParams.daily_budget = action.newBudget
+      else if (action.type === 'adjust_budget' && action.newBudget) {
+        // Facebook API daily_budget 单位是美分，action.newBudget 是美元
+        fbParams.daily_budget = Math.round(action.newBudget * 100)
+        log.info(`[AutoPilot] Budget: ${action.campaignName} → $${action.newBudget} (${fbParams.daily_budget} cents)`)
+      }
 
       await axios.post(`${FB_GRAPH}/${action.campaignId}`, null, { params: fbParams, timeout: 15000 })
 
