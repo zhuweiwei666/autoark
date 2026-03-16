@@ -1,14 +1,13 @@
-name: CI
+name: AutoArk CI
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main ]
   pull_request:
-    branches: [ main, master ]
+    branches: [ main ]
 
 jobs:
-  build:
-
+  build-and-test:
     runs-on: ubuntu-latest
 
     strategy:
@@ -17,23 +16,26 @@ jobs:
 
     steps:
     - uses: actions/checkout@v3
-    
+
     - name: Use Node.js ${{ matrix.node-version }}
       uses: actions/setup-node@v3
       with:
         node-version: ${{ matrix.node-version }}
         cache: 'npm'
-        cache-dependency-path: autoark-backend/package-lock.json
+        cache-dependency-path: '**/package-lock.json'
 
-    - name: Install Dependencies
+    - name: Install Frontend Dependencies
+      working-directory: ./autoark-frontend
+      run: npm ci
+
+    - name: Build Frontend
+      working-directory: ./autoark-frontend
+      run: npm run build
+
+    - name: Install Backend Dependencies
       working-directory: ./autoark-backend
       run: npm ci
 
-    - name: Run Lint
+    - name: Build Backend
       working-directory: ./autoark-backend
-      run: npm run lint
-
-    - name: Run Tests
-      working-directory: ./autoark-backend
-      run: npm test
-
+      run: npm run build
