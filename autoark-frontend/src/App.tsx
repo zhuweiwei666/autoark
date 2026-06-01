@@ -24,6 +24,7 @@ const queryClient = new QueryClient({
   },
 })
 import DashboardPage from './pages/DashboardPage'
+import CommercialCenterPage from './pages/CommercialCenterPage'
 import FacebookTokenPage from './pages/FacebookTokenPage'
 import FacebookAccountsPage from './pages/FacebookAccountsPage'
 import FacebookCampaignsPage from './pages/FacebookCampaignsPage'
@@ -60,6 +61,7 @@ function App() {
           <Layout>
             <Routes>
               <Route path="/dashboard" element={<DashboardPage />} />
+              <Route path="/commercial" element={<CommercialCenterPage />} />
               <Route path="/fb-accounts" element={<FacebookAccountsPage />} />
               <Route path="/fb-countries" element={<FacebookCountriesPage />} />
               <Route path="/fb-campaigns" element={<FacebookCampaignsPage />} />
@@ -107,4 +109,3 @@ function App() {
 }
 
 export default App
-

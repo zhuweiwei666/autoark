@@ -40,6 +40,69 @@ export const authFetch = async (url: string, options: RequestInit = {}): Promise
   return fetch(url, { ...options, headers })
 }
 
+// === 商用 SaaS 状态 ===
+
+export interface CommercialReadiness {
+  scope: {
+    mode: 'organization' | 'platform'
+    organizationId?: string
+    organizationName: string
+  }
+  plan: {
+    code: string
+    label: string
+    billingStatus: string
+    trialEndsAt?: string
+    currentPeriodEndsAt?: string
+    features: string[]
+    limits: Record<string, number | null>
+  }
+  usage: Record<string, {
+    used: number
+    limit: number | null
+    percent: number | null
+    status: 'ok' | 'warning' | 'exceeded'
+  }>
+  metrics: Record<string, number>
+  checklist: Array<{
+    id: string
+    title: string
+    description: string
+    status: 'done' | 'warning' | 'pending' | 'blocked'
+    actionPath?: string
+    metric?: string
+  }>
+  score: number
+  risks: Array<{
+    level: 'critical' | 'warning' | 'info'
+    message: string
+    actionPath?: string
+  }>
+  deployment: {
+    corsConfigured: boolean
+    oauthStateSecretConfigured: boolean
+    facebookBusinessLoginConfigConfigured: boolean
+    feishuWebhookConfigured: boolean
+  }
+}
+
+export async function getCommercialReadiness(organizationId?: string): Promise<{
+  success: boolean
+  data: CommercialReadiness
+}> {
+  const params = new URLSearchParams()
+  if (organizationId) params.append('organizationId', organizationId)
+  const url = `${API_BASE_URL}/api/commercial/readiness${params.toString() ? `?${params.toString()}` : ''}`
+  const response = await authFetch(url)
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}))
+    throw new Error(error.message || 'Failed to fetch commercial readiness')
+  }
+
+  return response.json()
+}
+
 export interface FbToken {
   id: string
   userId: string

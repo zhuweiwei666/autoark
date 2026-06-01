@@ -28,6 +28,7 @@ import type { IconProps } from "@phosphor-icons/react";
 import {
   getAccounts,
   getCampaigns,
+  getCommercialReadiness,
   getCountries,
   getMaterialRankings,
 } from "../services/api";
@@ -89,6 +90,12 @@ export default function Layout({ children }: LayoutProps) {
           }),
       });
     },
+    "/commercial": () => {
+      queryClient.prefetchQuery({
+        queryKey: ["commercial-readiness"],
+        queryFn: () => getCommercialReadiness(),
+      });
+    },
     "/fb-campaigns": () => {
       queryClient.prefetchQuery({
         queryKey: [
@@ -133,6 +140,12 @@ export default function Layout({ children }: LayoutProps) {
       title: "经营视图",
       items: [
         { to: "/dashboard", label: "仪表盘", icon: AppWindow },
+        {
+          to: "/commercial",
+          label: "商用中心",
+          icon: Lightning,
+          prefetch: prefetchConfig["/commercial"],
+        },
         {
           to: "/fb-accounts",
           label: "账户管理",

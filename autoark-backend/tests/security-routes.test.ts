@@ -9,6 +9,8 @@ describe('protected API routes', () => {
     ['POST', '/api/user-settings/campaign-columns'],
     ['GET', '/api/agg/daily'],
     ['POST', '/api/agg/refresh'],
+    ['GET', '/api/commercial/readiness'],
+    ['GET', '/api/commercial/plans'],
   ] as const
 
   it.each(protectedRequests)('%s %s requires authentication', async (method, path) => {
