@@ -34,13 +34,14 @@ describe('account management security', () => {
 
   it('does not select account tokens for account management lists', async () => {
     const chain = queryChain()
-    jest.spyOn(Account, 'find').mockReturnValue(chain as any)
+    const findSpy = jest.spyOn(Account, 'find').mockReturnValue(chain as any)
 
     await accountManagementService.getAccounts({
       userId: 'admin',
       role: UserRole.SUPER_ADMIN,
-    } as any)
+    } as any, { channel: 'tiktok' })
 
+    expect(findSpy).toHaveBeenCalledWith({ channel: 'tiktok' })
     expect(chain.select).toHaveBeenCalledWith('-token')
   })
 

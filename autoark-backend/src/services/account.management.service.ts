@@ -19,6 +19,9 @@ class AccountManagementService {
     const query: any = { ...getUserOrgScope(currentUser) }
 
     // 应用过滤条件
+    if (filters?.channel) {
+      query.channel = filters.channel
+    }
     if (filters?.organizationId && currentUser.role === UserRole.SUPER_ADMIN) {
       query.organizationId = filters.organizationId
     }

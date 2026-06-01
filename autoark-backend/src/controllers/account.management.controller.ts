@@ -15,6 +15,7 @@ class AccountManagementController {
       }
 
       const filters = {
+        channel: req.query.channel as string,
         organizationId: req.query.organizationId as string,
         tags: req.query.tags,
         groupId: req.query.groupId as string,
