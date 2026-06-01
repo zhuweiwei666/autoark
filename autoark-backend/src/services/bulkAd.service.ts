@@ -1,9 +1,11 @@
+import mongoose from 'mongoose'
 import AdDraft from '../models/AdDraft'
 import AdTask from '../models/AdTask'
 import TargetingPackage from '../models/TargetingPackage'
 import CopywritingPackage from '../models/CopywritingPackage'
 import CreativeGroup from '../models/CreativeGroup'
 import FbToken from '../models/FbToken'
+import FacebookUser from '../models/FacebookUser'
 import AdMaterialMapping from '../models/AdMaterialMapping'
 import logger from '../utils/logger'
 import User from '../models/User'
@@ -28,6 +30,104 @@ import { assertBulkAdPublishAllowed } from './commercial.service'
  */
 
 // ==================== 草稿管理 ====================
+
+const MIN_BUDGET = 1
+
+const normalizeObjectIdList = (values: any[] = []) => {
+  const unique = Array.from(new Set(values.map(value => value?.toString()).filter(Boolean)))
+  return {
+    valid: unique.filter(value => mongoose.Types.ObjectId.isValid(value)),
+    invalid: unique.filter(value => !mongoose.Types.ObjectId.isValid(value)),
+  }
+}
+
+const hasUsableMaterial = (material: any) => {
+  if (!material) return false
+  if (material.type === 'image') {
+    return Boolean(material.facebookImageHash || material.url)
+  }
+  if (material.type === 'video') {
+    return Boolean(material.facebookVideoId || material.url)
+  }
+  return false
+}
+
+const buildFacebookAssetSnapshot = async (draft: any) => {
+  const tokenAccessFilter = draft.organizationId
+    ? { organizationId: draft.organizationId }
+    : draft.createdBy
+      ? { userId: draft.createdBy }
+      : null
+
+  if (!tokenAccessFilter) {
+    return {
+      tokenCount: 0,
+      hasCachedAssets: false,
+      pageAccountPairs: new Set<string>(),
+      pixelAccountPairs: new Set<string>(),
+      adAccountStatuses: new Map<string, number>(),
+    }
+  }
+
+  const tokens: any[] = await FbToken.find({ status: 'active', ...tokenAccessFilter })
+    .select('_id fbUserId')
+    .lean()
+
+  if (tokens.length === 0) {
+    return {
+      tokenCount: 0,
+      hasCachedAssets: false,
+      pageAccountPairs: new Set<string>(),
+      pixelAccountPairs: new Set<string>(),
+      adAccountStatuses: new Map<string, number>(),
+    }
+  }
+
+  const tokenIds = tokens.map(token => token._id).filter(Boolean)
+  const fbUserIds = tokens.map(token => token.fbUserId).filter(Boolean)
+  const users: any[] = await FacebookUser.find({
+    $or: [
+      { tokenId: { $in: tokenIds } },
+      { fbUserId: { $in: fbUserIds } },
+    ],
+  }).lean()
+
+  const pageAccountPairs = new Set<string>()
+  const pixelAccountPairs = new Set<string>()
+  const adAccountStatuses = new Map<string, number>()
+
+  for (const user of users) {
+    for (const account of user.adAccounts || []) {
+      if (account.accountId && account.status !== undefined) {
+        adAccountStatuses.set(account.accountId, account.status)
+      }
+    }
+
+    for (const page of user.pages || []) {
+      for (const account of page.accounts || []) {
+        if (page.pageId && account.accountId) {
+          pageAccountPairs.add(`${page.pageId}:${account.accountId}`)
+        }
+      }
+    }
+
+    for (const pixel of user.pixels || []) {
+      for (const account of pixel.accounts || []) {
+        if (pixel.pixelId && account.accountId) {
+          pixelAccountPairs.add(`${pixel.pixelId}:${account.accountId}`)
+        }
+      }
+    }
+  }
+
+  return {
+    tokenCount: tokens.length,
+    hasCachedAssets: users.some(user => user.syncStatus === 'completed'),
+    pageAccountPairs,
+    pixelAccountPairs,
+    adAccountStatuses,
+  }
+}
 
 /**
  * 创建广告草稿
@@ -157,24 +257,158 @@ export const validateDraft = async (draftId: string, accessFilter: any = {}) => 
   // 简化验证逻辑
   const errors: any[] = []
   const warnings: any[] = []
+  const addError = (field: string, message: string) => errors.push({ field, message, severity: 'error' })
+  const addWarning = (field: string, message: string) => warnings.push({ field, message, severity: 'warning' })
   
   if (!draft.accounts || draft.accounts.length === 0) {
-    errors.push({ field: 'accounts', message: '请至少选择一个广告账户', severity: 'error' })
+    addError('accounts', '请至少选择一个广告账户')
+  } else {
+    const seenAccounts = new Set<string>()
+    const assetSnapshot = await buildFacebookAssetSnapshot(draft)
+
+    if (assetSnapshot.tokenCount === 0) {
+      addError('facebookAuthorization', '当前组织没有活跃 Facebook 授权，请先完成 Facebook Login for Business 授权')
+    }
+
+    for (const account of draft.accounts) {
+      const accountLabel = account.accountName || account.accountId || '未知账户'
+      if (!account.accountId) {
+        addError('accounts.accountId', '存在未填写广告账户 ID 的账户配置')
+        continue
+      }
+
+      if (seenAccounts.has(account.accountId)) {
+        addError(`accounts.${account.accountId}`, `广告账户 ${accountLabel} 被重复选择`)
+      }
+      seenAccounts.add(account.accountId)
+
+      const cachedStatus = assetSnapshot.adAccountStatuses.get(account.accountId)
+      if (cachedStatus !== undefined && cachedStatus !== 1) {
+        addError(`accounts.${account.accountId}.status`, `广告账户 ${accountLabel} 当前状态不可投放，请更换活跃账户`)
+      }
+
+      if (!account.pageId) {
+        addError(`accounts.${account.accountId}.pageId`, `账户 ${accountLabel} 未选择 Facebook 主页`)
+      } else if (
+        assetSnapshot.hasCachedAssets &&
+        !assetSnapshot.pageAccountPairs.has(`${account.pageId}:${account.accountId}`)
+      ) {
+        addError(`accounts.${account.accountId}.pageId`, `账户 ${accountLabel} 未同步到所选主页权限，请重新同步 Page 或更换主页`)
+      }
+
+      const requiresPixel = draft.campaign?.objective === 'OUTCOME_SALES' || draft.adset?.optimizationGoal === 'OFFSITE_CONVERSIONS'
+      if (requiresPixel && !account.pixelId) {
+        addError(`accounts.${account.accountId}.pixelId`, `账户 ${accountLabel} 使用转化目标时必须选择 Pixel`)
+      } else if (
+        account.pixelId &&
+        assetSnapshot.hasCachedAssets &&
+        !assetSnapshot.pixelAccountPairs.has(`${account.pixelId}:${account.accountId}`)
+      ) {
+        addError(`accounts.${account.accountId}.pixelId`, `账户 ${accountLabel} 未同步到所选 Pixel 权限，请重新同步 Pixel 或更换账户`)
+      }
+
+      if (account.pixelId && !account.conversionEvent) {
+        addWarning(`accounts.${account.accountId}.conversionEvent`, `账户 ${accountLabel} 未选择转化事件，将默认使用 PURCHASE`)
+      }
+    }
   }
   if (!draft.campaign?.nameTemplate) {
-    errors.push({ field: 'campaign.nameTemplate', message: '请填写广告系列名称', severity: 'error' })
+    addError('campaign.nameTemplate', '请填写广告系列名称')
   }
-  if (!draft.campaign?.budget || draft.campaign.budget <= 0) {
-    errors.push({ field: 'campaign.budget', message: '请填写有效的预算金额', severity: 'error' })
+  const campaignUsesCbo = draft.campaign?.budgetOptimization !== false
+  if (campaignUsesCbo && (!draft.campaign?.budget || draft.campaign.budget < MIN_BUDGET)) {
+    addError('campaign.budget', `CBO 模式下广告系列预算不能低于 ${MIN_BUDGET}`)
+  }
+  if (!campaignUsesCbo) {
+    const adsetBudget = draft.adset?.budget || draft.campaign?.budget
+    if (!adsetBudget || adsetBudget < MIN_BUDGET) {
+      addError('adset.budget', `非 CBO 模式下广告组预算不能低于 ${MIN_BUDGET}`)
+    }
   }
   if (!draft.adset?.targetingPackageId && !draft.adset?.inlineTargeting) {
-    errors.push({ field: 'adset.targeting', message: '请选择定向包或配置定向条件', severity: 'error' })
+    addError('adset.targeting', '请选择定向包或配置定向条件')
+  }
+  const adsetMultiplier = Number(draft.adset?.multiplier || 1)
+  if (!Number.isFinite(adsetMultiplier) || adsetMultiplier < 1 || adsetMultiplier > 10) {
+    addError('adset.multiplier', '广告组倍率必须在 1 到 10 之间')
+  }
+  if (draft.adset?.startTime && draft.adset?.endTime && new Date(draft.adset.endTime) <= new Date(draft.adset.startTime)) {
+    addError('adset.endTime', '广告组结束时间必须晚于开始时间')
+  }
+  if (draft.publishStrategy?.schedule === 'SCHEDULED') {
+    if (!draft.publishStrategy?.scheduledTime) {
+      addError('publishStrategy.scheduledTime', '定时发布必须设置发布时间')
+    } else if (new Date(draft.publishStrategy.scheduledTime).getTime() <= Date.now() + 5 * 60 * 1000) {
+      addError('publishStrategy.scheduledTime', '定时发布时间至少需要晚于当前时间 5 分钟')
+    }
+  }
+
+  if (draft.adset?.targetingPackageId) {
+    const targetingPackageId = draft.adset.targetingPackageId.toString()
+    if (!mongoose.Types.ObjectId.isValid(targetingPackageId)) {
+      addError('adset.targetingPackageId', '定向包 ID 无效')
+    } else {
+      const targetingPackage: any = await TargetingPackage.findOne(
+        combineFilters({ _id: targetingPackageId }, accessFilter),
+      )
+      if (!targetingPackage) {
+        addError('adset.targetingPackageId', '所选定向包不存在或无权访问')
+      } else if (
+        !targetingPackage.geoLocations?.countries?.length &&
+        !targetingPackage.geoLocations?.regions?.length &&
+        !targetingPackage.geoLocations?.cities?.length &&
+        !targetingPackage.customAudiences?.length
+      ) {
+        addWarning('adset.targetingPackageId', '所选定向包没有国家、地区、城市或自定义受众，可能导致 Meta 拒绝或受众过宽')
+      }
+    }
   }
   if (!draft.ad?.creativeGroupIds || draft.ad.creativeGroupIds.length === 0) {
-    errors.push({ field: 'ad.creativeGroupIds', message: '请至少选择一个创意组', severity: 'error' })
+    addError('ad.creativeGroupIds', '请至少选择一个创意组')
+  } else {
+    const { valid, invalid } = normalizeObjectIdList(draft.ad.creativeGroupIds)
+    for (const invalidId of invalid) {
+      addError('ad.creativeGroupIds', `创意组 ID 无效：${invalidId}`)
+    }
+    const creativeGroups: any[] = valid.length
+      ? await CreativeGroup.find(combineFilters({ _id: { $in: valid } }, accessFilter)).lean()
+      : []
+    if (creativeGroups.length !== valid.length) {
+      addError('ad.creativeGroupIds', '部分创意组不存在或无权访问')
+    }
+    for (const group of creativeGroups) {
+      const validMaterialCount = (group.materials || []).filter(hasUsableMaterial).length
+      if (validMaterialCount === 0) {
+        addError('ad.creativeGroupIds', `创意组「${group.name}」没有可用图片或视频素材`)
+      } else if ((group.materials || []).some((material: any) => material.status === 'failed')) {
+        addWarning('ad.creativeGroupIds', `创意组「${group.name}」包含上传失败素材，发布时会自动跳过`)
+      }
+    }
   }
   if (!draft.ad?.copywritingPackageIds || draft.ad.copywritingPackageIds.length === 0) {
-    errors.push({ field: 'ad.copywritingPackageIds', message: '请至少选择一个文案包', severity: 'error' })
+    addError('ad.copywritingPackageIds', '请至少选择一个文案包')
+  } else {
+    const { valid, invalid } = normalizeObjectIdList(draft.ad.copywritingPackageIds)
+    for (const invalidId of invalid) {
+      addError('ad.copywritingPackageIds', `文案包 ID 无效：${invalidId}`)
+    }
+    const copywritingPackages: any[] = valid.length
+      ? await CopywritingPackage.find(combineFilters({ _id: { $in: valid } }, accessFilter)).lean()
+      : []
+    if (copywritingPackages.length !== valid.length) {
+      addError('ad.copywritingPackageIds', '部分文案包不存在或无权访问')
+    }
+    for (const pkg of copywritingPackages) {
+      if (!pkg.links?.websiteUrl) {
+        addError('ad.copywritingPackageIds', `文案包「${pkg.name}」缺少落地页链接`)
+      }
+      if (!pkg.content?.primaryTexts?.length) {
+        addWarning('ad.copywritingPackageIds', `文案包「${pkg.name}」缺少正文文案`)
+      }
+      if (!pkg.content?.headlines?.length) {
+        addWarning('ad.copywritingPackageIds', `文案包「${pkg.name}」缺少标题文案`)
+      }
+    }
   }
   
   const validation = {
