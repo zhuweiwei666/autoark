@@ -1,3 +1,11 @@
+# Legacy Note
+
+This document describes an old PM2 deployment path and is kept only for history.
+Production now uses Docker Compose. Use `docs/deployment.md` or
+`deploy/README.md` for the current deploy flow.
+
+---
+
 # Dashboard 修复部署指南
 
 ## ✅ 已完成的工作
@@ -135,4 +143,3 @@ ls -la /root/autoark/autoark-frontend/dist
 1. PM2 日志: `pm2 logs autoark`
 2. Nginx 日志: `sudo tail -f /var/log/nginx/error.log`
 3. 服务状态: `pm2 status`
-

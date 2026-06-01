@@ -1,3 +1,11 @@
+# Legacy Note
+
+This document describes an old PM2 deployment path and is kept only for history.
+Production now uses Docker Compose. Use `docs/deployment.md` or
+`deploy/README.md` for the current deploy flow.
+
+---
+
 # Dashboard 页面修复部署指南
 
 ## 问题
@@ -78,4 +86,3 @@ cd /root/autoark/autoark-backend
    cd /root/autoark/autoark-frontend
    npm run build
    ```
-

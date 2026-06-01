@@ -15,10 +15,10 @@ jobs:
         node-version: [20.x]
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v6
 
     - name: Use Node.js ${{ matrix.node-version }}
-      uses: actions/setup-node@v3
+      uses: actions/setup-node@v6
       with:
         node-version: ${{ matrix.node-version }}
         cache: 'npm'
@@ -55,3 +55,12 @@ jobs:
     - name: Build Agent Web
       working-directory: ./autoark-agent/web
       run: npm run build
+
+    - name: Docker Backend Runtime Smoke Build
+      run: docker build --target backend-runtime -t autoark-backend:ci .
+
+    - name: Docker Agent Runtime Smoke Build
+      run: docker build --target agent-runtime -t autoark-agent:ci .
+
+    - name: Docker Gateway Smoke Build
+      run: docker build --target gateway -t autoark-gateway:ci .

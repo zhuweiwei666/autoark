@@ -1,3 +1,11 @@
+# Legacy Note
+
+This document describes an old PM2 deployment path and is kept only for history.
+Production now uses Docker Compose. Use `docs/deployment.md` or
+`deploy/README.md` for the current deploy flow.
+
+---
+
 # AutoArk 一键部署脚本使用指南
 
 ## 📋 功能说明
@@ -226,4 +234,3 @@ git pull origin main
 ---
 
 **祝部署顺利！** 🎉
-

@@ -4,9 +4,21 @@ set -euo pipefail
 APP_DIR="${APP_DIR:-/opt/autoark}"
 REPO_URL="${REPO_URL:-https://github.com/zhuweiwei666/autoark.git}"
 REF="${AUTOARK_REF:-main}"
+DEPLOY_LOCK_FILE="${AUTOARK_DEPLOY_LOCK_FILE:-/tmp/autoark-deploy.lock}"
 TLS_CERT_NAME="${TLS_CERT_NAME:-autoark.work}"
 TLS_DOMAINS="${TLS_DOMAINS:-app.autoark.work api.autoark.work}"
 TLS_EMAIL="${TLS_EMAIL:-}"
+
+log() {
+  printf '[autoark-deploy] %s\n' "$*"
+}
+
+require_command() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "$1 is required. Run deploy/server-bootstrap.sh first."
+    exit 1
+  fi
+}
 
 install_renew_timer() {
   if [ "$(id -u)" -ne 0 ] || ! command -v systemctl >/dev/null 2>&1; then
@@ -44,22 +56,46 @@ EOF_TIMER
   systemctl enable --now autoark-cert-renew.timer >/dev/null
 }
 
-if ! command -v docker >/dev/null 2>&1; then
-  echo "Docker is required. Run deploy/server-bootstrap.sh first."
-  exit 1
-fi
+verify_internal() {
+  if [ "${AUTOARK_INTERNAL_VERIFY:-true}" != "true" ]; then
+    return
+  fi
+
+  log "Verifying gateway health locally"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsS --retry 12 --retry-delay 2 http://127.0.0.1/healthz >/dev/null
+  else
+    log "curl not found; skipping local HTTP verification"
+  fi
+}
+
+require_command git
+require_command openssl
+require_command docker
 
 if ! docker compose version >/dev/null 2>&1; then
   echo "Docker Compose plugin is required. Run deploy/server-bootstrap.sh first."
   exit 1
 fi
 
+if command -v flock >/dev/null 2>&1; then
+  exec 9>"$DEPLOY_LOCK_FILE"
+  if ! flock -n 9; then
+    echo "Another AutoArk deployment is already running. Lock: $DEPLOY_LOCK_FILE"
+    exit 1
+  fi
+else
+  log "flock not found; continuing without deployment lock"
+fi
+
 if [ ! -d "$APP_DIR/.git" ]; then
+  log "Cloning $REPO_URL into $APP_DIR"
   mkdir -p "$APP_DIR"
   git clone "$REPO_URL" "$APP_DIR"
 fi
 
 cd "$APP_DIR"
+log "Fetching $REF"
 git fetch origin
 if git show-ref --verify --quiet "refs/remotes/origin/$REF"; then
   git checkout -B "$REF" "origin/$REF"
@@ -67,11 +103,14 @@ if git show-ref --verify --quiet "refs/remotes/origin/$REF"; then
 else
   git checkout --detach "$REF"
 fi
+DEPLOY_COMMIT="$(git rev-parse HEAD)"
+log "Deploying ref=$REF commit=$DEPLOY_COMMIT"
 
 if [ ! -f deploy/.env ]; then
   echo "Missing deploy/.env on server."
   exit 1
 fi
+chmod 600 deploy/.env || true
 
 COMPOSE=(docker compose -f deploy/docker-compose.prod.yml)
 TLS_DIR="deploy/tls/live"
@@ -92,9 +131,14 @@ if [ ! -s "$TLS_FULLCHAIN" ] || [ ! -s "$TLS_PRIVKEY" ]; then
   chmod 600 "$TLS_PRIVKEY"
 fi
 
+log "Validating Docker Compose config"
+"${COMPOSE[@]}" config --quiet
+
+log "Building and starting containers"
 "${COMPOSE[@]}" up -d --build
 
 if [ "${AUTOARK_ENABLE_LETSENCRYPT:-true}" = "true" ]; then
+  log "Checking Let's Encrypt certificate"
   certbot_args=(
     certonly
     --webroot
@@ -127,5 +171,16 @@ fi
 
 install_renew_timer
 
+log "Ensuring configured super admin exists"
 "${COMPOSE[@]}" run --rm backend node ensure-super-admin.js
+
+verify_internal
+
+cat > deploy/.last-deploy <<EOF_DEPLOY
+ref=$REF
+commit=$DEPLOY_COMMIT
+deployed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+EOF_DEPLOY
+
+log "Current production containers"
 "${COMPOSE[@]}" ps

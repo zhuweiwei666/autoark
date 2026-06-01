@@ -1,3 +1,11 @@
+# Legacy Note
+
+This document describes an old PM2 deployment path and is kept only for history.
+Production now uses Docker Compose. Use `docs/deployment.md` or
+`deploy/README.md` for the current deploy flow.
+
+---
+
 # 🚀 AutoArk 服务器部署指南（包含三级权限系统）
 
 ## 📋 服务器要求
