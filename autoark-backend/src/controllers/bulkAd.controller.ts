@@ -20,7 +20,9 @@ import { UserRole } from '../models/User'
 import mongoose from 'mongoose'
 import FacebookApp from '../models/FacebookApp'
 import Account from '../models/Account'
+import FacebookUser from '../models/FacebookUser'
 import * as facebookUserService from '../services/facebookUser.service'
+import { buildFacebookAssetDiagnostics } from '../services/facebookAssets.diagnostics.service'
 import {
   combineFilters,
   sanitizeScopedUpdate,
@@ -1063,6 +1065,44 @@ export const getAuthStatus = async (req: Request, res: Response) => {
     })
   } catch (error: any) {
     logger.error('[BulkAd] Get auth status failed:', error)
+    res.status(500).json({ success: false, error: error.message })
+  }
+}
+
+/**
+ * 获取当前授权资产诊断
+ * GET /api/bulk-ad/auth/diagnostics
+ */
+export const getAuthDiagnostics = async (req: Request, res: Response) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ success: false, error: '未认证' })
+    }
+
+    const tokenQuery: any = { status: 'active', ...scopedTokenFilter(req) }
+    const tokens: any[] = await FbToken.find(tokenQuery)
+      .select('_id fbUserId fbUserName expiresAt updatedAt')
+      .sort({ updatedAt: -1 })
+      .lean()
+
+    let users: any[] = []
+    if (tokens.length > 0) {
+      const tokenIds = tokens.map(token => token._id).filter(Boolean)
+      const fbUserIds = tokens.map(token => token.fbUserId).filter(Boolean)
+      users = await FacebookUser.find({
+        $or: [
+          { tokenId: { $in: tokenIds } },
+          { fbUserId: { $in: fbUserIds } },
+        ],
+      }).lean()
+    }
+
+    res.json({
+      success: true,
+      data: buildFacebookAssetDiagnostics({ tokens, users }),
+    })
+  } catch (error: any) {
+    logger.error('[BulkAd] Get auth diagnostics failed:', error)
     res.status(500).json({ success: false, error: error.message })
   }
 }

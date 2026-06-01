@@ -33,6 +33,21 @@ interface AuthStatus {
   tokenId?: string
 }
 
+interface AuthDiagnostics {
+  authorized: boolean
+  summary: {
+    tokenCount: number
+    syncedUserCount: number
+    accountCount: number
+    activeAccountCount: number
+    pageLinkedAccountCount: number
+    pixelLinkedAccountCount: number
+    readyAccountCount: number
+    lastSyncedAt?: string
+  }
+  risks: Array<{ level: 'critical' | 'warning' | 'info'; message: string }>
+}
+
 export default function BulkAdCreatePage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
@@ -46,6 +61,8 @@ export default function BulkAdCreatePage() {
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null)
   const [authLoading, setAuthLoading] = useState(true)
   const [loginLoading, setLoginLoading] = useState(false)
+  const [authDiagnostics, setAuthDiagnostics] = useState<AuthDiagnostics | null>(null)
+  const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
   
   // 账户资产
   const [accounts, setAccounts] = useState<any[]>([])
@@ -172,6 +189,7 @@ export default function BulkAdCreatePage() {
         // 如果已授权，自动加载账户
         if (data.data.authorized) {
           loadAdAccounts()
+          loadAuthDiagnostics()
         }
       }
     } catch (err) {
@@ -179,6 +197,21 @@ export default function BulkAdCreatePage() {
       setAuthStatus({ authorized: false })
     } finally {
       setAuthLoading(false)
+    }
+  }
+
+  const loadAuthDiagnostics = async () => {
+    setDiagnosticsLoading(true)
+    try {
+      const res = await authFetch(`${API_BASE}/bulk-ad/auth/diagnostics`)
+      const data = await res.json()
+      if (data.success) {
+        setAuthDiagnostics(data.data)
+      }
+    } catch (err) {
+      console.error('Failed to load auth diagnostics:', err)
+    } finally {
+      setDiagnosticsLoading(false)
     }
   }
   
@@ -352,6 +385,7 @@ export default function BulkAdCreatePage() {
         if (status?.status === 'completed') {
           clearInterval(pollInterval)
           loadCachedPixels()
+          loadAuthDiagnostics()
         }
       }, 2000)
       // 30秒后停止轮询
@@ -743,20 +777,52 @@ export default function BulkAdCreatePage() {
                 </div>
               ) : (
                 /* 已授权 - 显示状态 + 后台加载 Pixels */
-                <div className="flex items-center justify-between p-3 bg-green-50 border border-green-200 rounded-lg mb-4">
-                  <div className="flex items-center gap-2">
-                    <div className="w-8 h-8 bg-green-500 rounded-full flex items-center justify-center">
-                      <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                      </svg>
+                <div className="p-3 bg-green-50 border border-green-200 rounded-lg mb-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <div className="w-8 h-8 bg-green-500 rounded-full flex items-center justify-center">
+                        <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                        </svg>
+                      </div>
+                      <div>
+                        <span className="text-sm font-medium text-green-800">已授权: {authStatus.fbUserName}</span>
+                        {pixelsLoading && <span className="text-xs text-green-600 ml-2">（正在加载 Pixel...）</span>}
+                        {allPixels.length > 0 && <span className="text-xs text-green-600 ml-2">（已加载 {allPixels.length} 个 Pixel）</span>}
+                      </div>
                     </div>
-                    <div>
-                      <span className="text-sm font-medium text-green-800">已授权: {authStatus.fbUserName}</span>
-                      {pixelsLoading && <span className="text-xs text-green-600 ml-2">（正在加载 Pixel...）</span>}
-                      {allPixels.length > 0 && <span className="text-xs text-green-600 ml-2">（已加载 {allPixels.length} 个 Pixel）</span>}
-                    </div>
+                    <button onClick={handleFacebookLogin} className="text-xs text-green-600 hover:underline">切换账号</button>
                   </div>
-                  <button onClick={handleFacebookLogin} className="text-xs text-green-600 hover:underline">切换账号</button>
+                  {diagnosticsLoading && (
+                    <div className="mt-3 text-xs font-medium text-green-700">正在检查账户、Page 和 Pixel...</div>
+                  )}
+                  {authDiagnostics && (
+                    <div className="mt-3 border-t border-green-200 pt-3">
+                      <div className="grid grid-cols-4 gap-2 text-center">
+                        <div className="rounded-lg bg-white/70 px-2 py-2">
+                          <div className="text-lg font-bold text-green-800">{authDiagnostics.summary.readyAccountCount}</div>
+                          <div className="text-[11px] text-green-700">就绪账户</div>
+                        </div>
+                        <div className="rounded-lg bg-white/70 px-2 py-2">
+                          <div className="text-lg font-bold text-green-800">{authDiagnostics.summary.activeAccountCount}</div>
+                          <div className="text-[11px] text-green-700">活跃账户</div>
+                        </div>
+                        <div className="rounded-lg bg-white/70 px-2 py-2">
+                          <div className="text-lg font-bold text-green-800">{authDiagnostics.summary.pageLinkedAccountCount}</div>
+                          <div className="text-[11px] text-green-700">Page 可用</div>
+                        </div>
+                        <div className="rounded-lg bg-white/70 px-2 py-2">
+                          <div className="text-lg font-bold text-green-800">{authDiagnostics.summary.pixelLinkedAccountCount}</div>
+                          <div className="text-[11px] text-green-700">Pixel 可用</div>
+                        </div>
+                      </div>
+                      {authDiagnostics.risks.length > 0 && (
+                        <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
+                          {authDiagnostics.risks[0].message}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
               
