@@ -165,6 +165,20 @@ function parseReviewFeedback(feedback: any): any {
   return parsed
 }
 
+const getTaskOrganizationId = (task: any) => {
+  return task?.organizationId || task?.toObject?.()?.organizationId
+}
+
+const getActiveTokenForTask = async (task: any) => {
+  const organizationId = getTaskOrganizationId(task)
+  const query: any = { status: 'active' }
+  if (organizationId) {
+    query.organizationId = organizationId
+  }
+
+  return FbToken.findOne(query).sort({ updatedAt: -1 }).lean()
+}
+
 /**
  * 更新任务中所有广告的审核状态
  */
@@ -195,11 +209,13 @@ export async function updateTaskAdsReviewStatus(taskId: string): Promise<{
     
     // 收集任务中创建的所有广告 ID
     const adIds: string[] = []
+    const adAccountMap = new Map<string, string>()
     const taskObj = task.toObject ? task.toObject() : task
     for (const item of taskObj.items || []) {
       for (const ad of item.ads || []) {
         if (ad.adId) {
           adIds.push(ad.adId)
+          if (item.accountId) adAccountMap.set(ad.adId, item.accountId)
         }
       }
       // 也从 result.adIds 中获取（兼容旧数据）
@@ -208,6 +224,7 @@ export async function updateTaskAdsReviewStatus(taskId: string): Promise<{
           if (!adIds.includes(adId)) {
             adIds.push(adId)
           }
+          if (item.accountId) adAccountMap.set(adId, item.accountId)
         }
       }
     }
@@ -217,8 +234,8 @@ export async function updateTaskAdsReviewStatus(taskId: string): Promise<{
       return result
     }
     
-    // 获取有效的 token
-    const activeToken = await FbToken.findOne({ status: 'active' })
+    // 获取任务所属组织的有效 token，避免跨租户借用授权。
+    const activeToken = await getActiveTokenForTask(task)
     if (!activeToken) {
       result.errors.push('没有可用的 Facebook Token')
       return result
@@ -245,6 +262,8 @@ export async function updateTaskAdsReviewStatus(taskId: string): Promise<{
             reviewFeedback,
             reviewStatusUpdatedAt: new Date(),
             taskId,
+            accountId: adAccountMap.get(adId),
+            organizationId: getTaskOrganizationId(task),
           },
         },
         { upsert: true }
