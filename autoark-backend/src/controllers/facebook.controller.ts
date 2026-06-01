@@ -13,6 +13,9 @@ import { UserRole } from '../models/User'
 import { FB_VERSIONED_URL } from '../config/facebook.config'
 import Ad from '../models/Ad'
 import Campaign from '../models/Campaign'
+import Account from '../models/Account'
+import FbToken from '../models/FbToken'
+import { normalizeForApi, normalizeForStorage } from '../utils/accountId'
 
 const requireSuperAdmin = (req: Request, res: Response): boolean => {
   if (req.user?.role === UserRole.SUPER_ADMIN) return true
@@ -24,6 +27,45 @@ const ensureAccountAccess = async (req: Request, accountId: string): Promise<boo
   const accountIds = await getUserAccountIds(req)
   if (accountIds === null) return true
   return accountIds.includes(accountId) || accountIds.includes(accountId.replace(/^act_/, ''))
+}
+
+const accountIdVariants = (accountId: string): string[] => {
+  const normalized = normalizeForStorage(accountId)
+  const apiId = normalizeForApi(accountId)
+  return Array.from(new Set([normalized, apiId].filter(Boolean)))
+}
+
+const accountAuthorizationError = (message: string) => Object.assign(new Error(message), { statusCode: 403 })
+
+const resolveAccountAccessToken = async (req: Request, accountId: string): Promise<string> => {
+  const query: any = {
+    channel: 'facebook',
+    accountId: { $in: accountIdVariants(accountId) },
+  }
+
+  if (req.user?.role !== UserRole.SUPER_ADMIN) {
+    const tokenQuery: any = { status: 'active' }
+    if (req.user?.role === UserRole.ORG_ADMIN && req.user.organizationId) {
+      tokenQuery.organizationId = req.user.organizationId
+    } else {
+      tokenQuery.userId = req.user?.userId
+    }
+
+    const tokens = await FbToken.find(tokenQuery).select('token').lean()
+    const tokenValues = tokens.map((token: any) => token.token).filter(Boolean)
+    if (tokenValues.length === 0) {
+      throw accountAuthorizationError('未找到当前用户可用的 Facebook 授权')
+    }
+
+    query.token = { $in: tokenValues }
+  }
+
+  const account = await Account.findOne(query).select('token').lean()
+  if (!account?.token) {
+    throw accountAuthorizationError(`没有找到可访问账户 ${normalizeForStorage(accountId)} 的 Facebook 授权`)
+  }
+
+  return account.token
 }
 
 export const syncCampaigns = async (
@@ -296,7 +338,8 @@ export const getCampaigns = async (
     if (!(await ensureAccountAccess(req, id))) {
       return res.status(403).json({ success: false, error: 'Forbidden' })
     }
-    const data = await facebookService.getCampaigns(id)
+    const token = await resolveAccountAccessToken(req, id)
+    const data = await facebookService.getCampaigns(id, token)
     res.json(data)
   } catch (error) {
     next(error)
@@ -313,7 +356,8 @@ export const getAdSets = async (
     if (!(await ensureAccountAccess(req, id))) {
       return res.status(403).json({ success: false, error: 'Forbidden' })
     }
-    const data = await facebookService.getAdSets(id)
+    const token = await resolveAccountAccessToken(req, id)
+    const data = await facebookService.getAdSets(id, token)
     res.json(data)
   } catch (error) {
     next(error)
@@ -330,7 +374,8 @@ export const getAds = async (
     if (!(await ensureAccountAccess(req, id))) {
       return res.status(403).json({ success: false, error: 'Forbidden' })
     }
-    const data = await facebookService.getAds(id)
+    const token = await resolveAccountAccessToken(req, id)
+    const data = await facebookService.getAds(id, token)
     res.json(data)
   } catch (error) {
     next(error)
@@ -347,7 +392,8 @@ export const getInsightsDaily = async (
     if (!(await ensureAccountAccess(req, id))) {
       return res.status(403).json({ success: false, error: 'Forbidden' })
     }
-    const data = await facebookService.getInsightsDaily(id)
+    const token = await resolveAccountAccessToken(req, id)
+    const data = await facebookService.getInsightsDaily(id, undefined, token)
     res.json(data)
   } catch (error) {
     next(error)
