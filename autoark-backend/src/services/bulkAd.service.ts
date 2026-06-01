@@ -22,7 +22,12 @@ import {
 import { facebookClient } from '../integration/facebook/facebookClient'
 import { combineFilters } from '../utils/accessControl'
 import { normalizeForStorage } from '../utils/accountId'
-import { buildTaskOperationalDiagnostics, diagnoseBulkAdError, enrichTaskDiagnostics } from './bulkAd.diagnostics'
+import {
+  buildTaskOperationalDiagnostics,
+  diagnoseBulkAdError,
+  enrichTaskDiagnostics,
+  normalizeTaskErrors,
+} from './bulkAd.diagnostics'
 import { assertBulkAdPublishAllowed } from './commercial.service'
 
 /**
@@ -1428,23 +1433,88 @@ export const retryFailedItems = async (taskId: string, accessFilter: any = {}) =
   if (failedItems.length === 0) {
     throw new Error('No failed items to retry')
   }
+
+  const isRetryableItem = (item: any) => {
+    const itemErrors = normalizeTaskErrors(
+      Array.isArray(item.errors) && item.errors.length > 0
+        ? item.errors
+        : item.error || 'Task item failed without structured error',
+      { entityType: 'general' },
+    )
+    return itemErrors.some(error => error.retryable)
+  }
+
+  const retryableItems = failedItems.filter(isRetryableItem)
+  const blockedItems = failedItems.filter((item: any) => !isRetryableItem(item))
+  if (retryableItems.length === 0) {
+    const diagnostics = buildTaskOperationalDiagnostics(task)
+    const blockedReasons = diagnostics.buckets
+      .filter(bucket => !bucket.retryable)
+      .slice(0, 3)
+      .map(bucket => `${bucket.errorCode}：${bucket.customerMessage}`)
+      .join('；')
+    throw new Error(blockedReasons
+      ? `没有可重试的失败项。请先处理：${blockedReasons}`
+      : '没有可重试的失败项。请先修复权限、账户、Page、Pixel 或素材配置后重新发布任务')
+  }
   
-  // 重置失败项状态
-  for (const item of failedItems) {
+  // 只重置可重试项；权限、账户、Pixel 等阻断型失败保留失败状态，避免反复空跑。
+  for (const item of retryableItems) {
     item.status = 'pending'
     item.errors = []
     item.startedAt = undefined
     item.completedAt = undefined
   }
   
-  task.status = 'pending'
+  const retryCount = (task.retryInfo?.retryCount || 0) + 1
+  const successCount = task.items.filter((item: any) => ['success', 'completed'].includes(item.status)).length
+  const blockedCount = blockedItems.length
+  const completedCount = successCount + blockedCount
+  const totalCount = task.items.length || 1
+
+  task.status = blockedCount > 0 ? 'partial_success' : 'pending'
+  task.progress = {
+    ...(task.progress?.toObject?.() || task.progress || {}),
+    successAccounts: successCount,
+    failedAccounts: blockedCount,
+    completedAccounts: completedCount,
+    percentage: Math.round((completedCount / totalCount) * 100),
+  }
   task.retryInfo = {
-    retryCount: (task.retryInfo?.retryCount || 0) + 1,
+    retryCount,
     lastRetryAt: new Date(),
   }
-  
-  await task.save()
-  logger.info(`[BulkAd] Task retry initiated: ${taskId}`)
+
+  const accountIds = retryableItems.map((item: any) => item.accountId)
+  const { getRedisClient } = await import('../config/redis')
+  const redisAvailable = (() => {
+    try {
+      return getRedisClient() !== null
+    } catch {
+      return false
+    }
+  })()
+
+  if (redisAvailable) {
+    const { addBulkAdJobsBatch } = await import('../queue/bulkAd.queue')
+    task.status = 'queued'
+    task.queuedAt = new Date()
+    await task.save()
+
+    await addBulkAdJobsBatch(task._id.toString(), accountIds, 1, `retry-${retryCount}-${Date.now()}`)
+    logger.info(`[BulkAd] Task retry queued: ${taskId}, ${accountIds.length} account(s)`)
+  } else {
+    task.status = 'processing'
+    task.startedAt = new Date()
+    await task.save()
+
+    for (const accountId of accountIds) {
+      executeTaskForAccount(task._id.toString(), accountId).catch(err => {
+        logger.error(`[BulkAd] Retry failed for account ${accountId}:`, err)
+      })
+    }
+    logger.info(`[BulkAd] Task retry started synchronously: ${taskId}, ${accountIds.length} account(s)`)
+  }
   
   return task
 }

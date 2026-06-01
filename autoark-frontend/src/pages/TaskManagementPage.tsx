@@ -258,9 +258,12 @@ export default function TaskManagementPage() {
       if (data.success) {
         loadTasks()
         if (selectedTask?._id === taskId) loadTaskDetail(taskId)
+      } else {
+        alert(`重试失败：${data.error || '当前失败项不可重试'}`)
       }
     } catch (err) {
       console.error('Failed to retry task:', err)
+      alert('重试失败，请刷新任务诊断后再试')
     }
   }
   
@@ -347,6 +350,11 @@ export default function TaskManagementPage() {
     if (!iso) return '-'
     return new Date(iso).toLocaleString('zh-CN')
   }
+
+  const selectedTaskDiagnostics = taskDiagnostics?.taskId === selectedTask?._id ? taskDiagnostics : null
+  const retryBlocked = Boolean(selectedTaskDiagnostics
+    && selectedTaskDiagnostics.summary.retryableErrors === 0
+    && selectedTaskDiagnostics.summary.blockedErrors > 0)
   
   if (loading) {
     return <Loading.Page message="加载任务列表..." />
@@ -410,7 +418,14 @@ export default function TaskManagementPage() {
                       <button onClick={() => handleCancel(selectedTask._id)} className="px-3 py-1 text-sm border border-red-300 text-red-600 rounded hover:bg-red-50">取消任务</button>
                     )}
                     {['failed', 'partial_success'].includes(selectedTask.status) && (
-                      <button onClick={() => handleRetry(selectedTask._id)} className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">重试失败项</button>
+                      <button
+                        onClick={() => handleRetry(selectedTask._id)}
+                        disabled={retryBlocked}
+                        title={retryBlocked ? '当前失败原因需要先处理权限、账户、Page、Pixel 或素材配置' : undefined}
+                        className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-slate-300 disabled:cursor-not-allowed"
+                      >
+                        {retryBlocked ? '需先处理后重试' : '重试失败项'}
+                      </button>
                     )}
                     {['success', 'failed', 'partial_success', 'cancelled', 'completed'].includes(selectedTask.status) && (
                       <button onClick={() => openRerunModal(selectedTask._id)} className="px-3 py-1 text-sm bg-green-600 text-white rounded hover:bg-green-700">🔄 再次执行</button>
