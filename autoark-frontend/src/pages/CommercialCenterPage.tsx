@@ -1,5 +1,5 @@
-import { useMemo, useState, type ReactNode } from "react";
-import { Link } from "react-router-dom";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
   ArrowRight,
@@ -265,7 +265,12 @@ function NextActionCard({ action }: { action: CommercialReadiness["nextActions"]
 
 export default function CommercialCenterPage() {
   const { isSuperAdmin } = useAuth();
-  const [selectedOrganizationId, setSelectedOrganizationId] = useState("");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [selectedOrganizationId, setSelectedOrganizationId] = useState(searchParams.get("organizationId") || "");
+  const updateSelectedOrganization = (organizationId: string) => {
+    setSelectedOrganizationId(organizationId);
+    setSearchParams(organizationId ? { organizationId } : {});
+  };
   const { data, isLoading, error, refetch, isFetching } = useQuery({
     queryKey: ["commercial-readiness", selectedOrganizationId || "platform"],
     queryFn: () => getCommercialReadiness(selectedOrganizationId || undefined),
@@ -288,6 +293,13 @@ export default function CommercialCenterPage() {
   const readiness = data?.data;
   const organizations = organizationsData?.data || [];
   const organizationReadiness = organizationReadinessData?.data || [];
+
+  useEffect(() => {
+    const queryOrganizationId = searchParams.get("organizationId") || "";
+    if (queryOrganizationId !== selectedOrganizationId) {
+      setSelectedOrganizationId(queryOrganizationId);
+    }
+  }, [searchParams, selectedOrganizationId]);
   const readinessState = readiness?.state || {
     level: "attention",
     label: "状态计算中",
@@ -371,7 +383,7 @@ export default function CommercialCenterPage() {
               <select
                 id="commercial-organization-scope"
                 value={selectedOrganizationId}
-                onChange={(event) => setSelectedOrganizationId(event.target.value)}
+                onChange={(event) => updateSelectedOrganization(event.target.value)}
                 disabled={organizationsLoading}
                 className="h-10 min-w-0 flex-1 rounded-lg border border-zinc-200 bg-white px-3 text-sm font-bold text-zinc-900 outline-none transition hover:border-zinc-400 focus:border-zinc-950 disabled:opacity-60"
               >
@@ -460,7 +472,7 @@ export default function CommercialCenterPage() {
                       <td className="py-4 pr-4">
                         <button
                           type="button"
-                          onClick={() => setSelectedOrganizationId(item.organizationId)}
+                          onClick={() => updateSelectedOrganization(item.organizationId)}
                           className="text-left text-sm font-black text-zinc-950 underline-offset-4 hover:underline"
                         >
                           {item.organizationName}

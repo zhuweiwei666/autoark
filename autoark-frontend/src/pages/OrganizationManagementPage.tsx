@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react'
+import { Link } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { authFetch } from '../services/api'
 
@@ -298,6 +299,12 @@ const OrganizationManagementPage: React.FC = () => {
                     {new Date(org.createdAt).toLocaleDateString('zh-CN')}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 space-x-3">
+                    <Link
+                      to={`/commercial?organizationId=${org._id}`}
+                      className="text-emerald-700 hover:text-emerald-900"
+                    >
+                      商用验收
+                    </Link>
                     <button
                       onClick={() => handleEditClick(org)}
                       className="text-blue-600 hover:text-blue-900"
