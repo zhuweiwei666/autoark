@@ -114,6 +114,28 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   next()
 })
 
+// Attach requestId to manually-created JSON error bodies so support can trace UI reports.
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const originalJson = res.json.bind(res)
+
+  res.json = ((body?: any) => {
+    if (
+      body
+      && typeof body === 'object'
+      && !Array.isArray(body)
+      && body.success === false
+      && !body.requestId
+      && req.requestId
+    ) {
+      return originalJson({ ...body, requestId: req.requestId })
+    }
+
+    return originalJson(body)
+  }) as Response['json']
+
+  next()
+})
+
 // Request Logger
 app.use((req: Request, res: Response, next: NextFunction) => {
   const start = Date.now()

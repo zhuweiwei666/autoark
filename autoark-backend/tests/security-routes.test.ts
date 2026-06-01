@@ -23,4 +23,17 @@ describe('protected API routes', () => {
     const response = await request(app)[method.toLowerCase() as 'get' | 'post'](path)
     expect(response.status).toBe(401)
   })
+
+  it('adds requestId to manual JSON error responses', async () => {
+    const response = await request(app)
+      .get('/api/audit-logs')
+      .set('x-request-id', 'req_manual_error')
+
+    expect(response.status).toBe(401)
+    expect(response.headers['x-request-id']).toBe('req_manual_error')
+    expect(response.body).toMatchObject({
+      success: false,
+      requestId: 'req_manual_error',
+    })
+  })
 })
