@@ -227,6 +227,8 @@ export default function BulkAdCreatePage() {
   const [loginAttempt, setLoginAttempt] = useState<FacebookLoginAttempt | null>(null)
   const [authDiagnostics, setAuthDiagnostics] = useState<AuthDiagnostics | null>(null)
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
+  const [resyncing, setResyncing] = useState(false)
+  const [resyncMessage, setResyncMessage] = useState<string | null>(null)
   
   // 账户资产
   const [accounts, setAccounts] = useState<any[]>([])
@@ -561,21 +563,46 @@ export default function BulkAdCreatePage() {
   
   // 手动触发重新同步
   const triggerResync = async () => {
+    if (resyncing) return
+    setResyncing(true)
+    setResyncMessage('正在重新同步 Facebook 资产...')
     try {
-      await authFetch(`${API_BASE}/bulk-ad/auth/resync`, { method: 'POST' })
+      const res = await authFetch(`${API_BASE}/bulk-ad/auth/resync`, { method: 'POST' })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || data.success === false) {
+        throw new Error(data.error || '触发同步失败')
+      }
       // 开始轮询状态
+      let finished = false
       const pollInterval = setInterval(async () => {
         const status = await checkSyncStatus()
         if (status?.status === 'completed') {
+          finished = true
           clearInterval(pollInterval)
+          setResyncing(false)
+          setResyncMessage('资产同步完成，已刷新账户和 Pixel。')
           loadCachedPixels()
+          loadAdAccounts()
           loadAuthDiagnostics()
+        } else if (status?.status === 'failed') {
+          finished = true
+          clearInterval(pollInterval)
+          setResyncing(false)
+          setResyncMessage('资产同步失败，请检查 Facebook 授权后重试。')
         }
       }, 2000)
       // 30秒后停止轮询
-      setTimeout(() => clearInterval(pollInterval), 30000)
-    } catch (err) {
+      setTimeout(() => {
+        clearInterval(pollInterval)
+        if (!finished) {
+          setResyncing(false)
+          setResyncMessage('资产仍在后台同步，稍后可刷新页面查看最新状态。')
+        }
+      }, 30000)
+    } catch (err: any) {
       console.error('Failed to trigger resync:', err)
+      setResyncing(false)
+      setResyncMessage(err.message || '触发同步失败，请稍后重试。')
     }
   }
   
@@ -1014,10 +1041,24 @@ export default function BulkAdCreatePage() {
                         {allPixels.length > 0 && <span className="text-xs text-green-600 ml-2">（已加载 {allPixels.length} 个 Pixel）</span>}
                       </div>
                     </div>
-                    <button onClick={handleFacebookLogin} className="text-xs text-green-600 hover:underline">切换账号</button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={triggerResync}
+                        disabled={resyncing}
+                        className="rounded-md border border-green-300 bg-white px-3 py-1 text-xs font-semibold text-green-700 hover:bg-green-50 disabled:opacity-60"
+                      >
+                        {resyncing ? '同步中...' : '重新同步'}
+                      </button>
+                      <button onClick={handleFacebookLogin} className="text-xs text-green-600 hover:underline">切换账号</button>
+                    </div>
                   </div>
                   {loginAttempt && loginLoading && (
                     <FacebookLoginAttemptPanel attempt={loginAttempt} onStop={stopFacebookLoginWait} />
+                  )}
+                  {resyncMessage && (
+                    <div className="mt-3 rounded-lg border border-green-200 bg-white/80 px-3 py-2 text-xs font-semibold text-green-800">
+                      {resyncMessage}
+                    </div>
                   )}
                   {diagnosticsLoading && (
                     <div className="mt-3 text-xs font-medium text-green-700">正在检查账户、Page 和 Pixel...</div>
@@ -1271,9 +1312,16 @@ export default function BulkAdCreatePage() {
                       <button onClick={loadAllPixels} className="px-6 py-3 bg-purple-600 text-white rounded-xl hover:bg-purple-700">
                         立即加载
                       </button>
-                      <button onClick={triggerResync} className="ml-3 px-4 py-3 text-purple-600 hover:underline text-sm">
-                        重新同步
+                      <button
+                        onClick={triggerResync}
+                        disabled={resyncing}
+                        className="ml-3 px-4 py-3 text-sm text-purple-600 hover:underline disabled:text-slate-400"
+                      >
+                        {resyncing ? '同步中...' : '重新同步'}
                       </button>
+                      {resyncMessage && (
+                        <div className="mt-3 text-xs font-semibold text-slate-500">{resyncMessage}</div>
+                      )}
                     </div>
                   )}
                   
