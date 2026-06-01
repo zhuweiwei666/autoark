@@ -1003,6 +1003,7 @@ export default function CommercialCenterPage() {
               <tbody className="divide-y divide-zinc-100">
                 {organizationReadiness.map((item) => {
                   const tone = stateTone[item.state.level] || stateTone.attention;
+                  const tokenRiskCount = (item.metrics.expiredTokens || 0) + (item.metrics.expiringSoonTokens || 0) + (item.metrics.staleTokenChecks || 0);
                   return (
                     <tr key={item.organizationId} className="align-top">
                       <td className="py-4 pr-4">
@@ -1026,6 +1027,11 @@ export default function CommercialCenterPage() {
                       <td className="px-4 py-4 font-bold text-zinc-700">
                         <div>{item.metrics.activeTokens} 授权 · {item.metrics.adAccounts} 账户</div>
                         <div className="mt-1 text-xs text-zinc-500">{item.metrics.facebookReadyAccounts} 个可投放账户 · {item.metrics.materials} 素材</div>
+                        {tokenRiskCount > 0 && (
+                          <div className="mt-1 text-xs font-black text-[#b4233a]">
+                            Token 风险：{item.metrics.expiredTokens || 0} 过期 · {item.metrics.expiringSoonTokens || 0} 临期 · {item.metrics.staleTokenChecks || 0} 待校验
+                          </div>
+                        )}
                       </td>
                       <td className="px-4 py-4 font-bold text-zinc-700">
                         <div>{item.metrics.successfulTasks} 成功</div>

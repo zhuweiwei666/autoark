@@ -134,6 +134,9 @@ export interface CommercialOrganizationReadiness {
   }
   metrics: {
     activeTokens: number
+    expiredTokens?: number
+    expiringSoonTokens?: number
+    staleTokenChecks?: number
     adAccounts: number
     facebookReadyAccounts: number
     materials: number

@@ -1359,6 +1359,9 @@ export async function getCommercialOrganizationReadiness(user: JwtPayload) {
         : null,
       metrics: {
         activeTokens: readiness.metrics.activeTokens || 0,
+        expiredTokens: readiness.metrics.expiredTokens || 0,
+        expiringSoonTokens: readiness.metrics.expiringSoonTokens || 0,
+        staleTokenChecks: readiness.metrics.staleTokenChecks || 0,
         adAccounts: readiness.metrics.adAccounts || 0,
         facebookReadyAccounts: readiness.metrics.facebookReadyAccounts || 0,
         materials: readiness.metrics.materials || 0,
