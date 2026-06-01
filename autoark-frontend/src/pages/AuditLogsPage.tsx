@@ -24,6 +24,9 @@ const statuses = [
 
 const actionOptions = [
   { value: "", label: "全部动作" },
+  { value: "auth.login", label: "登录" },
+  { value: "auth.logout", label: "退出登录" },
+  { value: "auth.change_password", label: "修改密码" },
   { value: "commercial.support_package.generate", label: "生成客户支持包" },
   { value: "bulk_ad.draft_validate", label: "草稿发布前预检" },
   { value: "bulk_ad.facebook_login_url", label: "生成 Facebook 授权链接" },
@@ -49,6 +52,7 @@ const statusClass: Record<string, string> = {
 
 const actionLabel: Record<string, string> = {
   "auth.login": "登录",
+  "auth.logout": "退出登录",
   "auth.change_password": "修改密码",
   "user.create": "创建用户",
   "user.update": "更新用户",

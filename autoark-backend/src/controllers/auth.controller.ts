@@ -63,6 +63,20 @@ class AuthController {
    * 用户登出（前端删除 token）
    */
   async logout(req: Request, res: Response): Promise<void> {
+    if (req.user) {
+      await writeAuditLog(req, {
+        category: 'auth',
+        action: 'auth.logout',
+        status: 'success',
+        userId: req.user.userId,
+        userRole: req.user.role,
+        organizationId: req.user.organizationId,
+        targetType: 'user',
+        targetId: req.user.userId,
+        summary: '用户退出登录',
+      })
+    }
+
     res.json({
       success: true,
       message: '登出成功',
@@ -159,6 +173,15 @@ class AuthController {
       })
     } catch (error: any) {
       logger.error('Change password error:', error)
+      await writeAuditLog(req, {
+        category: 'auth',
+        action: 'auth.change_password',
+        status: 'failed',
+        targetType: 'user',
+        targetId: req.user?.userId,
+        summary: '用户修改密码失败',
+        reason: error.message || '修改密码失败',
+      })
       res.status(400).json({
         success: false,
         message: error.message || '修改密码失败',

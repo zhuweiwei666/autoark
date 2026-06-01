@@ -14,7 +14,7 @@ interface AuthContextType {
   user: User | null
   token: string | null
   login: (username: string, password: string) => Promise<void>
-  logout: () => void
+  logout: () => Promise<void>
   isAuthenticated: boolean
   isLoading: boolean
   isSuperAdmin: boolean
@@ -101,12 +101,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }
 
-  const logout = () => {
-    setToken(null)
-    setUser(null)
-    localStorage.removeItem('auth_token')
-    localStorage.removeItem('auth_user')
-    navigate('/login')
+  const logout = async () => {
+    const currentToken = token || localStorage.getItem('auth_token')
+    try {
+      if (currentToken) {
+        await fetch('/api/auth/logout', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${currentToken}`,
+          },
+        })
+      }
+    } catch (error) {
+      console.warn('记录登出审计失败，继续退出:', error)
+    } finally {
+      setToken(null)
+      setUser(null)
+      localStorage.removeItem('auth_token')
+      localStorage.removeItem('auth_user')
+      navigate('/login')
+    }
   }
 
   const value: AuthContextType = {
