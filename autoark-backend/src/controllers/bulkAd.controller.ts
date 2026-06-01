@@ -68,6 +68,28 @@ const taskAuditMetadata = (task: any) => ({
   failedAccounts: task?.progress?.failedAccounts || 0,
 })
 
+const parseBulkAdOAuthStateForAudit = (state: unknown): {
+  autoarkUserId?: string
+  organizationId?: string
+  error?: string
+} => {
+  if (typeof state !== 'string') return {}
+
+  try {
+    const stateObj = oauthService.parseStateParamWithOptions(state, { requireSignature: true })
+    const parts = String(stateObj.originalState || '').split('|')
+    if (parts[0] === 'bulk-ad' && parts[1]) {
+      return {
+        autoarkUserId: parts[1],
+        organizationId: parts[2] || undefined,
+      }
+    }
+    return {}
+  } catch (error: any) {
+    return { error: error.message || 'Invalid OAuth state' }
+  }
+}
+
 // ==================== 草稿管理 ====================
 
 /**
@@ -1008,6 +1030,22 @@ export const getAuthLoginUrl = async (req: Request, res: Response) => {
         clientIdInUrl || 'unknown'
       }, mode: ${authorizationMode}`,
     )
+
+    await writeBulkAdAudit(req, {
+      action: 'bulk_ad.facebook_login_url',
+      targetType: 'facebook_app',
+      targetId: clientIdInUrl || appId || 'default-pool',
+      summary: `生成 Facebook 授权链接：${authorizationMode === 'business_login' ? 'Business Login' : 'Scope OAuth'}`,
+      metadata: {
+        clientId: clientIdInUrl,
+        redirectUri,
+        authorizationMode,
+        businessLoginConfigured: Boolean(configIdInUrl),
+        scopeFallback: Boolean(scopeInUrl),
+        usingDefaultApp: !appId,
+        diagnostics,
+      },
+    })
     
     res.json({
       success: true,
@@ -1025,6 +1063,15 @@ export const getAuthLoginUrl = async (req: Request, res: Response) => {
     })
   } catch (error: any) {
     logger.error('[BulkAd] Get login URL failed:', error)
+    if (req.user) {
+      await writeBulkAdAudit(req, {
+        action: 'bulk_ad.facebook_login_url',
+        status: 'failed',
+        targetType: 'facebook_app',
+        summary: '生成 Facebook 授权链接失败',
+        reason: error.message,
+      })
+    }
     res.status(500).json({ success: false, error: error.message })
   }
 }
@@ -1036,17 +1083,47 @@ export const getAuthLoginUrl = async (req: Request, res: Response) => {
  * 用户隔离：从 state 参数解析 AutoArk 用户 ID，并将 token 与该用户关联
  */
 export const handleAuthCallback = async (req: Request, res: Response) => {
+  let stateAudit: ReturnType<typeof parseBulkAdOAuthStateForAudit> = {}
   try {
     const { code, error, error_description, state } = req.query
+    stateAudit = parseBulkAdOAuthStateForAudit(state)
     
     if (error) {
       logger.error('[BulkAd OAuth] Facebook returned error:', { error, error_description })
+      await writeAuditLog(req, {
+        category: 'bulk_ad',
+        action: 'bulk_ad.facebook_oauth_callback',
+        status: 'failed',
+        userId: stateAudit.autoarkUserId,
+        organizationId: stateAudit.organizationId,
+        targetType: 'facebook_oauth',
+        summary: 'Facebook 授权回调失败',
+        reason: String(error_description || error),
+        metadata: {
+          facebookError: error,
+          facebookErrorDescription: error_description,
+          stateParseError: stateAudit.error,
+        },
+      })
       return res.redirect(
         `/oauth/callback?oauth_error=${encodeURIComponent(error_description as string || error as string)}`
       )
     }
     
     if (!code) {
+      await writeAuditLog(req, {
+        category: 'bulk_ad',
+        action: 'bulk_ad.facebook_oauth_callback',
+        status: 'failed',
+        userId: stateAudit.autoarkUserId,
+        organizationId: stateAudit.organizationId,
+        targetType: 'facebook_oauth',
+        summary: 'Facebook 授权回调缺少 code',
+        reason: 'No authorization code received',
+        metadata: {
+          stateParseError: stateAudit.error,
+        },
+      })
       return res.redirect('/oauth/callback?oauth_error=No authorization code received')
     }
     
@@ -1066,6 +1143,17 @@ export const handleAuthCallback = async (req: Request, res: Response) => {
         }
       } catch (e) {
         logger.warn('[BulkAd OAuth] Invalid signed state:', e)
+        await writeAuditLog(req, {
+          category: 'bulk_ad',
+          action: 'bulk_ad.facebook_oauth_callback',
+          status: 'failed',
+          targetType: 'facebook_oauth',
+          summary: 'Facebook 授权回调 state 无效',
+          reason: 'Invalid OAuth state',
+          metadata: {
+            stateParseError: stateAudit.error || 'Invalid OAuth state',
+          },
+        })
         return res.redirect('/oauth/callback?oauth_error=Invalid OAuth state')
       }
     }
@@ -1081,6 +1169,22 @@ export const handleAuthCallback = async (req: Request, res: Response) => {
       })
       logger.info(`[BulkAd OAuth] Token ${result.tokenId} bound to user ${autoarkUserId}`)
     }
+
+    await writeAuditLog(req, {
+      category: 'bulk_ad',
+      action: 'bulk_ad.facebook_oauth_callback',
+      status: 'success',
+      userId: autoarkUserId,
+      organizationId,
+      targetType: 'facebook_token',
+      targetId: result.tokenId,
+      summary: `Facebook 授权成功：${result.fbUserName || result.fbUserId}`,
+      metadata: {
+        tokenId: result.tokenId,
+        fbUserId: result.fbUserId,
+        fbUserName: result.fbUserName,
+      },
+    })
     
     // 异步同步 Facebook 用户资产
     facebookUserService.syncFacebookUserAssets(
@@ -1103,6 +1207,19 @@ export const handleAuthCallback = async (req: Request, res: Response) => {
     res.redirect(`/oauth/callback?${params.toString()}`)
   } catch (error: any) {
     logger.error('[BulkAd OAuth] Callback handler failed:', error)
+    await writeAuditLog(req, {
+      category: 'bulk_ad',
+      action: 'bulk_ad.facebook_oauth_callback',
+      status: 'failed',
+      userId: stateAudit.autoarkUserId,
+      organizationId: stateAudit.organizationId,
+      targetType: 'facebook_oauth',
+      summary: 'Facebook 授权回调处理失败',
+      reason: error.message || 'OAuth callback failed',
+      metadata: {
+        stateParseError: stateAudit.error,
+      },
+    })
     res.redirect(`/oauth/callback?oauth_error=${encodeURIComponent(error.message || 'OAuth callback failed')}`)
   }
 }

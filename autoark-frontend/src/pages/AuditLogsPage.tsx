@@ -43,6 +43,8 @@ const actionLabel: Record<string, string> = {
   "bulk_ad.retry": "重试失败任务",
   "bulk_ad.rerun": "重新执行任务",
   "bulk_ad.facebook_resync": "同步 Facebook 资产",
+  "bulk_ad.facebook_login_url": "生成 Facebook 授权链接",
+  "bulk_ad.facebook_oauth_callback": "Facebook 授权回调",
   "facebook_app.create": "创建 Facebook App",
   "facebook_app.update": "更新 Facebook App",
   "facebook_app.delete": "删除 Facebook App",
