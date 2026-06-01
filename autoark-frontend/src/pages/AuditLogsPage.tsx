@@ -33,6 +33,10 @@ const actionOptions = [
   { value: "bulk_ad.rerun", label: "重新执行任务" },
   { value: "bulk_ad.facebook_resync", label: "同步 Facebook 资产" },
   { value: "organization.update", label: "更新组织" },
+  { value: "facebook_app.create", label: "创建 Facebook App" },
+  { value: "facebook_app.update", label: "更新 Facebook App" },
+  { value: "facebook_app.delete", label: "删除 Facebook App" },
+  { value: "facebook_app.validate", label: "验证 Facebook App" },
   { value: "facebook_app.compliance_update", label: "更新 App 合规" },
 ];
 
@@ -215,7 +219,7 @@ function LogRow({
         </td>
         <td className="whitespace-nowrap px-4 py-4 align-top">
           <span className={`rounded-md border px-2 py-1 text-xs font-bold ${statusTone}`}>
-            {log.status}
+            {statuses.find((statusOption) => statusOption.value === log.status)?.label || log.status}
           </span>
         </td>
         <td className="px-4 py-4 align-top text-sm font-bold text-zinc-700">
