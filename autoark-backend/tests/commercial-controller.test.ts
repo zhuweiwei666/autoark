@@ -38,6 +38,10 @@ describe('commercial controller', () => {
         risks: [{ level: 'warning', title: '需要补齐 Pixel' }],
         nextActions: [{ id: 'assign_facebook_pixel' }],
         metrics: { facebookReadyAccounts: 2 },
+        deployment: {
+          facebookBusinessLoginConfigConfigured: true,
+          oauthStateSecretConfigured: true,
+        },
       },
       facebookAssets: {
         summary: {
@@ -97,6 +101,8 @@ describe('commercial controller', () => {
         readinessScore: 72,
         readinessState: 'attention',
         readinessLabel: '需关注',
+        businessLoginConfigConfigured: true,
+        oauthStateSecretConfigured: true,
         readyAccountCount: 2,
         accountCount: 3,
         tokenCount: 1,

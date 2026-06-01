@@ -596,6 +596,17 @@ export async function getCommercialReadiness(
     monthlyTasks: limitState(monthlyTaskCount, limits.monthlyTaskLimit),
     concurrentTasks: limitState(runningTaskCount, limits.maxConcurrentTasks),
   }
+  const deployment = {
+    corsConfigured: Boolean(process.env.CORS_ALLOWED_ORIGINS),
+    oauthStateSecretConfigured: Boolean(process.env.OAUTH_STATE_SECRET),
+    facebookBusinessLoginConfigConfigured: Boolean(process.env.FACEBOOK_BUSINESS_LOGIN_CONFIG_ID),
+    feishuWebhookConfigured: Boolean(
+      process.env.FEISHU_WEBHOOK_VERIFICATION_TOKEN ||
+      process.env.FEISHU_WEBHOOK_SIGNING_SECRET ||
+      process.env.FEISHU_VERIFICATION_TOKEN ||
+      process.env.FEISHU_BOT_SECRET,
+    ),
+  }
 
   const checklist = [
     step(
@@ -621,6 +632,16 @@ export async function getCommercialReadiness(
       publicOauthAppCount > 0 ? 'done' : healthyAppCount > 0 ? 'warning' : 'blocked',
       '/fb-apps',
       `${publicOauthAppCount}/${healthyAppCount} 可公开授权`,
+    ),
+    step(
+      'facebook_business_login_config',
+      'Facebook Login for Business 配置',
+      '客户授权应使用已发布的 Login for Business Configuration，避免退回普通 scope OAuth 或出现功能不可用。',
+      deployment.facebookBusinessLoginConfigConfigured
+        ? deployment.oauthStateSecretConfigured ? 'done' : 'warning'
+        : 'blocked',
+      '/fb-apps',
+      deployment.facebookBusinessLoginConfigConfigured ? 'config_id 已配置' : '缺少 config_id',
     ),
     step(
       'facebook_authorization',
@@ -718,6 +739,13 @@ export async function getCommercialReadiness(
       actionPath: '/fb-apps',
     })
   }
+  if (!deployment.facebookBusinessLoginConfigConfigured) {
+    risks.push({
+      level: 'critical',
+      message: '未配置 Facebook Login for Business config_id，客户授权会退回普通 scope OAuth，容易出现功能不可用或权限不足。',
+      actionPath: '/fb-apps',
+    })
+  }
   if (mode === 'organization' && !hasBulkAdCreateFeature) {
     risks.push({
       level: 'critical',
@@ -767,7 +795,7 @@ export async function getCommercialReadiness(
       actionPath: '/bulk-ad/create',
     })
   }
-  if (!process.env.OAUTH_STATE_SECRET) {
+  if (!deployment.oauthStateSecretConfigured) {
     risks.push({
       level: 'warning',
       message: '生产建议配置 OAUTH_STATE_SECRET，避免 OAuth state 只依赖兜底密钥。',
@@ -825,6 +853,28 @@ export async function getCommercialReadiness(
       'critical',
       '完成 Facebook App 公开授权',
       '确认 App 已上线，并且 Login for Business 配置、Marketing API 权限和 Public OAuth 检查都已通过。',
+      '/fb-apps',
+      '平台运营',
+      'setup',
+    ))
+  }
+  if (!deployment.facebookBusinessLoginConfigConfigured) {
+    nextActions.push(action(
+      'configure_business_login_config',
+      'critical',
+      '配置 Facebook Login for Business config_id',
+      '在 Meta 开发者后台创建或打开 Business Login Configuration，加入 ads_management、ads_read、business_management、pages_show_list、pages_read_engagement、pages_manage_ads 等商用权限，然后把 configuration ID 配到生产环境。',
+      '/fb-apps',
+      '平台运营',
+      'setup',
+    ))
+  }
+  if (!deployment.oauthStateSecretConfigured) {
+    nextActions.push(action(
+      'configure_oauth_state_secret',
+      'medium',
+      '配置 OAuth state 签名密钥',
+      '生产环境需要固定 OAUTH_STATE_SECRET，避免服务重启或默认密钥导致授权回调校验不可控。',
       '/fb-apps',
       '平台运营',
       'setup',
@@ -1055,23 +1105,15 @@ export async function getCommercialReadiness(
       expiringSoonTokens: tokenHealth.expiringSoonCount,
       staleTokenChecks: tokenHealth.staleCheckCount,
       tokensWithoutExpiry: tokenHealth.missingExpiryCount,
+      businessLoginConfigured: deployment.facebookBusinessLoginConfigConfigured ? 1 : 0,
+      oauthStateSecretConfigured: deployment.oauthStateSecretConfigured ? 1 : 0,
     },
     checklist,
     score,
     state,
     nextActions,
     risks,
-    deployment: {
-      corsConfigured: Boolean(process.env.CORS_ALLOWED_ORIGINS),
-      oauthStateSecretConfigured: Boolean(process.env.OAUTH_STATE_SECRET),
-      facebookBusinessLoginConfigConfigured: Boolean(process.env.FACEBOOK_BUSINESS_LOGIN_CONFIG_ID),
-      feishuWebhookConfigured: Boolean(
-        process.env.FEISHU_WEBHOOK_VERIFICATION_TOKEN ||
-        process.env.FEISHU_WEBHOOK_SIGNING_SECRET ||
-        process.env.FEISHU_VERIFICATION_TOKEN ||
-        process.env.FEISHU_BOT_SECRET,
-      ),
-    },
+    deployment,
   }
 }
 
@@ -1422,6 +1464,7 @@ export async function getCommercialSupportPackage(
       risks: readiness.risks.slice(0, 5),
       nextActions: readiness.nextActions.slice(0, 5),
       metrics: readiness.metrics,
+      deployment: readiness.deployment,
     },
     facebookAssets: {
       summary: facebookAssets.summary,

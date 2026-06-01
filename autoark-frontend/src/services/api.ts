@@ -175,6 +175,7 @@ export interface CommercialSupportPackage {
     risks: CommercialReadiness['risks']
     nextActions: CommercialReadiness['nextActions']
     metrics: Record<string, number>
+    deployment: CommercialReadiness['deployment']
   }
   facebookAssets: {
     summary: Record<string, number | string | undefined>

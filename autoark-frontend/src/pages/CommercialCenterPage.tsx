@@ -98,6 +98,13 @@ const sourceLabels: Record<string, string> = {
   materials: "素材准备",
 };
 
+const deploymentLabels: Record<string, string> = {
+  corsConfigured: "跨域白名单",
+  oauthStateSecretConfigured: "OAuth state 密钥",
+  facebookBusinessLoginConfigConfigured: "Business Login config_id",
+  feishuWebhookConfigured: "飞书告警",
+};
+
 const metricLabels: Record<string, string> = {
   members: "成员",
   adAccounts: "广告账户",
@@ -186,6 +193,8 @@ const supportPackageInsights = (supportPackage: CommercialSupportPackage) => {
   const staleTokenCheckCount = summaryNumber(summary, "staleTokenCheckCount");
   const tokenWithoutExpiryCount = summaryNumber(summary, "tokenWithoutExpiryCount");
   const earliestTokenExpiresAt = summaryText(summary, "earliestTokenExpiresAt");
+  const businessLoginConfigured = supportPackage.readiness.deployment.facebookBusinessLoginConfigConfigured;
+  const oauthStateSecretConfigured = supportPackage.readiness.deployment.oauthStateSecretConfigured;
   const primaryRisk =
     supportPackage.facebookAssets.risks[0]?.message ||
     supportPackage.readiness.risks[0]?.message ||
@@ -208,6 +217,8 @@ const supportPackageInsights = (supportPackage: CommercialSupportPackage) => {
     staleTokenCheckCount,
     tokenWithoutExpiryCount,
     earliestTokenExpiresAt,
+    businessLoginConfigured,
+    oauthStateSecretConfigured,
     primaryRisk,
     topAction,
     topIssue,
@@ -635,6 +646,7 @@ export default function CommercialCenterPage() {
       `客户：${supportPackage.scope.organizationName}`,
       `状态：${supportPackage.readiness.state.label} / ${supportPackage.readiness.score} 分`,
       `首要动作：${insights.topAction}`,
+      `Business Login：${insights.businessLoginConfigured ? "已配置 config_id" : "待配置 config_id"}，OAuth state：${insights.oauthStateSecretConfigured ? "已配置" : "待配置"}`,
       `授权健康：${insights.tokenCount} 个 Token，${insights.expiredTokenCount} 过期，${insights.expiringSoonTokenCount} 临期，${insights.staleTokenCheckCount} 待复检`,
       `资产：${insights.readyAccountCount} 个可投放账户 / ${insights.accountCount} 个广告账户`,
       `首要风险：${insights.primaryRisk}`,
@@ -665,6 +677,8 @@ export default function CommercialCenterPage() {
         staleTokenCheckCount: insights.staleTokenCheckCount,
         tokenWithoutExpiryCount: insights.tokenWithoutExpiryCount,
         earliestTokenExpiresAt: insights.earliestTokenExpiresAt,
+        businessLoginConfigured: insights.businessLoginConfigured,
+        oauthStateSecretConfigured: insights.oauthStateSecretConfigured,
         recentTaskCount: supportPackage.recentTasks.length,
       },
       supportPackage,
@@ -914,6 +928,12 @@ export default function CommercialCenterPage() {
                         最早过期：{formatDateTime(supportInsights.earliestTokenExpiresAt)}
                       </div>
                     )}
+                  </div>
+                  <div className="rounded-lg border border-zinc-100 bg-white p-3 text-sm">
+                    <div className="font-black text-zinc-950">登录链路</div>
+                    <div className="mt-1 font-semibold leading-6 text-zinc-600">
+                      Business Login {supportInsights.businessLoginConfigured ? "已配置" : "待配置"} · OAuth state {supportInsights.oauthStateSecretConfigured ? "已配置" : "待配置"}
+                    </div>
                   </div>
                 </div>
               )}
@@ -1258,7 +1278,7 @@ export default function CommercialCenterPage() {
             <div className="mt-4 space-y-2 text-sm font-bold text-zinc-700">
               {Object.entries(readiness.deployment).map(([key, enabled]) => (
                 <div key={key} className="flex items-center justify-between gap-3">
-                  <span>{key}</span>
+                  <span>{deploymentLabels[key] || key}</span>
                   <span className={enabled ? "text-[#0f766e]" : "text-[#b45309]"}>
                     {enabled ? "已配置" : "待配置"}
                   </span>

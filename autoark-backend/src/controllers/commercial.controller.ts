@@ -79,6 +79,8 @@ export const getSupportPackage = async (req: Request, res: Response) => {
         readinessScore: data.readiness.score,
         readinessState: data.readiness.state.level,
         readinessLabel: data.readiness.state.label,
+        businessLoginConfigConfigured: data.readiness.deployment?.facebookBusinessLoginConfigConfigured,
+        oauthStateSecretConfigured: data.readiness.deployment?.oauthStateSecretConfigured,
         readyAccountCount: data.facebookAssets.summary.readyAccountCount,
         accountCount: data.facebookAssets.summary.accountCount,
         tokenCount: data.facebookAssets.summary.tokenCount,
