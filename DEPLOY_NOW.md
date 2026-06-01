@@ -1,3 +1,11 @@
+# Legacy Note
+
+This document describes an old PM2 deployment path and is kept only for history.
+Production now uses Docker Compose. Use `docs/deployment.md` or
+`deploy/README.md` for the current deploy flow.
+
+---
+
 # 🚀 立即部署到服务器
 
 ## 📋 前置条件检查
