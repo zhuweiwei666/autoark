@@ -568,6 +568,13 @@ export async function getCommercialReadiness(
     })
   }
 
+  const checklistScore = computeScore(checklist)
+  const score = risks.some(risk => risk.level === 'critical')
+    ? Math.min(checklistScore, 49)
+    : risks.some(risk => risk.level === 'warning')
+      ? Math.min(checklistScore, 79)
+      : checklistScore
+
   return {
     scope: {
       mode,
@@ -604,7 +611,7 @@ export async function getCommercialReadiness(
       recentTaskIssueTypes: recentTaskIssueBuckets.length,
     },
     checklist,
-    score: computeScore(checklist),
+    score,
     risks,
     deployment: {
       corsConfigured: Boolean(process.env.CORS_ALLOWED_ORIGINS),

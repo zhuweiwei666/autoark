@@ -182,4 +182,48 @@ describe('commercial publish limits', () => {
     expect(readiness.metrics.recentTaskIssueTypes).toBe(1)
     expect(readiness.checklist.find(item => item.id === 'facebook_ready_accounts')?.status).toBe('done')
   })
+
+  it('caps readiness score when critical commercial blockers exist', async () => {
+    jest.spyOn(User, 'countDocuments')
+      .mockResolvedValueOnce(1 as any)
+      .mockResolvedValueOnce(1 as any)
+    jest.spyOn(Account, 'countDocuments').mockResolvedValue(1 as any)
+    jest.spyOn(FbToken, 'countDocuments').mockResolvedValue(1 as any)
+    jest.spyOn(Material, 'countDocuments').mockResolvedValue(1 as any)
+    jest.spyOn(AdDraft, 'countDocuments').mockResolvedValue(0 as any)
+    jest.spyOn(AdTask, 'countDocuments')
+      .mockResolvedValueOnce(1 as any)
+      .mockResolvedValueOnce(1 as any)
+      .mockResolvedValueOnce(0 as any)
+      .mockResolvedValueOnce(0 as any)
+      .mockResolvedValueOnce(1 as any)
+    jest.spyOn(AdTask, 'find').mockReturnValue({
+      sort: jest.fn().mockReturnThis(),
+      limit: jest.fn().mockReturnThis(),
+      lean: jest.fn().mockResolvedValue([]),
+    } as any)
+    jest.spyOn(FacebookApp, 'countDocuments')
+      .mockResolvedValueOnce(0 as any)
+      .mockResolvedValueOnce(0 as any)
+    jest.spyOn(FbToken, 'find').mockReturnValue(tokenFindResult([{
+      _id: '665000000000000000000199',
+      fbUserId: 'fb_critical',
+      fbUserName: 'Facebook User',
+    }]) as any)
+    jest.spyOn(FacebookUser, 'find').mockReturnValue(leanFindResult([{
+      fbUserId: 'fb_critical',
+      syncStatus: 'completed',
+      adAccounts: [{ accountId: 'act_1', name: 'Account without pixel', status: 1 }],
+      pages: [{ pageId: 'page_1', name: 'Page 1', accounts: [{ accountId: 'act_1' }] }],
+      pixels: [],
+    }]) as any)
+
+    const readiness = await getCommercialReadiness({
+      userId: 'admin',
+      role: UserRole.SUPER_ADMIN,
+    } as any)
+
+    expect(readiness.risks.some(risk => risk.level === 'critical')).toBe(true)
+    expect(readiness.score).toBeLessThanOrEqual(49)
+  })
 })
