@@ -28,6 +28,10 @@ jobs:
       working-directory: ./autoark-frontend
       run: npm ci
 
+    - name: Audit Frontend Production Dependencies
+      working-directory: ./autoark-frontend
+      run: npm audit --omit=dev --audit-level=moderate
+
     - name: Build Frontend
       working-directory: ./autoark-frontend
       run: npm run build
@@ -35,6 +39,14 @@ jobs:
     - name: Install Backend Dependencies
       working-directory: ./autoark-backend
       run: npm ci
+
+    - name: Audit Backend Production Dependencies
+      working-directory: ./autoark-backend
+      run: npm audit --omit=dev --audit-level=moderate
+
+    - name: Test Backend
+      working-directory: ./autoark-backend
+      run: npm test -- --runInBand
 
     - name: Build Backend
       working-directory: ./autoark-backend
@@ -44,6 +56,10 @@ jobs:
       working-directory: ./autoark-agent
       run: npm ci
 
+    - name: Audit Agent Production Dependencies
+      working-directory: ./autoark-agent
+      run: npm audit --omit=dev --audit-level=moderate
+
     - name: Build Agent
       working-directory: ./autoark-agent
       run: npm run build
@@ -51,6 +67,10 @@ jobs:
     - name: Install Agent Web Dependencies
       working-directory: ./autoark-agent/web
       run: npm ci
+
+    - name: Audit Agent Web Production Dependencies
+      working-directory: ./autoark-agent/web
+      run: npm audit --omit=dev --audit-level=moderate
 
     - name: Build Agent Web
       working-directory: ./autoark-agent/web

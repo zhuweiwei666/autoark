@@ -11,7 +11,11 @@ import User, { UserRole, UserStatus } from '../src/models/User'
 dotenv.config()
 
 const SUPER_ADMIN_USERNAME = process.env.SUPER_ADMIN_USERNAME || 'admin'
-const SUPER_ADMIN_PASSWORD = process.env.SUPER_ADMIN_PASSWORD || 'admin123456'
+const SUPER_ADMIN_PASSWORD = process.env.SUPER_ADMIN_PASSWORD
+
+if (!SUPER_ADMIN_PASSWORD) {
+  throw new Error('SUPER_ADMIN_PASSWORD is required')
+}
 const SUPER_ADMIN_EMAIL = process.env.SUPER_ADMIN_EMAIL || 'admin@autoark.com'
 
 async function initSuperAdmin() {
@@ -87,10 +91,9 @@ async function initSuperAdmin() {
     console.log('\n✅ 超级管理员创建成功!')
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
     console.log(`用户名: ${SUPER_ADMIN_USERNAME}`)
-    console.log(`密码: ${SUPER_ADMIN_PASSWORD}`)
     console.log(`邮箱: ${SUPER_ADMIN_EMAIL}`)
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
-    console.log('\n⚠️  请妥善保管超级管理员密码，并在首次登录后修改!')
+    console.log('\n⚠️  密码来自 SUPER_ADMIN_PASSWORD，脚本不会打印明文密码。')
     console.log('\n提示: 您可以通过以下环境变量自定义超级管理员信息:')
     console.log('  - SUPER_ADMIN_USERNAME')
     console.log('  - SUPER_ADMIN_PASSWORD')

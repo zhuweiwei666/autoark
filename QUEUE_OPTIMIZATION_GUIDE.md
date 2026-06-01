@@ -225,7 +225,7 @@ const workerOptions: WorkerOptions = {
 
 ### 队列不工作
 1. 检查 Redis 连接：`redis-cli ping`
-2. 检查 Worker 日志：`pm2 logs autoark`
+2. 检查 Worker 日志：`ssh root@45.33.103.31 'cd /opt/autoark && docker compose -f deploy/docker-compose.prod.yml logs --tail=100 backend'`
 3. 检查队列状态：`GET /api/facebook/queue/status`
 
 ### Purchase 数据仍为 0
@@ -237,4 +237,3 @@ const workerOptions: WorkerOptions = {
 1. 调整 Worker 并发数
 2. 检查 Redis 性能
 3. 检查 MongoDB 索引
-

@@ -131,5 +131,5 @@ Renew TLS manually:
 ssh root@45.33.103.31 'cd /opt/autoark && bash deploy/server-renew-cert.sh'
 ```
 
-Do not use the old PM2 deployment documents for production. They are retained
-only as historical notes.
+Old PM2 deployment documents and scripts have been removed from the repository.
+Use this Docker Compose flow for production.

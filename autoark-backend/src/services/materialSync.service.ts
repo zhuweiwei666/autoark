@@ -47,7 +47,8 @@ const downloadFile = async (url: string): Promise<{ buffer: Buffer; mimeType: st
       },
     })
     
-    const mimeType = response.headers['content-type'] || 'image/jpeg'
+    const contentType = response.headers['content-type']
+    const mimeType = typeof contentType === 'string' ? contentType : 'image/jpeg'
     return {
       buffer: Buffer.from(response.data),
       mimeType,
@@ -311,4 +312,3 @@ export default {
   getMaterialPreviewByFingerprint,
   getMaterialPreviewsByFingerprints,
 }
-

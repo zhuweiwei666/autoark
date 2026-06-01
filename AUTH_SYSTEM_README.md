@@ -27,12 +27,12 @@ AutoArk 已配置完整的三级权限账号系统，支持：
 
 ```bash
 # JWT 配置
-JWT_SECRET=your-super-secret-key-change-this-in-production
+JWT_SECRET=<生成一个长随机字符串>
 JWT_EXPIRES_IN=7d
 
 # 超级管理员初始账号（可选自定义）
 SUPER_ADMIN_USERNAME=admin
-SUPER_ADMIN_PASSWORD=admin123456
+SUPER_ADMIN_PASSWORD=<设置强密码>
 SUPER_ADMIN_EMAIL=admin@autoark.com
 
 # MongoDB 配置
@@ -66,7 +66,7 @@ npm run init:super-admin
 ✅ 超级管理员创建成功!
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 用户名: admin
-密码: admin123456
+密码: 使用部署环境中的 `SUPER_ADMIN_PASSWORD`
 邮箱: admin@autoark.com
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -94,7 +94,7 @@ npm run build
 访问 `http://localhost:3000/login`，使用超级管理员账号登录：
 
 - 用户名：`admin`
-- 密码：`admin123456`
+- 密码：使用部署环境中的 `SUPER_ADMIN_PASSWORD`
 
 **⚠️ 重要：首次登录后请立即修改密码！**
 
@@ -225,7 +225,7 @@ Content-Type: application/json
 
 {
   "username": "admin",
-  "password": "admin123456"
+  "password": "<strong-password>"
 }
 
 # 响应
@@ -268,7 +268,7 @@ Authorization: Bearer <token>
 Content-Type: application/json
 
 {
-  "oldPassword": "admin123456",
+  "oldPassword": "<current-password>",
   "newPassword": "new_secure_password"
 }
 ```

@@ -10,14 +10,17 @@ const router = Router()
 router.use(authenticate)
 
 const MB_BASE = 'https://meta.iohubonline.club'
-const MB_EMAIL = process.env.METABASE_EMAIL || 'zhuweiwei@adcreative.cn'
-const MB_PASSWORD = process.env.METABASE_PASSWORD || 'QTL8GX92DmN29d'
+const MB_EMAIL = process.env.METABASE_EMAIL || ''
+const MB_PASSWORD = process.env.METABASE_PASSWORD || ''
 
 let sessionToken: string | null = null
 let sessionExpiry = 0
 
 async function getSession(): Promise<string> {
   if (sessionToken && Date.now() < sessionExpiry) return sessionToken
+  if (!MB_EMAIL || !MB_PASSWORD) {
+    throw new Error('METABASE_EMAIL and METABASE_PASSWORD must be configured')
+  }
   const res = await axios.post(`${MB_BASE}/api/session`, {
     username: MB_EMAIL, password: MB_PASSWORD,
   })
