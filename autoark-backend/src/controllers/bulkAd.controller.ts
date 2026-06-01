@@ -69,6 +69,20 @@ const taskAuditMetadata = (task: any) => ({
   failedAccounts: task?.progress?.failedAccounts || 0,
 })
 
+const validationAuditMetadata = (validation: any) => {
+  const errors = Array.isArray(validation?.errors) ? validation.errors : []
+  const warnings = Array.isArray(validation?.warnings) ? validation.warnings : []
+  return {
+    isValid: Boolean(validation?.isValid),
+    errorCount: errors.length,
+    warningCount: warnings.length,
+    firstError: errors[0]?.message,
+    firstErrorField: errors[0]?.field,
+    errorFields: errors.map((error: any) => error.field).filter(Boolean).slice(0, 20),
+    warningFields: warnings.map((warning: any) => warning.field).filter(Boolean).slice(0, 20),
+  }
+}
+
 const parseBulkAdOAuthStateForAudit = (state: unknown): {
   autoarkUserId?: string
   organizationId?: string
@@ -190,9 +204,31 @@ export const deleteDraft = async (req: Request, res: Response) => {
 export const validateDraft = async (req: Request, res: Response) => {
   try {
     const validation = await bulkAdService.validateDraft(req.params.id, getAssetFilter(req))
+    const firstError = validation.errors?.[0]
+    await writeBulkAdAudit(req, {
+      action: 'bulk_ad.draft_validate',
+      status: validation.isValid ? (validation.warnings?.length ? 'warning' : 'success') : 'failed',
+      targetType: 'ad_draft',
+      targetId: req.params.id,
+      summary: validation.isValid ? '批量广告草稿预检通过' : '批量广告草稿预检未通过',
+      reason: firstError?.message,
+      metadata: validationAuditMetadata(validation),
+    })
     res.json({ success: true, data: validation })
   } catch (error: any) {
     logger.error('[BulkAd] Validate draft failed:', error)
+    await writeBulkAdAudit(req, {
+      action: 'bulk_ad.draft_validate',
+      status: 'failed',
+      targetType: 'ad_draft',
+      targetId: req.params.id,
+      summary: '批量广告草稿预检失败',
+      reason: error.message,
+      metadata: {
+        errorCode: error.code,
+        details: error.details,
+      },
+    })
     res.status(400).json({ success: false, error: error.message })
   }
 }

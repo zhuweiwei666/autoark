@@ -4,7 +4,7 @@ import CreativeGroup from '../src/models/CreativeGroup'
 import FacebookUser from '../src/models/FacebookUser'
 import FbToken from '../src/models/FbToken'
 import TargetingPackage from '../src/models/TargetingPackage'
-import { validateDraft } from '../src/services/bulkAd.service'
+import { publishDraft, validateDraft } from '../src/services/bulkAd.service'
 
 const draftId = '665000000000000000000010'
 const creativeGroupId = '665000000000000000000011'
@@ -19,6 +19,15 @@ const queryWithLean = (value: any) => ({
 const tokenQuery = (value: any) => ({
   select: jest.fn().mockReturnValue(queryWithLean(value)),
 })
+
+const populatedDraftQuery = (value: any) => {
+  const query: any = {
+    populate: jest.fn().mockReturnThis(),
+    then: (resolve: any) => Promise.resolve(resolve(value)),
+    catch: jest.fn(),
+  }
+  return query
+}
 
 const baseDraft = (overrides: any = {}) => ({
   _id: draftId,
@@ -145,5 +154,37 @@ describe('bulk ad draft validation preflight', () => {
     expect(validation.isValid).toBe(false)
     expect(validation.errors.map((error: any) => error.field)).toContain('accounts.123.access')
     expect(validation.errors.map((error: any) => error.message).join(' ')).toContain('当前 Facebook 授权未同步到账户 Account 123 的访问权限')
+  })
+
+  it('returns structured validation failure details when publishing an invalid draft directly', async () => {
+    const draft = baseDraft({
+      accounts: [{
+        accountId: '123',
+        accountName: 'Account 123',
+      }],
+    })
+    jest.spyOn(AdDraft, 'findOne')
+      .mockReturnValueOnce(populatedDraftQuery(draft) as any)
+      .mockResolvedValueOnce(draft as any)
+    jest.spyOn(FbToken, 'find').mockReturnValue(tokenQuery([]) as any)
+    mockValidPackages()
+
+    await expect(publishDraft(draftId, '665000000000000000000002', {}))
+      .rejects
+      .toMatchObject({
+        code: 'DRAFT_VALIDATION_FAILED',
+        statusCode: 422,
+        details: expect.objectContaining({
+          errorCount: expect.any(Number),
+          firstError: expect.objectContaining({
+            field: 'facebookAuthorization',
+          }),
+          errorFields: expect.arrayContaining([
+            'facebookAuthorization',
+            'accounts.123.pageId',
+            'accounts.123.pixelId',
+          ]),
+        }),
+      })
   })
 })

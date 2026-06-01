@@ -60,6 +60,42 @@ const hasUsableMaterial = (material: any) => {
   return false
 }
 
+const buildDraftValidationFailureDetails = (validation: any) => {
+  const errors = Array.isArray(validation?.errors) ? validation.errors : []
+  const warnings = Array.isArray(validation?.warnings) ? validation.warnings : []
+  return {
+    errorCount: errors.length,
+    warningCount: warnings.length,
+    firstError: errors[0]
+      ? {
+        field: errors[0].field,
+        message: errors[0].message,
+      }
+      : undefined,
+    errorFields: errors.map((error: any) => error.field).filter(Boolean).slice(0, 20),
+    errors: errors.slice(0, 10).map((error: any) => ({
+      field: error.field,
+      message: error.message,
+      severity: error.severity || 'error',
+    })),
+    warnings: warnings.slice(0, 10).map((warning: any) => ({
+      field: warning.field,
+      message: warning.message,
+      severity: warning.severity || 'warning',
+    })),
+  }
+}
+
+const createDraftValidationFailure = (validation: any) => {
+  const details = buildDraftValidationFailureDetails(validation)
+  const firstMessage = details.firstError?.message || '请按预检结果修正草稿配置'
+  const error: any = new Error(`草稿预检未通过：${firstMessage}`)
+  error.code = 'DRAFT_VALIDATION_FAILED'
+  error.statusCode = 422
+  error.details = details
+  return error
+}
+
 const buildFacebookAssetSnapshot = async (draft: any) => {
   const tokenAccessFilter = draft.organizationId
     ? { organizationId: draft.organizationId }
@@ -453,7 +489,7 @@ export const publishDraft = async (draftId: string, userId?: string, accessFilte
   // 验证草稿
   const validation = await validateDraft(draftId, accessFilter)
   if (!validation.isValid) {
-    throw new Error(`Draft validation failed: ${validation.errors.map((e: any) => e.message).join(', ')}`)
+    throw createDraftValidationFailure(validation)
   }
   
   // 计算预估

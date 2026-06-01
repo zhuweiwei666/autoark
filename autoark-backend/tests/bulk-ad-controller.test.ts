@@ -1,6 +1,8 @@
 jest.mock('../src/services/bulkAd.service', () => ({
   __esModule: true,
   default: {
+    validateDraft: jest.fn(),
+    publishDraft: jest.fn(),
     getTaskSupportPackage: jest.fn(),
     rerunTask: jest.fn(),
   },
@@ -27,7 +29,12 @@ import bulkAdService from '../src/services/bulkAd.service'
 import { writeAuditLog } from '../src/services/auditLog.service'
 import * as oauthService from '../src/services/facebook.oauth.service'
 import FacebookApp from '../src/models/FacebookApp'
-import { getAuthLoginUrl, getTaskSupportPackage, rerunTask } from '../src/controllers/bulkAd.controller'
+import {
+  getAuthLoginUrl,
+  getTaskSupportPackage,
+  rerunTask,
+  validateDraft as validateDraftController,
+} from '../src/controllers/bulkAd.controller'
 
 const mockBulkAdService = bulkAdService as jest.Mocked<typeof bulkAdService>
 const mockWriteAuditLog = writeAuditLog as jest.Mock
@@ -37,6 +44,55 @@ const mockFacebookApp = FacebookApp as jest.Mocked<typeof FacebookApp>
 describe('bulk ad controller', () => {
   beforeEach(() => {
     jest.clearAllMocks()
+  })
+
+  it('writes an audit log when draft validation is blocked', async () => {
+    const validation = {
+      isValid: false,
+      errors: [{
+        field: 'accounts.123.pixelId',
+        message: '账户 Account 123 使用转化目标时必须选择 Pixel',
+        severity: 'error',
+      }],
+      warnings: [],
+      validatedAt: new Date('2026-06-01T12:00:00.000Z'),
+    }
+    mockBulkAdService.validateDraft.mockResolvedValue(validation as any)
+    mockWriteAuditLog.mockResolvedValue(undefined)
+
+    const req: any = {
+      params: { id: '665000000000000000000010' },
+      user: {
+        userId: '665000000000000000000002',
+        organizationId: '665000000000000000000001',
+      },
+      get: jest.fn(),
+    }
+    const res: any = {
+      json: jest.fn(),
+      status: jest.fn().mockReturnThis(),
+    }
+
+    await validateDraftController(req, res)
+
+    expect(mockBulkAdService.validateDraft).toHaveBeenCalledTimes(1)
+    expect(mockWriteAuditLog).toHaveBeenCalledWith(req, expect.objectContaining({
+      category: 'bulk_ad',
+      action: 'bulk_ad.draft_validate',
+      status: 'failed',
+      targetType: 'ad_draft',
+      targetId: '665000000000000000000010',
+      summary: '批量广告草稿预检未通过',
+      reason: '账户 Account 123 使用转化目标时必须选择 Pixel',
+      metadata: expect.objectContaining({
+        isValid: false,
+        errorCount: 1,
+        warningCount: 0,
+        firstErrorField: 'accounts.123.pixelId',
+        errorFields: ['accounts.123.pixelId'],
+      }),
+    }))
+    expect(res.json).toHaveBeenCalledWith({ success: true, data: validation })
   })
 
   it('includes selected Facebook App readiness gaps in login URL diagnostics', async () => {

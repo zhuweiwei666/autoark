@@ -132,12 +132,19 @@ const commercialBlockerActions: Record<string, { actions: string[]; actionPath?:
     actions: ['暂停本月新增发布，或升级月度任务额度。', '清理测试组织用量后再发布正式任务。'],
     actionPath: '/commercial',
   },
+  DRAFT_VALIDATION_FAILED: {
+    actions: ['回到对应步骤修正草稿配置。', '修正后重新点击发布，系统会重新执行预检。'],
+  },
 }
 
 const buildPublishBlocker = (data: any): PublishBlocker => {
   const preset = data?.errorCode ? commercialBlockerActions[data.errorCode] : undefined
   const details = data?.details || {}
   const detailActions: string[] = []
+  if (details.firstError?.message) detailActions.push(`首个错误：${details.firstError.message}`)
+  if (Array.isArray(details.errorFields) && details.errorFields.length > 0) {
+    detailActions.push(`涉及字段：${details.errorFields.slice(0, 5).join('、')}`)
+  }
   if (details.limit !== undefined) detailActions.push(`当前额度上限：${details.limit}`)
   if (details.monthlyTaskCount !== undefined) detailActions.push(`本月已发布任务：${details.monthlyTaskCount}`)
   if (details.runningTaskCount !== undefined) detailActions.push(`当前执行中任务：${details.runningTaskCount}`)
@@ -947,8 +954,32 @@ export default function BulkAdCreatePage() {
       const draftId = createData.data._id
       const validateRes = await authFetch(`${API_BASE}/bulk-ad/drafts/${draftId}/validate`, { method: 'POST' })
       const validateData = await validateRes.json()
-      if (!validateData.success || !validateData.data.isValid) {
-        throw new Error(`验证失败: ${validateData.data?.errors?.map((e: any) => e.message).join(', ')}`)
+      if (!validateData.success) {
+        const blocker = buildPublishBlocker(validateData)
+        setPublishBlocker(blocker)
+        setError(blocker.message)
+        return
+      }
+      if (!validateData.data.isValid) {
+        const validationErrors = validateData.data?.errors || []
+        const validationWarnings = validateData.data?.warnings || []
+        const blocker = buildPublishBlocker({
+          error: validationErrors[0]?.message
+            ? `草稿预检未通过：${validationErrors[0].message}`
+            : '草稿预检未通过，请按提示修正配置后重新发布。',
+          errorCode: 'DRAFT_VALIDATION_FAILED',
+          details: {
+            errorCount: validationErrors.length,
+            warningCount: validationWarnings.length,
+            firstError: validationErrors[0],
+            errorFields: validationErrors.map((error: any) => error.field).filter(Boolean),
+            errors: validationErrors.slice(0, 10),
+            warnings: validationWarnings.slice(0, 10),
+          },
+        })
+        setPublishBlocker(blocker)
+        setError(blocker.message)
+        return
       }
       
       const publishRes = await authFetch(`${API_BASE}/bulk-ad/drafts/${draftId}/publish`, { method: 'POST' })
@@ -1020,7 +1051,9 @@ export default function BulkAdCreatePage() {
                       {publishBlocker.errorCode}
                     </span>
                   )}
-                  <span className="text-xs font-semibold text-slate-500">商业额度或账单保护已生效</span>
+                  <span className="text-xs font-semibold text-slate-500">
+                    {publishBlocker.errorCode === 'DRAFT_VALIDATION_FAILED' ? '发布前预检已生效' : '商业额度或账单保护已生效'}
+                  </span>
                 </div>
                 <ul className="mt-2 list-disc space-y-1 pl-4 text-sm leading-6 text-slate-700">
                   {publishBlocker.nextActions.map((action) => (
