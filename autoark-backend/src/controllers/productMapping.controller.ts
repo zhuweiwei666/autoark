@@ -2,6 +2,8 @@ import { Request, Response } from 'express'
 import logger from '../utils/logger'
 import Product from '../models/Product'
 import Account from '../models/Account'
+import FbToken from '../models/FbToken'
+import FacebookUser from '../models/FacebookUser'
 import * as productMappingService from '../services/productMapping.service'
 import {
   combineFilters,
@@ -53,6 +55,49 @@ const getScopedAccountAsset = async (req: Request, rawAccountId: any) => {
     accountId,
     accountName: account.name,
   }
+}
+
+const getScopedPixelAsset = async (req: Request, rawPixelId: any) => {
+  const pixelId = Array.isArray(rawPixelId) ? rawPixelId[0] : rawPixelId
+  if (!pixelId) {
+    const error: any = new Error('pixelId is required')
+    error.statusCode = 400
+    throw error
+  }
+
+  const tokens: any[] = await FbToken.find({ status: 'active', ...scopedTokenFilter(req) })
+    .select('_id fbUserId organizationId')
+    .lean()
+  if (tokens.length === 0) {
+    const error: any = new Error('未授权 Facebook 账号')
+    error.statusCode = 401
+    throw error
+  }
+
+  const tokenIds = tokens.map(token => token._id).filter(Boolean)
+  const fbUserIds = tokens.map(token => token.fbUserId).filter(Boolean)
+  const userFilters: any[] = tokenIds.length > 0 ? [{ tokenId: { $in: tokenIds } }] : []
+  if (fbUserIds.length > 0) {
+    userFilters.push({
+      fbUserId: { $in: fbUserIds },
+      ...(req.user?.organizationId && { organizationId: req.user.organizationId }),
+    })
+  }
+
+  const users: any[] = userFilters.length > 0 ? await FacebookUser.find({ $or: userFilters }).lean() : []
+  for (const user of users) {
+    const pixel = (user.pixels || []).find((item: any) => item.pixelId === pixelId)
+    if (pixel) {
+      return {
+        pixelId,
+        pixelName: pixel.name,
+      }
+    }
+  }
+
+  const error: any = new Error(`无权绑定 Pixel ${pixelId}，请先同步 Facebook 资产后重新选择`)
+  error.statusCode = 403
+  throw error
 }
 
 /**
@@ -180,10 +225,7 @@ export const updateProduct = async (req: Request, res: Response) => {
 export const addPixelToProduct = async (req: Request, res: Response) => {
   try {
     const { pixelId, pixelName, verified } = req.body
-    
-    if (!pixelId) {
-      return res.status(400).json({ success: false, error: 'pixelId is required' })
-    }
+    const scopedPixel = await getScopedPixelAsset(req, pixelId)
     
     const product = await Product.findOne(combineFilters({ _id: req.params.id }, getProductFilter(req)))
     if (!product) {
@@ -197,8 +239,8 @@ export const addPixelToProduct = async (req: Request, res: Response) => {
     }
     
     product.pixels.push({
-      pixelId,
-      pixelName,
+      pixelId: scopedPixel.pixelId,
+      pixelName: pixelName || scopedPixel.pixelName,
       confidence: 100,
       matchMethod: 'manual',
       verified: verified !== false,
@@ -215,7 +257,7 @@ export const addPixelToProduct = async (req: Request, res: Response) => {
     res.json({ success: true, data: product })
   } catch (error: any) {
     logger.error('[ProductMapping] Add pixel failed:', error)
-    res.status(500).json({ success: false, error: error.message })
+    res.status(error.statusCode || 500).json({ success: false, error: error.message })
   }
 }
 

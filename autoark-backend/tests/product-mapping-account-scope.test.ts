@@ -1,12 +1,18 @@
 import Account from '../src/models/Account'
+import FacebookUser from '../src/models/FacebookUser'
+import FbToken from '../src/models/FbToken'
 import Product from '../src/models/Product'
 import { UserRole } from '../src/models/User'
-import { addAccountToProduct } from '../src/controllers/productMapping.controller'
+import { addAccountToProduct, addPixelToProduct } from '../src/controllers/productMapping.controller'
 
 const queryWithLean = (value: any) => ({
   select: jest.fn().mockReturnValue({
     lean: jest.fn().mockResolvedValue(value),
   }),
+})
+
+const leanQuery = (value: any) => ({
+  lean: jest.fn().mockResolvedValue(value),
 })
 
 const makeReq = (body: any = {}) => ({
@@ -96,6 +102,63 @@ describe('product mapping account scope', () => {
       throughPixelId: 'pixel_1',
       status: 'active',
     }])
+    expect(product.save).toHaveBeenCalled()
+    expect(res.json).toHaveBeenCalledWith({ success: true, data: product })
+  })
+
+  it('rejects linking a pixel outside the requester cached Facebook assets', async () => {
+    jest.spyOn(FbToken, 'find').mockReturnValue(queryWithLean([{
+      _id: '665000000000000000000501',
+      fbUserId: 'fb_1',
+    }]) as any)
+    jest.spyOn(FacebookUser, 'find').mockReturnValue(leanQuery([{
+      fbUserId: 'fb_1',
+      pixels: [{ pixelId: 'pixel_other', name: 'Other Pixel' }],
+    }]) as any)
+    const productFind = jest.spyOn(Product, 'findOne').mockResolvedValue(null as any)
+    const req: any = makeReq({ pixelId: 'pixel_1' })
+    const res: any = makeRes()
+
+    await addPixelToProduct(req, res)
+
+    expect(productFind).not.toHaveBeenCalled()
+    expect(res.status).toHaveBeenCalledWith(403)
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      error: '无权绑定 Pixel pixel_1，请先同步 Facebook 资产后重新选择',
+    })
+  })
+
+  it('links pixels from the requester cached Facebook assets', async () => {
+    jest.spyOn(FbToken, 'find').mockReturnValue(queryWithLean([{
+      _id: '665000000000000000000501',
+      fbUserId: 'fb_1',
+    }]) as any)
+    jest.spyOn(FacebookUser, 'find').mockReturnValue(leanQuery([{
+      fbUserId: 'fb_1',
+      pixels: [{ pixelId: 'pixel_1', name: 'Scoped Pixel' }],
+    }]) as any)
+
+    const product: any = {
+      pixels: [],
+      accounts: [],
+      save: jest.fn().mockResolvedValue(undefined),
+    }
+    jest.spyOn(Product, 'findOne').mockResolvedValue(product)
+    const req: any = makeReq({ pixelId: 'pixel_1' })
+    const res: any = makeRes()
+
+    await addPixelToProduct(req, res)
+
+    expect(product.pixels).toEqual([{
+      pixelId: 'pixel_1',
+      pixelName: 'Scoped Pixel',
+      confidence: 100,
+      matchMethod: 'manual',
+      verified: true,
+      verifiedAt: expect.any(Date),
+    }])
+    expect(product.primaryPixelId).toBe('pixel_1')
     expect(product.save).toHaveBeenCalled()
     expect(res.json).toHaveBeenCalledWith({ success: true, data: product })
   })
