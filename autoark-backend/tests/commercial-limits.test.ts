@@ -120,6 +120,23 @@ describe('commercial publish limits', () => {
       .mockResolvedValueOnce(0 as any)
       .mockResolvedValueOnce(1 as any)
       .mockResolvedValueOnce(4 as any)
+    jest.spyOn(AdTask, 'find').mockReturnValue({
+      sort: jest.fn().mockReturnThis(),
+      limit: jest.fn().mockReturnThis(),
+      lean: jest.fn().mockResolvedValue([{
+        _id: '665000000000000000000201',
+        status: 'failed',
+        items: [{
+          accountId: 'act_1',
+          accountName: 'Account 1',
+          status: 'failed',
+          errors: [{
+            errorCode: 'PIXEL_ACCESS_REQUIRED',
+            errorMessage: 'Pixel missing',
+          }],
+        }],
+      }]),
+    } as any)
     jest.spyOn(FacebookApp, 'countDocuments')
       .mockResolvedValueOnce(1 as any)
       .mockResolvedValueOnce(1 as any)
@@ -147,6 +164,7 @@ describe('commercial publish limits', () => {
     expect(readiness.usage.monthlyTasks.limit).toBeNull()
     expect(readiness.usage.concurrentTasks.limit).toBeNull()
     expect(readiness.metrics.facebookReadyAccounts).toBe(1)
+    expect(readiness.metrics.recentTaskIssueTypes).toBe(1)
     expect(readiness.checklist.find(item => item.id === 'facebook_ready_accounts')?.status).toBe('done')
   })
 })

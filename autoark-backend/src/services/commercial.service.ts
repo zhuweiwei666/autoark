@@ -15,6 +15,7 @@ import User, { UserRole, UserStatus } from '../models/User'
 import { JwtPayload } from '../utils/jwt'
 import { objectIdValue } from '../utils/accessControl'
 import { buildFacebookAssetDiagnostics } from './facebookAssets.diagnostics.service'
+import { buildTaskOperationalDiagnostics } from './bulkAd.diagnostics'
 
 type ChecklistStatus = 'done' | 'warning' | 'pending' | 'blocked'
 type ScopeMode = 'organization' | 'platform'
@@ -157,6 +158,34 @@ const computeScore = (items: Array<{ status: ChecklistStatus }>) => {
   }, 0)
 
   return Math.round((score / Math.max(items.length, 1)) * 100)
+}
+
+const aggregateRecentTaskIssues = (tasks: any[]) => {
+  const bucketMap = new Map<string, {
+    errorCode: string
+    count: number
+    retryable: boolean
+    customerMessage: string
+  }>()
+
+  for (const task of tasks) {
+    const diagnostics = buildTaskOperationalDiagnostics(task)
+    for (const bucket of diagnostics.buckets) {
+      const existing = bucketMap.get(bucket.errorCode)
+      if (existing) {
+        existing.count += bucket.count
+      } else {
+        bucketMap.set(bucket.errorCode, {
+          errorCode: bucket.errorCode,
+          count: bucket.count,
+          retryable: bucket.retryable,
+          customerMessage: bucket.customerMessage,
+        })
+      }
+    }
+  }
+
+  return Array.from(bucketMap.values()).sort((a, b) => b.count - a.count)
 }
 
 export class CommercialLimitError extends Error {
@@ -322,6 +351,7 @@ export async function getCommercialReadiness(
     publicOauthAppCount,
     healthyAppCount,
     activeTokenDocs,
+    recentFailedTasks,
   ] = await Promise.all([
     User.countDocuments(mode === 'organization' ? { organizationId: objectIdValue(organizationId) } : {}),
     User.countDocuments(mode === 'organization'
@@ -349,6 +379,10 @@ export async function getCommercialReadiness(
       .select('_id fbUserId fbUserName expiresAt updatedAt')
       .sort({ updatedAt: -1 })
       .lean(),
+    AdTask.find({ ...orgFilter, status: { $in: ['failed', 'partial_success'] } })
+      .sort({ createdAt: -1 })
+      .limit(20)
+      .lean(),
   ])
 
   const tokenIds = activeTokenDocs.map((token: any) => token._id).filter(Boolean)
@@ -365,6 +399,7 @@ export async function getCommercialReadiness(
     tokens: activeTokenDocs,
     users: facebookUsers,
   })
+  const recentTaskIssueBuckets = aggregateRecentTaskIssues(recentFailedTasks)
 
   const plan = mode === 'platform' ? OrganizationPlan.ENTERPRISE : getEffectivePlan(organization)
   const limits = mode === 'platform' ? PLAN_DEFAULTS[OrganizationPlan.ENTERPRISE].limits : getEffectiveLimits(organization)
@@ -517,9 +552,12 @@ export async function getCommercialReadiness(
     }
   }
   if (failedTaskCount > successfulTaskCount && taskCount > 0) {
+    const primaryIssue = recentTaskIssueBuckets[0]
     risks.push({
       level: 'warning',
-      message: '失败任务数高于成功任务数，建议先排查账户、Page、Pixel 或素材合规问题。',
+      message: primaryIssue
+        ? `失败任务数高于成功任务数，最近主因是 ${primaryIssue.errorCode}（${primaryIssue.count} 次）：${primaryIssue.customerMessage}`
+        : '失败任务数高于成功任务数，建议先排查账户、Page、Pixel 或素材合规问题。',
       actionPath: '/bulk-ad/tasks',
     })
   }
@@ -557,6 +595,7 @@ export async function getCommercialReadiness(
       facebookPageAccounts: facebookAssets.summary.pageLinkedAccountCount,
       facebookPixelAccounts: facebookAssets.summary.pixelLinkedAccountCount,
       facebookReadyAccounts: facebookAssets.summary.readyAccountCount,
+      recentTaskIssueTypes: recentTaskIssueBuckets.length,
     },
     checklist,
     score: computeScore(checklist),
