@@ -98,6 +98,24 @@ describe('commercial publish limits', () => {
       } as CommercialLimitError)
   })
 
+  it('blocks publish when bulk ad create feature is disabled by organization override', async () => {
+    jest.spyOn(Organization, 'findById').mockResolvedValue(mockOrganization({
+      settings: {
+        features: ['facebook_oauth', 'material_library'],
+      },
+    }) as any)
+
+    await expect(assertBulkAdPublishAllowed({ organizationId, requestedAccounts: 1 }))
+      .rejects.toMatchObject({
+        code: 'FEATURE_NOT_INCLUDED',
+        statusCode: 403,
+        details: expect.objectContaining({
+          feature: 'bulk_ad_create',
+          enabledFeatures: ['facebook_oauth', 'material_library'],
+        }),
+      } as CommercialLimitError)
+  })
+
   it('allows publish when billing and usage are within quota', async () => {
     jest.spyOn(Organization, 'findById').mockResolvedValue(mockOrganization() as any)
     jest.spyOn(AdTask, 'countDocuments')

@@ -9,6 +9,7 @@ import User, { UserRole } from '../models/User'
 import { JwtPayload } from '../utils/jwt'
 import logger from '../utils/logger'
 import authService from './auth.service'
+import { COMMERCIAL_FEATURE_SET } from '../config/commercialPlans'
 
 class OrganizationService {
   private sanitizeUpdates(updates: Partial<IOrganization>) {
@@ -47,6 +48,7 @@ class OrganizationService {
         sanitized.settings.features = settings.features
           .filter((feature: unknown) => typeof feature === 'string' && feature.trim())
           .map((feature: string) => feature.trim())
+          .filter((feature: string) => COMMERCIAL_FEATURE_SET.has(feature))
       }
     }
 

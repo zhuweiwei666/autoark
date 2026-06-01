@@ -107,7 +107,6 @@ const organizationSchema = new mongoose.Schema(
     settings: {
       maxMembers: {
         type: Number,
-        default: 50,
       },
       maxAdAccounts: {
         type: Number,

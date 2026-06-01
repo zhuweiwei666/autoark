@@ -53,6 +53,44 @@ describe('organization service', () => {
     expect(updated).toBe(organization)
   })
 
+  it('keeps only known commercial feature overrides', async () => {
+    const organization: any = {
+      _id: '665000000000000000000001',
+      name: 'Acme Team',
+      status: OrganizationStatus.ACTIVE,
+      billing: {
+        plan: OrganizationPlan.STARTER,
+        status: OrganizationBillingStatus.ACTIVE,
+      },
+      settings: {
+        features: [],
+      },
+      set: jest.fn(function setPath(path: string, value: unknown) {
+        const [, key] = path.split('.')
+        this.settings[key] = value
+      }),
+      save: jest.fn().mockResolvedValue(undefined),
+    }
+    jest.spyOn(Organization, 'findById').mockResolvedValue(organization)
+
+    await organizationService.updateOrganization(
+      '665000000000000000000001',
+      {
+        settings: {
+          features: ['bulk_ad_create', 'unknown_feature', ' audit_ready '],
+        },
+      } as any,
+      {
+        userId: 'admin',
+        role: UserRole.SUPER_ADMIN,
+      } as any,
+    )
+
+    expect(organization.set).toHaveBeenCalledWith('settings.features', ['bulk_ad_create', 'audit_ready'])
+    expect(organization.settings.features).toEqual(['bulk_ad_create', 'audit_ready'])
+    expect(organization.save).toHaveBeenCalled()
+  })
+
   it('rejects organization updates from non super admins', async () => {
     await expect(organizationService.updateOrganization(
       '665000000000000000000001',

@@ -17,6 +17,7 @@ import { JwtPayload } from '../utils/jwt'
 import { objectIdValue } from '../utils/accessControl'
 import { buildFacebookAssetDiagnostics } from './facebookAssets.diagnostics.service'
 import { buildTaskOperationalDiagnostics } from './bulkAd.diagnostics'
+import { COMMERCIAL_FEATURES, PLAN_DEFAULTS } from '../config/commercialPlans'
 
 type ChecklistStatus = 'done' | 'warning' | 'pending' | 'blocked'
 type ScopeMode = 'organization' | 'platform'
@@ -31,83 +32,6 @@ type CommercialNextAction = {
   actionPath?: string
   owner: string
   source: 'setup' | 'facebook' | 'quota' | 'tasks' | 'team' | 'materials'
-}
-
-export const COMMERCIAL_FEATURES = [
-  'facebook_oauth',
-  'bulk_ad_create',
-  'material_library',
-  'asset_sync',
-  'review_tracking',
-  'automation_agent',
-  'team_management',
-  'audit_ready',
-]
-
-export const PLAN_DEFAULTS: Record<OrganizationPlan, {
-  label: string
-  limits: {
-    maxMembers: number | null
-    maxAdAccounts: number | null
-    maxMaterials: number | null
-    maxConcurrentTasks: number | null
-    monthlyTaskLimit: number | null
-  }
-  features: string[]
-}> = {
-  [OrganizationPlan.TRIAL]: {
-    label: '试用版',
-    limits: {
-      maxMembers: 3,
-      maxAdAccounts: 3,
-      maxMaterials: 100,
-      maxConcurrentTasks: 1,
-      monthlyTaskLimit: 20,
-    },
-    features: ['facebook_oauth', 'bulk_ad_create', 'material_library', 'team_management'],
-  },
-  [OrganizationPlan.STARTER]: {
-    label: '标准版',
-    limits: {
-      maxMembers: 10,
-      maxAdAccounts: 15,
-      maxMaterials: 1000,
-      maxConcurrentTasks: 3,
-      monthlyTaskLimit: 300,
-    },
-    features: ['facebook_oauth', 'bulk_ad_create', 'material_library', 'asset_sync', 'team_management'],
-  },
-  [OrganizationPlan.GROWTH]: {
-    label: '增长版',
-    limits: {
-      maxMembers: 30,
-      maxAdAccounts: 80,
-      maxMaterials: 8000,
-      maxConcurrentTasks: 8,
-      monthlyTaskLimit: 3000,
-    },
-    features: [
-      'facebook_oauth',
-      'bulk_ad_create',
-      'material_library',
-      'asset_sync',
-      'review_tracking',
-      'automation_agent',
-      'team_management',
-      'audit_ready',
-    ],
-  },
-  [OrganizationPlan.ENTERPRISE]: {
-    label: '企业版',
-    limits: {
-      maxMembers: null,
-      maxAdAccounts: null,
-      maxMaterials: null,
-      maxConcurrentTasks: null,
-      monthlyTaskLimit: null,
-    },
-    features: COMMERCIAL_FEATURES,
-  },
 }
 
 const monthStart = () => {
@@ -491,6 +415,15 @@ export async function assertBulkAdPublishAllowed({
   }
 
   const limits = getEffectiveLimits(organization)
+  const features = getEffectiveFeatures(organization)
+  if (!features.includes('bulk_ad_create')) {
+    throw new CommercialLimitError(
+      'FEATURE_NOT_INCLUDED',
+      '当前组织未开通批量创建广告功能，请升级套餐或联系平台运营开启后再发布任务。',
+      403,
+      { feature: 'bulk_ad_create', plan, enabledFeatures: features },
+    )
+  }
   const requestedAccountCount = Math.max(1, Number(requestedAccounts) || 1)
   const requestedTaskCount = Math.max(1, Number(requestedTasks) || 1)
 
@@ -532,6 +465,7 @@ export async function assertBulkAdPublishAllowed({
     plan,
     billingStatus,
     limits,
+    features,
     usage: {
       runningTaskCount,
       monthlyTaskCount,

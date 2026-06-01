@@ -88,6 +88,10 @@ const commercialBlockerActions: Record<string, { actions: string[]; actionPath?:
     actions: ['处理客户续费或账单暂停问题。', '恢复账单状态后重新发布任务。'],
     actionPath: '/commercial',
   },
+  FEATURE_NOT_INCLUDED: {
+    actions: ['在组织管理中开启“批量建广告”功能，或升级到包含该能力的套餐。', '开启功能后刷新页面并重新发布任务。'],
+    actionPath: '/organizations',
+  },
   TASK_ACCOUNT_LIMIT_EXCEEDED: {
     actions: ['减少本次选择的广告账户数量。', '升级套餐或让平台运营调整单次账户额度。'],
     actionPath: '/commercial',

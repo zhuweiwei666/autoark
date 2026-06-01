@@ -37,6 +37,18 @@ interface CommercialPlan {
     maxConcurrentTasks: number | null
     monthlyTaskLimit: number | null
   }
+  features: string[]
+}
+
+const commercialFeatureLabels: Record<string, string> = {
+  facebook_oauth: 'Facebook 授权',
+  bulk_ad_create: '批量建广告',
+  material_library: '素材库',
+  asset_sync: '资产同步',
+  review_tracking: '审核追踪',
+  automation_agent: '投放 Agent',
+  team_management: '团队管理',
+  audit_ready: '审计就绪',
 }
 
 const OrganizationManagementPage: React.FC = () => {
@@ -65,6 +77,8 @@ const OrganizationManagementPage: React.FC = () => {
     maxMaterials: '',
     maxConcurrentTasks: '',
     monthlyTaskLimit: '',
+    featureMode: 'default',
+    features: [] as string[],
   })
 
   const fetchOrganizations = async () => {
@@ -185,6 +199,8 @@ const OrganizationManagementPage: React.FC = () => {
       maxMaterials: org.settings?.maxMaterials?.toString() || '',
       maxConcurrentTasks: org.settings?.maxConcurrentTasks?.toString() || '',
       monthlyTaskLimit: org.settings?.monthlyTaskLimit?.toString() || '',
+      featureMode: org.settings?.features?.length ? 'custom' : 'default',
+      features: org.settings?.features || [],
     })
     setShowEditModal(true)
   }
@@ -212,6 +228,7 @@ const OrganizationManagementPage: React.FC = () => {
         maxMaterials: optionalNumber(editFormData.maxMaterials),
         maxConcurrentTasks: optionalNumber(editFormData.maxConcurrentTasks),
         monthlyTaskLimit: optionalNumber(editFormData.monthlyTaskLimit),
+        features: editFormData.featureMode === 'default' ? [] : editFormData.features,
       },
     }
 
@@ -259,6 +276,31 @@ const OrganizationManagementPage: React.FC = () => {
 
   const selectedPlan = commercialPlans.find((plan) => plan.code === editFormData.plan)
   const formatLimit = (value: number | null | undefined) => value === null ? '不限' : value ?? '-'
+  const allFeatureCodes = commercialPlans.length > 0
+    ? Array.from(new Set(commercialPlans.flatMap((plan) => plan.features)))
+    : Object.keys(commercialFeatureLabels)
+  const selectedFeatureCodes = editFormData.featureMode === 'default'
+    ? selectedPlan?.features || []
+    : editFormData.features
+  const selectedFeatureSet = new Set(selectedFeatureCodes)
+  const setFeatureMode = (featureMode: string) => {
+    setEditFormData({
+      ...editFormData,
+      featureMode,
+      features: featureMode === 'custom' && editFormData.features.length === 0
+        ? selectedPlan?.features || []
+        : editFormData.features,
+    })
+  }
+  const toggleFeature = (feature: string) => {
+    const current = new Set(editFormData.features)
+    if (current.has(feature)) {
+      current.delete(feature)
+    } else {
+      current.add(feature)
+    }
+    setEditFormData({ ...editFormData, featureMode: 'custom', features: Array.from(current) })
+  }
 
   return (
     <div className="p-6">
@@ -325,7 +367,10 @@ const OrganizationManagementPage: React.FC = () => {
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                     <div className="font-medium text-gray-900">{org.billing?.plan || 'trial'} · {org.billing?.status || 'trialing'}</div>
                     <div className="text-xs text-gray-500">
-                      成员 {org.settings?.maxMembers || '-'} · 账户 {org.settings?.maxAdAccounts || '-'} · 月任务 {org.settings?.monthlyTaskLimit || '-'}
+                      成员 {formatLimit(org.settings?.maxMembers)} · 账户 {formatLimit(org.settings?.maxAdAccounts)} · 月任务 {formatLimit(org.settings?.monthlyTaskLimit)}
+                    </div>
+                    <div className="text-xs text-gray-400">
+                      功能 {org.settings?.features?.length ? `${org.settings.features.length} 项自定义` : '跟随套餐'}
                     </div>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
@@ -595,6 +640,65 @@ const OrganizationManagementPage: React.FC = () => {
                       </div>
                     ))}
                   </div>
+                </div>
+                <div className="border-t pt-4">
+                  <h3 className="text-sm font-semibold text-gray-800 mb-3">功能开关</h3>
+                  <div className="mb-3 grid grid-cols-2 gap-2">
+                    <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm font-medium text-gray-700">
+                      <input
+                        type="radio"
+                        name="featureMode"
+                        value="default"
+                        checked={editFormData.featureMode === 'default'}
+                        onChange={(e) => setFeatureMode(e.target.value)}
+                      />
+                      跟随套餐
+                    </label>
+                    <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm font-medium text-gray-700">
+                      <input
+                        type="radio"
+                        name="featureMode"
+                        value="custom"
+                        checked={editFormData.featureMode === 'custom'}
+                        onChange={(e) => setFeatureMode(e.target.value)}
+                      />
+                      自定义开关
+                    </label>
+                  </div>
+                  {selectedPlan && editFormData.featureMode === 'default' && (
+                    <p className="mb-3 text-xs font-medium text-gray-500">
+                      当前跟随 {selectedPlan.label} 默认功能；保存后会清除手动功能覆盖。
+                    </p>
+                  )}
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    {allFeatureCodes.map((feature) => {
+                      const checked = selectedFeatureSet.has(feature)
+                      const disabled = editFormData.featureMode === 'default'
+                      return (
+                        <label
+                          key={feature}
+                          className={`flex min-h-[44px] items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium ${
+                            checked
+                              ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+                              : 'border-gray-200 bg-white text-gray-500'
+                          } ${disabled ? 'cursor-default opacity-80' : 'cursor-pointer'}`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            disabled={disabled}
+                            onChange={() => toggleFeature(feature)}
+                          />
+                          <span>{commercialFeatureLabels[feature] || feature}</span>
+                        </label>
+                      )
+                    })}
+                  </div>
+                  {editFormData.featureMode === 'custom' && !selectedFeatureSet.has('bulk_ad_create') && (
+                    <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">
+                      未开启“批量建广告”时，该客户组织会被禁止发布批量广告任务。
+                    </div>
+                  )}
                 </div>
                 <div className="flex gap-2 justify-end mt-6">
                   <button
