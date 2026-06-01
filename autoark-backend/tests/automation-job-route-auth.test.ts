@@ -38,13 +38,15 @@ const createApp = () => {
 }
 
 describe('automation job route authorization', () => {
-  it('blocks members from creating automation jobs', async () => {
-    const response = await request(createApp())
-      .post('/api/automation-jobs')
-      .send({
-        type: 'PUBLISH_DRAFT',
-        payload: { draftId: '665000000000000000000099' },
-      })
+  it.each([
+    ['GET', '/api/automation-jobs', undefined],
+    ['POST', '/api/automation-jobs', { type: 'PUBLISH_DRAFT', payload: { draftId: '665000000000000000000099' } }],
+    ['GET', '/api/automation-jobs/665000000000000000000301', undefined],
+    ['POST', '/api/automation-jobs/665000000000000000000301/cancel', {}],
+    ['POST', '/api/automation-jobs/665000000000000000000301/retry', {}],
+  ] as const)('blocks members from %s %s', async (method, path, body) => {
+    const req = request(createApp())[method.toLowerCase() as 'get' | 'post'](path)
+    const response = body ? await req.send(body) : await req
 
     expect(response.status).toBe(403)
     expect(response.body).toMatchObject({
