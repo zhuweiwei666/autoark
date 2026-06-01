@@ -241,7 +241,19 @@ async function fetchAccountPages(accountId: string, accessToken: string): Promis
     throw new Error(data.error.message)
   }
   
-  return data.data || []
+  if (data.data?.length) {
+    return data.data
+  }
+
+  const fallbackUrl = `${FB_BASE_URL}/me/accounts?fields=id,name,access_token&limit=100&access_token=${accessToken}`
+  const fallbackResponse = await fetch(fallbackUrl)
+  const fallbackData = await fallbackResponse.json()
+
+  if (fallbackData.error) {
+    throw new Error(fallbackData.error.message)
+  }
+
+  return fallbackData.data || []
 }
 
 async function fetchBusinesses(accessToken: string): Promise<any[]> {
@@ -269,4 +281,3 @@ export default {
   getCachedCatalogs,
   getSyncStatus,
 }
-
