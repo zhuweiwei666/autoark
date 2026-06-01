@@ -582,6 +582,7 @@ export async function getCommercialReadiness(
   const plan = mode === 'platform' ? OrganizationPlan.ENTERPRISE : getEffectivePlan(organization)
   const limits = mode === 'platform' ? PLAN_DEFAULTS[OrganizationPlan.ENTERPRISE].limits : getEffectiveLimits(organization)
   const features = mode === 'platform' ? COMMERCIAL_FEATURES : getEffectiveFeatures(organization)
+  const hasBulkAdCreateFeature = features.includes('bulk_ad_create')
   const billingStatus = mode === 'platform' ? OrganizationBillingStatus.ACTIVE : organization?.billing?.status || (
     plan === OrganizationPlan.TRIAL
       ? OrganizationBillingStatus.TRIALING
@@ -604,6 +605,14 @@ export async function getCommercialReadiness(
       mode === 'platform' || organization?.status === OrganizationStatus.ACTIVE ? 'done' : 'blocked',
       mode === 'platform' ? '/organizations' : '/users',
       mode === 'platform' ? `${activeUserCount} 个活跃用户` : organization?.status,
+    ),
+    step(
+      'bulk_ad_feature',
+      '批量建广告功能',
+      '客户组织必须开通批量建广告能力，否则发布任务会被套餐功能拦截。',
+      hasBulkAdCreateFeature ? 'done' : 'blocked',
+      '/organizations',
+      hasBulkAdCreateFeature ? '已开启' : '未开启',
     ),
     step(
       'public_oauth_app',
@@ -709,6 +718,13 @@ export async function getCommercialReadiness(
       actionPath: '/fb-apps',
     })
   }
+  if (mode === 'organization' && !hasBulkAdCreateFeature) {
+    risks.push({
+      level: 'critical',
+      message: '该组织未开通批量建广告功能，客户发布任务会被套餐功能拦截。',
+      actionPath: '/organizations',
+    })
+  }
   if (mode === 'organization' && activeTokenCount === 0) {
     risks.push({
       level: 'critical',
@@ -810,6 +826,17 @@ export async function getCommercialReadiness(
       '完成 Facebook App 公开授权',
       '确认 App 已上线，并且 Login for Business 配置、Marketing API 权限和 Public OAuth 检查都已通过。',
       '/fb-apps',
+      '平台运营',
+      'setup',
+    ))
+  }
+  if (mode === 'organization' && !hasBulkAdCreateFeature) {
+    nextActions.push(action(
+      'enable_bulk_ad_feature',
+      'critical',
+      '开启批量建广告功能',
+      '在组织管理中把该客户组织切到包含批量建广告的套餐，或使用自定义功能开关启用该能力。',
+      '/organizations',
       '平台运营',
       'setup',
     ))
@@ -1022,6 +1049,7 @@ export async function getCommercialReadiness(
       facebookPageAccounts: facebookAssets.summary.pageLinkedAccountCount,
       facebookPixelAccounts: facebookAssets.summary.pixelLinkedAccountCount,
       facebookReadyAccounts: facebookAssets.summary.readyAccountCount,
+      enabledFeatures: features.length,
       recentTaskIssueTypes: recentTaskIssueBuckets.length,
       expiredTokens: tokenHealth.expiredCount,
       expiringSoonTokens: tokenHealth.expiringSoonCount,

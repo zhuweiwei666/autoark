@@ -313,6 +313,64 @@ describe('commercial publish limits', () => {
     ]))
   })
 
+  it('marks readiness blocked when bulk ad create feature is disabled', async () => {
+    jest.spyOn(Organization, 'findById').mockResolvedValue(mockOrganization({
+      settings: {
+        features: ['facebook_oauth', 'material_library', 'team_management'],
+      },
+    }) as any)
+    jest.spyOn(User, 'countDocuments')
+      .mockResolvedValueOnce(2 as any)
+      .mockResolvedValueOnce(2 as any)
+    jest.spyOn(Account, 'countDocuments').mockResolvedValue(1 as any)
+    jest.spyOn(FbToken, 'countDocuments').mockResolvedValue(1 as any)
+    jest.spyOn(Material, 'countDocuments').mockResolvedValue(3 as any)
+    jest.spyOn(AdDraft, 'countDocuments').mockResolvedValue(1 as any)
+    jest.spyOn(AdTask, 'countDocuments')
+      .mockResolvedValueOnce(1 as any)
+      .mockResolvedValueOnce(1 as any)
+      .mockResolvedValueOnce(0 as any)
+      .mockResolvedValueOnce(0 as any)
+      .mockResolvedValueOnce(1 as any)
+    jest.spyOn(AdTask, 'find').mockReturnValue(sortedLeanFindResult([]) as any)
+    jest.spyOn(FacebookApp, 'countDocuments')
+      .mockResolvedValueOnce(1 as any)
+      .mockResolvedValueOnce(1 as any)
+    jest.spyOn(FbToken, 'find').mockReturnValue(tokenFindResult([{
+      _id: '665000000000000000000399',
+      fbUserId: 'fb_ready',
+      fbUserName: 'Ready User',
+      lastCheckedAt: new Date(),
+    }]) as any)
+    jest.spyOn(FacebookUser, 'find').mockReturnValue(leanFindResult([{
+      fbUserId: 'fb_ready',
+      syncStatus: 'completed',
+      adAccounts: [{ accountId: 'act_1', name: 'Ready account', status: 1 }],
+      pages: [{ pageId: 'page_1', name: 'Page 1', accounts: [{ accountId: 'act_1' }] }],
+      pixels: [{ pixelId: 'pixel_1', name: 'Pixel 1', accounts: [{ accountId: 'act_1' }] }],
+    }]) as any)
+
+    const readiness = await getCommercialReadiness({
+      userId: 'org_admin',
+      role: UserRole.ORG_ADMIN,
+      organizationId,
+    } as any)
+
+    expect(readiness.checklist.find(item => item.id === 'bulk_ad_feature')).toMatchObject({
+      status: 'blocked',
+      metric: '未开启',
+    })
+    expect(readiness.risks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        level: 'critical',
+        message: expect.stringContaining('未开通批量建广告功能'),
+      }),
+    ]))
+    expect(readiness.nextActions.map(action => action.id)).toContain('enable_bulk_ad_feature')
+    expect(readiness.metrics.enabledFeatures).toBe(3)
+    expect(readiness.state.level).toBe('blocked')
+  })
+
   it('returns a commercial usage ledger with daily task counts and quota events', async () => {
     jest.spyOn(Organization, 'findById').mockResolvedValue(mockOrganization({ name: 'Acme Team' }) as any)
     jest.spyOn(User, 'countDocuments').mockResolvedValue(3 as any)
