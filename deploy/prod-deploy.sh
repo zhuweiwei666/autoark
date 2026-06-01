@@ -49,6 +49,13 @@ ssh "$PROD_HOST" "set -euo pipefail
     git clone '$REPO_URL' '$APP_DIR'
   fi
   cd '$APP_DIR'
+  git fetch origin
+  if git show-ref --verify --quiet 'refs/remotes/origin/$AUTOARK_REF'; then
+    git checkout -B '$AUTOARK_REF' 'origin/$AUTOARK_REF'
+    git pull --ff-only origin '$AUTOARK_REF'
+  else
+    git checkout --detach '$AUTOARK_REF'
+  fi
   if [ ! -f deploy/.env ]; then
     if [ -f '$REMOTE_ENV_BACKUP' ]; then
       cp '$REMOTE_ENV_BACKUP' deploy/.env
