@@ -16,4 +16,4 @@ userSchema.methods.comparePassword = function (candidate: string) {
   return bcrypt.compare(candidate, this.password)
 }
 
-export const User = mongoose.model('User', userSchema)
+export const User = mongoose.model('AgentUser', userSchema, 'agent_users')
