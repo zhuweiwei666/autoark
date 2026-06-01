@@ -1,6 +1,7 @@
 import FacebookUser from '../models/FacebookUser'
 import logger from '../utils/logger'
 import { FB_VERSIONED_URL } from '../config/facebook.config'
+import { sanitizeFacebookPages } from '../utils/facebookAssetSanitizer'
 
 const FB_BASE_URL = FB_VERSIONED_URL
 
@@ -89,7 +90,6 @@ export const syncFacebookUserAssets = async (
             pagesMap.set(page.id, {
               pageId: page.id,
               name: page.name,
-              accessToken: page.access_token,
               accounts: [{ accountId }],
             })
           } else {
@@ -197,12 +197,12 @@ export const getCachedPages = async (fbUserId: string, accountId?: string, scope
   
   if (accountId) {
     // 筛选该账户可用的粉丝页
-    return user.pages.filter((p: any) => 
+    return sanitizeFacebookPages(user.pages.filter((p: any) =>
       p.accounts?.some((a: any) => a.accountId === accountId)
-    )
+    ))
   }
   
-  return user.pages
+  return sanitizeFacebookPages(user.pages)
 }
 
 /**

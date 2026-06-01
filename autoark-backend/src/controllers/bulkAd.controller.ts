@@ -25,6 +25,7 @@ import * as facebookUserService from '../services/facebookUser.service'
 import { buildFacebookAssetDiagnostics } from '../services/facebookAssets.diagnostics.service'
 import { writeAuditLog } from '../services/auditLog.service'
 import { buildPublicOAuthReadiness } from '../utils/facebookAppReadiness'
+import { sanitizeFacebookPages } from '../utils/facebookAssetSanitizer'
 import {
   combineFilters,
   sanitizeScopedUpdate,
@@ -1625,7 +1626,7 @@ export const getAuthPages = async (req: Request, res: Response) => {
         // 使用找到的 token 获取该用户管理的所有主页
         const userPagesResult = await facebookClient.get(`/${fbToken.fbUserId}/accounts`, {
           access_token: fbToken.token,
-          fields: 'id,name,picture,access_token',
+          fields: 'id,name,picture',
           limit: 100,
         })
         pages = (userPagesResult.data || []).filter((p: any) => p.id && p.name)
@@ -1644,7 +1645,7 @@ export const getAuthPages = async (req: Request, res: Response) => {
       })
     }
     
-    res.json({ success: true, data: pages })
+    res.json({ success: true, data: sanitizeFacebookPages(pages) })
   } catch (error: any) {
     logger.error('[BulkAd] Get pages failed:', error)
     res.status(500).json({ success: false, error: error.message })

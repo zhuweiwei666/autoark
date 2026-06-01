@@ -1,4 +1,5 @@
 import mongoose from 'mongoose'
+import { sanitizeFacebookPages } from '../utils/facebookAssetSanitizer'
 
 /**
  * Facebook 授权用户模型
@@ -74,8 +75,20 @@ const facebookUserSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
-    toJSON: { virtuals: true },
-    toObject: { virtuals: true },
+    toJSON: {
+      virtuals: true,
+      transform: (_doc, ret: any) => {
+        ret.pages = sanitizeFacebookPages(ret.pages || [])
+        return ret
+      },
+    },
+    toObject: {
+      virtuals: true,
+      transform: (_doc, ret: any) => {
+        ret.pages = sanitizeFacebookPages(ret.pages || [])
+        return ret
+      },
+    },
   }
 )
 
