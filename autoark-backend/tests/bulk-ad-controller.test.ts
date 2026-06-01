@@ -25,6 +25,14 @@ describe('bulk ad controller', () => {
   it('writes an audit log when a task support package is generated', async () => {
     const supportPackage = {
       supportId: 'AUTOARK-TASK-20260601170000-000401',
+      system: {
+        build: {
+          ref: 'feat/commercial-saas-foundation',
+          commit: '1234567890abcdef',
+          shortCommit: '1234567890ab',
+          deployedAt: '2026-06-01T12:00:00Z',
+        },
+      },
       task: {
         id: '665000000000000000000401',
         name: 'autoark_demo_task',
@@ -76,6 +84,10 @@ describe('bulk ad controller', () => {
         supportId: 'AUTOARK-TASK-20260601170000-000401',
         taskStatus: 'failed',
         health: 'blocked',
+        buildRef: 'feat/commercial-saas-foundation',
+        buildCommit: '1234567890abcdef',
+        buildShortCommit: '1234567890ab',
+        buildDeployedAt: '2026-06-01T12:00:00Z',
         totalErrors: 2,
         blockedErrors: 2,
         failedAccounts: 1,

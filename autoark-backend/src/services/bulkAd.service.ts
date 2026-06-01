@@ -23,6 +23,7 @@ import {
 import { facebookClient } from '../integration/facebook/facebookClient'
 import { combineFilters } from '../utils/accessControl'
 import { normalizeForStorage } from '../utils/accountId'
+import { getBuildInfo } from '../utils/buildInfo'
 import {
   buildTaskOperationalDiagnostics,
   diagnoseBulkAdError,
@@ -1465,6 +1466,9 @@ export const getTaskSupportPackage = async (taskId: string, accessFilter: any = 
   return {
     supportId: buildTaskSupportId(taskId, generatedAt),
     generatedAt: generatedAt.toISOString(),
+    system: {
+      build: getBuildInfo(),
+    },
     task: {
       id: String(task._id),
       name: task.name,

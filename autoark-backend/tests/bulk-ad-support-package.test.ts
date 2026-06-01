@@ -16,9 +16,30 @@ const auditQuery = (value: any) => ({
   lean: jest.fn().mockResolvedValue(value),
 })
 
+const originalDeployRef = process.env.AUTOARK_DEPLOY_REF
+const originalDeployCommit = process.env.AUTOARK_DEPLOY_COMMIT
+const originalDeployedAt = process.env.AUTOARK_DEPLOYED_AT
+
 describe('bulk ad task support package', () => {
+  beforeEach(() => {
+    process.env.AUTOARK_DEPLOY_REF = 'feat/commercial-saas-foundation'
+    process.env.AUTOARK_DEPLOY_COMMIT = '1234567890abcdef'
+    process.env.AUTOARK_DEPLOYED_AT = '2026-06-01T12:00:00Z'
+  })
+
   afterEach(() => {
     jest.restoreAllMocks()
+    for (const [key, value] of Object.entries({
+      AUTOARK_DEPLOY_REF: originalDeployRef,
+      AUTOARK_DEPLOY_COMMIT: originalDeployCommit,
+      AUTOARK_DEPLOYED_AT: originalDeployedAt,
+    })) {
+      if (value === undefined) {
+        delete process.env[key]
+      } else {
+        process.env[key] = value
+      }
+    }
   })
 
   it('builds an operator support package with normalized diagnostics and safe audit history', async () => {
@@ -70,6 +91,12 @@ describe('bulk ad task support package', () => {
     const supportPackage = await getTaskSupportPackage(taskId, { organizationId: '665000000000000000000001' })
 
     expect(supportPackage.supportId).toMatch(/^AUTOARK-TASK-\d{14}-000401$/)
+    expect(supportPackage.system.build).toMatchObject({
+      ref: 'feat/commercial-saas-foundation',
+      commit: '1234567890abcdef',
+      shortCommit: '1234567890ab',
+      deployedAt: '2026-06-01T12:00:00Z',
+    })
     expect(supportPackage.task).toMatchObject({
       id: taskId,
       name: 'autoark_demo_task',

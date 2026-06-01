@@ -101,6 +101,14 @@ interface TaskDiagnostics {
 interface TaskSupportPackage {
   supportId: string
   generatedAt: string
+  system?: {
+    build?: {
+      ref?: string
+      commit?: string
+      shortCommit?: string
+      deployedAt?: string | null
+    }
+  }
   task: {
     id: string
     name?: string
@@ -462,6 +470,7 @@ export default function TaskManagementPage() {
     const lines = [
       `排障包：${selectedTaskSupportPackage.supportId}`,
       `任务：${selectedTaskSupportPackage.task.name || selectedTaskSupportPackage.task.id}`,
+      `版本：${selectedTaskSupportPackage.system?.build?.shortCommit || 'unknown'} (${selectedTaskSupportPackage.system?.build?.ref || 'unknown'})`,
       `状态：${STATUS_MAP[selectedTaskSupportPackage.task.status]?.label || selectedTaskSupportPackage.task.status}`,
       `健康度：${DIAGNOSTIC_HEALTH_MAP[selectedTaskSupportPackage.diagnostics.health]?.label || selectedTaskSupportPackage.diagnostics.health}`,
       `账户：成功 ${selectedTaskSupportPackage.diagnostics.summary.successAccounts} / 失败 ${selectedTaskSupportPackage.diagnostics.summary.failedAccounts} / 总计 ${selectedTaskSupportPackage.diagnostics.summary.totalAccounts}`,
@@ -731,6 +740,9 @@ export default function TaskManagementPage() {
                       <div>
                         <h3 className="font-semibold text-sm text-slate-900">任务排障包</h3>
                         <div className="mt-1 font-mono text-xs text-slate-500">{selectedTaskSupportPackage.supportId}</div>
+                        <div className="mt-1 font-mono text-[11px] font-semibold text-slate-400">
+                          build {selectedTaskSupportPackage.system?.build?.shortCommit || 'unknown'}
+                        </div>
                       </div>
                       <div className="flex items-center gap-2">
                         <span className={`rounded px-2 py-0.5 text-xs font-semibold ${DIAGNOSTIC_HEALTH_MAP[selectedTaskSupportPackage.diagnostics.health]?.color || DIAGNOSTIC_HEALTH_MAP.unknown.color}`}>
