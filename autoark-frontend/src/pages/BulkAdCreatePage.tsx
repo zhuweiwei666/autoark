@@ -71,6 +71,56 @@ interface FacebookLoginAttempt {
   openedAt: string
 }
 
+interface PublishBlocker {
+  message: string
+  errorCode?: string
+  details?: Record<string, any>
+  nextActions: string[]
+  actionPath?: string
+}
+
+const commercialBlockerActions: Record<string, { actions: string[]; actionPath?: string }> = {
+  ORGANIZATION_NOT_ACTIVE: {
+    actions: ['联系平台运营启用客户组织。', '启用后刷新页面并重新发布任务。'],
+    actionPath: '/users',
+  },
+  BILLING_NOT_ACTIVE: {
+    actions: ['处理客户续费或账单暂停问题。', '恢复账单状态后重新发布任务。'],
+    actionPath: '/commercial',
+  },
+  TASK_ACCOUNT_LIMIT_EXCEEDED: {
+    actions: ['减少本次选择的广告账户数量。', '升级套餐或让平台运营调整单次账户额度。'],
+    actionPath: '/commercial',
+  },
+  MAX_CONCURRENT_TASKS_REACHED: {
+    actions: ['等待当前执行中的任务完成。', '降低重跑倍率或升级并发额度。'],
+    actionPath: '/bulk-ad/tasks',
+  },
+  MONTHLY_TASK_LIMIT_REACHED: {
+    actions: ['暂停本月新增发布，或升级月度任务额度。', '清理测试组织用量后再发布正式任务。'],
+    actionPath: '/commercial',
+  },
+}
+
+const buildPublishBlocker = (data: any): PublishBlocker => {
+  const preset = data?.errorCode ? commercialBlockerActions[data.errorCode] : undefined
+  const details = data?.details || {}
+  const detailActions: string[] = []
+  if (details.limit !== undefined) detailActions.push(`当前额度上限：${details.limit}`)
+  if (details.monthlyTaskCount !== undefined) detailActions.push(`本月已发布任务：${details.monthlyTaskCount}`)
+  if (details.runningTaskCount !== undefined) detailActions.push(`当前执行中任务：${details.runningTaskCount}`)
+  if (details.requestedAccounts !== undefined) detailActions.push(`本次选择账户：${details.requestedAccounts}`)
+  if (details.requestedTasks !== undefined) detailActions.push(`本次请求任务数：${details.requestedTasks}`)
+
+  return {
+    message: data?.error || '发布失败',
+    errorCode: data?.errorCode,
+    details,
+    nextActions: [...detailActions, ...(preset?.actions || ['按错误提示修正配置后重新发布。'])],
+    actionPath: preset?.actionPath,
+  }
+}
+
 function FacebookLoginAttemptPanel({
   attempt,
   onStop,
@@ -129,6 +179,7 @@ export default function BulkAdCreatePage() {
   
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [publishBlocker, setPublishBlocker] = useState<PublishBlocker | null>(null)
   
   // 授权状态
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null)
@@ -293,6 +344,7 @@ export default function BulkAdCreatePage() {
   const handleFacebookLogin = async () => {
     setLoginLoading(true)
     setError(null)
+    setPublishBlocker(null)
     setLoginAttempt(null)
     
     try {
@@ -384,6 +436,8 @@ export default function BulkAdCreatePage() {
 
   const stopFacebookLoginWait = () => {
     setLoginLoading(false)
+    setLoginAttempt(null)
+    setPublishBlocker(null)
     setError('已停止等待 Facebook 授权窗口。若弹窗显示“功能不可用”，请先关闭弹窗，再到 App 管理检查 Public OAuth 与 Login for Business 配置。')
   }
   
@@ -752,6 +806,7 @@ export default function BulkAdCreatePage() {
   const handlePublish = async () => {
     setLoading(true)
     setError(null)
+    setPublishBlocker(null)
     try {
       const draft = {
         name: `批量广告_${new Date().toISOString().slice(0, 10)}`,
@@ -777,13 +832,16 @@ export default function BulkAdCreatePage() {
       const publishRes = await authFetch(`${API_BASE}/bulk-ad/drafts/${draftId}/publish`, { method: 'POST' })
       const publishData = await publishRes.json()
       if (!publishData.success) {
-        const supportCode = publishData.errorCode ? `（错误码：${publishData.errorCode}）` : ''
-        throw new Error(`${publishData.error || '发布失败'}${supportCode}`)
+        const blocker = buildPublishBlocker(publishData)
+        setPublishBlocker(blocker)
+        setError(blocker.message)
+        return
       }
       
       navigate(`/bulk-ad/tasks?taskId=${publishData.data._id}`)
     } catch (err: any) {
       setError(err.message)
+      setPublishBlocker(null)
     } finally {
       setLoading(false)
     }
@@ -809,9 +867,40 @@ export default function BulkAdCreatePage() {
         
         {/* 错误提示 */}
         {error && (
-          <div className="mb-6 bg-red-50 border border-red-200 text-red-600 px-4 py-3 rounded-lg flex items-center justify-between">
-            <span>{error}</span>
-            <button onClick={() => setError(null)} className="text-red-400 hover:text-red-600">✕</button>
+          <div className="mb-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-red-700">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-sm font-semibold">{publishBlocker ? '发布被阻断' : '操作失败'}</div>
+                <div className="mt-1 text-sm font-medium">{error}</div>
+              </div>
+              <button onClick={() => { setError(null); setPublishBlocker(null) }} className="text-red-400 hover:text-red-600">✕</button>
+            </div>
+            {publishBlocker && (
+              <div className="mt-3 rounded-lg border border-red-100 bg-white px-3 py-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  {publishBlocker.errorCode && (
+                    <span className="rounded bg-red-100 px-2 py-0.5 font-mono text-xs font-semibold text-red-700">
+                      {publishBlocker.errorCode}
+                    </span>
+                  )}
+                  <span className="text-xs font-semibold text-slate-500">商业额度或账单保护已生效</span>
+                </div>
+                <ul className="mt-2 list-disc space-y-1 pl-4 text-sm leading-6 text-slate-700">
+                  {publishBlocker.nextActions.map((action) => (
+                    <li key={action}>{action}</li>
+                  ))}
+                </ul>
+                {publishBlocker.actionPath && (
+                  <button
+                    type="button"
+                    onClick={() => navigate(publishBlocker.actionPath!)}
+                    className="mt-3 rounded-lg bg-slate-950 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800"
+                  >
+                    去处理
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         )}
         
