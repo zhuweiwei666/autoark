@@ -2,6 +2,7 @@ import Account from '../models/Account'
 import AdDraft from '../models/AdDraft'
 import AdTask from '../models/AdTask'
 import FacebookApp from '../models/FacebookApp'
+import FacebookUser from '../models/FacebookUser'
 import FbToken from '../models/FbToken'
 import Material from '../models/Material'
 import Organization, {
@@ -13,6 +14,7 @@ import Organization, {
 import User, { UserRole, UserStatus } from '../models/User'
 import { JwtPayload } from '../utils/jwt'
 import { objectIdValue } from '../utils/accessControl'
+import { buildFacebookAssetDiagnostics } from './facebookAssets.diagnostics.service'
 
 type ChecklistStatus = 'done' | 'warning' | 'pending' | 'blocked'
 type ScopeMode = 'organization' | 'platform'
@@ -319,6 +321,7 @@ export async function getCommercialReadiness(
     monthlyTaskCount,
     publicOauthAppCount,
     healthyAppCount,
+    activeTokenDocs,
   ] = await Promise.all([
     User.countDocuments(mode === 'organization' ? { organizationId: objectIdValue(organizationId) } : {}),
     User.countDocuments(mode === 'organization'
@@ -342,7 +345,26 @@ export async function getCommercialReadiness(
       status: 'active',
       'validation.isValid': true,
     }),
+    FbToken.find({ ...orgFilter, status: 'active' })
+      .select('_id fbUserId fbUserName expiresAt updatedAt')
+      .sort({ updatedAt: -1 })
+      .lean(),
   ])
+
+  const tokenIds = activeTokenDocs.map((token: any) => token._id).filter(Boolean)
+  const fbUserIds = activeTokenDocs.map((token: any) => token.fbUserId).filter(Boolean)
+  const facebookUsers = activeTokenDocs.length > 0
+    ? await FacebookUser.find({
+      $or: [
+        { tokenId: { $in: tokenIds } },
+        { fbUserId: { $in: fbUserIds } },
+      ],
+    }).lean()
+    : []
+  const facebookAssets = buildFacebookAssetDiagnostics({
+    tokens: activeTokenDocs,
+    users: facebookUsers,
+  })
 
   const plan = mode === 'platform' ? OrganizationPlan.ENTERPRISE : getEffectivePlan(organization)
   const limits = mode === 'platform' ? PLAN_DEFAULTS[OrganizationPlan.ENTERPRISE].limits : getEffectiveLimits(organization)
@@ -395,6 +417,30 @@ export async function getCommercialReadiness(
       `${adAccountCount} 个账户`,
     ),
     step(
+      'facebook_pages',
+      'Page 资产可用',
+      '批量创建广告创意前，广告账户必须能使用至少一个 Facebook Page。',
+      facebookAssets.summary.pageLinkedAccountCount > 0 ? 'done' : activeTokenCount > 0 ? 'blocked' : 'pending',
+      '/bulk-ad/create',
+      `${facebookAssets.summary.pageLinkedAccountCount} 个账户`,
+    ),
+    step(
+      'facebook_pixels',
+      'Pixel 资产可用',
+      '转化目标投放前，广告账户必须能访问 Pixel，否则发布前会被阻断。',
+      facebookAssets.summary.pixelLinkedAccountCount > 0 ? 'done' : activeTokenCount > 0 ? 'blocked' : 'pending',
+      '/bulk-ad/create',
+      `${facebookAssets.summary.pixelLinkedAccountCount} 个账户`,
+    ),
+    step(
+      'facebook_ready_accounts',
+      '可投放账户',
+      '账户同时满足活跃、Page、Pixel 后才适合交付客户批量发布。',
+      facebookAssets.summary.readyAccountCount > 0 ? 'done' : activeTokenCount > 0 ? 'blocked' : 'pending',
+      '/bulk-ad/create',
+      `${facebookAssets.summary.readyAccountCount} 个就绪`,
+    ),
+    step(
       'materials',
       '素材库准备',
       '批量创建广告前，需要先上传或导入可投放素材。',
@@ -440,6 +486,20 @@ export async function getCommercialReadiness(
     risks.push({
       level: 'critical',
       message: '该组织还没有活跃 Facebook 授权，无法拉取资产或创建广告。',
+      actionPath: '/bulk-ad/create',
+    })
+  }
+  if (activeTokenCount > 0 && facebookAssets.summary.pageLinkedAccountCount === 0) {
+    risks.push({
+      level: 'critical',
+      message: 'Facebook 授权存在，但没有任何广告账户可使用 Page，客户无法创建广告创意。',
+      actionPath: '/bulk-ad/create',
+    })
+  }
+  if (activeTokenCount > 0 && facebookAssets.summary.pixelLinkedAccountCount === 0) {
+    risks.push({
+      level: 'critical',
+      message: 'Facebook 授权存在，但没有任何广告账户可使用 Pixel，转化目标投放会被阻断。',
       actionPath: '/bulk-ad/create',
     })
   }
@@ -494,6 +554,9 @@ export async function getCommercialReadiness(
       monthlyTasks: monthlyTaskCount,
       publicOauthApps: publicOauthAppCount,
       healthyApps: healthyAppCount,
+      facebookPageAccounts: facebookAssets.summary.pageLinkedAccountCount,
+      facebookPixelAccounts: facebookAssets.summary.pixelLinkedAccountCount,
+      facebookReadyAccounts: facebookAssets.summary.readyAccountCount,
     },
     checklist,
     score: computeScore(checklist),

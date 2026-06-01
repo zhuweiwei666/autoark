@@ -198,7 +198,7 @@ export default function CommercialCenterPage() {
       {
         label: "广告账户",
         value: String(readiness.metrics.adAccounts || 0),
-        detail: `${readiness.metrics.activeTokens || 0} 个 Facebook 授权`,
+        detail: `${readiness.metrics.activeTokens || 0} 授权 · ${readiness.metrics.facebookReadyAccounts || 0} 就绪`,
         icon: <Stack size={22} weight="fill" />,
       },
       {

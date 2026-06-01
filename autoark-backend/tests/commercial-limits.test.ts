@@ -2,6 +2,7 @@ import Account from '../src/models/Account'
 import AdTask from '../src/models/AdTask'
 import AdDraft from '../src/models/AdDraft'
 import FacebookApp from '../src/models/FacebookApp'
+import FacebookUser from '../src/models/FacebookUser'
 import FbToken from '../src/models/FbToken'
 import Material from '../src/models/Material'
 import Organization, {
@@ -32,6 +33,16 @@ const mockOrganization = (overrides: any = {}) => ({
 describe('commercial publish limits', () => {
   afterEach(() => {
     jest.restoreAllMocks()
+  })
+
+  const tokenFindResult = (tokens: any[]) => ({
+    select: jest.fn().mockReturnThis(),
+    sort: jest.fn().mockReturnThis(),
+    lean: jest.fn().mockResolvedValue(tokens),
+  })
+
+  const leanFindResult = (items: any[]) => ({
+    lean: jest.fn().mockResolvedValue(items),
   })
 
   it('blocks organizations with inactive billing', async () => {
@@ -112,6 +123,18 @@ describe('commercial publish limits', () => {
     jest.spyOn(FacebookApp, 'countDocuments')
       .mockResolvedValueOnce(1 as any)
       .mockResolvedValueOnce(1 as any)
+    jest.spyOn(FbToken, 'find').mockReturnValue(tokenFindResult([{
+      _id: '665000000000000000000099',
+      fbUserId: 'fb_1',
+      fbUserName: 'Facebook User',
+    }]) as any)
+    jest.spyOn(FacebookUser, 'find').mockReturnValue(leanFindResult([{
+      fbUserId: 'fb_1',
+      syncStatus: 'completed',
+      adAccounts: [{ accountId: 'act_1', name: 'Ready account', status: 1 }],
+      pages: [{ pageId: 'page_1', name: 'Page 1', accounts: [{ accountId: 'act_1' }] }],
+      pixels: [{ pixelId: 'pixel_1', name: 'Pixel 1', accounts: [{ accountId: 'act_1' }] }],
+    }]) as any)
 
     const readiness = await getCommercialReadiness({
       userId: 'admin',
@@ -123,5 +146,7 @@ describe('commercial publish limits', () => {
     expect(readiness.plan.limits.maxConcurrentTasks).toBeNull()
     expect(readiness.usage.monthlyTasks.limit).toBeNull()
     expect(readiness.usage.concurrentTasks.limit).toBeNull()
+    expect(readiness.metrics.facebookReadyAccounts).toBe(1)
+    expect(readiness.checklist.find(item => item.id === 'facebook_ready_accounts')?.status).toBe('done')
   })
 })
