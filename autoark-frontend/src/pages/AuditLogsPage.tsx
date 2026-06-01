@@ -9,6 +9,7 @@ const categories = [
   { value: "user", label: "用户管理" },
   { value: "organization", label: "组织管理" },
   { value: "bulk_ad", label: "批量投放" },
+  { value: "facebook_app", label: "Facebook App" },
 ];
 
 const statuses = [
@@ -41,6 +42,11 @@ const actionLabel: Record<string, string> = {
   "bulk_ad.retry": "重试失败任务",
   "bulk_ad.rerun": "重新执行任务",
   "bulk_ad.facebook_resync": "同步 Facebook 资产",
+  "facebook_app.create": "创建 Facebook App",
+  "facebook_app.update": "更新 Facebook App",
+  "facebook_app.delete": "删除 Facebook App",
+  "facebook_app.validate": "验证 Facebook App",
+  "facebook_app.compliance_update": "更新 App 合规",
 };
 
 const formatTime = (value: string) => {

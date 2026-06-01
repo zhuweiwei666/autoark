@@ -3,6 +3,7 @@ import FacebookApp from '../models/FacebookApp'
 import axios from 'axios'
 import logger from '../utils/logger'
 import { FB_BASE_URL, FB_OAUTH_URL } from '../config/facebook.config'
+import { writeAuditLog } from '../services/auditLog.service'
 
 // 公开 OAuth 最低需要的权限（用于“任意 FB 号可授权”）
 const PUBLIC_OAUTH_REQUIRED_PERMISSIONS = [
@@ -22,6 +23,36 @@ const computePublicOauthReady = (app: any): boolean => {
     // 这里用“Advanced 且 Approved”作为可对外授权的判定
     return p && p.access === 'advanced' && p.status === 'approved'
   })
+}
+
+const writeFacebookAppAudit = (req: Request, input: {
+  action: string
+  status?: 'success' | 'failed' | 'warning'
+  targetId?: string
+  summary?: string
+  reason?: string
+  metadata?: any
+}) => writeAuditLog(req, {
+  category: 'facebook_app',
+  targetType: 'facebook_app',
+  organizationId: req.user?.organizationId,
+  userId: req.user?.userId,
+  ...input,
+})
+
+const complianceAuditMetadata = (app: any) => {
+  const permissions = Array.isArray(app?.compliance?.permissions) ? app.compliance.permissions : []
+  return {
+    appId: app?.appId,
+    appMode: app?.compliance?.appMode,
+    businessVerification: app?.compliance?.businessVerification,
+    appReview: app?.compliance?.appReview,
+    publicOauthReady: Boolean(app?.compliance?.publicOauthReady),
+    permissionCount: permissions.length,
+    approvedAdvancedPermissions: permissions.filter((permission: any) => (
+      permission.access === 'advanced' && permission.status === 'approved'
+    )).length,
+  }
 }
 
 /**
@@ -87,9 +118,28 @@ export const createApp = async (req: Request, res: Response) => {
 
     await app.save()
     logger.info(`创建 Facebook App: ${appName || appId}`)
+    await writeFacebookAppAudit(req, {
+      action: 'facebook_app.create',
+      targetId: String(app._id),
+      summary: `创建 Facebook App：${app.appName}`,
+      metadata: {
+        appId: app.appId,
+        validationIsValid: app.validation?.isValid,
+        status: app.status,
+      },
+    })
     res.json({ success: true, data: app })
   } catch (error: any) {
     logger.error('创建 Facebook App 失败:', error)
+    await writeFacebookAppAudit(req, {
+      action: 'facebook_app.create',
+      status: 'failed',
+      summary: '创建 Facebook App 失败',
+      reason: error.message,
+      metadata: {
+        appId: req.body?.appId,
+      },
+    })
     res.status(500).json({ success: false, error: error.message })
   }
 }
@@ -140,9 +190,27 @@ export const updateApp = async (req: Request, res: Response) => {
 
     await app.save()
     logger.info(`更新 Facebook App: ${app.appName}`)
+    await writeFacebookAppAudit(req, {
+      action: 'facebook_app.update',
+      targetId: String(app._id),
+      summary: `更新 Facebook App：${app.appName}`,
+      metadata: {
+        appId: app.appId,
+        status: app.status,
+        validationIsValid: app.validation?.isValid,
+        publicOauthReady: app.compliance?.publicOauthReady,
+      },
+    })
     res.json({ success: true, data: app })
   } catch (error: any) {
     logger.error('更新 Facebook App 失败:', error)
+    await writeFacebookAppAudit(req, {
+      action: 'facebook_app.update',
+      status: 'failed',
+      targetId: req.params.id,
+      summary: '更新 Facebook App 失败',
+      reason: error.message,
+    })
     res.status(500).json({ success: false, error: error.message })
   }
 }
@@ -181,9 +249,22 @@ export const updateCompliance = async (req: Request, res: Response) => {
     app.compliance.lastCheckedAt = new Date()
 
     await app.save()
+    await writeFacebookAppAudit(req, {
+      action: 'facebook_app.compliance_update',
+      targetId: String(app._id),
+      summary: `更新 Facebook App 合规信息：${app.appName}`,
+      metadata: complianceAuditMetadata(app),
+    })
     res.json({ success: true, data: app })
   } catch (error: any) {
     logger.error('更新 App 合规信息失败:', error)
+    await writeFacebookAppAudit(req, {
+      action: 'facebook_app.compliance_update',
+      status: 'failed',
+      targetId: req.params.id,
+      summary: '更新 Facebook App 合规信息失败',
+      reason: error.message,
+    })
     res.status(500).json({ success: false, error: error.message })
   }
 }
@@ -199,9 +280,24 @@ export const deleteApp = async (req: Request, res: Response) => {
       return res.status(404).json({ success: false, error: 'App 不存在' })
     }
     logger.info(`删除 Facebook App: ${app.appName}`)
+    await writeFacebookAppAudit(req, {
+      action: 'facebook_app.delete',
+      targetId: String(app._id),
+      summary: `删除 Facebook App：${app.appName}`,
+      metadata: {
+        appId: app.appId,
+      },
+    })
     res.json({ success: true, message: '删除成功' })
   } catch (error: any) {
     logger.error('删除 Facebook App 失败:', error)
+    await writeFacebookAppAudit(req, {
+      action: 'facebook_app.delete',
+      status: 'failed',
+      targetId: req.params.id,
+      summary: '删除 Facebook App 失败',
+      reason: error.message,
+    })
     res.status(500).json({ success: false, error: error.message })
   }
 }
@@ -232,9 +328,27 @@ export const validateApp = async (req: Request, res: Response) => {
     }
 
     await app.save()
+    await writeFacebookAppAudit(req, {
+      action: 'facebook_app.validate',
+      status: result.isValid ? 'success' : 'failed',
+      targetId: String(app._id),
+      summary: result.isValid ? `验证 Facebook App 成功：${app.appName}` : `验证 Facebook App 失败：${app.appName}`,
+      reason: result.error,
+      metadata: {
+        appId: app.appId,
+        validationIsValid: result.isValid,
+      },
+    })
     res.json({ success: true, data: { ...result, app } })
   } catch (error: any) {
     logger.error('验证 Facebook App 失败:', error)
+    await writeFacebookAppAudit(req, {
+      action: 'facebook_app.validate',
+      status: 'failed',
+      targetId: req.params.id,
+      summary: '验证 Facebook App 失败',
+      reason: error.message,
+    })
     res.status(500).json({ success: false, error: error.message })
   }
 }
