@@ -222,6 +222,7 @@ export async function findMaterialByFacebookId(
 export async function recordAdMaterialMapping(data: {
   adId: string
   materialId: string
+  organizationId?: string
   accountId?: string
   campaignId?: string
   adsetId?: string
@@ -268,6 +269,7 @@ export async function recordAdMaterialMappings(
   mappings: Array<{
     adId: string
     materialId: string
+    organizationId?: string
     accountId?: string
     campaignId?: string
     adsetId?: string
@@ -586,4 +588,3 @@ export default {
   getReusableMaterials,
   getMaterialFullData,
 }
-

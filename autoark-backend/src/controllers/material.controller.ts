@@ -1195,10 +1195,12 @@ export const recordAdMapping = async (req: Request, res: Response) => {
     if (!material) {
       return res.status(404).json({ success: false, error: '素材不存在或无权访问' })
     }
+    const materialOrganizationId = (material as any).organizationId?.toString?.() || req.user?.organizationId
     
     const success = await recordAdMaterialMapping({
       adId,
       materialId,
+      organizationId: materialOrganizationId,
       accountId,
       campaignId,
       adsetId,
@@ -1239,9 +1241,20 @@ export const recordAdMappingsBatch = async (req: Request, res: Response) => {
     const visibleMaterials = await Material.find(combineFilters(
       { _id: { $in: materialIds } },
       getMaterialFilter(req),
-    )).select('_id').lean()
+    )).select('_id organizationId').lean()
     const visibleMaterialIds = new Set(visibleMaterials.map((material: any) => material._id.toString()))
-    const scopedMappings = mappings.filter((mapping: any) => visibleMaterialIds.has(String(mapping.materialId)))
+    const materialOrgById = new Map(
+      visibleMaterials.map((material: any) => [
+        material._id.toString(),
+        material.organizationId?.toString?.() || req.user?.organizationId,
+      ]),
+    )
+    const scopedMappings = mappings
+      .filter((mapping: any) => visibleMaterialIds.has(String(mapping.materialId)))
+      .map((mapping: any) => ({
+        ...mapping,
+        organizationId: materialOrgById.get(String(mapping.materialId)),
+      }))
 
     const result = await recordAdMaterialMappings(scopedMappings)
     
