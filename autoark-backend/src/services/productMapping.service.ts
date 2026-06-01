@@ -6,6 +6,7 @@ import Account from '../models/Account'
 import { facebookClient } from '../integration/facebook/facebookClient'
 import { URL } from 'url'
 import { combineFilters } from '../utils/accessControl'
+import { normalizeForStorage } from '../utils/accountId'
 
 /**
  * 产品映射服务
@@ -176,6 +177,34 @@ interface PixelInfo {
   accountName?: string
 }
 
+const getScopedTokenForAccount = async (account: any, tokens: any[]) => {
+  const accountId = normalizeForStorage(account.accountId)
+  if (!accountId || tokens.length === 0) return null
+
+  if (account.token) {
+    const directlyLinkedToken = tokens.find(token => token.token === account.token)
+    if (directlyLinkedToken) {
+      return directlyLinkedToken
+    }
+  }
+
+  for (const token of tokens) {
+    try {
+      const result = await facebookClient.get(`/act_${accountId}`, {
+        access_token: token.token,
+        fields: 'id,name',
+      })
+      if (result?.id) {
+        return token
+      }
+    } catch (error: any) {
+      logger.debug(`[ProductMapping] Token ${token.fbUserName || token._id} cannot access account ${accountId}`)
+    }
+  }
+
+  return null
+}
+
 /**
  * 从所有授权账户获取 Pixels
  */
@@ -184,18 +213,26 @@ export async function fetchAllPixels(accountFilter: any = {}, tokenFilter: any =
   
   try {
     // 获取所有活跃账户
-    const accounts = await Account.find(combineFilters({ status: { $ne: 'disabled' } }, accountFilter))
+    const accounts = await Account.find(combineFilters({
+      channel: 'facebook',
+      status: { $ne: 'disabled' },
+    }, accountFilter))
     
     // 获取有效 Token
-    const fbToken: any = await FbToken.findOne({ status: 'active', ...tokenFilter }).sort({ updatedAt: -1 })
-    if (!fbToken) {
+    const fbTokens: any[] = await FbToken.find({ status: 'active', ...tokenFilter })
+    if (fbTokens.length === 0) {
       logger.warn('[ProductMapping] No active Facebook token found')
       return []
     }
     
     for (const account of accounts) {
       try {
-        const accountId = account.accountId.replace('act_', '')
+        const accountId = normalizeForStorage(account.accountId)
+        const fbToken = await getScopedTokenForAccount(account, fbTokens)
+        if (!fbToken) {
+          logger.warn(`[ProductMapping] No scoped Facebook token can access account ${accountId}`)
+          continue
+        }
         const result = await facebookClient.get(`/act_${accountId}/adspixels`, {
           access_token: fbToken.token,
           fields: 'id,name',
@@ -207,7 +244,7 @@ export async function fetchAllPixels(accountFilter: any = {}, tokenFilter: any =
           allPixels.push({
             id: pixel.id,
             name: pixel.name || 'Unnamed Pixel',
-            accountId: account.accountId,
+            accountId,
             accountName: account.name,
           })
         }
@@ -376,10 +413,13 @@ export async function discoverAccountsByPixels(
       'pixels.0': { $exists: true } // 至少有一个 Pixel
     }, accessFilter))
     
-    const accounts = await Account.find(combineFilters({ status: { $ne: 'disabled' } }, accountFilter))
-    const fbToken: any = await FbToken.findOne({ status: 'active', ...tokenFilter }).sort({ updatedAt: -1 })
+    const accounts = await Account.find(combineFilters({
+      channel: 'facebook',
+      status: { $ne: 'disabled' },
+    }, accountFilter))
+    const fbTokens: any[] = await FbToken.find({ status: 'active', ...tokenFilter })
     
-    if (!fbToken) {
+    if (fbTokens.length === 0) {
       logger.warn('[ProductMapping] No active Facebook token found')
       return result
     }
@@ -389,7 +429,12 @@ export async function discoverAccountsByPixels(
     
     for (const account of accounts) {
       try {
-        const accountId = account.accountId.replace('act_', '')
+        const accountId = normalizeForStorage(account.accountId)
+        const fbToken = await getScopedTokenForAccount(account, fbTokens)
+        if (!fbToken) {
+          logger.warn(`[ProductMapping] No scoped Facebook token can access account ${accountId}`)
+          continue
+        }
         const pixelsResult = await facebookClient.get(`/act_${accountId}/adspixels`, {
           access_token: fbToken.token,
           fields: 'id',
@@ -399,7 +444,7 @@ export async function discoverAccountsByPixels(
         const pixels = pixelsResult.data || []
         for (const pixel of pixels) {
           const existing = pixelToAccounts.get(pixel.id) || []
-          existing.push({ accountId: account.accountId, accountName: account.name })
+          existing.push({ accountId, accountName: account.name })
           pixelToAccounts.set(pixel.id, existing)
         }
       } catch (error: any) {
