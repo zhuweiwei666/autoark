@@ -19,6 +19,18 @@ import { buildTaskOperationalDiagnostics } from './bulkAd.diagnostics'
 
 type ChecklistStatus = 'done' | 'warning' | 'pending' | 'blocked'
 type ScopeMode = 'organization' | 'platform'
+type RiskLevel = 'critical' | 'warning' | 'info'
+type ReadinessLevel = 'blocked' | 'attention' | 'ready'
+
+type CommercialNextAction = {
+  id: string
+  priority: 'critical' | 'high' | 'medium' | 'low'
+  title: string
+  description: string
+  actionPath?: string
+  owner: string
+  source: 'setup' | 'facebook' | 'quota' | 'tasks' | 'team' | 'materials'
+}
 
 export const COMMERCIAL_FEATURES = [
   'facebook_oauth',
@@ -158,6 +170,62 @@ const computeScore = (items: Array<{ status: ChecklistStatus }>) => {
   }, 0)
 
   return Math.round((score / Math.max(items.length, 1)) * 100)
+}
+
+const buildReadinessState = ({
+  score,
+  risks,
+}: {
+  score: number
+  risks: Array<{ level: RiskLevel }>
+}): { level: ReadinessLevel; label: string; summary: string } => {
+  if (risks.some(risk => risk.level === 'critical')) {
+    return {
+      level: 'blocked',
+      label: '未就绪',
+      summary: '仍存在会阻断客户授权或广告发布的关键问题，暂不适合交付商用客户。',
+    }
+  }
+
+  if (risks.some(risk => risk.level === 'warning') || score < 80) {
+    return {
+      level: 'attention',
+      label: '需关注',
+      summary: '核心链路可继续推进，但上线前仍建议处理风险项，降低客户交付失败率。',
+    }
+  }
+
+  return {
+    level: 'ready',
+    label: '可商用',
+    summary: '授权、资产、额度和任务闭环均已达到商用验收要求，可以进入客户交付。',
+  }
+}
+
+const action = (
+  id: string,
+  priority: CommercialNextAction['priority'],
+  title: string,
+  description: string,
+  actionPath: string | undefined,
+  owner: string,
+  source: CommercialNextAction['source'],
+): CommercialNextAction => ({
+  id,
+  priority,
+  title,
+  description,
+  actionPath,
+  owner,
+  source,
+})
+
+const limitLabel: Record<string, string> = {
+  members: '团队成员',
+  adAccounts: '广告账户',
+  materials: '素材资产',
+  monthlyTasks: '本月任务',
+  concurrentTasks: '当前并发任务',
 }
 
 const aggregateRecentTaskIssues = (tasks: any[]) => {
@@ -515,7 +583,7 @@ export async function getCommercialReadiness(
     ),
   ]
 
-  const risks: Array<{ level: 'critical' | 'warning' | 'info'; message: string; actionPath?: string }> = []
+  const risks: Array<{ level: RiskLevel; message: string; actionPath?: string }> = []
   if (publicOauthAppCount === 0) {
     risks.push({
       level: 'critical',
@@ -566,6 +634,13 @@ export async function getCommercialReadiness(
         : '失败任务数高于成功任务数，建议先排查账户、Page、Pixel 或素材合规问题。',
       actionPath: '/bulk-ad/tasks',
     })
+  } else if (recentTaskIssueBuckets.length > 0) {
+    const primaryIssue = recentTaskIssueBuckets[0]
+    risks.push({
+      level: 'info',
+      message: `最近任务仍出现 ${primaryIssue.errorCode}（${primaryIssue.count} 次），建议在任务管理中清理尾部问题。`,
+      actionPath: '/bulk-ad/tasks',
+    })
   }
 
   const checklistScore = computeScore(checklist)
@@ -574,6 +649,173 @@ export async function getCommercialReadiness(
     : risks.some(risk => risk.level === 'warning')
       ? Math.min(checklistScore, 79)
       : checklistScore
+  const state = buildReadinessState({ score, risks })
+  const nextActions: CommercialNextAction[] = []
+
+  if (mode === 'organization' && organization?.status !== OrganizationStatus.ACTIVE) {
+    nextActions.push(action(
+      'activate_organization',
+      'critical',
+      '启用客户组织',
+      '组织未启用时客户无法稳定登录和发布任务，先在用户/组织管理里恢复服务状态。',
+      '/users',
+      '平台运营',
+      'setup',
+    ))
+  }
+
+  if (publicOauthAppCount === 0) {
+    nextActions.push(action(
+      'complete_public_oauth_app',
+      'critical',
+      '完成 Facebook App 公开授权',
+      '确认 App 已上线，并且 Login for Business 配置、Marketing API 权限和 Public OAuth 检查都已通过。',
+      '/fb-apps',
+      '平台运营',
+      'setup',
+    ))
+  }
+
+  if (mode === 'organization' && activeTokenCount === 0) {
+    nextActions.push(action(
+      'connect_facebook_authorization',
+      'critical',
+      '让客户重新授权 Facebook',
+      '客户需要使用 Facebook Login for Business 登录并授予广告账户、Page、Pixel 相关权限。',
+      '/bulk-ad/create',
+      '客户管理员',
+      'facebook',
+    ))
+  }
+
+  if (activeTokenCount > 0 && facebookAssets.summary.pageLinkedAccountCount === 0) {
+    nextActions.push(action(
+      'assign_facebook_page',
+      'critical',
+      '给广告账户分配可用 Page',
+      '在 Meta Business Manager 中把主页授权给对应广告账户，然后回到 AutoArk 重新同步资产。',
+      '/bulk-ad/create',
+      'Meta BM 管理员',
+      'facebook',
+    ))
+  }
+
+  if (activeTokenCount > 0 && facebookAssets.summary.pixelLinkedAccountCount === 0) {
+    nextActions.push(action(
+      'assign_facebook_pixel',
+      'critical',
+      '给广告账户分配 Pixel',
+      '转化目标投放依赖 Pixel 权限。请在 Business Manager 中把 Pixel 共享给广告账户，并重新同步资产。',
+      '/bulk-ad/create',
+      'Meta BM 管理员',
+      'facebook',
+    ))
+  }
+
+  if (
+    activeTokenCount > 0 &&
+    facebookAssets.summary.pageLinkedAccountCount > 0 &&
+    facebookAssets.summary.pixelLinkedAccountCount > 0 &&
+    facebookAssets.summary.readyAccountCount === 0
+  ) {
+    nextActions.push(action(
+      'repair_facebook_asset_mapping',
+      'high',
+      '校准账户、Page、Pixel 关联',
+      'Page 和 Pixel 已同步，但没有同时满足三者的可投放账户，需要检查资产是否分配到同一个广告账户。',
+      '/bulk-ad/create',
+      'Meta BM 管理员',
+      'facebook',
+    ))
+  }
+
+  if (materialCount === 0) {
+    nextActions.push(action(
+      'prepare_materials',
+      'medium',
+      '补齐投放素材',
+      '上传视频、图片或导入素材库，确保批量创建广告时有可用创意资产。',
+      '/bulk-ad/materials',
+      '投放运营',
+      'materials',
+    ))
+  }
+
+  if (draftCount === 0 && taskCount === 0) {
+    nextActions.push(action(
+      'run_first_publish_flow',
+      'medium',
+      '跑通一次批量投放流程',
+      '先创建草稿并发布一次小批量任务，用真实链路验证账户、素材和权限组合。',
+      '/bulk-ad/create',
+      '投放运营',
+      'tasks',
+    ))
+  } else if (successfulTaskCount === 0) {
+    nextActions.push(action(
+      'complete_successful_publish',
+      'high',
+      '完成一次真实成功任务',
+      '当前还没有成功或部分成功的发布记录，先修复任务错误并用小预算账户验证闭环。',
+      '/bulk-ad/tasks',
+      '投放运营',
+      'tasks',
+    ))
+  }
+
+  if (failedTaskCount > successfulTaskCount && taskCount > 0) {
+    const primaryIssue = recentTaskIssueBuckets[0]
+    nextActions.push(action(
+      'resolve_recent_task_failures',
+      primaryIssue?.retryable ? 'medium' : 'high',
+      primaryIssue ? `处理任务失败主因：${primaryIssue.errorCode}` : '处理最近任务失败',
+      primaryIssue
+        ? `${primaryIssue.customerMessage}。先按任务诊断处理不可重试项，再重新发布或重试。`
+        : '失败任务高于成功任务，先从任务管理页查看诊断并处理账户、Page、Pixel 或素材问题。',
+      '/bulk-ad/tasks',
+      '投放运营',
+      'tasks',
+    ))
+  } else if (recentTaskIssueBuckets.length > 0) {
+    const primaryIssue = recentTaskIssueBuckets[0]
+    nextActions.push(action(
+      'review_recent_task_warnings',
+      'low',
+      `复盘最近任务提示：${primaryIssue.errorCode}`,
+      `${primaryIssue.customerMessage}。该问题当前没有阻断商用评分，但建议上线前复盘并清理失败项。`,
+      '/bulk-ad/tasks',
+      '投放运营',
+      'tasks',
+    ))
+  }
+
+  for (const [key, value] of Object.entries(usage)) {
+    if (value.status === 'exceeded' || value.status === 'warning') {
+      nextActions.push(action(
+        `review_quota_${key}`,
+        value.status === 'exceeded' ? 'critical' : 'medium',
+        `${limitLabel[key] || key}额度${value.status === 'exceeded' ? '已超限' : '接近上限'}`,
+        value.status === 'exceeded'
+          ? '当前使用量已经超过套餐限制，需要升级套餐、释放资源或联系平台运营调整额度。'
+          : '使用率超过 85%，建议提前准备套餐升级或运营扩容，避免客户发布时被限流。',
+        mode === 'platform' ? '/organizations' : '/users',
+        '平台运营',
+        'quota',
+      ))
+    }
+  }
+
+  if (mode === 'organization' && memberCount < 2) {
+    nextActions.push(action(
+      'invite_team_member',
+      'low',
+      '补充客户团队成员',
+      '商用客户建议至少有组织管理员和投放成员，便于权限隔离、审计和交接。',
+      '/users',
+      '客户管理员',
+      'team',
+    ))
+  }
 
   return {
     scope: {
@@ -612,6 +854,8 @@ export async function getCommercialReadiness(
     },
     checklist,
     score,
+    state,
+    nextActions,
     risks,
     deployment: {
       corsConfigured: Boolean(process.env.CORS_ALLOWED_ORIGINS),

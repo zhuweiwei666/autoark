@@ -44,6 +44,47 @@ const riskTone: Record<string, string> = {
   info: "border-zinc-200 bg-white text-zinc-700",
 };
 
+const stateTone: Record<string, { panel: string; badge: string; icon: any }> = {
+  blocked: {
+    panel: "border-[#fecdd3] bg-[#fff8f8] text-[#9f1239]",
+    badge: "bg-[#fff1f2] text-[#9f1239] border-[#fecdd3]",
+    icon: XCircle,
+  },
+  attention: {
+    panel: "border-[#fed7aa] bg-[#fffaf3] text-[#9a3412]",
+    badge: "bg-[#fff7ed] text-[#9a3412] border-[#fed7aa]",
+    icon: WarningCircle,
+  },
+  ready: {
+    panel: "border-[#b7e3d5] bg-[#f4fbf8] text-[#0f766e]",
+    badge: "bg-[#e7f3ef] text-[#0f766e] border-[#b7e3d5]",
+    icon: CheckCircle,
+  },
+};
+
+const priorityTone: Record<string, string> = {
+  critical: "bg-[#fff1f2] text-[#9f1239] border-[#fecdd3]",
+  high: "bg-[#fff7ed] text-[#9a3412] border-[#fed7aa]",
+  medium: "bg-[#f8fafc] text-zinc-700 border-zinc-200",
+  low: "bg-[#f4fbf8] text-[#0f766e] border-[#b7e3d5]",
+};
+
+const priorityLabels: Record<string, string> = {
+  critical: "必须处理",
+  high: "优先处理",
+  medium: "上线前处理",
+  low: "建议完善",
+};
+
+const sourceLabels: Record<string, string> = {
+  setup: "系统配置",
+  facebook: "Facebook 资产",
+  quota: "套餐额度",
+  tasks: "任务闭环",
+  team: "团队权限",
+  materials: "素材准备",
+};
+
 const metricLabels: Record<string, string> = {
   members: "成员",
   adAccounts: "广告账户",
@@ -185,6 +226,37 @@ function ChecklistRow({ item }: { item: CommercialReadiness["checklist"][number]
   );
 }
 
+function NextActionCard({ action }: { action: CommercialReadiness["nextActions"][number] }) {
+  return (
+    <article className="flex h-full flex-col justify-between rounded-lg border border-zinc-200 bg-white p-4 shadow-[0_18px_38px_-34px_rgba(24,24,27,0.72)]">
+      <div>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className={`rounded-md border px-2 py-0.5 text-[11px] font-black ${priorityTone[action.priority] || priorityTone.medium}`}>
+            {priorityLabels[action.priority] || action.priority}
+          </span>
+          <span className="rounded-md bg-zinc-100 px-2 py-0.5 text-[11px] font-bold text-zinc-600">
+            {sourceLabels[action.source] || action.source}
+          </span>
+        </div>
+        <h3 className="mt-3 text-base font-black leading-6 text-zinc-950">{action.title}</h3>
+        <p className="mt-2 text-sm font-medium leading-6 text-zinc-600">{action.description}</p>
+      </div>
+      <div className="mt-4 flex items-center justify-between gap-3 border-t border-zinc-100 pt-3">
+        <span className="text-xs font-bold text-zinc-500">{action.owner}</span>
+        {action.actionPath && (
+          <Link
+            to={action.actionPath}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-bold text-zinc-900 hover:border-zinc-400"
+          >
+            去处理
+            <ArrowRight size={14} weight="bold" />
+          </Link>
+        )}
+      </div>
+    </article>
+  );
+}
+
 export default function CommercialCenterPage() {
   const { data, isLoading, error, refetch, isFetching } = useQuery({
     queryKey: ["commercial-readiness"],
@@ -192,6 +264,14 @@ export default function CommercialCenterPage() {
   });
 
   const readiness = data?.data;
+  const readinessState = readiness?.state || {
+    level: "attention",
+    label: "状态计算中",
+    summary: "正在同步商用验收状态。",
+  };
+  const readinessTone = stateTone[readinessState.level] || stateTone.attention;
+  const ReadinessStateIcon = readinessTone.icon;
+  const nextActions = readiness?.nextActions || [];
   const topMetrics = useMemo(() => {
     if (!readiness) return [];
     return [
@@ -259,6 +339,33 @@ export default function CommercialCenterPage() {
           <p className="mt-3 max-w-3xl text-sm font-semibold leading-7 text-zinc-600">
             汇总组织套餐、额度、Facebook 授权、广告账户、素材和任务闭环状态，作为客户交付前的统一验收入口。
           </p>
+          <div className={`mt-5 max-w-4xl rounded-lg border p-4 ${readinessTone.panel}`}>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="flex min-w-0 items-start gap-3">
+                <div className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border ${readinessTone.badge}`}>
+                  <ReadinessStateIcon size={18} weight="fill" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className={`rounded-md border px-2 py-0.5 text-xs font-black ${readinessTone.badge}`}>
+                      {readinessState.label}
+                    </span>
+                    <span className="text-xs font-bold text-zinc-500">当前商用状态</span>
+                  </div>
+                  <p className="mt-2 text-sm font-bold leading-6">{readinessState.summary}</p>
+                </div>
+              </div>
+              {nextActions[0]?.actionPath && (
+                <Link
+                  to={nextActions[0].actionPath}
+                  className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-lg bg-zinc-950 px-4 py-2 text-sm font-black text-white hover:bg-zinc-800"
+                >
+                  先处理：{nextActions[0].title}
+                  <ArrowRight size={15} weight="bold" />
+                </Link>
+              )}
+            </div>
+          </div>
         </div>
         <div className="lg:justify-self-end">
           <ReadinessGauge score={readiness.score} />
@@ -270,6 +377,32 @@ export default function CommercialCenterPage() {
           <MetricCard key={metric.label} {...metric} />
         ))}
       </section>
+
+      {nextActions.length > 0 && (
+        <section className="mt-6">
+          <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-black text-zinc-950">优先处理</h2>
+              <p className="mt-1 text-sm font-semibold text-zinc-500">
+                按顺序处理这些动作，处理后刷新商用状态即可验收。
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => refetch()}
+              disabled={isFetching}
+              className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-bold text-zinc-700 hover:border-zinc-400 disabled:opacity-60"
+            >
+              {isFetching ? "刷新中" : "刷新状态"}
+            </button>
+          </div>
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {nextActions.slice(0, 6).map((action) => (
+              <NextActionCard key={action.id} action={action} />
+            ))}
+          </div>
+        </section>
+      )}
 
       <section className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1.35fr)_minmax(360px,0.65fr)]">
         <div className="rounded-lg border border-zinc-200 bg-white p-5 shadow-[0_18px_38px_-34px_rgba(24,24,27,0.72)]">

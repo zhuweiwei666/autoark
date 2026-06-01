@@ -181,6 +181,9 @@ describe('commercial publish limits', () => {
     expect(readiness.metrics.facebookReadyAccounts).toBe(1)
     expect(readiness.metrics.recentTaskIssueTypes).toBe(1)
     expect(readiness.checklist.find(item => item.id === 'facebook_ready_accounts')?.status).toBe('done')
+    expect(readiness.state.level).toBe('attention')
+    expect(readiness.risks.some(risk => risk.level === 'info')).toBe(true)
+    expect(readiness.nextActions.some(action => action.id === 'review_recent_task_warnings')).toBe(true)
   })
 
   it('caps readiness score when critical commercial blockers exist', async () => {
@@ -225,5 +228,13 @@ describe('commercial publish limits', () => {
 
     expect(readiness.risks.some(risk => risk.level === 'critical')).toBe(true)
     expect(readiness.score).toBeLessThanOrEqual(49)
+    expect(readiness.state).toMatchObject({
+      level: 'blocked',
+      label: '未就绪',
+    })
+    expect(readiness.nextActions.map(action => action.id)).toEqual(expect.arrayContaining([
+      'complete_public_oauth_app',
+      'assign_facebook_pixel',
+    ]))
   })
 })

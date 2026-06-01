@@ -73,6 +73,20 @@ export interface CommercialReadiness {
     metric?: string
   }>
   score: number
+  state: {
+    level: 'blocked' | 'attention' | 'ready'
+    label: string
+    summary: string
+  }
+  nextActions: Array<{
+    id: string
+    priority: 'critical' | 'high' | 'medium' | 'low'
+    title: string
+    description: string
+    actionPath?: string
+    owner: string
+    source: 'setup' | 'facebook' | 'quota' | 'tasks' | 'team' | 'materials'
+  }>
   risks: Array<{
     level: 'critical' | 'warning' | 'info'
     message: string
