@@ -447,6 +447,31 @@ export default function FacebookAppPage() {
       : { text: 'Public OAuth 未就绪', cls: 'bg-amber-50 border-amber-200 text-amber-700' }
   }
 
+  const getPublicOauthGaps = (app: FacebookApp) => {
+    const permissions = app.compliance?.permissions || []
+    const map = new Map(permissions.map((permission) => [permission.name, permission]))
+    return publicOAuthRequirements.filter((name) => {
+      const permission = map.get(name)
+      return !(permission?.access === 'advanced' && permission.status === 'approved')
+    })
+  }
+
+  const applyApprovedCompliancePreset = () => {
+    const existing = new Map(complianceForm.permissions.map((permission) => [permission.name, permission]))
+    const names = Array.from(new Set([...publicOAuthRequirements, ...complianceForm.permissions.map((permission) => permission.name)]))
+    setComplianceForm({
+      appMode: 'live',
+      businessVerification: 'verified',
+      appReview: 'approved',
+      permissions: names.map((name) => ({
+        ...existing.get(name),
+        name,
+        access: 'advanced',
+        status: 'approved',
+      })),
+    })
+  }
+
   return (
     <div className="min-h-screen bg-white text-slate-900 p-6 relative overflow-hidden">
       <div className="relative z-10 max-w-7xl mx-auto space-y-8">
@@ -628,8 +653,8 @@ export default function FacebookAppPage() {
                       {getPublicOauthBadge(app).text}
                     </div>
                     {publicOAuthRequirements.length > 0 && !(app.isPublicOauthReady || app.compliance?.publicOauthReady) && (
-                      <div className="text-xs text-slate-500 mt-2">
-                        公开授权需要：{publicOAuthRequirements.join(', ')}（需 Advanced + Approved）
+                      <div className="text-xs text-slate-500 mt-2 leading-5">
+                        缺失或未通过：{getPublicOauthGaps(app).join(', ') || '无'}
                       </div>
                     )}
                   </div>
@@ -964,11 +989,20 @@ export default function FacebookAppPage() {
             <div className="mt-6">
               <div className="flex items-center justify-between">
                 <h3 className="font-semibold text-slate-900">Permissions</h3>
-                {publicOAuthRequirements.length > 0 && (
-                  <div className="text-xs text-slate-500">
-                    Public OAuth 必需：{publicOAuthRequirements.join(', ')}
-                  </div>
-                )}
+                <div className="flex items-center gap-3">
+                  {publicOAuthRequirements.length > 0 && (
+                    <div className="text-xs text-slate-500">
+                      Public OAuth 必需：{publicOAuthRequirements.join(', ')}
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={applyApprovedCompliancePreset}
+                    className="px-3 py-1.5 rounded-lg border border-indigo-200 bg-indigo-50 text-xs font-semibold text-indigo-700 hover:bg-indigo-100"
+                  >
+                    填充已通过
+                  </button>
+                </div>
               </div>
 
               <div className="mt-3 border border-slate-200 rounded-2xl overflow-hidden">
@@ -1064,4 +1098,3 @@ export default function FacebookAppPage() {
     </div>
   )
 }
-
