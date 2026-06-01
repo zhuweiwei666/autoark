@@ -11,6 +11,7 @@ const PUBLIC_OAUTH_REQUIRED_PERMISSIONS = [
   'business_management',
   'pages_show_list',
   'pages_read_engagement',
+  'pages_manage_ads',
 ]
 
 const computePublicOauthReady = (app: any): boolean => {
@@ -426,4 +427,3 @@ export async function recordAppRequest(appId: string, success: boolean, error?: 
 
   await FacebookApp.updateOne({ appId }, update)
 }
-
