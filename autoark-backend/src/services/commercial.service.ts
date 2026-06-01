@@ -115,6 +115,18 @@ const monthStart = () => {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))
 }
 
+const utcDayStart = (value = new Date()) => (
+  new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate()))
+)
+
+const addUtcDays = (value: Date, days: number) => {
+  const next = new Date(value)
+  next.setUTCDate(next.getUTCDate() + days)
+  return next
+}
+
+const formatUtcDay = (value: Date) => value.toISOString().slice(0, 10)
+
 const scoped = (organizationId?: string) => {
   return organizationId ? { organizationId: objectIdValue(organizationId) } : {}
 }
@@ -228,6 +240,33 @@ const limitLabel: Record<string, string> = {
   monthlyTasks: '本月任务',
   concurrentTasks: '当前并发任务',
 }
+
+const taskStatusLabel: Record<string, string> = {
+  pending: '等待中',
+  queued: '排队中',
+  processing: '执行中',
+  success: '成功',
+  partial_success: '部分成功',
+  failed: '失败',
+  cancelled: '已取消',
+}
+
+const taskStatusGroup = (status?: string) => {
+  if (['pending', 'queued', 'processing'].includes(status || '')) return 'running'
+  if (['success', 'partial_success'].includes(status || '')) return 'success'
+  if (status === 'failed') return 'failed'
+  if (status === 'cancelled') return 'cancelled'
+  return 'other'
+}
+
+const QUOTA_ERROR_CODES = [
+  'ORGANIZATION_NOT_FOUND',
+  'ORGANIZATION_NOT_ACTIVE',
+  'BILLING_NOT_ACTIVE',
+  'TASK_ACCOUNT_LIMIT_EXCEEDED',
+  'MAX_CONCURRENT_TASKS_REACHED',
+  'MONTHLY_TASK_LIMIT_REACHED',
+]
 
 const sentence = (value: string) => {
   const trimmed = value.trim()
@@ -875,6 +914,201 @@ export async function getCommercialReadiness(
         process.env.FEISHU_BOT_SECRET,
       ),
     },
+  }
+}
+
+export async function getCommercialUsageLedger(
+  user: JwtPayload,
+  requestedOrganizationId?: string,
+) {
+  const { mode, organizationId, organization } = await resolveScope(user, requestedOrganizationId)
+  const orgFilter = scoped(organizationId)
+  const userFilter = mode === 'organization' ? { organizationId: objectIdValue(organizationId) } : {}
+  const currentMonthStart = monthStart()
+  const todayStart = utcDayStart()
+  const dailyStart = addUtcDays(todayStart, -13)
+
+  const plan = mode === 'platform' ? OrganizationPlan.ENTERPRISE : getEffectivePlan(organization)
+  const limits = mode === 'platform' ? PLAN_DEFAULTS[OrganizationPlan.ENTERPRISE].limits : getEffectiveLimits(organization)
+  const billingStatus = mode === 'platform' ? OrganizationBillingStatus.ACTIVE : organization?.billing?.status || (
+    plan === OrganizationPlan.TRIAL
+      ? OrganizationBillingStatus.TRIALING
+      : OrganizationBillingStatus.ACTIVE
+  )
+
+  const [
+    memberCount,
+    adAccountCount,
+    materialCount,
+    runningTaskCount,
+    monthlyTaskCount,
+    statusRows,
+    dailyRows,
+    recentTaskDocs,
+    quotaEventDocs,
+  ] = await Promise.all([
+    User.countDocuments(userFilter),
+    Account.countDocuments({ ...orgFilter, status: { $ne: 'disabled' } }),
+    Material.countDocuments({ ...orgFilter, status: { $ne: 'deleted' } }),
+    AdTask.countDocuments({ ...orgFilter, status: { $in: ['pending', 'queued', 'processing'] } }),
+    AdTask.countDocuments({ ...orgFilter, createdAt: { $gte: currentMonthStart } }),
+    AdTask.aggregate([
+      { $match: { ...orgFilter, createdAt: { $gte: currentMonthStart } } },
+      {
+        $project: {
+          status: 1,
+          accountCount: { $size: { $ifNull: ['$items', []] } },
+        },
+      },
+      {
+        $group: {
+          _id: '$status',
+          tasks: { $sum: 1 },
+          accounts: { $sum: '$accountCount' },
+        },
+      },
+      { $sort: { tasks: -1 } },
+    ]),
+    AdTask.aggregate([
+      { $match: { ...orgFilter, createdAt: { $gte: dailyStart } } },
+      {
+        $project: {
+          status: 1,
+          day: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: 'UTC' } },
+          accountCount: { $size: { $ifNull: ['$items', []] } },
+        },
+      },
+      {
+        $group: {
+          _id: { day: '$day', status: '$status' },
+          tasks: { $sum: 1 },
+          accounts: { $sum: '$accountCount' },
+        },
+      },
+      { $sort: { '_id.day': 1 } },
+    ]),
+    AdTask.find(orgFilter)
+      .sort({ createdAt: -1 })
+      .limit(10)
+      .lean(),
+    OpsLog.find({
+      ...orgFilter,
+      category: 'bulk_ad',
+      status: 'failed',
+      'metadata.errorCode': { $in: QUOTA_ERROR_CODES },
+    })
+      .sort({ createdAt: -1 })
+      .limit(20)
+      .select('action status summary reason metadata requestId createdAt username userId userRole')
+      .lean(),
+  ])
+
+  const usage = {
+    members: limitState(memberCount, limits.maxMembers),
+    adAccounts: limitState(adAccountCount, limits.maxAdAccounts),
+    materials: limitState(materialCount, limits.maxMaterials),
+    monthlyTasks: limitState(monthlyTaskCount, limits.monthlyTaskLimit),
+    concurrentTasks: limitState(runningTaskCount, limits.maxConcurrentTasks),
+  }
+
+  const dayMap = new Map<string, {
+    date: string
+    totalTasks: number
+    successTasks: number
+    failedTasks: number
+    runningTasks: number
+    cancelledTasks: number
+    accountExecutions: number
+  }>()
+  for (let offset = 0; offset < 14; offset += 1) {
+    const date = formatUtcDay(addUtcDays(dailyStart, offset))
+    dayMap.set(date, {
+      date,
+      totalTasks: 0,
+      successTasks: 0,
+      failedTasks: 0,
+      runningTasks: 0,
+      cancelledTasks: 0,
+      accountExecutions: 0,
+    })
+  }
+
+  for (const row of dailyRows as any[]) {
+    const date = row._id?.day
+    if (!date || !dayMap.has(date)) continue
+    const item = dayMap.get(date)!
+    const tasks = Number(row.tasks || 0)
+    const group = taskStatusGroup(row._id?.status)
+    item.totalTasks += tasks
+    item.accountExecutions += Number(row.accounts || 0)
+    if (group === 'success') item.successTasks += tasks
+    else if (group === 'failed') item.failedTasks += tasks
+    else if (group === 'running') item.runningTasks += tasks
+    else if (group === 'cancelled') item.cancelledTasks += tasks
+  }
+
+  const recentTasks = (recentTaskDocs as any[]).map(task => {
+    const diagnostics = buildTaskOperationalDiagnostics(task)
+    return {
+      taskId: String(task._id),
+      taskName: task.name,
+      status: task.status,
+      statusLabel: taskStatusLabel[task.status] || task.status,
+      createdAt: task.createdAt,
+      accountCount: task.items?.length || task.progress?.totalAccounts || 0,
+      createdAds: task.progress?.createdAds || 0,
+      health: diagnostics.health,
+      totalErrors: diagnostics.summary.totalErrors,
+      topIssue: diagnostics.buckets[0]
+        ? {
+          errorCode: diagnostics.buckets[0].errorCode,
+          count: diagnostics.buckets[0].count,
+          retryable: diagnostics.buckets[0].retryable,
+          customerMessage: diagnostics.buckets[0].customerMessage,
+        }
+        : null,
+    }
+  })
+
+  return {
+    generatedAt: new Date().toISOString(),
+    scope: {
+      mode,
+      organizationId,
+      organizationName: organization?.name || 'AutoArk Platform',
+    },
+    period: {
+      currentMonthStart: currentMonthStart.toISOString(),
+      dailyStart: dailyStart.toISOString(),
+      dailyEnd: todayStart.toISOString(),
+    },
+    plan: {
+      code: plan,
+      label: mode === 'platform' ? '平台运营' : PLAN_DEFAULTS[plan].label,
+      billingStatus,
+      limits,
+    },
+    usage,
+    taskStatusBreakdown: (statusRows as any[]).map(row => ({
+      status: row._id || 'unknown',
+      label: taskStatusLabel[row._id] || row._id || '未知',
+      tasks: Number(row.tasks || 0),
+      accountExecutions: Number(row.accounts || 0),
+    })),
+    dailyTaskCounts: Array.from(dayMap.values()),
+    quotaEvents: (quotaEventDocs as any[]).map(log => ({
+      action: log.action,
+      status: log.status,
+      summary: log.summary,
+      reason: log.reason,
+      errorCode: log.metadata?.errorCode,
+      details: log.metadata?.details,
+      requestId: log.requestId,
+      createdAt: log.createdAt,
+      operator: log.username || log.userId || 'anonymous',
+      userRole: log.userRole,
+    })),
+    recentTasks,
   }
 }
 

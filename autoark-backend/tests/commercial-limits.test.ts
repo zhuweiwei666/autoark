@@ -5,6 +5,7 @@ import FacebookApp from '../src/models/FacebookApp'
 import FacebookUser from '../src/models/FacebookUser'
 import FbToken from '../src/models/FbToken'
 import Material from '../src/models/Material'
+import OpsLog from '../src/models/OpsLog'
 import Organization, {
   OrganizationBillingStatus,
   OrganizationPlan,
@@ -15,6 +16,7 @@ import {
   assertBulkAdPublishAllowed,
   CommercialLimitError,
   getCommercialReadiness,
+  getCommercialUsageLedger,
 } from '../src/services/commercial.service'
 
 const organizationId = '665000000000000000000001'
@@ -42,6 +44,13 @@ describe('commercial publish limits', () => {
   })
 
   const leanFindResult = (items: any[]) => ({
+    lean: jest.fn().mockResolvedValue(items),
+  })
+
+  const sortedLeanFindResult = (items: any[]) => ({
+    sort: jest.fn().mockReturnThis(),
+    limit: jest.fn().mockReturnThis(),
+    select: jest.fn().mockReturnThis(),
     lean: jest.fn().mockResolvedValue(items),
   })
 
@@ -236,5 +245,87 @@ describe('commercial publish limits', () => {
       'complete_public_oauth_app',
       'assign_facebook_pixel',
     ]))
+  })
+
+  it('returns a commercial usage ledger with daily task counts and quota events', async () => {
+    jest.spyOn(Organization, 'findById').mockResolvedValue(mockOrganization({ name: 'Acme Team' }) as any)
+    jest.spyOn(User, 'countDocuments').mockResolvedValue(3 as any)
+    jest.spyOn(Account, 'countDocuments').mockResolvedValue(5 as any)
+    jest.spyOn(Material, 'countDocuments').mockResolvedValue(20 as any)
+    jest.spyOn(AdTask, 'countDocuments')
+      .mockResolvedValueOnce(1 as any)
+      .mockResolvedValueOnce(12 as any)
+    jest.spyOn(AdTask, 'aggregate')
+      .mockResolvedValueOnce([
+        { _id: 'success', tasks: 8, accounts: 16 },
+        { _id: 'failed', tasks: 4, accounts: 8 },
+      ] as any)
+      .mockResolvedValueOnce([
+        { _id: { day: '2026-06-01', status: 'success' }, tasks: 2, accounts: 4 },
+        { _id: { day: '2026-06-01', status: 'failed' }, tasks: 1, accounts: 2 },
+      ] as any)
+    jest.spyOn(AdTask, 'find').mockReturnValue(sortedLeanFindResult([{
+      _id: '665000000000000000000301',
+      name: 'Recent task',
+      status: 'failed',
+      createdAt: new Date('2026-06-01T08:00:00.000Z'),
+      items: [{
+        accountId: 'act_1',
+        accountName: 'Account 1',
+        status: 'failed',
+        errors: [{
+          errorCode: 'MONTHLY_TASK_LIMIT_REACHED',
+          errorMessage: 'Monthly limit reached',
+        }],
+      }],
+      progress: { totalAccounts: 1, createdAds: 0 },
+    }]) as any)
+    jest.spyOn(OpsLog, 'find').mockReturnValue(sortedLeanFindResult([{
+      action: 'bulk_ad.publish',
+      status: 'failed',
+      summary: '发布批量广告任务失败',
+      reason: '本月任务额度不足',
+      metadata: {
+        errorCode: 'MONTHLY_TASK_LIMIT_REACHED',
+        details: { monthlyTaskCount: 12, requestedTasks: 1, limit: 20, plan: OrganizationPlan.STARTER },
+      },
+      requestId: 'req_ledger',
+      createdAt: new Date('2026-06-01T09:00:00.000Z'),
+      username: 'operator',
+      userRole: 'super_admin',
+    }]) as any)
+
+    const ledger = await getCommercialUsageLedger({
+      userId: 'user_1',
+      role: UserRole.ORG_ADMIN,
+      organizationId,
+    } as any)
+
+    expect(ledger.scope).toMatchObject({
+      mode: 'organization',
+      organizationName: 'Acme Team',
+    })
+    expect(ledger.plan.code).toBe(OrganizationPlan.STARTER)
+    expect(ledger.usage.monthlyTasks.used).toBe(12)
+    expect(ledger.usage.concurrentTasks.used).toBe(1)
+    expect(ledger.taskStatusBreakdown).toEqual(expect.arrayContaining([
+      expect.objectContaining({ status: 'success', tasks: 8, accountExecutions: 16 }),
+      expect.objectContaining({ status: 'failed', tasks: 4, accountExecutions: 8 }),
+    ]))
+    expect(ledger.dailyTaskCounts.find(day => day.date === '2026-06-01')).toMatchObject({
+      totalTasks: 3,
+      successTasks: 2,
+      failedTasks: 1,
+      accountExecutions: 6,
+    })
+    expect(ledger.quotaEvents[0]).toMatchObject({
+      errorCode: 'MONTHLY_TASK_LIMIT_REACHED',
+      operator: 'operator',
+    })
+    expect(ledger.recentTasks[0]).toMatchObject({
+      taskName: 'Recent task',
+      status: 'failed',
+      totalErrors: 1,
+    })
   })
 })

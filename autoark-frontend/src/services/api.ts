@@ -231,6 +231,84 @@ export async function getCommercialSupportPackage(organizationId?: string): Prom
   return response.json()
 }
 
+export interface CommercialUsageLedger {
+  generatedAt: string
+  scope: CommercialReadiness['scope']
+  period: {
+    currentMonthStart: string
+    dailyStart: string
+    dailyEnd: string
+  }
+  plan: {
+    code: string
+    label: string
+    billingStatus: string
+    limits: Record<string, number | null>
+  }
+  usage: CommercialReadiness['usage']
+  taskStatusBreakdown: Array<{
+    status: string
+    label: string
+    tasks: number
+    accountExecutions: number
+  }>
+  dailyTaskCounts: Array<{
+    date: string
+    totalTasks: number
+    successTasks: number
+    failedTasks: number
+    runningTasks: number
+    cancelledTasks: number
+    accountExecutions: number
+  }>
+  quotaEvents: Array<{
+    action?: string
+    status?: string
+    summary?: string
+    reason?: string
+    errorCode?: string
+    details?: Record<string, any>
+    requestId?: string
+    createdAt?: string
+    operator?: string
+    userRole?: string
+  }>
+  recentTasks: Array<{
+    taskId: string
+    taskName?: string
+    status: string
+    statusLabel: string
+    createdAt?: string
+    accountCount: number
+    createdAds: number
+    health: string
+    totalErrors: number
+    topIssue: null | {
+      errorCode: string
+      count: number
+      retryable: boolean
+      customerMessage: string
+    }
+  }>
+}
+
+export async function getCommercialUsageLedger(organizationId?: string): Promise<{
+  success: boolean
+  data: CommercialUsageLedger
+}> {
+  const params = new URLSearchParams()
+  if (organizationId) params.append('organizationId', organizationId)
+  const url = `${API_BASE_URL}/api/commercial/usage-ledger${params.toString() ? `?${params.toString()}` : ''}`
+  const response = await authFetch(url)
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}))
+    throw new Error(error.message || 'Failed to fetch commercial usage ledger')
+  }
+
+  return response.json()
+}
+
 export interface OrganizationSummary {
   _id: string
   name: string

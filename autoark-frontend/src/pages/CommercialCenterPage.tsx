@@ -19,10 +19,12 @@ import {
   getCommercialOrganizationReadiness,
   getCommercialReadiness,
   getCommercialSupportPackage,
+  getCommercialUsageLedger,
   getOrganizations,
   type AuditLogEntry,
   type CommercialReadiness,
   type CommercialSupportPackage,
+  type CommercialUsageLedger,
 } from "../services/api";
 import { useAuth } from "../contexts/AuthContext";
 
@@ -242,6 +244,149 @@ function UsageBar({
   );
 }
 
+function UsageLedgerPanel({
+  ledger,
+  isLoading,
+  error,
+  onRefresh,
+  isFetching,
+}: {
+  ledger?: CommercialUsageLedger;
+  isLoading: boolean;
+  error: unknown;
+  onRefresh: () => void;
+  isFetching: boolean;
+}) {
+  const lastSevenDays = ledger?.dailyTaskCounts.slice(-7) || [];
+  const quotaEvent = ledger?.quotaEvents[0];
+  const monthlyTasks = ledger?.usage.monthlyTasks;
+  const concurrentTasks = ledger?.usage.concurrentTasks;
+
+  return (
+    <section className="mt-6 rounded-lg border border-zinc-200 bg-white p-5 shadow-[0_18px_38px_-34px_rgba(24,24,27,0.72)]">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-black text-zinc-950">用量流水</h2>
+          <p className="mt-1 text-sm font-semibold text-zinc-500">
+            看清本月发布量、近 7 天任务走势和额度拦截记录，方便客户续费、扩容和排障。
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onRefresh}
+          disabled={isFetching}
+          className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-bold text-zinc-700 hover:border-zinc-400 disabled:opacity-60"
+        >
+          {isFetching ? "刷新中" : "刷新用量"}
+        </button>
+      </div>
+
+      {isLoading ? (
+        <div className="flex h-32 items-center justify-center text-sm font-bold text-zinc-500">
+          正在加载用量流水...
+        </div>
+      ) : error ? (
+        <div className="rounded-lg border border-[#fecdd3] bg-[#fff1f2] p-3 text-sm font-bold text-[#9f1239]">
+          获取用量流水失败：{(error as Error).message}
+        </div>
+      ) : !ledger ? (
+        <div className="rounded-lg border border-zinc-100 bg-[#fbfbf8] p-4 text-sm font-bold text-zinc-500">
+          暂无用量数据
+        </div>
+      ) : (
+        <div className="grid gap-4 xl:grid-cols-[0.8fr_1.2fr]">
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="rounded-lg border border-zinc-100 bg-[#fbfbf8] p-4">
+                <div className="text-xs font-black uppercase text-zinc-500">本月任务</div>
+                <div className="mt-2 font-mono text-3xl font-black text-zinc-950">
+                  {monthlyTasks?.used ?? 0}
+                </div>
+                <div className="mt-1 text-xs font-bold text-zinc-500">
+                  上限 {monthlyTasks?.limit || "不限"}
+                </div>
+              </div>
+              <div className="rounded-lg border border-zinc-100 bg-[#fbfbf8] p-4">
+                <div className="text-xs font-black uppercase text-zinc-500">当前并发</div>
+                <div className="mt-2 font-mono text-3xl font-black text-zinc-950">
+                  {concurrentTasks?.used ?? 0}
+                </div>
+                <div className="mt-1 text-xs font-bold text-zinc-500">
+                  上限 {concurrentTasks?.limit || "不限"}
+                </div>
+              </div>
+            </div>
+            <div className="rounded-lg border border-zinc-100 bg-white p-4">
+              <div className="mb-3 text-xs font-black uppercase text-zinc-500">本月状态拆分</div>
+              <div className="space-y-2">
+                {ledger.taskStatusBreakdown.length === 0 ? (
+                  <div className="text-sm font-bold text-zinc-500">本月暂无任务</div>
+                ) : ledger.taskStatusBreakdown.map((item) => (
+                  <div key={item.status} className="flex items-center justify-between gap-3 text-sm">
+                    <span className="font-bold text-zinc-800">{item.label}</span>
+                    <span className="font-mono text-xs font-black text-zinc-500">
+                      {item.tasks} 任务 · {item.accountExecutions} 账户
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <div className="rounded-lg border border-zinc-100 bg-white p-4">
+              <div className="mb-3 text-xs font-black uppercase text-zinc-500">近 7 天任务</div>
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-left text-xs">
+                  <thead className="text-zinc-500">
+                    <tr>
+                      <th className="py-2 pr-3">日期</th>
+                      <th className="px-3 py-2">总任务</th>
+                      <th className="px-3 py-2">成功</th>
+                      <th className="px-3 py-2">失败</th>
+                      <th className="py-2 pl-3">账户执行</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-100 font-bold text-zinc-800">
+                    {lastSevenDays.map((day) => (
+                      <tr key={day.date}>
+                        <td className="py-2 pr-3 font-mono text-zinc-500">{day.date.slice(5)}</td>
+                        <td className="px-3 py-2">{day.totalTasks}</td>
+                        <td className="px-3 py-2 text-[#0f766e]">{day.successTasks}</td>
+                        <td className="px-3 py-2 text-[#b4233a]">{day.failedTasks}</td>
+                        <td className="py-2 pl-3">{day.accountExecutions}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-zinc-100 bg-[#fbfbf8] p-4">
+              <div className="mb-2 text-xs font-black uppercase text-zinc-500">最近额度拦截</div>
+              {quotaEvent ? (
+                <div>
+                  <div className="font-black text-zinc-950">{quotaEvent.errorCode || quotaEvent.action}</div>
+                  <div className="mt-1 text-sm font-semibold leading-6 text-zinc-600">
+                    {quotaEvent.reason || quotaEvent.summary || "额度校验失败"}
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-2 text-[11px] font-bold text-zinc-500">
+                    <span>{formatDateTime(quotaEvent.createdAt)}</span>
+                    <span>{quotaEvent.operator || "anonymous"}</span>
+                    {quotaEvent.details?.limit !== undefined && <span>上限 {quotaEvent.details.limit}</span>}
+                  </div>
+                </div>
+              ) : (
+                <div className="text-sm font-bold text-[#0f766e]">最近没有额度拦截</div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function ChecklistRow({ item }: { item: CommercialReadiness["checklist"][number] }) {
   const tone = statusCopy[item.status] || statusCopy.pending;
   const Icon = tone.icon;
@@ -351,11 +496,22 @@ export default function CommercialCenterPage() {
       limit: 8,
     }),
   });
+  const {
+    data: usageLedgerData,
+    isLoading: usageLedgerLoading,
+    error: usageLedgerError,
+    refetch: refetchUsageLedger,
+    isFetching: usageLedgerFetching,
+  } = useQuery({
+    queryKey: ["commercial-usage-ledger", selectedOrganizationId || "platform"],
+    queryFn: () => getCommercialUsageLedger(selectedOrganizationId || undefined),
+  });
 
   const readiness = data?.data;
   const organizations = organizationsData?.data || [];
   const organizationReadiness = organizationReadinessData?.data || [];
   const supportAuditLogs = supportAuditData?.data || [];
+  const usageLedger = usageLedgerData?.data;
   const generateSupportPackage = async () => {
     setSupportPackageLoading(true);
     setSupportPackageError("");
@@ -525,6 +681,14 @@ export default function CommercialCenterPage() {
           <MetricCard key={metric.label} {...metric} />
         ))}
       </section>
+
+      <UsageLedgerPanel
+        ledger={usageLedger}
+        isLoading={usageLedgerLoading}
+        error={usageLedgerError}
+        onRefresh={() => refetchUsageLedger()}
+        isFetching={usageLedgerFetching}
+      />
 
       <section className="mt-6 rounded-lg border border-zinc-200 bg-white p-5 shadow-[0_18px_38px_-34px_rgba(24,24,27,0.72)]">
         <div className="flex flex-wrap items-center justify-between gap-3">

@@ -12,6 +12,7 @@ describe('protected API routes', () => {
     ['GET', '/api/commercial/readiness'],
     ['GET', '/api/commercial/organizations/readiness'],
     ['GET', '/api/commercial/support-package'],
+    ['GET', '/api/commercial/usage-ledger'],
     ['GET', '/api/commercial/plans'],
     ['GET', '/api/audit-logs'],
     ['GET', '/api/bulk-ad/tasks/665000000000000000000001/diagnostics'],
