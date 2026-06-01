@@ -156,6 +156,11 @@ const metadataText = (log: AuditLogEntry, key: string) => {
   return typeof value === "string" ? value : undefined;
 };
 
+const safeFileName = (value: string) => {
+  const normalized = value.trim().replace(/[^\w.-]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+  return normalized.slice(0, 80) || "autoark-support-package";
+};
+
 function ReadinessGauge({ score }: { score: number }) {
   const color = score >= 80 ? "#0f766e" : score >= 55 ? "#b45309" : "#b4233a";
   return (
@@ -583,6 +588,37 @@ export default function CommercialCenterPage() {
     await navigator.clipboard?.writeText(text);
   };
 
+  const downloadSupportPackage = () => {
+    if (!supportPackage) return;
+    const topAction = supportPackage.readiness.nextActions[0]?.title || "暂无优先动作";
+    const topIssue = supportPackage.recentTasks[0]?.topIssue?.errorCode || "暂无最近任务错误";
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      exportType: "autoark_commercial_support_package",
+      summary: {
+        supportId: supportPackage.supportId,
+        customer: supportPackage.scope.organizationName,
+        state: supportPackage.readiness.state.label,
+        score: supportPackage.readiness.score,
+        topAction,
+        topIssue,
+        readyAccountCount: supportPackage.facebookAssets.summary.readyAccountCount || 0,
+        tokenCount: supportPackage.facebookAssets.summary.tokenCount || 0,
+        recentTaskCount: supportPackage.recentTasks.length,
+      },
+      supportPackage,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `${safeFileName(supportPackage.supportId)}-${safeFileName(supportPackage.scope.organizationName)}.json`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  };
+
   useEffect(() => {
     const queryOrganizationId = searchParams.get("organizationId") || "";
     if (queryOrganizationId !== selectedOrganizationId) {
@@ -750,13 +786,22 @@ export default function CommercialCenterPage() {
               {supportPackageLoading ? "生成中" : "生成支持包"}
             </button>
             {supportPackage && (
-              <button
-                type="button"
-                onClick={copySupportSummary}
-                className="rounded-lg border border-zinc-200 bg-white px-4 py-2 text-sm font-bold text-zinc-700 hover:border-zinc-400"
-              >
-                复制摘要
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={copySupportSummary}
+                  className="rounded-lg border border-zinc-200 bg-white px-4 py-2 text-sm font-bold text-zinc-700 hover:border-zinc-400"
+                >
+                  复制摘要
+                </button>
+                <button
+                  type="button"
+                  onClick={downloadSupportPackage}
+                  className="rounded-lg border border-zinc-200 bg-white px-4 py-2 text-sm font-bold text-zinc-700 hover:border-zinc-400"
+                >
+                  下载 JSON
+                </button>
+              </>
             )}
           </div>
         </div>
