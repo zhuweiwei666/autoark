@@ -1349,6 +1349,7 @@ export const executeTaskForAccount = async (
               campaignId,
               campaignName,
               accountId,
+              organizationId: task.organizationId,
               creativeId: adDetail.creativeId,
               materialId: adDetail.materialId,
               taskId,
@@ -1365,6 +1366,7 @@ export const executeTaskForAccount = async (
             await (AdMaterialMapping as any).recordMapping({
               adId: adDetail.adId,
               materialId: adDetail.materialId,
+              organizationId: task.organizationId?.toString(),
               accountId,
               campaignId,
               adsetId: adDetail.adsetId,

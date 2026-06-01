@@ -14,6 +14,7 @@ jest.mock('../src/integration/facebook/facebookClient', () => ({
 }))
 
 import Ad from '../src/models/Ad'
+import AdMaterialMapping from '../src/models/AdMaterialMapping'
 import AdTask from '../src/models/AdTask'
 import CopywritingPackage from '../src/models/CopywritingPackage'
 import CreativeGroup from '../src/models/CreativeGroup'
@@ -150,5 +151,67 @@ describe('bulk ad execution diagnostics', () => {
       source: 'meta',
     })
     expect(storedErrors[0].operatorMessage).toContain('Invalid image hash')
+  })
+
+  it('stores organization scope on created ads and material mappings', async () => {
+    const task = buildTask()
+    jest.spyOn(AdTask, 'findById')
+      .mockResolvedValueOnce(task as any)
+      .mockResolvedValueOnce(task as any)
+    jest.spyOn(AdTask, 'findOneAndUpdate').mockResolvedValue(task as any)
+    jest.spyOn(AdTask, 'findByIdAndUpdate').mockResolvedValue(task as any)
+    jest.spyOn(FbToken, 'findOne').mockResolvedValue({
+      token: 'fb_token',
+      fbUserName: 'Tester',
+    } as any)
+    jest.spyOn(CreativeGroup, 'find').mockResolvedValue([{
+      _id: '665000000000000000000711',
+      name: 'Creative Group',
+      materials: [{
+        _id: '665000000000000000000713',
+        type: 'image',
+        name: 'Image 1',
+        facebookImageHash: 'hash_1',
+        status: 'uploaded',
+      }],
+    }] as any)
+    jest.spyOn(CopywritingPackage, 'find').mockResolvedValue([{
+      _id: '665000000000000000000712',
+      name: 'Copy Package',
+      links: { websiteUrl: 'https://example.com' },
+      content: {
+        primaryTexts: ['Primary'],
+        headlines: ['Headline'],
+        descriptions: ['Description'],
+      },
+      callToAction: 'SHOP_NOW',
+    }] as any)
+    jest.spyOn(Ad, 'findOneAndUpdate').mockResolvedValue({} as any)
+    jest.spyOn(AdMaterialMapping as any, 'recordMapping').mockResolvedValue({} as any)
+    ;(createCampaign as jest.Mock).mockResolvedValue({ success: true, id: 'camp_1' })
+    ;(createAdSet as jest.Mock).mockResolvedValue({ success: true, id: 'adset_1' })
+    ;(createAdCreative as jest.Mock).mockResolvedValue({ success: true, id: 'creative_1' })
+    ;(createAd as jest.Mock).mockResolvedValue({ success: true, id: 'ad_1' })
+
+    await executeTaskForAccount(taskId, '123')
+
+    expect(Ad.findOneAndUpdate).toHaveBeenCalledWith(
+      { adId: 'ad_1' },
+      { $set: expect.objectContaining({
+        adId: 'ad_1',
+        accountId: '123',
+        organizationId: task.organizationId,
+        taskId,
+        materialId: '665000000000000000000713',
+      }) },
+      { upsert: true },
+    )
+    expect((AdMaterialMapping as any).recordMapping).toHaveBeenCalledWith(expect.objectContaining({
+      adId: 'ad_1',
+      accountId: '123',
+      organizationId: task.organizationId,
+      taskId,
+      materialId: '665000000000000000000713',
+    }))
   })
 })
