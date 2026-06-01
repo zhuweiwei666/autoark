@@ -14,8 +14,12 @@ import {
   recordAdMaterialMappings,
 } from '../services/materialTracking.service'
 import logger from '../utils/logger'
-import { UserRole } from '../models/User'
-import mongoose from 'mongoose'
+import {
+  combineFilters,
+  isSuperAdmin,
+  sanitizeScopedUpdate,
+  scopedOwnerFilter,
+} from '../utils/accessControl'
 
 /**
  * 素材管理控制器
@@ -28,46 +32,7 @@ import mongoose from 'mongoose'
  * - 普通成员：看自己上传的 + 公共数据
  */
 const getMaterialFilter = (req: Request): any => {
-  if (!req.user) {
-    logger.warn('[Material] No user in request, returning null filter')
-    return { _id: null } // 未认证，返回空结果
-  }
-  
-  // 超级管理员看所有
-  if (req.user.role === UserRole.SUPER_ADMIN) {
-    return {}
-  }
-  
-  // 将 userId 转换为 ObjectId（如果是有效的 ObjectId 字符串）
-  const userIdConditions: any[] = [{ createdBy: req.user.userId }]
-  if (mongoose.Types.ObjectId.isValid(req.user.userId)) {
-    userIdConditions.push({ createdBy: new mongoose.Types.ObjectId(req.user.userId) })
-  }
-  
-  // 公共数据条件（无 createdBy）
-  const publicDataConditions = [
-    { createdBy: { $exists: false } },
-    { createdBy: null },
-    { createdBy: '' }
-  ]
-  
-  // 组织管理员看本组织 + 公共数据
-  if (req.user.role === UserRole.ORG_ADMIN && req.user.organizationId) {
-    return {
-      $or: [
-        { organizationId: req.user.organizationId },
-        ...publicDataConditions
-      ]
-    }
-  }
-  
-  // 普通成员看自己上传的 + 公共数据
-  return {
-    $or: [
-      ...userIdConditions,
-      ...publicDataConditions
-    ]
-  }
+  return scopedOwnerFilter(req)
 }
 
 /**
@@ -126,7 +91,7 @@ export const streamPublicMaterial = async (req: Request, res: Response) => {
 export const getPresignedUrl = async (req: Request, res: Response) => {
   try {
     const { fileName, mimeType, folder } = req.body
-    
+
     if (!fileName || !mimeType) {
       return res.status(400).json({ success: false, error: '请提供文件名和类型' })
     }
@@ -365,13 +330,18 @@ export const uploadMaterial = async (req: Request, res: Response) => {
     if (!skipDuplicateCheck) {
       const duplicateCheck = await checkDuplicate(fingerprint, materialType)
       if (duplicateCheck.isDuplicate && duplicateCheck.existingMaterial) {
-        logger.info(`[Material] Duplicate found: ${duplicateCheck.existingMaterial._id}`)
-        return res.json({
-          success: true,
-          data: duplicateCheck.existingMaterial,
-          isDuplicate: true,
-          message: '素材已存在，返回现有素材',
-        })
+        const visibleDuplicate = await Material.findOne(
+          combineFilters({ _id: duplicateCheck.existingMaterial._id }, getMaterialFilter(req)),
+        ).lean()
+        if (visibleDuplicate) {
+          logger.info(`[Material] Duplicate found: ${duplicateCheck.existingMaterial._id}`)
+          return res.json({
+            success: true,
+            data: visibleDuplicate,
+            isDuplicate: true,
+            message: '素材已存在，返回现有素材',
+          })
+        }
       }
     }
     
@@ -528,19 +498,21 @@ export const getMaterialList = async (req: Request, res: Response) => {
     } = req.query
     
     // 根据用户权限过滤
-    const filter: any = { status, ...getMaterialFilter(req) }
+    let filter: any = combineFilters({ status }, getMaterialFilter(req))
     
-    if (type) filter.type = type
-    if (folder) filter.folder = folder
+    if (type) filter = combineFilters(filter, { type })
+    if (folder) filter = combineFilters(filter, { folder })
     if (tags) {
       const tagList = (tags as string).split(',').map(t => t.trim())
-      filter.tags = { $in: tagList }
+      filter = combineFilters(filter, { tags: { $in: tagList } })
     }
     if (search) {
-      filter.$or = [
-        { name: { $regex: search, $options: 'i' } },
-        { notes: { $regex: search, $options: 'i' } },
-      ]
+      filter = combineFilters(filter, {
+        $or: [
+          { name: { $regex: search, $options: 'i' } },
+          { notes: { $regex: search, $options: 'i' } },
+        ],
+      })
     }
     
     const sort: any = {}
@@ -577,7 +549,7 @@ export const getMaterialList = async (req: Request, res: Response) => {
  */
 export const getMaterial = async (req: Request, res: Response) => {
   try {
-    const material = await Material.findById(req.params.id)
+    const material = await Material.findOne(combineFilters({ _id: req.params.id }, getMaterialFilter(req)))
     if (!material) {
       return res.status(404).json({ success: false, error: '素材不存在' })
     }
@@ -594,10 +566,10 @@ export const getMaterial = async (req: Request, res: Response) => {
  */
 export const updateMaterial = async (req: Request, res: Response) => {
   try {
-    const { name, tags, folder, notes } = req.body
+    const { name, tags, folder, notes } = sanitizeScopedUpdate(req.body)
     
-    const material = await Material.findByIdAndUpdate(
-      req.params.id,
+    const material = await Material.findOneAndUpdate(
+      combineFilters({ _id: req.params.id }, getMaterialFilter(req)),
       { 
         ...(name && { name }),
         ...(tags && { tags: Array.isArray(tags) ? tags : tags.split(',').map((t: string) => t.trim()) }),
@@ -624,7 +596,7 @@ export const updateMaterial = async (req: Request, res: Response) => {
  */
 export const deleteMaterial = async (req: Request, res: Response) => {
   try {
-    const material: any = await Material.findById(req.params.id)
+    const material: any = await Material.findOne(combineFilters({ _id: req.params.id }, getMaterialFilter(req)))
     if (!material) {
       return res.status(404).json({ success: false, error: '素材不存在' })
     }
@@ -657,7 +629,7 @@ export const deleteMaterialBatch = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, error: '请选择要删除的素材' })
     }
     
-    const materials = await Material.find({ _id: { $in: ids } })
+    const materials = await Material.find(combineFilters({ _id: { $in: ids } }, getMaterialFilter(req)))
     
     // 从 R2 删除文件
     for (const material of materials) {
@@ -669,12 +641,12 @@ export const deleteMaterialBatch = async (req: Request, res: Response) => {
     
     // 批量软删除
     await Material.updateMany(
-      { _id: { $in: ids } },
+      combineFilters({ _id: { $in: ids } }, getMaterialFilter(req)),
       { status: 'deleted' }
     )
     
-    logger.info(`[Material] Batch deleted: ${ids.length} items`)
-    res.json({ success: true, data: { deletedCount: ids.length } })
+    logger.info(`[Material] Batch deleted: ${materials.length} items`)
+    res.json({ success: true, data: { deletedCount: materials.length } })
   } catch (error: any) {
     logger.error('[Material] Batch delete failed:', error)
     res.status(500).json({ success: false, error: error.message })
@@ -718,7 +690,7 @@ export const getFolders = async (req: Request, res: Response) => {
 export const getTags = async (req: Request, res: Response) => {
   try {
     const tags = await Material.aggregate([
-      { $match: { status: 'uploaded' } },
+      { $match: combineFilters({ status: 'uploaded' }, getMaterialFilter(req)) },
       { $unwind: '$tags' },
       { $group: { _id: '$tags', count: { $sum: 1 } } },
       { $sort: { count: -1 } },
@@ -754,7 +726,7 @@ export const moveToFolder = async (req: Request, res: Response) => {
     }
     
     const result = await Material.updateMany(
-      { _id: { $in: ids }, status: 'uploaded' },
+      combineFilters({ _id: { $in: ids }, status: 'uploaded' }, getMaterialFilter(req)),
       { folder }
     )
     
@@ -778,8 +750,8 @@ export const getFolderTree = async (req: Request, res: Response) => {
     const userFilter = getMaterialFilter(req)
     const baseFilter = { status: 'uploaded', ...userFilter }
     
-    // 获取所有文件夹
-    const folders = await Folder.find().sort({ path: 1 }).lean()
+    // 获取用户可见文件夹
+    const folders = await Folder.find(getMaterialFilter(req)).sort({ path: 1 }).lean()
     
     // 获取每个文件夹的素材数量（仅统计用户可见的素材）
     const folderStats = await Material.aggregate([
@@ -831,7 +803,7 @@ export const createFolder = async (req: Request, res: Response) => {
     
     // 如果有父文件夹
     if (parentId) {
-      const parent = await Folder.findById(parentId)
+      const parent = await Folder.findOne(combineFilters({ _id: parentId }, getMaterialFilter(req)))
       if (!parent) {
         return res.status(400).json({ success: false, error: '父文件夹不存在' })
       }
@@ -840,7 +812,10 @@ export const createFolder = async (req: Request, res: Response) => {
     }
     
     // 检查是否已存在
-    const existing = await Folder.findOne({ parentId: parentId || null, name: name.trim() })
+    const existing = await Folder.findOne(combineFilters(
+      { parentId: parentId || null, name: name.trim() },
+      getMaterialFilter(req),
+    ))
     if (existing) {
       return res.status(400).json({ success: false, error: '同名文件夹已存在' })
     }
@@ -850,6 +825,8 @@ export const createFolder = async (req: Request, res: Response) => {
       parentId: parentId || null,
       path,
       level,
+      createdBy: req.user?.userId,
+      organizationId: req.user?.organizationId,
     })
     
     await folder.save()
@@ -874,7 +851,7 @@ export const renameFolder = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, error: '参数不完整' })
     }
     
-    const folder: any = await Folder.findById(folderId)
+    const folder: any = await Folder.findOne(combineFilters({ _id: folderId }, getMaterialFilter(req)))
     if (!folder) {
       return res.status(404).json({ success: false, error: '文件夹不存在' })
     }
@@ -885,18 +862,18 @@ export const renameFolder = async (req: Request, res: Response) => {
     // 计算新路径
     let newPath: string
     if (folder.parentId) {
-      const parent = await Folder.findById(folder.parentId)
+      const parent = await Folder.findOne(combineFilters({ _id: folder.parentId }, getMaterialFilter(req)))
       newPath = parent ? `${parent.path}/${newName.trim()}` : newName.trim()
     } else {
       newPath = newName.trim()
     }
     
     // 检查同级是否有重名
-    const existing = await Folder.findOne({ 
+    const existing = await Folder.findOne(combineFilters({
       parentId: folder.parentId, 
       name: newName.trim(),
       _id: { $ne: folderId }
-    })
+    }, getMaterialFilter(req)))
     if (existing) {
       return res.status(400).json({ success: false, error: '同名文件夹已存在' })
     }
@@ -908,19 +885,19 @@ export const renameFolder = async (req: Request, res: Response) => {
     
     // 更新所有子文件夹的路径
     await Folder.updateMany(
-      { path: { $regex: `^${oldPath}/` } },
+      combineFilters({ path: { $regex: `^${oldPath}/` } }, getMaterialFilter(req)),
       [{ $set: { path: { $replaceOne: { input: '$path', find: oldPath, replacement: newPath } } } }]
     )
     
     // 更新素材的文件夹路径
     await Material.updateMany(
-      { folder: oldPath, status: 'uploaded' },
+      combineFilters({ folder: oldPath, status: 'uploaded' }, getMaterialFilter(req)),
       { folder: newPath }
     )
     
     // 更新子文件夹下素材的路径
     await Material.updateMany(
-      { folder: { $regex: `^${oldPath}/` }, status: 'uploaded' },
+      combineFilters({ folder: { $regex: `^${oldPath}/` }, status: 'uploaded' }, getMaterialFilter(req)),
       [{ $set: { folder: { $replaceOne: { input: '$folder', find: oldPath, replacement: newPath } } } }]
     )
     
@@ -944,7 +921,7 @@ export const deleteFolder = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, error: '请指定要删除的文件夹' })
     }
     
-    const folder: any = await Folder.findById(folderId)
+    const folder: any = await Folder.findOne(combineFilters({ _id: folderId }, getMaterialFilter(req)))
     if (!folder) {
       return res.status(404).json({ success: false, error: '文件夹不存在' })
     }
@@ -954,21 +931,21 @@ export const deleteFolder = async (req: Request, res: Response) => {
     
     // 移动该文件夹及子文件夹下的素材到目标文件夹
     await Material.updateMany(
-      { 
+      combineFilters({
         $or: [
           { folder: folderPath },
           { folder: { $regex: `^${folderPath}/` } }
         ],
         status: 'uploaded' 
-      },
+      }, getMaterialFilter(req)),
       { folder: targetPath }
     )
-    
+
     // 删除所有子文件夹
-    await Folder.deleteMany({ path: { $regex: `^${folderPath}/` } })
+    await Folder.deleteMany(combineFilters({ path: { $regex: `^${folderPath}/` } }, getMaterialFilter(req)))
     
     // 删除当前文件夹
-    await Folder.findByIdAndDelete(folderId)
+    await Folder.deleteOne(combineFilters({ _id: folderId }, getMaterialFilter(req)))
     
     logger.info(`[Folder] Deleted: ${folderPath}, materials moved to: ${targetPath}`)
     res.json({ success: true })
@@ -997,6 +974,11 @@ export const recordFbMapping = async (req: Request, res: Response) => {
     
     if (!imageHash && !videoId) {
       return res.status(400).json({ success: false, error: '请提供 imageHash 或 videoId' })
+    }
+
+    const material = await Material.findOne(combineFilters({ _id: materialId }, getMaterialFilter(req))).lean()
+    if (!material) {
+      return res.status(404).json({ success: false, error: '素材不存在或无权访问' })
     }
     
     const success = await recordFacebookMapping(materialId, accountId, { imageHash, videoId })
@@ -1035,8 +1017,12 @@ export const findByFacebookId = async (req: Request, res: Response) => {
     if (!material) {
       return res.status(404).json({ success: false, error: '未找到对应素材' })
     }
+    const visibleMaterial = await Material.findOne(combineFilters({ _id: material._id }, getMaterialFilter(req))).lean()
+    if (!visibleMaterial) {
+      return res.status(404).json({ success: false, error: '未找到对应素材' })
+    }
     
-    res.json({ success: true, data: material })
+    res.json({ success: true, data: visibleMaterial })
   } catch (error: any) {
     logger.error('[Material] Find by FB ID failed:', error)
     res.status(500).json({ success: false, error: error.message })
@@ -1066,8 +1052,12 @@ export const getReusable = async (req: Request, res: Response) => {
       limit: parseInt(limit as string),
       sortBy: sortBy as 'roas' | 'spend' | 'qualityScore',
     })
+    const visibleMaterials = await Material.find(combineFilters(
+      { _id: { $in: materials.map((material: any) => material._id) } },
+      getMaterialFilter(req),
+    )).lean()
     
-    res.json({ success: true, data: materials })
+    res.json({ success: true, data: visibleMaterials })
   } catch (error: any) {
     logger.error('[Material] Get reusable failed:', error)
     res.status(500).json({ success: false, error: error.message })
@@ -1080,6 +1070,10 @@ export const getReusable = async (req: Request, res: Response) => {
  */
 export const getFullData = async (req: Request, res: Response) => {
   try {
+    const material = await Material.findOne(combineFilters({ _id: req.params.id }, getMaterialFilter(req))).lean()
+    if (!material) {
+      return res.status(404).json({ success: false, error: '素材不存在或无权访问' })
+    }
     const data = await getMaterialFullData(req.params.id)
     res.json({ success: true, data })
   } catch (error: any) {
@@ -1095,6 +1089,9 @@ export const getFullData = async (req: Request, res: Response) => {
 export const aggregateMetrics = async (req: Request, res: Response) => {
   try {
     const { date } = req.body
+    if (!isSuperAdmin(req)) {
+      return res.status(403).json({ success: false, error: '只有超级管理员可以触发全局素材归因' })
+    }
     const targetDate = date || new Date().toISOString().split('T')[0]
     
     logger.info(`[Material] Manual metrics aggregation for ${targetDate}`)
@@ -1141,6 +1138,11 @@ export const recordAdMapping = async (req: Request, res: Response) => {
     if (!adId || !materialId) {
       return res.status(400).json({ success: false, error: '缺少 adId 或 materialId' })
     }
+
+    const material = await Material.findOne(combineFilters({ _id: materialId }, getMaterialFilter(req))).lean()
+    if (!material) {
+      return res.status(404).json({ success: false, error: '素材不存在或无权访问' })
+    }
     
     const success = await recordAdMaterialMapping({
       adId,
@@ -1180,8 +1182,16 @@ export const recordAdMappingsBatch = async (req: Request, res: Response) => {
     if (!mappings || !Array.isArray(mappings) || mappings.length === 0) {
       return res.status(400).json({ success: false, error: '请提供映射列表' })
     }
-    
-    const result = await recordAdMaterialMappings(mappings)
+
+    const materialIds = mappings.map((mapping: any) => mapping.materialId).filter(Boolean)
+    const visibleMaterials = await Material.find(combineFilters(
+      { _id: { $in: materialIds } },
+      getMaterialFilter(req),
+    )).select('_id').lean()
+    const visibleMaterialIds = new Set(visibleMaterials.map((material: any) => material._id.toString()))
+    const scopedMappings = mappings.filter((mapping: any) => visibleMaterialIds.has(String(mapping.materialId)))
+
+    const result = await recordAdMaterialMappings(scopedMappings)
     
     res.json({
       success: true,

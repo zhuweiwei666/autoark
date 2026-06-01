@@ -5,20 +5,21 @@ import { JwtPayload } from '../utils/jwt'
 import { UserRole } from '../models/User'
 import logger from '../utils/logger'
 
+const getUserOrgScope = (currentUser: JwtPayload): any => {
+  if (currentUser.role === UserRole.SUPER_ADMIN) return {}
+  if (!currentUser.organizationId) return { _id: null }
+  return { organizationId: currentUser.organizationId }
+}
+
 class AccountManagementService {
   /**
    * 获取账户列表（带组织和标签信息）
    */
   async getAccounts(currentUser: JwtPayload, filters?: any): Promise<IAccount[]> {
-    const query: any = {}
-
-    // 超级管理员可以看到所有账户
-    if (currentUser.role !== UserRole.SUPER_ADMIN) {
-      query.organizationId = currentUser.organizationId
-    }
+    const query: any = { ...getUserOrgScope(currentUser) }
 
     // 应用过滤条件
-    if (filters?.organizationId) {
+    if (filters?.organizationId && currentUser.role === UserRole.SUPER_ADMIN) {
       query.organizationId = filters.organizationId
     }
     if (filters?.tags) {
@@ -27,7 +28,7 @@ class AccountManagementService {
     if (filters?.groupId) {
       query.groupId = filters.groupId
     }
-    if (filters?.unassigned === 'true') {
+    if (filters?.unassigned === 'true' && currentUser.role === UserRole.SUPER_ADMIN) {
       query.organizationId = null
     }
 
@@ -49,16 +50,9 @@ class AccountManagementService {
     tags: string[],
     currentUser: JwtPayload
   ): Promise<IAccount> {
-    const account = await Account.findOne({ accountId })
+    const account = await Account.findOne({ accountId, ...getUserOrgScope(currentUser) })
     if (!account) {
       throw new Error('账户不存在')
-    }
-
-    // 权限检查：超级管理员或账户所属组织的管理员
-    if (currentUser.role !== UserRole.SUPER_ADMIN) {
-      if (account.organizationId?.toString() !== currentUser.organizationId) {
-        throw new Error('无权修改此账户')
-      }
     }
 
     // 添加标签（去重）
@@ -79,16 +73,9 @@ class AccountManagementService {
     tags: string[],
     currentUser: JwtPayload
   ): Promise<IAccount> {
-    const account = await Account.findOne({ accountId })
+    const account = await Account.findOne({ accountId, ...getUserOrgScope(currentUser) })
     if (!account) {
       throw new Error('账户不存在')
-    }
-
-    // 权限检查
-    if (currentUser.role !== UserRole.SUPER_ADMIN) {
-      if (account.organizationId?.toString() !== currentUser.organizationId) {
-        throw new Error('无权修改此账户')
-      }
     }
 
     // 移除标签
@@ -177,8 +164,25 @@ class AccountManagementService {
     },
     currentUser: JwtPayload
   ): Promise<IAccountGroup> {
+    const organizationId =
+      currentUser.role === UserRole.SUPER_ADMIN
+        ? data.organizationId
+        : currentUser.organizationId
+
+    if (currentUser.role !== UserRole.SUPER_ADMIN && !organizationId) {
+      throw new Error('用户未关联组织，无法创建分组')
+    }
+
+    if (
+      currentUser.role !== UserRole.SUPER_ADMIN &&
+      data.organizationId &&
+      data.organizationId !== currentUser.organizationId
+    ) {
+      throw new Error('无权为其他组织创建分组')
+    }
+
     // 检查分组名是否已存在
-    const existingGroup = await AccountGroup.findOne({ name: data.name })
+    const existingGroup = await AccountGroup.findOne({ name: data.name, ...(organizationId ? { organizationId } : {}) })
     if (existingGroup) {
       throw new Error('分组名称已存在')
     }
@@ -187,7 +191,7 @@ class AccountManagementService {
       name: data.name,
       description: data.description,
       color: data.color || '#3B82F6',
-      organizationId: data.organizationId,
+      organizationId,
       accounts: data.accounts || [],
       createdBy: currentUser.userId,
     })
@@ -197,7 +201,7 @@ class AccountManagementService {
     // 更新账户的 groupId
     if (data.accounts && data.accounts.length > 0) {
       await Account.updateMany(
-        { accountId: { $in: data.accounts } },
+        { accountId: { $in: data.accounts }, ...(organizationId ? { organizationId } : {}) },
         { $set: { groupId: group._id } }
       )
     }
@@ -211,14 +215,9 @@ class AccountManagementService {
    * 获取分组列表
    */
   async getGroups(currentUser: JwtPayload, filters?: any): Promise<IAccountGroup[]> {
-    const query: any = {}
+    const query: any = { ...getUserOrgScope(currentUser) }
 
-    // 非超级管理员只能看到自己组织的分组
-    if (currentUser.role !== UserRole.SUPER_ADMIN) {
-      query.organizationId = currentUser.organizationId
-    }
-
-    if (filters?.organizationId) {
+    if (filters?.organizationId && currentUser.role === UserRole.SUPER_ADMIN) {
       query.organizationId = filters.organizationId
     }
 
@@ -238,16 +237,9 @@ class AccountManagementService {
     notes: string,
     currentUser: JwtPayload
   ): Promise<IAccount> {
-    const account = await Account.findOne({ accountId })
+    const account = await Account.findOne({ accountId, ...getUserOrgScope(currentUser) })
     if (!account) {
       throw new Error('账户不存在')
-    }
-
-    // 权限检查
-    if (currentUser.role !== UserRole.SUPER_ADMIN) {
-      if (account.organizationId?.toString() !== currentUser.organizationId) {
-        throw new Error('无权修改此账户')
-      }
     }
 
     account.notes = notes
@@ -281,16 +273,12 @@ class AccountManagementService {
    * 获取账户统计信息
    */
   async getAccountStats(currentUser: JwtPayload) {
-    const query: any = {}
-
-    if (currentUser.role !== UserRole.SUPER_ADMIN) {
-      query.organizationId = currentUser.organizationId
-    }
+    const query: any = { ...getUserOrgScope(currentUser) }
 
     const total = await Account.countDocuments(query)
-    const unassigned = await Account.countDocuments({
-      organizationId: null,
-    })
+    const unassigned = currentUser.role === UserRole.SUPER_ADMIN
+      ? await Account.countDocuments({ organizationId: null })
+      : 0
     
     // 按组织统计
     const byOrganization = await Account.aggregate([

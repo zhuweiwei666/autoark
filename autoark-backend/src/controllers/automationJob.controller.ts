@@ -45,6 +45,10 @@ export const getJobs = async (req: Request, res: Response) => {
 
     const { status, type, agentId, page, pageSize } = req.query
 
+    if (req.user.role !== UserRole.SUPER_ADMIN && !req.user.organizationId) {
+      return res.json({ success: true, data: { list: [], total: 0, page: Number(page || 1), pageSize: Number(pageSize || 20) } })
+    }
+
     const organizationId =
       req.user.role !== UserRole.SUPER_ADMIN &&
       req.user.organizationId &&
@@ -76,8 +80,8 @@ export const getJob = async (req: Request, res: Response) => {
     if (!doc) return res.status(404).json({ success: false, error: 'Job not found' })
 
     // 组织隔离：非超管只能看自己组织
-    if (req.user.role !== UserRole.SUPER_ADMIN && req.user.organizationId) {
-      if (String(doc.organizationId || '') !== String(req.user.organizationId)) {
+    if (req.user.role !== UserRole.SUPER_ADMIN) {
+      if (!req.user.organizationId || String(doc.organizationId || '') !== String(req.user.organizationId)) {
         return res.status(403).json({ success: false, error: 'Forbidden' })
       }
     }
@@ -95,8 +99,8 @@ export const cancelJob = async (req: Request, res: Response) => {
     const doc: any = await AutomationJob.findById(req.params.id)
     if (!doc) return res.status(404).json({ success: false, error: 'Job not found' })
 
-    if (req.user.role !== UserRole.SUPER_ADMIN && req.user.organizationId) {
-      if (String(doc.organizationId || '') !== String(req.user.organizationId)) {
+    if (req.user.role !== UserRole.SUPER_ADMIN) {
+      if (!req.user.organizationId || String(doc.organizationId || '') !== String(req.user.organizationId)) {
         return res.status(403).json({ success: false, error: 'Forbidden' })
       }
     }
@@ -115,8 +119,8 @@ export const retryJob = async (req: Request, res: Response) => {
     const doc: any = await AutomationJob.findById(req.params.id)
     if (!doc) return res.status(404).json({ success: false, error: 'Job not found' })
 
-    if (req.user.role !== UserRole.SUPER_ADMIN && req.user.organizationId) {
-      if (String(doc.organizationId || '') !== String(req.user.organizationId)) {
+    if (req.user.role !== UserRole.SUPER_ADMIN) {
+      if (!req.user.organizationId || String(doc.organizationId || '') !== String(req.user.organizationId)) {
         return res.status(403).json({ success: false, error: 'Forbidden' })
       }
     }
@@ -128,4 +132,3 @@ export const retryJob = async (req: Request, res: Response) => {
     res.status(500).json({ success: false, error: e.message })
   }
 }
-

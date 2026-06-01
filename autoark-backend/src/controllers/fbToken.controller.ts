@@ -6,6 +6,7 @@ import {
 } from '../services/fbToken.validation.service'
 import logger from '../utils/logger'
 import { UserRole } from '../models/User'
+import { combineFilters, scopedIdFilter, scopedTokenFilter } from '../utils/accessControl'
 
 /**
  * 获取 Token 过滤条件
@@ -14,34 +15,7 @@ import { UserRole } from '../models/User'
  * - 普通成员：看自己绑定的 + 公共数据
  */
 const getTokenFilter = (req: Request): any => {
-  if (!req.user) return { _id: null } // 未认证，返回空结果
-  
-  // 超级管理员看所有
-  if (req.user.role === UserRole.SUPER_ADMIN) return {}
-  
-  // 组织管理员看本组织 + 公共数据（无 userId 或 userId 为空）
-  if (req.user.role === UserRole.ORG_ADMIN && req.user.organizationId) {
-    return {
-      $or: [
-        { organizationId: req.user.organizationId },
-        { userId: { $exists: false } },
-        { userId: null },
-        { userId: '' },
-        { userId: 'default-user' } // 兼容旧数据
-      ]
-    }
-  }
-  
-  // 普通成员看自己绑定的 + 公共数据（无 userId 或 userId 为空）
-  return {
-    $or: [
-      { userId: req.user.userId },
-      { userId: { $exists: false } },
-      { userId: null },
-      { userId: '' },
-      { userId: 'default-user' } // 兼容旧数据
-    ]
-  }
+  return scopedTokenFilter(req)
 }
 
 /**
@@ -108,7 +82,7 @@ export const bindToken = async (
     // 使用 fbUserId 作为唯一标识，而不是 userId
     // 这样同一个 Facebook 用户只能有一个 token，但不同的 Facebook 用户可以有多个 token
     const savedToken = await FbToken.findOneAndUpdate(
-      { fbUserId: fbUserId },
+      combineFilters({ fbUserId: fbUserId }, scopedTokenFilter(req)),
       tokenData,
       { new: true, upsert: true },
     )
@@ -211,7 +185,7 @@ export const getTokenById = async (
   try {
     const { id } = req.params
 
-    const token = await FbToken.findById(id).lean()
+    const token = await FbToken.findOne(scopedIdFilter(req, id, scopedTokenFilter(req))).lean()
 
     if (!token) {
       return res.status(404).json({
@@ -254,7 +228,7 @@ export const checkTokenStatus = async (
   try {
     const { id } = req.params
 
-    const token = await FbToken.findById(id)
+    const token = await FbToken.findOne(scopedIdFilter(req, id, scopedTokenFilter(req)))
 
     if (!token) {
       return res.status(404).json({
@@ -267,7 +241,7 @@ export const checkTokenStatus = async (
     const newStatus = await checkAndUpdateTokenStatus(token)
 
     // 重新获取更新后的 token
-    const updatedToken = await FbToken.findById(id).lean()
+    const updatedToken = await FbToken.findOne(scopedIdFilter(req, id, scopedTokenFilter(req))).lean()
 
     return res.json({
       success: true,
@@ -307,7 +281,7 @@ export const updateToken = async (
       updateData.optimizer = optimizer
     }
 
-    const updatedToken = await FbToken.findByIdAndUpdate(id, updateData, {
+    const updatedToken = await FbToken.findOneAndUpdate(scopedIdFilter(req, id, scopedTokenFilter(req)), updateData, {
       new: true,
     }).lean()
 
@@ -352,7 +326,7 @@ export const deleteToken = async (
   try {
     const { id } = req.params
 
-    const token = await FbToken.findByIdAndDelete(id)
+    const token = await FbToken.findOneAndDelete(scopedIdFilter(req, id, scopedTokenFilter(req)))
 
     if (!token) {
       return res.status(404).json({
@@ -370,4 +344,3 @@ export const deleteToken = async (
     next(error)
   }
 }
-

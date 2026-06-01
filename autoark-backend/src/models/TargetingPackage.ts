@@ -167,8 +167,14 @@ const targetingPackageSchema = new mongoose.Schema(
   },
 )
 
-// 复合索引
-targetingPackageSchema.index({ accountId: 1, name: 1 }, { unique: true })
+// 复合索引：同一组织内，同一账户下名称唯一；accountId 为空时表示组织级通用包
+targetingPackageSchema.index(
+  { organizationId: 1, accountId: 1, name: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { organizationId: { $exists: true } },
+  },
+)
 targetingPackageSchema.index({ platform: 1, createdAt: -1 })
 
 // 转换为 Facebook API 格式的方法
@@ -277,4 +283,3 @@ targetingPackageSchema.methods.toFacebookTargeting = function() {
 }
 
 export default mongoose.model('TargetingPackage', targetingPackageSchema)
-

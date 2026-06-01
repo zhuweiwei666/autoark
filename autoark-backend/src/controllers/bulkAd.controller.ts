@@ -16,12 +16,17 @@ import logger from '../utils/logger'
 import * as oauthService from '../services/facebook.oauth.service'
 import { facebookClient } from '../integration/facebook/facebookClient'
 import { parseProductUrl } from '../services/productMapping.service'
-import { getOrgFilter } from '../middlewares/auth'
 import { UserRole } from '../models/User'
 import mongoose from 'mongoose'
 import FacebookApp from '../models/FacebookApp'
 import Account from '../models/Account'
 import * as facebookUserService from '../services/facebookUser.service'
+import {
+  combineFilters,
+  sanitizeScopedUpdate,
+  scopedOwnerFilter,
+  scopedTokenFilter,
+} from '../utils/accessControl'
 
 /**
  * 获取资产过滤条件（文案包/定向包/创意组等）
@@ -30,47 +35,11 @@ import * as facebookUserService from '../services/facebookUser.service'
  * - 普通成员：看自己创建的 + 公共数据
  */
 const getAssetFilter = (req: Request): any => {
-  if (!req.user) {
-    logger.warn('[BulkAd] No user in request, returning null filter')
-    return { _id: null } // 未认证，返回空结果
-  }
-  
-  // 超级管理员看所有
-  if (req.user.role === UserRole.SUPER_ADMIN) {
-    return {}
-  }
-  
-  // 将 userId 转换为 ObjectId（如果是有效的 ObjectId 字符串）
-  // 这样可以同时匹配字符串类型和 ObjectId 类型的 createdBy
-  const userIdConditions: any[] = [{ createdBy: req.user.userId }]
-  if (mongoose.Types.ObjectId.isValid(req.user.userId)) {
-    userIdConditions.push({ createdBy: new mongoose.Types.ObjectId(req.user.userId) })
-  }
-  
-  // 公共数据条件（无 createdBy）
-  const publicDataConditions = [
-    { createdBy: { $exists: false } },
-    { createdBy: null },
-    { createdBy: '' }
-  ]
-  
-  // 组织管理员看本组织 + 公共数据
-  if (req.user.role === UserRole.ORG_ADMIN && req.user.organizationId) {
-    return {
-      $or: [
-        { organizationId: req.user.organizationId },
-        ...publicDataConditions
-      ]
-    }
-  }
-  
-  // 普通成员看自己创建的 + 公共数据
-  return {
-    $or: [
-      ...userIdConditions,
-      ...publicDataConditions
-    ]
-  }
+  return scopedOwnerFilter(req)
+}
+
+const getScopedActiveToken = (req: Request) => {
+  return FbToken.findOne({ status: 'active', ...scopedTokenFilter(req) }).sort({ updatedAt: -1 })
 }
 
 // ==================== 草稿管理 ====================
@@ -94,7 +63,7 @@ export const createDraft = async (req: Request, res: Response) => {
       createdBy: req.user?.userId,
       organizationId: req.user?.organizationId,
     }
-    const draft = await bulkAdService.createDraft(draftData)
+    const draft = await bulkAdService.createDraft(draftData, req.user?.userId)
     res.json({ success: true, data: draft })
   } catch (error: any) {
     logger.error('[BulkAd] Create draft failed:', error)
@@ -108,7 +77,12 @@ export const createDraft = async (req: Request, res: Response) => {
  */
 export const updateDraft = async (req: Request, res: Response) => {
   try {
-    const draft = await bulkAdService.updateDraft(req.params.id, req.body)
+    const draft = await bulkAdService.updateDraft(
+      req.params.id,
+      sanitizeScopedUpdate(req.body),
+      req.user?.userId,
+      getAssetFilter(req),
+    )
     res.json({ success: true, data: draft })
   } catch (error: any) {
     logger.error('[BulkAd] Update draft failed:', error)
@@ -122,7 +96,7 @@ export const updateDraft = async (req: Request, res: Response) => {
  */
 export const getDraft = async (req: Request, res: Response) => {
   try {
-    const draft = await bulkAdService.getDraft(req.params.id)
+    const draft = await bulkAdService.getDraft(req.params.id, getAssetFilter(req))
     res.json({ success: true, data: draft })
   } catch (error: any) {
     logger.error('[BulkAd] Get draft failed:', error)
@@ -152,7 +126,7 @@ export const getDraftList = async (req: Request, res: Response) => {
  */
 export const deleteDraft = async (req: Request, res: Response) => {
   try {
-    await bulkAdService.deleteDraft(req.params.id)
+    await bulkAdService.deleteDraft(req.params.id, getAssetFilter(req))
     res.json({ success: true })
   } catch (error: any) {
     logger.error('[BulkAd] Delete draft failed:', error)
@@ -166,7 +140,7 @@ export const deleteDraft = async (req: Request, res: Response) => {
  */
 export const validateDraft = async (req: Request, res: Response) => {
   try {
-    const validation = await bulkAdService.validateDraft(req.params.id)
+    const validation = await bulkAdService.validateDraft(req.params.id, getAssetFilter(req))
     res.json({ success: true, data: validation })
   } catch (error: any) {
     logger.error('[BulkAd] Validate draft failed:', error)
@@ -180,7 +154,7 @@ export const validateDraft = async (req: Request, res: Response) => {
  */
 export const publishDraft = async (req: Request, res: Response) => {
   try {
-    const task = await bulkAdService.publishDraft(req.params.id)
+    const task = await bulkAdService.publishDraft(req.params.id, req.user?.userId, getAssetFilter(req))
     res.json({ success: true, data: task })
   } catch (error: any) {
     logger.error('[BulkAd] Publish draft failed:', error)
@@ -196,7 +170,7 @@ export const publishDraft = async (req: Request, res: Response) => {
  */
 export const getTask = async (req: Request, res: Response) => {
   try {
-    const task = await bulkAdService.getTask(req.params.id)
+    const task = await bulkAdService.getTask(req.params.id, getAssetFilter(req))
     res.json({ success: true, data: task })
   } catch (error: any) {
     logger.error('[BulkAd] Get task failed:', error)
@@ -226,7 +200,7 @@ export const getTaskList = async (req: Request, res: Response) => {
  */
 export const cancelTask = async (req: Request, res: Response) => {
   try {
-    const task = await bulkAdService.cancelTask(req.params.id)
+    const task = await bulkAdService.cancelTask(req.params.id, getAssetFilter(req))
     res.json({ success: true, data: task })
   } catch (error: any) {
     logger.error('[BulkAd] Cancel task failed:', error)
@@ -240,7 +214,7 @@ export const cancelTask = async (req: Request, res: Response) => {
  */
 export const retryTask = async (req: Request, res: Response) => {
   try {
-    const task = await bulkAdService.retryFailedItems(req.params.id)
+    const task = await bulkAdService.retryFailedItems(req.params.id, getAssetFilter(req))
     res.json({ success: true, data: task })
   } catch (error: any) {
     logger.error('[BulkAd] Retry task failed:', error)
@@ -257,7 +231,7 @@ export const rerunTask = async (req: Request, res: Response) => {
   try {
     const multiplier = parseInt(req.body.multiplier) || 1
     const userId = req.user?.userId
-    const newTasks = await bulkAdService.rerunTask(req.params.id, multiplier, userId)
+    const newTasks = await bulkAdService.rerunTask(req.params.id, multiplier, userId, getAssetFilter(req))
     res.json({ success: true, data: newTasks })
   } catch (error: any) {
     logger.error('[BulkAd] Rerun task failed:', error)
@@ -293,9 +267,9 @@ export const createTargetingPackage = async (req: Request, res: Response) => {
  */
 export const updateTargetingPackage = async (req: Request, res: Response) => {
   try {
-    const pkg = await TargetingPackage.findByIdAndUpdate(
-      req.params.id,
-      req.body,
+    const pkg = await TargetingPackage.findOneAndUpdate(
+      combineFilters({ _id: req.params.id }, getAssetFilter(req)),
+      sanitizeScopedUpdate(req.body),
       { new: true }
     )
     if (!pkg) {
@@ -343,7 +317,10 @@ export const getTargetingPackageList = async (req: Request, res: Response) => {
  */
 export const deleteTargetingPackage = async (req: Request, res: Response) => {
   try {
-    await TargetingPackage.deleteOne({ _id: req.params.id })
+    const result = await TargetingPackage.deleteOne(combineFilters({ _id: req.params.id }, getAssetFilter(req)))
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ success: false, error: 'Targeting package not found' })
+    }
     res.json({ success: true })
   } catch (error: any) {
     logger.error('[BulkAd] Delete targeting package failed:', error)
@@ -398,7 +375,9 @@ export const updateCopywritingPackage = async (req: Request, res: Response) => {
     
     // 如果更新了 websiteUrl，自动重新提取产品信息
     if (data.links?.websiteUrl) {
-      const existingPkg = await CopywritingPackage.findById(req.params.id)
+      const existingPkg = await CopywritingPackage.findOne(
+        combineFilters({ _id: req.params.id }, getAssetFilter(req)),
+      )
       const urlChanged = existingPkg?.links?.websiteUrl !== data.links.websiteUrl
       const productNotManual = !existingPkg?.product || existingPkg.product.autoExtracted !== false
       
@@ -416,9 +395,9 @@ export const updateCopywritingPackage = async (req: Request, res: Response) => {
       }
     }
     
-    const pkg = await CopywritingPackage.findByIdAndUpdate(
-      req.params.id,
-      data,
+    const pkg = await CopywritingPackage.findOneAndUpdate(
+      combineFilters({ _id: req.params.id }, getAssetFilter(req)),
+      sanitizeScopedUpdate(data),
       { new: true }
     )
     if (!pkg) {
@@ -466,7 +445,10 @@ export const getCopywritingPackageList = async (req: Request, res: Response) => 
  */
 export const deleteCopywritingPackage = async (req: Request, res: Response) => {
   try {
-    await CopywritingPackage.deleteOne({ _id: req.params.id })
+    const result = await CopywritingPackage.deleteOne(combineFilters({ _id: req.params.id }, getAssetFilter(req)))
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ success: false, error: 'Copywriting package not found' })
+    }
     res.json({ success: true })
   } catch (error: any) {
     logger.error('[BulkAd] Delete copywriting package failed:', error)
@@ -480,14 +462,14 @@ export const deleteCopywritingPackage = async (req: Request, res: Response) => {
  */
 export const parseAllCopywritingProducts = async (req: Request, res: Response) => {
   try {
-    const packages = await CopywritingPackage.find({
+    const packages = await CopywritingPackage.find(combineFilters(getAssetFilter(req), {
       'links.websiteUrl': { $exists: true, $ne: '' },
       $or: [
         { 'product.name': { $exists: false } },
         { 'product.name': '' },
         { 'product.name': null },
       ]
-    })
+    }))
     
     let updated = 0
     let failed = 0
@@ -559,9 +541,9 @@ export const createCreativeGroup = async (req: Request, res: Response) => {
  */
 export const updateCreativeGroup = async (req: Request, res: Response) => {
   try {
-    const group = await CreativeGroup.findByIdAndUpdate(
-      req.params.id,
-      req.body,
+    const group = await CreativeGroup.findOneAndUpdate(
+      combineFilters({ _id: req.params.id }, getAssetFilter(req)),
+      sanitizeScopedUpdate(req.body),
       { new: true }
     )
     if (!group) {
@@ -609,7 +591,10 @@ export const getCreativeGroupList = async (req: Request, res: Response) => {
  */
 export const deleteCreativeGroup = async (req: Request, res: Response) => {
   try {
-    await CreativeGroup.deleteOne({ _id: req.params.id })
+    const result = await CreativeGroup.deleteOne(combineFilters({ _id: req.params.id }, getAssetFilter(req)))
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ success: false, error: 'Creative group not found' })
+    }
     res.json({ success: true })
   } catch (error: any) {
     logger.error('[BulkAd] Delete creative group failed:', error)
@@ -623,7 +608,7 @@ export const deleteCreativeGroup = async (req: Request, res: Response) => {
  */
 export const addMaterial = async (req: Request, res: Response) => {
   try {
-    const group = await CreativeGroup.findById(req.params.id)
+    const group = await CreativeGroup.findOne(combineFilters({ _id: req.params.id }, getAssetFilter(req)))
     if (!group) {
       return res.status(404).json({ success: false, error: 'Creative group not found' })
     }
@@ -644,7 +629,7 @@ export const addMaterial = async (req: Request, res: Response) => {
  */
 export const removeMaterial = async (req: Request, res: Response) => {
   try {
-    const group: any = await CreativeGroup.findById(req.params.id)
+    const group: any = await CreativeGroup.findOne(combineFilters({ _id: req.params.id }, getAssetFilter(req)))
     if (!group) {
       return res.status(404).json({ success: false, error: 'Creative group not found' })
     }
@@ -671,7 +656,7 @@ export const searchInterests = async (req: Request, res: Response) => {
   try {
     const { q, type = 'adinterest', limit = 50 } = req.query
     
-    const fbToken = await FbToken.findOne({ status: 'active' })
+    const fbToken = await getScopedActiveToken(req)
     if (!fbToken) {
       return res.status(400).json({ success: false, error: 'No active Facebook token' })
     }
@@ -698,7 +683,7 @@ export const searchLocations = async (req: Request, res: Response) => {
   try {
     const { q, type = 'adgeolocation', limit = 50 } = req.query
     
-    const fbToken = await FbToken.findOne({ status: 'active' })
+    const fbToken = await getScopedActiveToken(req)
     if (!fbToken) {
       return res.status(400).json({ success: false, error: 'No active Facebook token' })
     }
@@ -728,7 +713,7 @@ export const getFacebookPages = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, error: 'accountId is required' })
     }
     
-    const fbToken = await FbToken.findOne({ status: 'active' })
+    const fbToken = await getScopedActiveToken(req)
     if (!fbToken) {
       return res.status(400).json({ success: false, error: 'No active Facebook token' })
     }
@@ -752,7 +737,7 @@ export const getFacebookInstagramAccounts = async (req: Request, res: Response) 
       return res.status(400).json({ success: false, error: 'pageId is required' })
     }
     
-    const fbToken = await FbToken.findOne({ status: 'active' })
+    const fbToken = await getScopedActiveToken(req)
     if (!fbToken) {
       return res.status(400).json({ success: false, error: 'No active Facebook token' })
     }
@@ -776,7 +761,7 @@ export const getFacebookPixels = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, error: 'accountId is required' })
     }
     
-    const fbToken = await FbToken.findOne({ status: 'active' })
+    const fbToken = await getScopedActiveToken(req)
     if (!fbToken) {
       return res.status(400).json({ success: false, error: 'No active Facebook token' })
     }
@@ -800,7 +785,7 @@ export const getFacebookCustomConversions = async (req: Request, res: Response) 
       return res.status(400).json({ success: false, error: 'accountId is required' })
     }
     
-    const fbToken = await FbToken.findOne({ status: 'active' })
+    const fbToken = await getScopedActiveToken(req)
     if (!fbToken) {
       return res.status(400).json({ success: false, error: 'No active Facebook token' })
     }
@@ -929,19 +914,14 @@ export const handleAuthCallback = async (req: Request, res: Response) => {
       return res.redirect('/oauth/callback?oauth_error=No authorization code received')
     }
     
-    // 解析 state 参数获取 AutoArk 用户信息
-    // state 是 base64 编码的 JSON: { originalState: 'bulk-ad|userId|orgId', appId: 'xxx' }
-    // originalState 格式: bulk-ad|userId|organizationId
+    // 解析 state 参数获取 AutoArk 用户信息。
+    // state 必须由服务端 HMAC 签名，防止外部伪造 userId/orgId 绑定 token。
     let autoarkUserId: string | undefined
     let organizationId: string | undefined
     if (state) {
       try {
-        // 先解码 base64 JSON
-        const decoded = Buffer.from(state as string, 'base64').toString('utf-8')
-        const stateObj = JSON.parse(decoded)
+        const stateObj = oauthService.parseStateParamWithOptions(state as string, { requireSignature: true })
         const originalState = stateObj.originalState || ''
-        
-        // 从 originalState 解析 userId
         const parts = originalState.split('|')
         if (parts[0] === 'bulk-ad' && parts[1]) {
           autoarkUserId = parts[1]
@@ -949,13 +929,8 @@ export const handleAuthCallback = async (req: Request, res: Response) => {
           logger.info(`[BulkAd OAuth] Binding token to AutoArk user: ${autoarkUserId}`)
         }
       } catch (e) {
-        // 旧格式，直接解析
-        const parts = (state as string).split('|')
-        if (parts[0] === 'bulk-ad' && parts[1]) {
-          autoarkUserId = parts[1]
-          organizationId = parts[2] || undefined
-          logger.info(`[BulkAd OAuth] Binding token to AutoArk user (legacy): ${autoarkUserId}`)
-        }
+        logger.warn('[BulkAd OAuth] Invalid signed state:', e)
+        return res.redirect('/oauth/callback?oauth_error=Invalid OAuth state')
       }
     }
     
@@ -1014,7 +989,7 @@ export const getAuthStatus = async (req: Request, res: Response) => {
         : undefined
     
     // 构建查询条件
-    const tokenQuery: any = { status: 'active' }
+    const tokenQuery: any = { status: 'active', ...scopedTokenFilter(req) }
     
     // 超级管理员看到所有，普通用户只看到自己绑定的或本组织的
     if (req.user.role === UserRole.SUPER_ADMIN) {
@@ -1055,16 +1030,7 @@ export const getAuthStatus = async (req: Request, res: Response) => {
         })
       }
     } else {
-      // 普通用户：只看到自己绑定的 token
-      tokenQuery.userId = req.user.userId
-      // 如果有组织，也可以看到同组织的
-      if (orgObjectId) {
-        tokenQuery.$or = [
-          { userId: req.user.userId },
-          { organizationId: orgObjectId }
-        ]
-        delete tokenQuery.userId
-      }
+      Object.assign(tokenQuery, scopedTokenFilter(req))
     }
     
     const fbToken: any = await FbToken.findOne(tokenQuery).sort({ updatedAt: -1 })
@@ -1112,11 +1078,7 @@ export const getAuthAdAccounts = async (req: Request, res: Response) => {
     }
 
     // 构建 token 查询条件（根据组织隔离）
-    const tokenQuery: any = { status: 'active' }
-    // 如果不是超级管理员，只查询本组织的 token
-    if (req.user.role !== UserRole.SUPER_ADMIN && req.user.organizationId) {
-      tokenQuery.organizationId = req.user.organizationId
-    }
+    const tokenQuery: any = { status: 'active', ...scopedTokenFilter(req) }
 
     // 查找所有符合条件的 token（超级管理员看到所有，普通用户只看到本组织）
     const fbTokens: any[] = await FbToken.find(tokenQuery).sort({ updatedAt: -1 })
@@ -1197,7 +1159,7 @@ export const getAuthPages = async (req: Request, res: Response) => {
     let fbToken: any = null
     
     // 1. 尝试找到有权限访问此账户的 token
-    const allTokens = await FbToken.find({ status: 'active' })
+    const allTokens = await FbToken.find({ status: 'active', ...scopedTokenFilter(req) })
     for (const t of allTokens) {
       try {
         // 验证此 token 是否有权访问该账户
@@ -1277,7 +1239,7 @@ export const getAuthPixels = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, error: 'accountId is required' })
     }
     
-    const fbToken: any = await FbToken.findOne({ status: 'active' }).sort({ updatedAt: -1 })
+    const fbToken: any = await getScopedActiveToken(req)
     if (!fbToken) {
       return res.status(401).json({ success: false, error: '未授权 Facebook 账号' })
     }
@@ -1310,11 +1272,7 @@ export const getCachedPixels = async (req: Request, res: Response) => {
         : undefined
     
     // 构建 token 查询条件（根据组织隔离）
-    const tokenQuery: any = { status: 'active' }
-    // 如果不是超级管理员，只查询本组织的 token
-    if (req.user?.role !== UserRole.SUPER_ADMIN && orgObjectId) {
-      tokenQuery.organizationId = orgObjectId
-    }
+    const tokenQuery: any = { status: 'active', ...scopedTokenFilter(req) }
     
     const fbTokens: any[] = await FbToken.find(tokenQuery).sort({ updatedAt: -1 })
     if (!fbTokens || fbTokens.length === 0) {
@@ -1378,10 +1336,7 @@ export const getCachedCatalogs = async (req: Request, res: Response) => {
         ? new mongoose.Types.ObjectId(req.user.organizationId)
         : undefined
 
-    const tokenQuery: any = { status: 'active' }
-    if (req.user?.role !== UserRole.SUPER_ADMIN && orgObjectId) {
-      tokenQuery.organizationId = orgObjectId
-    }
+    const tokenQuery: any = { status: 'active', ...scopedTokenFilter(req) }
 
     const fbTokens: any[] = await FbToken.find(tokenQuery).sort({ updatedAt: -1 })
     if (!fbTokens || fbTokens.length === 0) {
@@ -1420,7 +1375,7 @@ export const getCachedCatalogs = async (req: Request, res: Response) => {
  */
 export const getPixelSyncStatus = async (req: Request, res: Response) => {
   try {
-    const fbToken: any = await FbToken.findOne({ status: 'active' }).sort({ updatedAt: -1 })
+    const fbToken: any = await getScopedActiveToken(req)
     if (!fbToken) {
       return res.status(401).json({ success: false, error: '未授权 Facebook 账号' })
     }
@@ -1440,7 +1395,7 @@ export const getPixelSyncStatus = async (req: Request, res: Response) => {
  */
 export const resyncFacebookAssets = async (req: Request, res: Response) => {
   try {
-    const fbToken: any = await FbToken.findOne({ status: 'active' }).sort({ updatedAt: -1 })
+    const fbToken: any = await getScopedActiveToken(req)
     if (!fbToken) {
       return res.status(401).json({ success: false, error: '未授权 Facebook 账号' })
     }
@@ -1469,6 +1424,7 @@ export const resyncFacebookAssets = async (req: Request, res: Response) => {
  */
 export const getTaskReviewStatus = async (req: Request, res: Response) => {
   try {
+    await bulkAdService.getTask(req.params.id, getAssetFilter(req))
     const { getTaskReviewDetails } = await import('../services/adReview.service')
     const result = await getTaskReviewDetails(req.params.id)
     res.json({ success: true, data: result })
@@ -1484,6 +1440,7 @@ export const getTaskReviewStatus = async (req: Request, res: Response) => {
  */
 export const checkTaskReviewStatus = async (req: Request, res: Response) => {
   try {
+    await bulkAdService.getTask(req.params.id, getAssetFilter(req))
     const { updateTaskAdsReviewStatus } = await import('../services/adReview.service')
     const result = await updateTaskAdsReviewStatus(req.params.id)
     res.json({ success: true, data: result })
@@ -1499,6 +1456,9 @@ export const checkTaskReviewStatus = async (req: Request, res: Response) => {
  */
 export const getAdsReviewOverview = async (req: Request, res: Response) => {
   try {
+    if (req.user?.role !== UserRole.SUPER_ADMIN) {
+      return res.status(403).json({ success: false, error: 'Forbidden' })
+    }
     const { getReviewOverview } = await import('../services/adReview.service')
     const result = await getReviewOverview()
     res.json({ success: true, data: result })
@@ -1514,6 +1474,9 @@ export const getAdsReviewOverview = async (req: Request, res: Response) => {
  */
 export const refreshAdsReviewStatus = async (req: Request, res: Response) => {
   try {
+    if (req.user?.role !== UserRole.SUPER_ADMIN) {
+      return res.status(403).json({ success: false, error: 'Forbidden' })
+    }
     const { refreshAllReviewStatus } = await import('../services/adReview.service')
     const result = await refreshAllReviewStatus()
     res.json({ success: true, data: result })

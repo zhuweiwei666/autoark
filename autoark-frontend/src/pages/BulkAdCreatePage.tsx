@@ -229,6 +229,9 @@ export default function BulkAdCreatePage() {
       
       // 监听来自弹窗的消息
       const handleMessage = (event: MessageEvent) => {
+        if (event.origin !== window.location.origin) {
+          return
+        }
         if (event.data?.type === 'oauth-success') {
           clearInterval(checkPopup)
           window.removeEventListener('message', handleMessage)

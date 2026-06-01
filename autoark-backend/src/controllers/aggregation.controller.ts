@@ -24,11 +24,59 @@ import {
   AggCampaign,
   AggOptimizer,
 } from '../models/Aggregation'
-import { authenticate } from '../middlewares/auth'
+import { authenticate, getUserAccountIds } from '../middlewares/auth'
+import { UserRole } from '../models/User'
 
 const router = Router()
 
 router.use(authenticate)
+
+const getAccountScope = async (req: Request): Promise<string[] | null> => {
+  return getUserAccountIds(req)
+}
+
+const aggregateDailyFromAccounts = async (start: string, end: string, accountIds: string[]) => {
+  const rows = await AggAccount.find({
+    date: { $gte: start, $lte: end },
+    accountId: { $in: accountIds },
+  }).lean()
+
+  const byDate = new Map<string, any>()
+  for (const row of rows) {
+    const current = byDate.get(row.date) || {
+      date: row.date,
+      spend: 0,
+      revenue: 0,
+      impressions: 0,
+      clicks: 0,
+      installs: 0,
+      activeAccounts: new Set<string>(),
+      activeCampaigns: 0,
+    }
+    current.spend += row.spend || 0
+    current.revenue += row.revenue || 0
+    current.impressions += row.impressions || 0
+    current.clicks += row.clicks || 0
+    current.installs += row.installs || 0
+    current.activeCampaigns += row.campaigns || 0
+    if ((row.spend || 0) > 0) current.activeAccounts.add(row.accountId)
+    byDate.set(row.date, current)
+  }
+
+  return Array.from(byDate.values()).map(row => ({
+    ...row,
+    activeAccounts: row.activeAccounts.size,
+    roas: row.spend > 0 ? row.revenue / row.spend : 0,
+    ctr: row.impressions > 0 ? row.clicks / row.impressions : 0,
+    cpi: row.installs > 0 ? row.spend / row.installs : 0,
+  })).sort((a, b) => a.date.localeCompare(b.date))
+}
+
+const requireSuperAdmin = (req: Request, res: Response): boolean => {
+  if (req.user?.role === UserRole.SUPER_ADMIN) return true
+  res.status(403).json({ success: false, error: '只有超级管理员可以访问全局聚合数据' })
+  return false
+}
 
 // ==================== Dashboard 汇总 ====================
 
@@ -42,7 +90,10 @@ router.get('/daily', async (req: Request, res: Response) => {
     const end = (endDate as string) || dayjs().format('YYYY-MM-DD')
     const start = (startDate as string) || dayjs().subtract(7, 'day').format('YYYY-MM-DD')
 
-    const data = await getDailySummary(start, end)
+    const accountIds = await getAccountScope(req)
+    const data = accountIds === null
+      ? await getDailySummary(start, end)
+      : await aggregateDailyFromAccounts(start, end, accountIds)
 
     res.json({
       success: true,
@@ -62,8 +113,10 @@ router.get('/daily', async (req: Request, res: Response) => {
 router.get('/today', async (req: Request, res: Response) => {
   try {
     const today = dayjs().format('YYYY-MM-DD')
-    // 🚀 直接读取，不刷新（刷新由后台定时任务完成）
-    const data = await AggDaily.findOne({ date: today }).lean()
+    const accountIds = await getAccountScope(req)
+    const data = accountIds === null
+      ? await AggDaily.findOne({ date: today }).lean()
+      : (await aggregateDailyFromAccounts(today, today, accountIds))[0]
 
     res.json({
       success: true,
@@ -84,7 +137,8 @@ router.get('/today', async (req: Request, res: Response) => {
 router.get('/countries', async (req: Request, res: Response) => {
   try {
     const date = (req.query.date as string) || dayjs().format('YYYY-MM-DD')
-    const data = await getCountryData(date)
+    const accountIds = await getAccountScope(req)
+    const data = accountIds === null ? await getCountryData(date) : []
 
     res.json({
       success: true,
@@ -110,7 +164,8 @@ router.get('/countries/trend', async (req: Request, res: Response) => {
     const query: any = { date: { $gte: startDate, $lte: endDate } }
     if (country) query.country = country
 
-    const data = await AggCountry.find(query).sort({ date: 1 }).lean()
+    const accountIds = await getAccountScope(req)
+    const data = accountIds === null ? await AggCountry.find(query).sort({ date: 1 }).lean() : []
 
     res.json({
       success: true,
@@ -132,7 +187,10 @@ router.get('/countries/trend', async (req: Request, res: Response) => {
 router.get('/accounts', async (req: Request, res: Response) => {
   try {
     const date = (req.query.date as string) || dayjs().format('YYYY-MM-DD')
-    const data = await getAccountData(date)
+    const accountIds = await getAccountScope(req)
+    const data = accountIds === null
+      ? await getAccountData(date)
+      : await AggAccount.find({ date, accountId: { $in: accountIds } }).sort({ spend: -1 }).lean()
 
     res.json({
       success: true,
@@ -155,11 +213,25 @@ router.get('/campaigns', async (req: Request, res: Response) => {
   try {
     const date = (req.query.date as string) || dayjs().format('YYYY-MM-DD')
     const { optimizer, accountId } = req.query
+    const optimizerFilter = optimizer as string | undefined
 
-    const data = await getCampaignData(date, {
-      optimizer: optimizer as string,
-      accountId: accountId as string,
-    })
+    const accountIds = await getAccountScope(req)
+    const requestedAccountId = accountId as string | undefined
+    const scopedAccountId = accountIds === null
+      ? requestedAccountId
+      : requestedAccountId && accountIds.includes(requestedAccountId)
+        ? requestedAccountId
+        : undefined
+    const data = accountIds === null
+      ? await getCampaignData(date, {
+          optimizer: optimizerFilter,
+          accountId: scopedAccountId,
+        })
+      : await AggCampaign.find({
+          date,
+          ...(optimizerFilter ? { optimizer: optimizerFilter } : {}),
+          accountId: scopedAccountId ? scopedAccountId : { $in: accountIds },
+        }).sort({ spend: -1 }).lean()
 
     res.json({
       success: true,
@@ -184,6 +256,8 @@ router.get('/campaigns/trend', async (req: Request, res: Response) => {
 
     const query: any = { date: { $gte: startDate, $lte: endDate } }
     if (campaignId) query.campaignId = campaignId
+    const accountIds = await getAccountScope(req)
+    if (accountIds !== null) query.accountId = { $in: accountIds }
 
     const data = await AggCampaign.find(query).sort({ date: 1 }).lean()
 
@@ -207,7 +281,15 @@ router.get('/campaigns/trend', async (req: Request, res: Response) => {
 router.get('/optimizers', async (req: Request, res: Response) => {
   try {
     const date = (req.query.date as string) || dayjs().format('YYYY-MM-DD')
-    const data = await getOptimizerData(date)
+    const accountIds = await getAccountScope(req)
+    const data = accountIds === null
+      ? await getOptimizerData(date)
+      : await AggCampaign.aggregate([
+          { $match: { date, accountId: { $in: accountIds } } },
+          { $group: { _id: '$optimizer', spend: { $sum: '$spend' }, revenue: { $sum: '$revenue' }, campaigns: { $sum: 1 } } },
+          { $project: { optimizer: '$_id', spend: 1, revenue: 1, roas: { $cond: [{ $gt: ['$spend', 0] }, { $divide: ['$revenue', '$spend'] }, 0] }, campaigns: 1 } },
+          { $sort: { spend: -1 } },
+        ])
 
     res.json({
       success: true,
@@ -232,8 +314,15 @@ router.get('/optimizers/trend', async (req: Request, res: Response) => {
 
     const query: any = { date: { $gte: startDate, $lte: endDate } }
     if (optimizer) query.optimizer = optimizer
-
-    const data = await AggOptimizer.find(query).sort({ date: 1 }).lean()
+    const accountIds = await getAccountScope(req)
+    const data = accountIds === null
+      ? await AggOptimizer.find(query).sort({ date: 1 }).lean()
+      : await AggCampaign.aggregate([
+          { $match: { ...query, accountId: { $in: accountIds } } },
+          { $group: { _id: { date: '$date', optimizer: '$optimizer' }, spend: { $sum: '$spend' }, revenue: { $sum: '$revenue' }, campaigns: { $sum: 1 } } },
+          { $project: { date: '$_id.date', optimizer: '$_id.optimizer', spend: 1, revenue: 1, roas: { $cond: [{ $gt: ['$spend', 0] }, { $divide: ['$revenue', '$spend'] }, 0] }, campaigns: 1 } },
+          { $sort: { date: 1 } },
+        ])
 
     res.json({
       success: true,
@@ -255,7 +344,8 @@ router.get('/optimizers/trend', async (req: Request, res: Response) => {
 router.get('/materials', async (req: Request, res: Response) => {
   try {
     const date = (req.query.date as string) || dayjs().format('YYYY-MM-DD')
-    const data = await getMaterialData(date)
+    const accountIds = await getAccountScope(req)
+    const data = accountIds === null ? await getMaterialData(date) : []
 
     res.json({
       success: true,
@@ -277,6 +367,7 @@ router.get('/materials', async (req: Request, res: Response) => {
 router.post('/refresh', async (req: Request, res: Response) => {
   try {
     const { date } = req.body
+    if (!requireSuperAdmin(req, res)) return
     
     if (date) {
       await refreshAggregation(date, true)
@@ -301,6 +392,7 @@ router.post('/refresh', async (req: Request, res: Response) => {
 router.get('/ai/snapshot', async (req: Request, res: Response) => {
   try {
     const today = dayjs().format('YYYY-MM-DD')
+    if (!requireSuperAdmin(req, res)) return
     const yesterday = dayjs().subtract(1, 'day').format('YYYY-MM-DD')
     const sevenDaysAgo = dayjs().subtract(7, 'day').format('YYYY-MM-DD')
 

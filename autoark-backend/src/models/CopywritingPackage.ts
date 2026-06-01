@@ -89,8 +89,14 @@ const copywritingPackageSchema = new mongoose.Schema(
   },
 )
 
-// 复合索引
-copywritingPackageSchema.index({ accountId: 1, name: 1 }, { unique: true })
+// 复合索引：同一组织内，同一账户下名称唯一；accountId 为空时表示组织级通用文案包
+copywritingPackageSchema.index(
+  { organizationId: 1, accountId: 1, name: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { organizationId: { $exists: true } },
+  },
+)
 copywritingPackageSchema.index({ platform: 1, createdAt: -1 })
 copywritingPackageSchema.index({ tags: 1 })
 
@@ -182,4 +188,3 @@ copywritingPackageSchema.methods.getFullUrl = function() {
 }
 
 export default mongoose.model('CopywritingPackage', copywritingPackageSchema)
-

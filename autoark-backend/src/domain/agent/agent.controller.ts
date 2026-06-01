@@ -2,13 +2,14 @@ import { Router, Request, Response } from 'express'
 import { agentService } from './agent.service'
 import { AgentConfig, AgentOperation, DailyReport, AiConversation } from './agent.model'
 import logger from '../../utils/logger'
-import { authenticate } from '../../middlewares/auth'
+import { authenticate, authorize } from '../../middlewares/auth'
 import { UserRole } from '../../models/User'
 
 const router = Router()
 
 // 所有 Agent 能力均需要认证（涉及自动调控/审批/对话数据）
 router.use(authenticate)
+router.use(authorize(UserRole.SUPER_ADMIN))
 
 // ==================== Agent 配置 CRUD ====================
 
@@ -432,4 +433,3 @@ router.get('/materials/recommendations', async (req: Request, res: Response) => 
 })
 
 export default router
-

@@ -11,7 +11,8 @@
     "lint": "eslint 'src/**/*.ts' --fix",
     "debug:purchase": "node scripts/debug_facebook_purchase.js",
     "init:super-admin": "ts-node scripts/initSuperAdmin.ts",
-    "backfill:mapping": "ts-node scripts/backfillAdMaterialMapping.ts"
+    "backfill:mapping": "ts-node scripts/backfillAdMaterialMapping.ts",
+    "migrate:commercial-isolation": "ts-node src/scripts/migrateCommercialTenantIsolation.ts"
   },
   "keywords": [],
   "author": "",

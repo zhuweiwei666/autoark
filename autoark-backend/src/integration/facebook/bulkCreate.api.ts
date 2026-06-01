@@ -8,6 +8,27 @@ import logger from '../../utils/logger'
 
 // ==================== Campaign 创建 ====================
 
+const SENSITIVE_KEYS = new Set(['access_token', 'token', 'client_secret', 'appSecret', 'authorization'])
+
+const redactSensitive = (value: any): any => {
+  if (Array.isArray(value)) {
+    return value.map(redactSensitive)
+  }
+
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, nestedValue]) => [
+        key,
+        SENSITIVE_KEYS.has(key) ? '[REDACTED]' : redactSensitive(nestedValue),
+      ]),
+    )
+  }
+
+  return value
+}
+
+const safeJson = (value: any): string => JSON.stringify(redactSensitive(value), null, 2)
+
 export interface CreateCampaignParams {
   accountId: string
   token: string
@@ -66,7 +87,7 @@ export const createCampaign = async (params: CreateCampaignParams) => {
 
   try {
     logger.info(`[BulkCreate] Creating campaign for account ${accountId}: ${name}`)
-    logger.info(`[BulkCreate] Campaign params: ${JSON.stringify(requestParams, null, 2)}`)
+    logger.info(`[BulkCreate] Campaign params: ${safeJson(requestParams)}`)
     const res = await facebookClient.post(`/act_${accountId}/campaigns`, requestParams)
     logger.info(`[BulkCreate] Campaign created: ${res.id}`)
     return { success: true, id: res.id, data: res }
@@ -82,7 +103,7 @@ export const createCampaign = async (params: CreateCampaignParams) => {
       userMessage: error.userMessage || fbError.error_user_msg || fbError.error_user_title,
       fbResponse: fbResponse,
       rawError: String(error),
-    }, null, 2))
+    }))
     
     return {
       success: false,
@@ -207,14 +228,14 @@ export const createAdSet = async (params: CreateAdSetParams) => {
 
   try {
     logger.info(`[BulkCreate] Creating adset for campaign ${campaignId}: ${name}`)
-    logger.info(`[BulkCreate] AdSet params: ${JSON.stringify(requestParams, null, 2)}`)
+    logger.info(`[BulkCreate] AdSet params: ${safeJson(requestParams)}`)
     const res = await facebookClient.post(`/act_${accountId}/adsets`, requestParams)
     logger.info(`[BulkCreate] AdSet created: ${res.id}`)
     return { success: true, id: res.id, data: res }
   } catch (error: any) {
     const errorData = error.response?.data?.error || error.response?.data || error.message
     logger.error(`[BulkCreate] Failed to create adset - Full error:`, JSON.stringify(errorData, null, 2))
-    logger.error(`[BulkCreate] AdSet failed params: ${JSON.stringify(requestParams, null, 2)}`)
+    logger.error(`[BulkCreate] AdSet failed params: ${safeJson(requestParams)}`)
     return {
       success: false,
       error: {
@@ -262,7 +283,7 @@ export const createAdCreative = async (params: CreateAdCreativeParams) => {
 
   try {
     logger.info(`[BulkCreate] Creating ad creative for account ${accountId}: ${name}`)
-    logger.info(`[BulkCreate] Creative params: ${JSON.stringify(requestParams, null, 2)}`)
+    logger.info(`[BulkCreate] Creative params: ${safeJson(requestParams)}`)
     const res = await facebookClient.post(`/act_${accountId}/adcreatives`, requestParams)
     logger.info(`[BulkCreate] Ad Creative created: ${res.id}`)
     return { success: true, id: res.id, data: res }
@@ -277,7 +298,7 @@ export const createAdCreative = async (params: CreateAdCreativeParams) => {
     logger.error(`[BulkCreate] Error subcode: ${error.subcode || fbError.error_subcode}`)
     logger.error(`[BulkCreate] Error user_msg: ${error.userMessage || fbError.error_user_msg || fbError.error_user_title}`)
     logger.error(`[BulkCreate] Full response: ${JSON.stringify(responseData, null, 2)}`)
-    logger.error(`[BulkCreate] Creative failed params: ${JSON.stringify(requestParams, null, 2)}`)
+    logger.error(`[BulkCreate] Creative failed params: ${safeJson(requestParams)}`)
     return {
       success: false,
       error: {

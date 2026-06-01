@@ -1,7 +1,8 @@
 import { Router, Request, Response } from 'express'
 import dayjs from 'dayjs'
 import logger from '../utils/logger'
-import { authenticate } from '../middlewares/auth'
+import { authenticate, authorize } from '../middlewares/auth'
+import { UserRole } from '../models/User'
 import {
   aggregateMaterialMetrics,
   getMaterialRankings,
@@ -16,6 +17,7 @@ const router = Router()
 
 // 所有路由都需要认证
 router.use(authenticate)
+router.use(authorize(UserRole.SUPER_ADMIN))
 
 // ==================== 素材排行榜 ====================
 

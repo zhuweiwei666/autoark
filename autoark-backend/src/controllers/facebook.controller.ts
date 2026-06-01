@@ -14,12 +14,25 @@ import { FB_VERSIONED_URL } from '../config/facebook.config'
 import Ad from '../models/Ad'
 import Campaign from '../models/Campaign'
 
+const requireSuperAdmin = (req: Request, res: Response): boolean => {
+  if (req.user?.role === UserRole.SUPER_ADMIN) return true
+  res.status(403).json({ success: false, error: 'Forbidden' })
+  return false
+}
+
+const ensureAccountAccess = async (req: Request, accountId: string): Promise<boolean> => {
+  const accountIds = await getUserAccountIds(req)
+  if (accountIds === null) return true
+  return accountIds.includes(accountId) || accountIds.includes(accountId.replace(/^act_/, ''))
+}
+
 export const syncCampaigns = async (
   req: Request,
   res: Response,
   next: NextFunction,
 ) => {
   try {
+    if (!requireSuperAdmin(req, res)) return
     // 使用新的队列系统（V2）
     const useV2 = req.query.v2 === 'true' || process.env.USE_QUEUE_SYNC === 'true'
     
@@ -51,6 +64,7 @@ export const getQueueStatus = async (
   next: NextFunction,
 ) => {
   try {
+    if (!requireSuperAdmin(req, res)) return
     const status = await facebookCampaignsV2Service.getQueueStatus()
     res.json({
       success: true,
@@ -68,6 +82,7 @@ export const diagnoseTokens = async (
   next: NextFunction,
 ) => {
   try {
+    if (!requireSuperAdmin(req, res)) return
     const { tokenId } = req.query
     
     if (tokenId) {
@@ -97,6 +112,7 @@ export const getTokenPoolStatus = async (
   next: NextFunction,
 ) => {
   try {
+    if (!requireSuperAdmin(req, res)) return
     const status = tokenPool.getTokenStatus()
     res.json({
       success: true,
@@ -121,6 +137,11 @@ export const getPurchaseValueInfo = async (
         success: false,
         message: 'campaignId and date are required',
       })
+    }
+
+    const campaign = await Campaign.findOne({ campaignId: campaignId as string }).select('accountId').lean()
+    if (campaign?.accountId && !(await ensureAccountAccess(req, campaign.accountId))) {
+      return res.status(403).json({ success: false, error: 'Forbidden' })
     }
 
     const info = await facebookPurchaseCorrectionService.getPurchaseValueInfo(
@@ -182,6 +203,7 @@ export const syncAccounts = async (
   next: NextFunction,
 ) => {
   try {
+    if (!requireSuperAdmin(req, res)) return
     const result = await facebookAccountsService.syncAccountsFromTokens()
     res.json({
       success: true,
@@ -199,6 +221,7 @@ export const getAccountsList = async (
   next: NextFunction,
 ) => {
   try {
+    if (!requireSuperAdmin(req, res)) return
     const page = parseInt(req.query.page as string) || 1
     const limit = parseInt(req.query.limit as string) || 20
     const sortBy = (req.query.sortBy as string) || 'periodSpend'
@@ -270,6 +293,9 @@ export const getCampaigns = async (
 ) => {
   try {
     const { id } = req.params
+    if (!(await ensureAccountAccess(req, id))) {
+      return res.status(403).json({ success: false, error: 'Forbidden' })
+    }
     const data = await facebookService.getCampaigns(id)
     res.json(data)
   } catch (error) {
@@ -284,6 +310,9 @@ export const getAdSets = async (
 ) => {
   try {
     const { id } = req.params
+    if (!(await ensureAccountAccess(req, id))) {
+      return res.status(403).json({ success: false, error: 'Forbidden' })
+    }
     const data = await facebookService.getAdSets(id)
     res.json(data)
   } catch (error) {
@@ -298,6 +327,9 @@ export const getAds = async (
 ) => {
   try {
     const { id } = req.params
+    if (!(await ensureAccountAccess(req, id))) {
+      return res.status(403).json({ success: false, error: 'Forbidden' })
+    }
     const data = await facebookService.getAds(id)
     res.json(data)
   } catch (error) {
@@ -312,6 +344,9 @@ export const getInsightsDaily = async (
 ) => {
   try {
     const { id } = req.params
+    if (!(await ensureAccountAccess(req, id))) {
+      return res.status(403).json({ success: false, error: 'Forbidden' })
+    }
     const data = await facebookService.getInsightsDaily(id)
     res.json(data)
   } catch (error) {
@@ -326,9 +361,13 @@ export const getAccounts = async (
 ) => {
   try {
     const accounts = await getEffectiveAdAccounts()
+    const accountIds = await getUserAccountIds(req)
+    const filteredAccounts = accountIds === null
+      ? accounts
+      : accounts.filter((account: any) => accountIds.includes(account.accountId) || accountIds.includes(String(account.accountId || '').replace(/^act_/, '')))
     res.json({
       success: true,
-      accounts,
+      accounts: filteredAccounts,
     })
   } catch (error) {
     next(error)
@@ -379,6 +418,7 @@ export const updateCampaignStatus = async (
   next: NextFunction,
 ) => {
   try {
+    if (!requireSuperAdmin(req, res)) return
     const { campaignId } = req.params
     const { status } = req.body
     

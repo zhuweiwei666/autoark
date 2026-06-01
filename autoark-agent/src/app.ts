@@ -14,8 +14,35 @@ import governanceRoutes from './monitor/governance.controller'
 import feishuWebhook from './platform/feishu/webhook'
 
 const app = express()
-app.use(cors())
-app.use(express.json())
+const allowedOrigins = (process.env.CORS_ALLOWED_ORIGINS || 'https://app.autoark.work,http://localhost:5173,http://localhost:3000')
+  .split(',')
+  .map(origin => origin.trim())
+  .filter(Boolean)
+
+app.use(cors({
+  origin(origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) return callback(null, true)
+    return callback(new Error('CORS origin denied'))
+  },
+  credentials: true,
+}))
+app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '2mb' }))
+
+const authAttempts = new Map<string, { count: number; resetAt: number }>()
+const authRateLimit: express.RequestHandler = (req, res, next) => {
+  const now = Date.now()
+  const windowMs = Number(process.env.AUTH_RATE_LIMIT_WINDOW_MS || 15 * 60 * 1000)
+  const maxAttempts = Number(process.env.AUTH_RATE_LIMIT_MAX || 20)
+  const key = `${req.ip}:${req.path}`
+  const current = authAttempts.get(key)
+  if (!current || current.resetAt <= now) {
+    authAttempts.set(key, { count: 1, resetAt: now + windowMs })
+    return next()
+  }
+  current.count += 1
+  if (current.count > maxAttempts) return res.status(429).json({ error: 'Too many requests' })
+  return next()
+}
 
 app.get('/healthz', (_req, res) => {
   res.json({
@@ -26,7 +53,7 @@ app.get('/healthz', (_req, res) => {
 })
 
 // API 路由
-app.use('/api/auth', authRoutes)
+app.use('/api/auth', authRateLimit, authRoutes)
 app.use('/api/chat', conversationRoutes)
 app.use('/api/actions', actionRoutes)
 app.use('/api/monitor', monitorRoutes)

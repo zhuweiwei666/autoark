@@ -75,4 +75,24 @@ describe('Facebook OAuth login URL generation', () => {
       'pages_manage_ads',
     ])
   })
+
+  it('rejects tampered signed OAuth state when verification is required', async () => {
+    const oauthApi = await loadOauthApi({
+      appId: '2165550037551429',
+      appSecret: 'secret',
+      config: {},
+    })
+
+    const loginUrl = await oauthApi.getFacebookLoginUrl('bulk-ad|user|org', '2165550037551429', {
+      businessLogin: true,
+    })
+    const url = new URL(loginUrl)
+    const state = url.searchParams.get('state') || ''
+    const raw = JSON.parse(Buffer.from(state, 'base64url').toString('utf-8'))
+    raw.originalState = 'bulk-ad|attacker|other-org'
+    const tamperedState = Buffer.from(JSON.stringify(raw)).toString('base64url')
+
+    expect(() => oauthApi.parseStateParamWithOptions(tamperedState, { requireSignature: true }))
+      .toThrow('Invalid OAuth state')
+  })
 })

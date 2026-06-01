@@ -44,5 +44,16 @@ const FbTokenSchema = new mongoose.Schema(
 FbTokenSchema.index({ optimizer: 1, createdAt: -1 })
 // 索引：状态 + 最后检查时间
 FbTokenSchema.index({ status: 1, lastCheckedAt: -1 })
+// 同一组织内同一个 Facebook 用户只保留一个活跃授权，避免并发 OAuth 产生重复记录
+FbTokenSchema.index(
+  { fbUserId: 1, organizationId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      fbUserId: { $exists: true },
+      organizationId: { $exists: true },
+    },
+  },
+)
 
 export default mongoose.model<IFbToken>('FbToken', FbTokenSchema)

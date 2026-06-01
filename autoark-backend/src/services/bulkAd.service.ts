@@ -18,6 +18,7 @@ import {
   uploadVideoFromUrl,
 } from '../integration/facebook/bulkCreate.api'
 import { facebookClient } from '../integration/facebook/facebookClient'
+import { combineFilters } from '../utils/accessControl'
 
 /**
  * 批量广告创建服务
@@ -32,8 +33,8 @@ import { facebookClient } from '../integration/facebook/facebookClient'
 export const createDraft = async (data: any, userId?: string) => {
   const draft: any = new AdDraft({
     ...data,
-    createdBy: userId,
-    lastModifiedBy: userId,
+    createdBy: userId || data.createdBy,
+    lastModifiedBy: userId || data.lastModifiedBy || data.createdBy,
   })
   
   // 计算预估数据
@@ -49,8 +50,13 @@ export const createDraft = async (data: any, userId?: string) => {
 /**
  * 更新广告草稿
  */
-export const updateDraft = async (draftId: string, data: any, userId?: string) => {
-  const draft: any = await AdDraft.findById(draftId)
+export const updateDraft = async (
+  draftId: string,
+  data: any,
+  userId?: string,
+  accessFilter: any = {},
+) => {
+  const draft: any = await AdDraft.findOne(combineFilters({ _id: draftId }, accessFilter))
   if (!draft) {
     throw new Error('Draft not found')
   }
@@ -78,8 +84,8 @@ export const updateDraft = async (draftId: string, data: any, userId?: string) =
 /**
  * 获取草稿详情
  */
-export const getDraft = async (draftId: string) => {
-  const draft = await AdDraft.findById(draftId)
+export const getDraft = async (draftId: string, accessFilter: any = {}) => {
+  const draft = await AdDraft.findOne(combineFilters({ _id: draftId }, accessFilter))
     .populate('adset.targetingPackageId')
     .populate('ad.creativeGroupIds')
     .populate('ad.copywritingPackageIds')
@@ -117,8 +123,8 @@ export const getDraftList = async (query: any = {}, userFilter: any = {}) => {
 /**
  * 删除草稿
  */
-export const deleteDraft = async (draftId: string) => {
-  const draft = await AdDraft.findById(draftId)
+export const deleteDraft = async (draftId: string, accessFilter: any = {}) => {
+  const draft = await AdDraft.findOne(combineFilters({ _id: draftId }, accessFilter))
   if (!draft) {
     throw new Error('Draft not found')
   }
@@ -127,7 +133,7 @@ export const deleteDraft = async (draftId: string) => {
     throw new Error('Cannot delete published draft')
   }
   
-  await AdDraft.deleteOne({ _id: draftId })
+  await AdDraft.deleteOne(combineFilters({ _id: draftId }, accessFilter))
   logger.info(`[BulkAd] Draft deleted: ${draftId}`)
   return { success: true }
 }
@@ -135,8 +141,8 @@ export const deleteDraft = async (draftId: string) => {
 /**
  * 验证草稿
  */
-export const validateDraft = async (draftId: string) => {
-  const draft: any = await AdDraft.findById(draftId)
+export const validateDraft = async (draftId: string, accessFilter: any = {}) => {
+  const draft: any = await AdDraft.findOne(combineFilters({ _id: draftId }, accessFilter))
   if (!draft) {
     throw new Error('Draft not found')
   }
@@ -187,11 +193,11 @@ export const validateDraft = async (draftId: string) => {
 /**
  * 发布草稿（创建任务）
  */
-export const publishDraft = async (draftId: string, userId?: string) => {
-  const draft: any = await getDraft(draftId)
+export const publishDraft = async (draftId: string, userId?: string, accessFilter: any = {}) => {
+  const draft: any = await getDraft(draftId, accessFilter)
   
   // 验证草稿
-  const validation = await validateDraft(draftId)
+  const validation = await validateDraft(draftId, accessFilter)
   if (!validation.isValid) {
     throw new Error(`Draft validation failed: ${validation.errors.map((e: any) => e.message).join(', ')}`)
   }
@@ -246,6 +252,7 @@ export const publishDraft = async (draftId: string, userId?: string) => {
     status: 'pending',
     platform: 'facebook',
     draftId: draft._id,
+    organizationId: draft.organizationId,
     
     // 初始化任务项
     items: draft.accounts.map((account: any) => ({
@@ -443,19 +450,32 @@ export const executeTaskForAccount = async (
   }
   
   // 获取 Token - 根据账户 ID 找到正确的 token
+  const taskAccessFilter = task.organizationId
+    ? { organizationId: task.organizationId }
+    : task.createdBy
+      ? { createdBy: task.createdBy }
+      : {}
+  const tokenAccessFilter = task.organizationId
+    ? { organizationId: task.organizationId }
+    : task.createdBy
+      ? { userId: task.createdBy }
+      : {}
+
   // 1. 优先查找明确绑定了该账户的 token
   let fbToken: any = await FbToken.findOne({ 
     status: 'active',
+    ...tokenAccessFilter,
     'accounts.accountId': accountId 
   })
   
   // 2. 如果没有绑定关系，尝试从 Account 模型获取 fbUserId
   // 注意：Account 模型可能不包含 fbUserId 字段，这是历史兼容代码
   if (!fbToken) {
-    const account: any = await Account.findOne({ accountId }).lean()
+    const account: any = await Account.findOne(combineFilters({ accountId }, task.organizationId ? { organizationId: task.organizationId } : {})).lean()
     if (account?.fbUserId) {
       fbToken = await FbToken.findOne({ 
         status: 'active', 
+        ...tokenAccessFilter,
         fbUserId: account.fbUserId 
       })
     }
@@ -463,7 +483,7 @@ export const executeTaskForAccount = async (
   
   // 3. 如果还没找到，查找所有 active token 并验证权限
   if (!fbToken) {
-    const allTokens = await FbToken.find({ status: 'active' })
+    const allTokens = await FbToken.find({ status: 'active', ...tokenAccessFilter })
     for (const t of allTokens) {
       try {
         // 验证此 token 是否有权访问该账户
@@ -511,7 +531,9 @@ export const executeTaskForAccount = async (
     let targeting: any = {}
     let targetingName = ''  // 定向包名称，用于名称模板
     if (config.adset.targetingPackageId) {
-      const targetingPackage: any = await TargetingPackage.findById(config.adset.targetingPackageId)
+      const targetingPackage: any = await TargetingPackage.findOne(
+        combineFilters({ _id: config.adset.targetingPackageId }, taskAccessFilter),
+      )
       if (targetingPackage) {
         targetingName = targetingPackage.name || ''
         if (targetingPackage.toFacebookTargeting) {
@@ -1083,8 +1105,8 @@ function updateTaskProgress(task: any) {
 /**
  * 获取任务详情
  */
-export const getTask = async (taskId: string) => {
-  const task = await AdTask.findById(taskId).populate('draftId')
+export const getTask = async (taskId: string, accessFilter: any = {}) => {
+  const task = await AdTask.findOne(combineFilters({ _id: taskId }, accessFilter)).populate('draftId')
   if (!task) {
     throw new Error('Task not found')
   }
@@ -1120,8 +1142,8 @@ export const getTaskList = async (query: any = {}, userFilter: any = {}) => {
 /**
  * 取消任务
  */
-export const cancelTask = async (taskId: string) => {
-  const task: any = await AdTask.findById(taskId)
+export const cancelTask = async (taskId: string, accessFilter: any = {}) => {
+  const task: any = await AdTask.findOne(combineFilters({ _id: taskId }, accessFilter))
   if (!task) {
     throw new Error('Task not found')
   }
@@ -1141,8 +1163,8 @@ export const cancelTask = async (taskId: string) => {
 /**
  * 重试失败的任务项
  */
-export const retryFailedItems = async (taskId: string) => {
-  const task: any = await AdTask.findById(taskId)
+export const retryFailedItems = async (taskId: string, accessFilter: any = {}) => {
+  const task: any = await AdTask.findOne(combineFilters({ _id: taskId }, accessFilter))
   if (!task) {
     throw new Error('Task not found')
   }
@@ -1178,8 +1200,13 @@ export const retryFailedItems = async (taskId: string) => {
  * @param multiplier 执行倍率（创建多少个新任务）
  * @param userId 当前用户ID（用于任务命名）
  */
-export const rerunTask = async (taskId: string, multiplier: number = 1, userId?: string) => {
-  const originalTask: any = await AdTask.findById(taskId)
+export const rerunTask = async (
+  taskId: string,
+  multiplier: number = 1,
+  userId?: string,
+  accessFilter: any = {},
+) => {
+  const originalTask: any = await AdTask.findOne(combineFilters({ _id: taskId }, accessFilter))
   if (!originalTask) {
     throw new Error('Task not found')
   }
@@ -1225,6 +1252,7 @@ export const rerunTask = async (taskId: string, multiplier: number = 1, userId?:
       status: 'pending',
       platform: originalTask.platform,
       draftId: originalTask.draftId,
+      organizationId: originalTask.organizationId,
       configSnapshot: config,
       publishSettings: originalTask.publishSettings,
       notes: `重新执行自任务 ${taskId}${safeMultiplier > 1 ? ` (${i + 1}/${safeMultiplier})` : ''}`,
@@ -1241,6 +1269,7 @@ export const rerunTask = async (taskId: string, multiplier: number = 1, userId?:
         failedAccounts: 0,
         percentage: 0,
       },
+      createdBy: userId || originalTask.createdBy,
     })
     
     await newTask.save()

@@ -1,11 +1,19 @@
 import { Request, Response, NextFunction } from 'express'
 import * as pixelsService from '../services/facebook.pixels.service'
+import { UserRole } from '../models/User'
+
+const requireSuperAdmin = (req: Request, res: Response): boolean => {
+  if (req.user?.role === UserRole.SUPER_ADMIN) return true
+  res.status(403).json({ success: false, error: 'Forbidden' })
+  return false
+}
 
 /**
  * 获取所有 Pixels
  */
 export const getPixels = async (req: Request, res: Response, next: NextFunction) => {
   try {
+    if (!requireSuperAdmin(req, res)) return
     const { tokenId, allTokens } = req.query
 
     let pixels: any[]
@@ -36,6 +44,7 @@ export const getPixels = async (req: Request, res: Response, next: NextFunction)
  */
 export const getPixelDetails = async (req: Request, res: Response, next: NextFunction) => {
   try {
+    if (!requireSuperAdmin(req, res)) return
     const { id } = req.params
     const { tokenId } = req.query
 
@@ -55,6 +64,7 @@ export const getPixelDetails = async (req: Request, res: Response, next: NextFun
  */
 export const getPixelEvents = async (req: Request, res: Response, next: NextFunction) => {
   try {
+    if (!requireSuperAdmin(req, res)) return
     const { id } = req.params
     const { tokenId, limit } = req.query
 
@@ -73,4 +83,3 @@ export const getPixelEvents = async (req: Request, res: Response, next: NextFunc
     next(error)
   }
 }
-

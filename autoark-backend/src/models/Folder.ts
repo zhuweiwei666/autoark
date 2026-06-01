@@ -5,6 +5,8 @@ export interface IFolder extends Document {
   parentId: mongoose.Types.ObjectId | null  // 父文件夹 ID，null 表示根目录
   path: string  // 完整路径，如 "产品图/Banner"
   level: number  // 层级深度，0 表示根目录
+  organizationId?: mongoose.Types.ObjectId
+  createdBy?: string
   createdAt: Date
   updatedAt: Date
 }
@@ -29,12 +31,27 @@ const folderSchema = new Schema<IFolder>({
     type: Number, 
     default: 0,
   },
+  organizationId: {
+    type: Schema.Types.ObjectId,
+    ref: 'Organization',
+    index: true,
+  },
+  createdBy: {
+    type: String,
+    index: true,
+  },
 }, {
   timestamps: true,
 })
 
 // 复合索引：同一父目录下名称唯一
-folderSchema.index({ parentId: 1, name: 1 }, { unique: true })
+folderSchema.index(
+  { organizationId: 1, parentId: 1, name: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { organizationId: { $exists: true } },
+  },
+)
+folderSchema.index({ organizationId: 1, path: 1 })
 
 export default mongoose.model<IFolder>('Folder', folderSchema)
-

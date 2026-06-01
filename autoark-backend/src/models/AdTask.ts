@@ -46,20 +46,13 @@ const taskItemSchema = new mongoose.Schema({
   }],
   
   // 错误信息
-  errors: [{
-    entityType: { type: String, enum: ['campaign', 'adset', 'ad', 'creative', 'general'] },
-    entityName: { type: String },
-    errorCode: { type: String },
-    errorMessage: { type: String },
-    errorDetails: { type: Object },
-    timestamp: { type: Date, default: Date.now },
-  }],
+  errors: { type: mongoose.Schema.Types.Mixed, default: [] },
   
   // 时间戳
   startedAt: { type: Date },
   completedAt: { type: Date },
   duration: { type: Number },  // 耗时（毫秒）
-}, { _id: true })
+}, { _id: true, suppressReservedKeysWarning: true })
 
 const adTaskSchema = new mongoose.Schema(
   {
@@ -314,4 +307,3 @@ adTaskSchema.methods.getAllErrors = function() {
 }
 
 export default mongoose.model('AdTask', adTaskSchema)
-

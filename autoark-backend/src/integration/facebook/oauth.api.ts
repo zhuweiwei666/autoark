@@ -1,4 +1,5 @@
 import axios from 'axios'
+import crypto from 'crypto'
 import logger from '../../utils/logger'
 import FacebookApp from '../../models/FacebookApp'
 import { FB_API_VERSION, FB_BASE_URL } from '../../config/facebook.config'
@@ -12,6 +13,12 @@ const ENV_FB_APP_SECRET = process.env.FACEBOOK_APP_SECRET || ''
 const ENV_FB_BUSINESS_LOGIN_CONFIG_ID =
   process.env.FACEBOOK_BUSINESS_LOGIN_CONFIG_ID || process.env.FACEBOOK_CONFIG_ID || ''
 const FB_REDIRECT_URI = process.env.FACEBOOK_REDIRECT_URI || 'http://localhost:3001/api/facebook/oauth/callback'
+const OAUTH_STATE_SECRET =
+  process.env.OAUTH_STATE_SECRET ||
+  process.env.JWT_SECRET ||
+  process.env.FACEBOOK_APP_SECRET ||
+  'autoark-oauth-state-dev-secret'
+const OAUTH_STATE_TTL_MS = Number(process.env.OAUTH_STATE_TTL_MS || 10 * 60 * 1000)
 
 const getBulkAdRedirectUri = (): string => {
   if (process.env.FACEBOOK_BULK_AD_REDIRECT_URI) {
@@ -30,6 +37,59 @@ export const getFacebookBulkAdRedirectUri = (): string => getBulkAdRedirectUri()
 export interface FacebookLoginUrlOptions {
   businessLogin?: boolean
   redirectUri?: string
+}
+
+interface OAuthStatePayload {
+  originalState: string
+  appId?: string
+  redirectUri?: string
+  iat?: number
+  exp?: number
+  nonce?: string
+  sig?: string
+}
+
+const signStatePayload = (payload: Omit<OAuthStatePayload, 'sig'>): string => {
+  return crypto
+    .createHmac('sha256', OAUTH_STATE_SECRET)
+    .update(JSON.stringify(payload))
+    .digest('hex')
+}
+
+const buildStateParam = (payload: Omit<OAuthStatePayload, 'sig' | 'iat' | 'exp' | 'nonce'>): string => {
+  const now = Date.now()
+  const signedPayload: Omit<OAuthStatePayload, 'sig'> = {
+    ...payload,
+    iat: now,
+    exp: now + OAUTH_STATE_TTL_MS,
+    nonce: crypto.randomUUID(),
+  }
+
+  return Buffer.from(JSON.stringify({
+    ...signedPayload,
+    sig: signStatePayload(signedPayload),
+  })).toString('base64url')
+}
+
+const verifySignedState = (stateObj: OAuthStatePayload): void => {
+  const { sig, ...payload } = stateObj
+  if (!sig) {
+    throw new Error('OAuth state signature missing')
+  }
+
+  const expected = signStatePayload(payload)
+  const actualBuffer = Buffer.from(sig)
+  const expectedBuffer = Buffer.from(expected)
+  if (
+    actualBuffer.length !== expectedBuffer.length ||
+    !crypto.timingSafeEqual(actualBuffer, expectedBuffer)
+  ) {
+    throw new Error('OAuth state signature invalid')
+  }
+
+  if (!stateObj.exp || stateObj.exp < Date.now()) {
+    throw new Error('OAuth state expired')
+  }
 }
 
 /**
@@ -158,7 +218,7 @@ export const getFacebookLoginUrl = async (
     'pages_manage_ads',
   ].join(',')
 
-  // 在 state 中编码 appId，以便回调时知道用哪个 app
+  // 在 state 中编码 appId，以便回调时知道用哪个 app；state 带 HMAC 签名，防止回调被伪造绑定到其他用户/组织。
   const stateData = {
     originalState: state || '',
     appId: config.appId,
@@ -169,7 +229,7 @@ export const getFacebookLoginUrl = async (
     client_id: config.appId,
     redirect_uri: redirectUri,
     response_type: 'code',
-    state: Buffer.from(JSON.stringify(stateData)).toString('base64'),
+    state: buildStateParam(stateData),
   })
 
   if (options.businessLogin && businessLoginConfigId) {
@@ -207,7 +267,11 @@ export const getFacebookLoginUrlSync = (state?: string): string => {
     client_id: ENV_FB_APP_ID,
     redirect_uri: FB_REDIRECT_URI,
     response_type: 'code',
-    state: state || '',
+    state: buildStateParam({
+      originalState: state || '',
+      appId: ENV_FB_APP_ID,
+      redirectUri: FB_REDIRECT_URI,
+    }),
   })
 
   if (ENV_FB_BUSINESS_LOGIN_CONFIG_ID) {
@@ -229,10 +293,32 @@ export const parseStateParam = (state: string): {
   appId?: string
   redirectUri?: string
 } => {
+  return parseStateParamWithOptions(state)
+}
+
+export const parseStateParamWithOptions = (state: string, options: { requireSignature?: boolean } = {}): {
+  originalState: string
+  appId?: string
+  redirectUri?: string
+} => {
   try {
     const decoded = Buffer.from(state, 'base64').toString('utf-8')
-    return JSON.parse(decoded)
+    const stateObj = JSON.parse(decoded)
+    if (stateObj?.sig) {
+      verifySignedState(stateObj)
+    } else if (options.requireSignature) {
+      throw new Error('OAuth state signature missing')
+    }
+
+    return {
+      originalState: stateObj.originalState || '',
+      appId: stateObj.appId,
+      redirectUri: stateObj.redirectUri,
+    }
   } catch {
+    if (options.requireSignature) {
+      throw new Error('Invalid OAuth state')
+    }
     // 旧格式，直接返回
     return { originalState: state }
   }

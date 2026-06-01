@@ -103,8 +103,14 @@ const creativeGroupSchema = new mongoose.Schema(
   },
 )
 
-// 复合索引
-creativeGroupSchema.index({ accountId: 1, name: 1 }, { unique: true })
+// 复合索引：同一组织内，同一账户下名称唯一；accountId 为空时表示组织级通用创意组
+creativeGroupSchema.index(
+  { organizationId: 1, accountId: 1, name: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { organizationId: { $exists: true } },
+  },
+)
 creativeGroupSchema.index({ platform: 1, createdAt: -1 })
 creativeGroupSchema.index({ tags: 1 })
 creativeGroupSchema.index({ folderId: 1 })
@@ -175,4 +181,3 @@ creativeGroupSchema.methods.isReady = function() {
 }
 
 export default mongoose.model('CreativeGroup', creativeGroupSchema)
-

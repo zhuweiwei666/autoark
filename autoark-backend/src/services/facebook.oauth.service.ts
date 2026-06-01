@@ -40,6 +40,13 @@ export const getAvailableApps = async () => {
   return oauthApi.getAvailableApps()
 }
 
+export const parseStateParamWithOptions = (
+  state: string,
+  options: { requireSignature?: boolean } = {},
+) => {
+  return oauthApi.parseStateParamWithOptions(state, options)
+}
+
 /**
  * 验证 OAuth 配置（异步）
  */
@@ -74,11 +81,18 @@ export const handleOAuthCallback = async (code: string, state?: string): Promise
     let appId: string | undefined
     let redirectUri: string | undefined
     let originalState: string = ''
+    let autoarkUserId: string | undefined
+    let organizationId: string | undefined
     if (state) {
-      const stateData = oauthApi.parseStateParam(state)
+      const stateData = oauthApi.parseStateParamWithOptions(state, { requireSignature: true })
       appId = stateData.appId
       redirectUri = stateData.redirectUri
       originalState = stateData.originalState
+      const stateParts = originalState.split('|')
+      if (stateParts[0] === 'bulk-ad' && stateParts[1]) {
+        autoarkUserId = stateParts[1]
+        organizationId = stateParts[2] || undefined
+      }
       logger.info(`[OAuth] Using App ${appId || 'default'} from state`)
     }
 
@@ -98,10 +112,19 @@ export const handleOAuthCallback = async (code: string, state?: string): Promise
     const expiresAt = new Date(Date.now() + expiresIn * 1000)
 
     // 4. 存储或更新 Token（记录使用的 App）
+    const tokenQuery: any = { fbUserId: userInfo.id }
+    if (organizationId) {
+      tokenQuery.organizationId = organizationId
+    } else if (autoarkUserId) {
+      tokenQuery.userId = autoarkUserId
+    }
+
     const tokenDoc = await FbToken.findOneAndUpdate(
-      { fbUserId: userInfo.id },
+      tokenQuery,
       {
         token: longLivedToken,
+        ...(autoarkUserId && { userId: autoarkUserId }),
+        ...(organizationId && { organizationId }),
         fbUserId: userInfo.id,
         fbUserName: userInfo.name,
         status: 'active',

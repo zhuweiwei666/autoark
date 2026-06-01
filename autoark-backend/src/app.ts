@@ -38,8 +38,53 @@ declare global {
 }
 
 const app = express()
-app.use(cors())
-app.use(express.json())
+
+const configuredOrigins = (process.env.CORS_ALLOWED_ORIGINS || '')
+  .split(',')
+  .map(origin => origin.trim())
+  .filter(Boolean)
+
+const defaultAllowedOrigins = [
+  'https://app.autoark.work',
+  'https://autoark.work',
+  'http://localhost:5173',
+  'http://localhost:3000',
+  'http://localhost:3001',
+]
+
+const allowedOrigins = configuredOrigins.length > 0 ? configuredOrigins : defaultAllowedOrigins
+
+app.use(cors({
+  origin(origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) {
+      return callback(null, true)
+    }
+    return callback(new Error('CORS origin denied'))
+  },
+  credentials: true,
+}))
+app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '2mb' }))
+
+const authAttempts = new Map<string, { count: number; resetAt: number }>()
+const authRateLimit = (req: Request, res: Response, next: NextFunction) => {
+  const windowMs = Number(process.env.AUTH_RATE_LIMIT_WINDOW_MS || 15 * 60 * 1000)
+  const maxAttempts = Number(process.env.AUTH_RATE_LIMIT_MAX || 20)
+  const key = `${req.ip}:${req.path}`
+  const now = Date.now()
+  const current = authAttempts.get(key)
+
+  if (!current || current.resetAt <= now) {
+    authAttempts.set(key, { count: 1, resetAt: now + windowMs })
+    return next()
+  }
+
+  current.count += 1
+  if (current.count > maxAttempts) {
+    return res.status(429).json({ success: false, message: '请求过于频繁，请稍后再试' })
+  }
+
+  return next()
+}
 
 app.get('/healthz', (_req: Request, res: Response) => {
   res.json({
@@ -74,7 +119,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 
 // API Routes
 // 认证路由（公开）
-app.use('/api/auth', authRoutes)
+app.use('/api/auth', authRateLimit, authRoutes)
 // 用户和组织管理（需要认证）
 app.use('/api/users', userRoutes)
 app.use('/api/organizations', organizationRoutes)

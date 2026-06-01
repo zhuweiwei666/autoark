@@ -17,11 +17,12 @@ const OAuthCallbackPage = () => {
       setMessage(`授权成功${fbUserName ? ` - ${decodeURIComponent(fbUserName)}` : ''}`)
       
       if (window.opener) {
+        const targetOrigin = window.location.origin
         window.opener.postMessage({
           type: 'oauth-success',
           tokenId,
           fbUserName: fbUserName ? decodeURIComponent(fbUserName) : undefined,
-        }, '*')
+        }, targetOrigin)
         setTimeout(() => window.close(), 1500)
       } else {
         setTimeout(() => { window.location.href = '/bulk-ad/create' }, 1500)
@@ -31,7 +32,7 @@ const OAuthCallbackPage = () => {
       setMessage(decodeURIComponent(oauthError))
       
       if (window.opener) {
-        window.opener.postMessage({ type: 'oauth-error', error: decodeURIComponent(oauthError) }, '*')
+        window.opener.postMessage({ type: 'oauth-error', error: decodeURIComponent(oauthError) }, window.location.origin)
         setTimeout(() => window.close(), 3000)
       }
     } else {
@@ -122,4 +123,3 @@ const OAuthCallbackPage = () => {
 }
 
 export default OAuthCallbackPage
-

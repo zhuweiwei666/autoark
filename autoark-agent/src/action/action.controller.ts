@@ -9,12 +9,18 @@ import { executeAction } from './action.executor'
 const router = Router()
 router.use(authenticate)
 
+const canReviewSharedActions = (req: Request): boolean => req.user?.role === 'admin'
+
+const actionAccessFilter = (req: Request): any => {
+  if (canReviewSharedActions(req)) return {}
+  return { userId: req.user!.id }
+}
+
 // 获取待审批操作列表（包含 Agent 自动生成的无 userId 的操作）
 router.get('/pending', async (req: Request, res: Response) => {
-  const actions = await Action.find({
-    status: 'pending',
-    $or: [{ userId: req.user!.id }, { userId: { $exists: false } }, { userId: null }],
-  })
+  const actions = await Action.find(canReviewSharedActions(req)
+    ? { status: 'pending' }
+    : { status: 'pending', userId: req.user!.id })
     .sort({ createdAt: -1 })
     .lean()
   res.json(actions)
@@ -31,7 +37,7 @@ router.get('/', async (req: Request, res: Response) => {
 
 // 批准操作
 router.post('/:id/approve', async (req: Request, res: Response) => {
-  const action = await Action.findById(req.params.id)
+  const action = await Action.findOne({ _id: req.params.id, ...actionAccessFilter(req) })
   if (!action) return res.status(404).json({ error: 'Action not found' })
   if (action.status !== 'pending') return res.status(400).json({ error: `Action is ${action.status}, not pending` })
 
@@ -49,7 +55,7 @@ router.post('/:id/approve', async (req: Request, res: Response) => {
 
 // 拒绝操作
 router.post('/:id/reject', async (req: Request, res: Response) => {
-  const action = await Action.findById(req.params.id)
+  const action = await Action.findOne({ _id: req.params.id, ...actionAccessFilter(req) })
   if (!action) return res.status(404).json({ error: 'Action not found' })
   if (action.status !== 'pending') return res.status(400).json({ error: `Action is ${action.status}, not pending` })
 
@@ -69,7 +75,14 @@ router.post('/approve-all', async (req: Request, res: Response) => {
 
   const results = []
   for (const id of actionIds) {
-    await Action.updateOne({ _id: id, status: 'pending' }, { status: 'approved', reviewedBy: req.user!.id, reviewedAt: new Date() })
+    const update = await Action.updateOne(
+      { _id: id, status: 'pending', ...actionAccessFilter(req) },
+      { status: 'approved', reviewedBy: req.user!.id, reviewedAt: new Date() },
+    )
+    if (update.modifiedCount === 0) {
+      results.push({ id, success: false, error: 'Action not found or not allowed' })
+      continue
+    }
     const r = await executeAction(id)
     results.push({ id, ...r })
   }

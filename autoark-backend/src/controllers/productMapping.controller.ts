@@ -2,6 +2,12 @@ import { Request, Response } from 'express'
 import logger from '../utils/logger'
 import Product from '../models/Product'
 import * as productMappingService from '../services/productMapping.service'
+import {
+  combineFilters,
+  sanitizeScopedUpdate,
+  scopedOwnerFilter,
+  scopedTokenFilter,
+} from '../utils/accessControl'
 
 /**
  * 产品映射控制器
@@ -10,6 +16,13 @@ import * as productMappingService from '../services/productMapping.service'
 
 // ==================== 产品 CRUD ====================
 
+const getProductFilter = (req: Request): any => scopedOwnerFilter(req)
+
+const getOwnerData = (req: Request): any => ({
+  ...(req.user?.organizationId && { organizationId: req.user.organizationId }),
+  ...(req.user?.userId && { createdBy: req.user.userId }),
+})
+
 /**
  * 获取所有产品
  * GET /api/product-mapping/products
@@ -17,19 +30,21 @@ import * as productMappingService from '../services/productMapping.service'
 export const getProducts = async (req: Request, res: Response) => {
   try {
     const { status, hasPixel, hasAccount, search } = req.query
-    const query: any = {}
+    let query: any = getProductFilter(req)
     
-    if (status) query.status = status
-    if (hasPixel === 'true') query['pixels.0'] = { $exists: true }
-    if (hasPixel === 'false') query['pixels.0'] = { $exists: false }
-    if (hasAccount === 'true') query['accounts.0'] = { $exists: true }
-    if (hasAccount === 'false') query['accounts.0'] = { $exists: false }
+    if (status) query = combineFilters(query, { status })
+    if (hasPixel === 'true') query = combineFilters(query, { 'pixels.0': { $exists: true } })
+    if (hasPixel === 'false') query = combineFilters(query, { 'pixels.0': { $exists: false } })
+    if (hasAccount === 'true') query = combineFilters(query, { 'accounts.0': { $exists: true } })
+    if (hasAccount === 'false') query = combineFilters(query, { 'accounts.0': { $exists: false } })
     if (search) {
-      query.$or = [
+      query = combineFilters(query, {
+        $or: [
         { name: { $regex: search, $options: 'i' } },
         { identifier: { $regex: search, $options: 'i' } },
         { primaryDomain: { $regex: search, $options: 'i' } },
-      ]
+        ],
+      })
     }
     
     const products = await Product.find(query)
@@ -53,7 +68,7 @@ export const getProducts = async (req: Request, res: Response) => {
  */
 export const getProductById = async (req: Request, res: Response) => {
   try {
-    const product = await Product.findById(req.params.id)
+    const product = await Product.findOne(combineFilters({ _id: req.params.id }, getProductFilter(req)))
       .populate('copywritingPackageIds', 'name links')
     
     if (!product) {
@@ -79,7 +94,7 @@ export const createProduct = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, error: 'name and identifier are required' })
     }
     
-    const existing = await Product.findOne({ identifier })
+    const existing = await Product.findOne(combineFilters({ identifier }, getProductFilter(req)))
     if (existing) {
       return res.status(400).json({ success: false, error: 'Product with this identifier already exists' })
     }
@@ -91,6 +106,7 @@ export const createProduct = async (req: Request, res: Response) => {
       description,
       tags,
       category,
+      ...getOwnerData(req),
     })
     
     res.json({ success: true, data: product })
@@ -106,9 +122,9 @@ export const createProduct = async (req: Request, res: Response) => {
  */
 export const updateProduct = async (req: Request, res: Response) => {
   try {
-    const product = await Product.findByIdAndUpdate(
-      req.params.id,
-      { $set: req.body },
+    const product = await Product.findOneAndUpdate(
+      combineFilters({ _id: req.params.id }, getProductFilter(req)),
+      { $set: sanitizeScopedUpdate(req.body) },
       { new: true }
     )
     
@@ -137,7 +153,7 @@ export const addPixelToProduct = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, error: 'pixelId is required' })
     }
     
-    const product = await Product.findById(req.params.id)
+    const product = await Product.findOne(combineFilters({ _id: req.params.id }, getProductFilter(req)))
     if (!product) {
       return res.status(404).json({ success: false, error: 'Product not found' })
     }
@@ -177,7 +193,7 @@ export const addPixelToProduct = async (req: Request, res: Response) => {
  */
 export const removePixelFromProduct = async (req: Request, res: Response) => {
   try {
-    const product = await Product.findById(req.params.id)
+    const product = await Product.findOne(combineFilters({ _id: req.params.id }, getProductFilter(req)))
     if (!product) {
       return res.status(404).json({ success: false, error: 'Product not found' })
     }
@@ -208,7 +224,7 @@ export const setPrimaryPixel = async (req: Request, res: Response) => {
   try {
     const { pixelId } = req.body
     
-    const product = await Product.findById(req.params.id)
+    const product = await Product.findOne(combineFilters({ _id: req.params.id }, getProductFilter(req)))
     if (!product) {
       return res.status(404).json({ success: false, error: 'Product not found' })
     }
@@ -236,7 +252,7 @@ export const setPrimaryPixel = async (req: Request, res: Response) => {
  */
 export const getProductAccounts = async (req: Request, res: Response) => {
   try {
-    const accounts = await productMappingService.getAvailableAccountsForProduct(req.params.id)
+    const accounts = await productMappingService.getAvailableAccountsForProduct(req.params.id, getProductFilter(req))
     res.json({ success: true, data: accounts })
   } catch (error: any) {
     logger.error('[ProductMapping] Get accounts failed:', error)
@@ -256,7 +272,7 @@ export const addAccountToProduct = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, error: 'accountId is required' })
     }
     
-    const product = await Product.findById(req.params.id)
+    const product = await Product.findOne(combineFilters({ _id: req.params.id }, getProductFilter(req)))
     if (!product) {
       return res.status(404).json({ success: false, error: 'Product not found' })
     }
@@ -290,7 +306,7 @@ export const addAccountToProduct = async (req: Request, res: Response) => {
  */
 export const scanProducts = async (req: Request, res: Response) => {
   try {
-    const result = await productMappingService.scanProductsFromCopyPackages()
+    const result = await productMappingService.scanProductsFromCopyPackages(getProductFilter(req), getOwnerData(req))
     res.json({ success: true, data: result })
   } catch (error: any) {
     logger.error('[ProductMapping] Scan products failed:', error)
@@ -305,7 +321,12 @@ export const scanProducts = async (req: Request, res: Response) => {
 export const matchPixels = async (req: Request, res: Response) => {
   try {
     const minConfidence = parseInt(req.query.minConfidence as string) || 50
-    const result = await productMappingService.matchProductsWithPixels(minConfidence)
+    const result = await productMappingService.matchProductsWithPixels(
+      minConfidence,
+      getProductFilter(req),
+      getProductFilter(req),
+      scopedTokenFilter(req),
+    )
     res.json({ success: true, data: result })
   } catch (error: any) {
     logger.error('[ProductMapping] Match pixels failed:', error)
@@ -319,7 +340,11 @@ export const matchPixels = async (req: Request, res: Response) => {
  */
 export const discoverAccounts = async (req: Request, res: Response) => {
   try {
-    const result = await productMappingService.discoverAccountsByPixels()
+    const result = await productMappingService.discoverAccountsByPixels(
+      getProductFilter(req),
+      getProductFilter(req),
+      scopedTokenFilter(req),
+    )
     res.json({ success: true, data: result })
   } catch (error: any) {
     logger.error('[ProductMapping] Discover accounts failed:', error)
@@ -333,7 +358,12 @@ export const discoverAccounts = async (req: Request, res: Response) => {
  */
 export const syncAll = async (req: Request, res: Response) => {
   try {
-    const result = await productMappingService.syncAllProductMappings()
+    const result = await productMappingService.syncAllProductMappings(
+      getProductFilter(req),
+      getOwnerData(req),
+      getProductFilter(req),
+      scopedTokenFilter(req),
+    )
     res.json({ success: true, data: result })
   } catch (error: any) {
     logger.error('[ProductMapping] Sync all failed:', error)
@@ -354,7 +384,7 @@ export const findByUrl = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, error: 'url parameter is required' })
     }
     
-    const product = await productMappingService.findProductByUrl(url)
+    const product = await productMappingService.findProductByUrl(url, getProductFilter(req))
     
     res.json({
       success: true,
@@ -373,7 +403,7 @@ export const findByUrl = async (req: Request, res: Response) => {
  */
 export const getBestAccount = async (req: Request, res: Response) => {
   try {
-    const result = await productMappingService.selectBestAccountForProduct(req.params.id)
+    const result = await productMappingService.selectBestAccountForProduct(req.params.id, getProductFilter(req))
     
     if (!result) {
       return res.status(404).json({
@@ -418,13 +448,14 @@ export const parseUrl = async (req: Request, res: Response) => {
  */
 export const getStats = async (req: Request, res: Response) => {
   try {
-    const totalProducts = await Product.countDocuments()
-    const productsWithPixel = await Product.countDocuments({ 'pixels.0': { $exists: true } })
-    const productsWithAccount = await Product.countDocuments({ 'accounts.0': { $exists: true } })
-    const fullyConfigured = await Product.countDocuments({
+    const scope = getProductFilter(req)
+    const totalProducts = await Product.countDocuments(scope)
+    const productsWithPixel = await Product.countDocuments(combineFilters(scope, { 'pixels.0': { $exists: true } }))
+    const productsWithAccount = await Product.countDocuments(combineFilters(scope, { 'accounts.0': { $exists: true } }))
+    const fullyConfigured = await Product.countDocuments(combineFilters(scope, {
       'pixels.0': { $exists: true },
       'accounts.0': { $exists: true },
-    })
+    }))
     
     res.json({
       success: true,
@@ -441,4 +472,3 @@ export const getStats = async (req: Request, res: Response) => {
     res.status(500).json({ success: false, error: error.message })
   }
 }
-

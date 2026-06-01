@@ -45,8 +45,9 @@ const urlPatternSchema = new mongoose.Schema({
 const productSchema = new mongoose.Schema(
   {
     // 基本信息
+    organizationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Organization', index: true },
     name: { type: String, required: true, index: true },
-    identifier: { type: String, required: true, unique: true }, // 唯一标识符（从URL提取）
+    identifier: { type: String, required: true }, // 唯一标识符（从URL提取）
     description: { type: String },
     
     // URL 匹配规则
@@ -98,6 +99,16 @@ const productSchema = new mongoose.Schema(
 
 // 索引
 productSchema.index({ primaryDomain: 1 })
+productSchema.index(
+  { organizationId: 1, identifier: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      organizationId: { $exists: true },
+      identifier: { $exists: true },
+    },
+  },
+)
 productSchema.index({ 'pixels.pixelId': 1 })
 productSchema.index({ 'accounts.accountId': 1 })
 productSchema.index({ status: 1, createdAt: -1 })
@@ -144,4 +155,3 @@ productSchema.methods.getPrimaryPixel = function(): { pixelId: string; pixelName
 }
 
 export default mongoose.model('Product', productSchema)
-

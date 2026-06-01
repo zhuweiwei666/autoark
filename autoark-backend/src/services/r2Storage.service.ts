@@ -44,7 +44,14 @@ const generateStorageKey = (originalName: string, folder?: string): string => {
   const date = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
   const uuid = uuidv4()
   const ext = path.extname(originalName).toLowerCase() || '.bin'
-  const prefix = folder ? `${folder}/` : 'uploads/'
+  const safeFolder = (folder || 'uploads')
+    .replace(/\\/g, '/')
+    .split('/')
+    .map(part => part.trim())
+    .filter(part => part && part !== '.' && part !== '..')
+    .map(part => part.replace(/[^\w\u4e00-\u9fa5.-]/g, '_').slice(0, 80))
+    .join('/')
+  const prefix = `${safeFolder || 'uploads'}/`
   return `${prefix}${date}/${uuid}${ext}`
 }
 

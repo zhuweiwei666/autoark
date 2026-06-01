@@ -27,6 +27,38 @@ const router = Router()
 // 所有路由需要认证
 router.use(authenticate)
 
+const requireSuperAdmin = (req: Request, res: Response): boolean => {
+  if (req.user?.role === UserRole.SUPER_ADMIN) return true
+  res.status(403).json({ success: false, error: '只有超级管理员可以访问全局聚合管理接口' })
+  return false
+}
+
+const aggregateAccountDaily = async (startDate: string, endDate: string, accountIds: string[]) => {
+  const rows = await AggAccount.find({
+    date: { $gte: startDate, $lte: endDate },
+    accountId: { $in: accountIds },
+  }).lean()
+
+  return rows.reduce((acc, row) => {
+    acc.totalSpend += row.spend || 0
+    acc.totalRevenue += row.revenue || 0
+    acc.totalImpressions += row.impressions || 0
+    acc.totalClicks += row.clicks || 0
+    acc.totalInstalls += row.installs || 0
+    acc.activeCampaigns += row.campaigns || 0
+    if ((row.spend || 0) > 0) acc.activeAccountsSet.add(row.accountId)
+    return acc
+  }, {
+    totalSpend: 0,
+    totalRevenue: 0,
+    totalImpressions: 0,
+    totalClicks: 0,
+    totalInstalls: 0,
+    activeCampaigns: 0,
+    activeAccountsSet: new Set<string>(),
+  } as any)
+}
+
 // ==================== 仪表盘汇总 ====================
 
 /**
@@ -41,10 +73,7 @@ router.get('/dashboard', async (req: Request, res: Response) => {
     const startDate = (req.query.startDate as string) || date
     const endDate = (req.query.endDate as string) || date
 
-    // 从预聚合表读取
-    const dailyData = await AggDaily.find({
-      date: { $gte: startDate, $lte: endDate }
-    }).lean()
+    const userAccountIds = await getUserAccountIds(req)
 
     // 汇总多日数据
     let totalSpend = 0
@@ -55,14 +84,30 @@ router.get('/dashboard', async (req: Request, res: Response) => {
     let activeCampaigns = 0
     let activeAccounts = 0
 
-    for (const day of dailyData) {
-      totalSpend += day.spend || 0
-      totalRevenue += day.revenue || 0
-      totalImpressions += day.impressions || 0
-      totalClicks += day.clicks || 0
-      totalInstalls += day.installs || 0
-      activeCampaigns = Math.max(activeCampaigns, day.activeCampaigns || 0)
-      activeAccounts = Math.max(activeAccounts, day.activeAccounts || 0)
+    if (userAccountIds === null) {
+      // 从预聚合表读取
+      const dailyData = await AggDaily.find({
+        date: { $gte: startDate, $lte: endDate }
+      }).lean()
+
+      for (const day of dailyData) {
+        totalSpend += day.spend || 0
+        totalRevenue += day.revenue || 0
+        totalImpressions += day.impressions || 0
+        totalClicks += day.clicks || 0
+        totalInstalls += day.installs || 0
+        activeCampaigns = Math.max(activeCampaigns, day.activeCampaigns || 0)
+        activeAccounts = Math.max(activeAccounts, day.activeAccounts || 0)
+      }
+    } else if (userAccountIds.length > 0) {
+      const scoped = await aggregateAccountDaily(startDate, endDate, userAccountIds)
+      totalSpend = scoped.totalSpend
+      totalRevenue = scoped.totalRevenue
+      totalImpressions = scoped.totalImpressions
+      totalClicks = scoped.totalClicks
+      totalInstalls = scoped.totalInstalls
+      activeCampaigns = scoped.activeCampaigns
+      activeAccounts = scoped.activeAccountsSet.size
     }
 
     // 计算派生指标
@@ -113,10 +158,17 @@ router.get('/dashboard/trend', async (req: Request, res: Response) => {
     const endDate = dayjs().format('YYYY-MM-DD')
     const startDate = dayjs().subtract(days - 1, 'day').format('YYYY-MM-DD')
 
-    // 从预聚合表读取
-    const dailyData = await AggDaily.find({
-      date: { $gte: startDate, $lte: endDate }
-    }).sort({ date: 1 }).lean()
+    const userAccountIds = await getUserAccountIds(req)
+    const dailyData = userAccountIds === null
+      ? await AggDaily.find({
+          date: { $gte: startDate, $lte: endDate }
+        }).sort({ date: 1 }).lean()
+      : await AggAccount.aggregate([
+          { $match: { date: { $gte: startDate, $lte: endDate }, accountId: { $in: userAccountIds } } },
+          { $group: { _id: '$date', spend: { $sum: '$spend' }, revenue: { $sum: '$revenue' }, impressions: { $sum: '$impressions' }, clicks: { $sum: '$clicks' } } },
+          { $project: { date: '$_id', spend: 1, revenue: 1, impressions: 1, clicks: 1, roas: { $cond: [{ $gt: ['$spend', 0] }, { $divide: ['$revenue', '$spend'] }, 0] } } },
+          { $sort: { date: 1 } },
+        ])
 
     // 生成完整日期数组（填充缺失日期）
     const dateMap = new Map<string, any>()
@@ -198,8 +250,29 @@ router.get('/accounts', async (req: Request, res: Response) => {
     }
 
     if (status) match.status = status
-    if (accountId) match.accountId = { $regex: accountId, $options: 'i' }
+    if (accountId) {
+      if (userAccountIds !== null && !userAccountIds.some(id => id.includes(accountId))) {
+        return res.json({
+          success: true,
+          data: [],
+          pagination: { page, limit, total: 0, pages: 0 },
+          cached: true,
+        })
+      }
+      match.accountId = userAccountIds === null
+        ? { $regex: accountId, $options: 'i' }
+        : { $in: userAccountIds.filter(id => id.includes(accountId)) }
+    }
     if (name) match.accountName = { $regex: name, $options: 'i' }
+
+    if (req.user?.role !== UserRole.SUPER_ADMIN) {
+      return res.json({
+        success: true,
+        data: [],
+        pagination: { page, limit, total: 0, pages: 0 },
+        cached: true,
+      })
+    }
 
     // 多日聚合
     const aggregated = await AggAccount.aggregate([
@@ -371,7 +444,17 @@ router.get('/campaigns', async (req: Request, res: Response) => {
       match.accountId = { $in: userAccountIds }
     }
 
-    if (accountId) match.accountId = accountId
+    if (accountId) {
+      if (userAccountIds !== null && !userAccountIds.includes(accountId)) {
+        return res.json({
+          success: true,
+          data: [],
+          pagination: { page, limit, total: 0, pages: 0 },
+          cached: true,
+        })
+      }
+      match.accountId = accountId
+    }
     if (status) match.status = status
     if (name) match.campaignName = { $regex: name, $options: 'i' }
 
@@ -460,6 +543,15 @@ router.get('/materials', async (req: Request, res: Response) => {
     const page = parseInt(req.query.page as string) || 1
     const skip = (page - 1) * limit
 
+    if (req.user?.role !== UserRole.SUPER_ADMIN) {
+      return res.json({
+        success: true,
+        data: [],
+        pagination: { page, limit, total: 0, pages: 0 },
+        cached: true,
+      })
+    }
+
     const match: any = { 
       date: { $gte: startDate, $lte: endDate },
       spend: { $gt: 0 }  // 只返回有消耗的素材
@@ -536,6 +628,7 @@ router.get('/materials', async (req: Request, res: Response) => {
  */
 router.get('/status', async (req: Request, res: Response) => {
   try {
+    if (!requireSuperAdmin(req, res)) return
     const today = dayjs().format('YYYY-MM-DD')
     
     // 检查各表最新数据
@@ -572,6 +665,7 @@ router.get('/status', async (req: Request, res: Response) => {
  */
 router.post('/refresh', async (req: Request, res: Response) => {
   try {
+    if (!requireSuperAdmin(req, res)) return
     const startTime = Date.now()
     logger.info('[SummaryController] Manual refresh triggered')
 
