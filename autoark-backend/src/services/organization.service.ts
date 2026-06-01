@@ -1,11 +1,58 @@
 import mongoose from 'mongoose'
-import Organization, { IOrganization, OrganizationStatus } from '../models/Organization'
+import Organization, {
+  IOrganization,
+  OrganizationBillingStatus,
+  OrganizationPlan,
+  OrganizationStatus,
+} from '../models/Organization'
 import User, { UserRole } from '../models/User'
 import { JwtPayload } from '../utils/jwt'
 import logger from '../utils/logger'
 import authService from './auth.service'
 
 class OrganizationService {
+  private sanitizeUpdates(updates: Partial<IOrganization>) {
+    const sanitized: any = {}
+
+    if (typeof updates.name === 'string') sanitized.name = updates.name.trim()
+    if (typeof updates.description === 'string') sanitized.description = updates.description.trim()
+    if (updates.status && Object.values(OrganizationStatus).includes(updates.status as OrganizationStatus)) {
+      sanitized.status = updates.status
+    }
+
+    const billing = (updates as any).billing
+    if (billing && typeof billing === 'object') {
+      sanitized.billing = {}
+      if (Object.values(OrganizationPlan).includes(billing.plan)) sanitized.billing.plan = billing.plan
+      if (Object.values(OrganizationBillingStatus).includes(billing.status)) sanitized.billing.status = billing.status
+      if (Number.isFinite(Number(billing.seats))) sanitized.billing.seats = Math.max(0, Number(billing.seats))
+      if (billing.trialEndsAt) sanitized.billing.trialEndsAt = new Date(billing.trialEndsAt)
+      if (billing.currentPeriodEndsAt) sanitized.billing.currentPeriodEndsAt = new Date(billing.currentPeriodEndsAt)
+      if (typeof billing.customerId === 'string') sanitized.billing.customerId = billing.customerId.trim()
+      if (typeof billing.subscriptionId === 'string') sanitized.billing.subscriptionId = billing.subscriptionId.trim()
+    }
+
+    const settings = (updates as any).settings
+    if (settings && typeof settings === 'object') {
+      sanitized.settings = {}
+      for (const key of ['maxMembers', 'maxAdAccounts', 'maxMaterials', 'maxConcurrentTasks', 'monthlyTaskLimit']) {
+        const value = settings[key]
+        if (value === null) {
+          sanitized.settings[key] = undefined
+        } else if (value !== undefined && value !== '' && Number.isFinite(Number(value))) {
+          sanitized.settings[key] = Math.max(0, Number(value))
+        }
+      }
+      if (Array.isArray(settings.features)) {
+        sanitized.settings.features = settings.features
+          .filter((feature: unknown) => typeof feature === 'string' && feature.trim())
+          .map((feature: string) => feature.trim())
+      }
+    }
+
+    return sanitized
+  }
+
   /**
    * 获取组织列表
    */
@@ -151,11 +198,21 @@ class OrganizationService {
       throw new Error('组织不存在')
     }
 
-    // 不允许直接修改 adminId 和 createdBy
-    delete updates.adminId
-    delete updates.createdBy
+    const sanitized = this.sanitizeUpdates(updates)
+    const billingUpdates = sanitized.billing
+    const settingsUpdates = sanitized.settings
+    delete sanitized.billing
+    delete sanitized.settings
 
-    Object.assign(organization, updates)
+    Object.assign(organization, sanitized)
+    if (billingUpdates) {
+      const billingTarget = (organization as any).billing || ((organization as any).billing = {})
+      Object.assign(billingTarget, billingUpdates)
+    }
+    if (settingsUpdates) {
+      const settingsTarget = (organization as any).settings || ((organization as any).settings = {})
+      Object.assign(settingsTarget, settingsUpdates)
+    }
     await organization.save()
 
     logger.info(`Organization ${organization.name} updated`)

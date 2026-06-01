@@ -8,8 +8,19 @@ interface Organization {
   description?: string
   adminId: any
   status: string
+  billing?: {
+    plan?: string
+    status?: string
+    seats?: number
+    trialEndsAt?: string
+    currentPeriodEndsAt?: string
+  }
   settings?: {
     maxMembers?: number
+    maxAdAccounts?: number
+    maxMaterials?: number
+    maxConcurrentTasks?: number
+    monthlyTaskLimit?: number
     features?: string[]
   }
   createdAt: string
@@ -33,6 +44,13 @@ const OrganizationManagementPage: React.FC = () => {
     name: '',
     description: '',
     status: 'active',
+    plan: 'trial',
+    billingStatus: 'trialing',
+    maxMembers: '',
+    maxAdAccounts: '',
+    maxMaterials: '',
+    maxConcurrentTasks: '',
+    monthlyTaskLimit: '',
   })
 
   const fetchOrganizations = async () => {
@@ -129,6 +147,13 @@ const OrganizationManagementPage: React.FC = () => {
       name: org.name,
       description: org.description || '',
       status: org.status,
+      plan: org.billing?.plan || 'trial',
+      billingStatus: org.billing?.status || 'trialing',
+      maxMembers: org.settings?.maxMembers?.toString() || '',
+      maxAdAccounts: org.settings?.maxAdAccounts?.toString() || '',
+      maxMaterials: org.settings?.maxMaterials?.toString() || '',
+      maxConcurrentTasks: org.settings?.maxConcurrentTasks?.toString() || '',
+      monthlyTaskLimit: org.settings?.monthlyTaskLimit?.toString() || '',
     })
     setShowEditModal(true)
   }
@@ -137,6 +162,28 @@ const OrganizationManagementPage: React.FC = () => {
     e.preventDefault()
     if (!editingOrg) return
 
+    const optionalNumber = (value: string) => {
+      if (value.trim() === '') return undefined
+      const parsed = Number(value)
+      return Number.isFinite(parsed) ? parsed : undefined
+    }
+    const payload = {
+      name: editFormData.name,
+      description: editFormData.description,
+      status: editFormData.status,
+      billing: {
+        plan: editFormData.plan,
+        status: editFormData.billingStatus,
+      },
+      settings: {
+        maxMembers: optionalNumber(editFormData.maxMembers),
+        maxAdAccounts: optionalNumber(editFormData.maxAdAccounts),
+        maxMaterials: optionalNumber(editFormData.maxMaterials),
+        maxConcurrentTasks: optionalNumber(editFormData.maxConcurrentTasks),
+        monthlyTaskLimit: optionalNumber(editFormData.monthlyTaskLimit),
+      },
+    }
+
     try {
       const response = await authFetch(`/api/organizations/${editingOrg._id}`, {
         method: 'PUT',
@@ -144,7 +191,7 @@ const OrganizationManagementPage: React.FC = () => {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`,
         },
-        body: JSON.stringify(editFormData),
+        body: JSON.stringify(payload),
       })
       const data = await response.json()
       if (data.success) {
@@ -208,6 +255,9 @@ const OrganizationManagementPage: React.FC = () => {
                   状态
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  套餐/额度
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   创建时间
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -237,6 +287,12 @@ const OrganizationManagementPage: React.FC = () => {
                     >
                       {org.status === 'active' ? '激活' : '停用'}
                     </span>
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    <div className="font-medium text-gray-900">{org.billing?.plan || 'trial'} · {org.billing?.status || 'trialing'}</div>
+                    <div className="text-xs text-gray-500">
+                      成员 {org.settings?.maxMembers || '-'} · 账户 {org.settings?.maxAdAccounts || '-'} · 月任务 {org.settings?.monthlyTaskLimit || '-'}
+                    </div>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                     {new Date(org.createdAt).toLocaleDateString('zh-CN')}
@@ -372,7 +428,7 @@ const OrganizationManagementPage: React.FC = () => {
         {/* 编辑组织模态框 */}
         {showEditModal && editingOrg && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div className="bg-white rounded-lg p-6 w-full max-w-md">
+            <div className="bg-white rounded-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
               <h2 className="text-xl font-bold mb-4">编辑组织</h2>
               <form onSubmit={handleUpdateOrganization} className="space-y-4">
                 <div>
@@ -416,6 +472,74 @@ const OrganizationManagementPage: React.FC = () => {
                     <option value="active">激活</option>
                     <option value="inactive">停用</option>
                   </select>
+                </div>
+                <div className="border-t pt-4">
+                  <h3 className="text-sm font-semibold text-gray-800 mb-3">套餐与账单</h3>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        套餐
+                      </label>
+                      <select
+                        value={editFormData.plan}
+                        onChange={(e) =>
+                          setEditFormData({ ...editFormData, plan: e.target.value })
+                        }
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                      >
+                        <option value="trial">试用版</option>
+                        <option value="starter">标准版</option>
+                        <option value="growth">增长版</option>
+                        <option value="enterprise">企业版</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        账单状态
+                      </label>
+                      <select
+                        value={editFormData.billingStatus}
+                        onChange={(e) =>
+                          setEditFormData({ ...editFormData, billingStatus: e.target.value })
+                        }
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                      >
+                        <option value="trialing">试用中</option>
+                        <option value="active">正常</option>
+                        <option value="past_due">逾期</option>
+                        <option value="paused">暂停</option>
+                        <option value="canceled">已取消</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+                <div className="border-t pt-4">
+                  <h3 className="text-sm font-semibold text-gray-800 mb-3">额度覆盖</h3>
+                  <div className="grid grid-cols-2 gap-3">
+                    {[
+                      ['maxMembers', '成员上限'],
+                      ['maxAdAccounts', '广告账户上限'],
+                      ['maxMaterials', '素材上限'],
+                      ['maxConcurrentTasks', '并发任务上限'],
+                      ['monthlyTaskLimit', '月任务上限'],
+                    ].map(([key, label]) => (
+                      <div key={key}>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          {label}
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          value={(editFormData as any)[key]}
+                          onChange={(e) =>
+                            setEditFormData({ ...editFormData, [key]: e.target.value })
+                          }
+                          placeholder="使用套餐默认"
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                        />
+                      </div>
+                    ))}
+                  </div>
                 </div>
                 <div className="flex gap-2 justify-end mt-6">
                   <button
