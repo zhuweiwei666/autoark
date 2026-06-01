@@ -69,6 +69,30 @@ const actionLabel: Record<string, string> = {
   "commercial.support_package.generate": "生成客户支持包",
 };
 
+const auditFieldLabels: Record<string, string> = {
+  "name": "组织名称",
+  "status": "组织状态",
+  "billing.plan": "套餐",
+  "billing.status": "账单状态",
+  "settings.maxMembers": "成员上限",
+  "settings.maxAdAccounts": "广告账户上限",
+  "settings.maxMaterials": "素材上限",
+  "settings.maxConcurrentTasks": "并发任务上限",
+  "settings.monthlyTaskLimit": "月任务上限",
+  "settings.features": "功能开关",
+};
+
+const featureLabels: Record<string, string> = {
+  facebook_oauth: "Facebook 授权",
+  bulk_ad_create: "批量建广告",
+  material_library: "素材库",
+  asset_sync: "资产同步",
+  review_tracking: "审核追踪",
+  automation_agent: "投放 Agent",
+  team_management: "团队管理",
+  audit_ready: "审计就绪",
+};
+
 const formatTime = (value: string) => {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
@@ -79,6 +103,52 @@ const formatTime = (value: string) => {
     minute: "2-digit",
   }).format(date);
 };
+
+const getPathValue = (source: Record<string, unknown> | undefined, path: string): unknown => {
+  if (!source) return undefined;
+  return path.split(".").reduce<unknown>((current, key) => {
+    if (!current || typeof current !== "object") return undefined;
+    return (current as Record<string, unknown>)[key];
+  }, source);
+};
+
+const normalizeValue = (value: unknown) => {
+  if (value === undefined || value === null || value === "") return null;
+  if (Array.isArray(value)) return [...value].sort();
+  return value;
+};
+
+const formatAuditValue = (value: unknown, path?: string) => {
+  if (value === undefined || value === null || value === "") return "未设置";
+  if (Array.isArray(value)) {
+    if (value.length === 0) return "跟随套餐";
+    if (path === "settings.features") {
+      return value.map((feature) => featureLabels[String(feature)] || String(feature)).join("、");
+    }
+    return value.map(String).join("、");
+  }
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+};
+
+const buildChangeRows = (log: AuditLogEntry) => {
+  if (!log.before || !log.after) return [];
+  return Object.entries(auditFieldLabels)
+    .map(([path, label]) => {
+      const before = getPathValue(log.before, path);
+      const after = getPathValue(log.after, path);
+      return {
+        path,
+        label,
+        before,
+        after,
+        changed: JSON.stringify(normalizeValue(before)) !== JSON.stringify(normalizeValue(after)),
+      };
+    })
+    .filter((row) => row.changed);
+};
+
+const compactJson = (value: unknown) => JSON.stringify(value, null, 2);
 
 function SelectFilter({
   value,
@@ -104,38 +174,101 @@ function SelectFilter({
   );
 }
 
-function LogRow({ log }: { log: AuditLogEntry }) {
+function LogRow({
+  log,
+  expanded,
+  onToggle,
+}: {
+  log: AuditLogEntry;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
   const statusTone = statusClass[log.status] || statusClass.warning;
+  const changeRows = buildChangeRows(log);
+  const hasDetails = changeRows.length > 0 || Boolean(log.reason || log.metadata || log.related || log.before || log.after);
   return (
-    <tr className="border-b border-zinc-100 last:border-b-0">
-      <td className="whitespace-nowrap px-4 py-4 align-top font-mono text-xs font-bold text-zinc-500">
-        {formatTime(log.createdAt)}
-      </td>
-      <td className="px-4 py-4 align-top">
-        <div className="font-bold text-zinc-950">{actionLabel[log.action] || log.action}</div>
-        <div className="mt-1 max-w-xl text-sm font-medium leading-6 text-zinc-500">
-          {log.summary || log.reason || "-"}
-        </div>
-        {(log.targetType || log.targetId) && (
-          <div className="mt-2 font-mono text-[11px] font-bold text-zinc-400">
-            {log.targetType || "target"}: {log.targetId || "-"}
+    <>
+      <tr className="border-b border-zinc-100 last:border-b-0">
+        <td className="whitespace-nowrap px-4 py-4 align-top font-mono text-xs font-bold text-zinc-500">
+          {formatTime(log.createdAt)}
+        </td>
+        <td className="px-4 py-4 align-top">
+          <div className="font-bold text-zinc-950">{actionLabel[log.action] || log.action}</div>
+          <div className="mt-1 max-w-xl text-sm font-medium leading-6 text-zinc-500">
+            {log.summary || log.reason || "-"}
           </div>
-        )}
-      </td>
-      <td className="whitespace-nowrap px-4 py-4 align-top">
-        <span className={`rounded-md border px-2 py-1 text-xs font-bold ${statusTone}`}>
-          {log.status}
-        </span>
-      </td>
-      <td className="px-4 py-4 align-top text-sm font-bold text-zinc-700">
-        <div>{log.username || log.userId || "anonymous"}</div>
-        {log.userRole && <div className="mt-1 text-xs text-zinc-500">{log.userRole}</div>}
-      </td>
-      <td className="px-4 py-4 align-top font-mono text-xs text-zinc-500">
-        <div className="max-w-[180px] truncate">{log.requestId || "-"}</div>
-        {log.ip && <div className="mt-1 truncate">{log.ip}</div>}
-      </td>
-    </tr>
+          {(log.targetType || log.targetId) && (
+            <div className="mt-2 font-mono text-[11px] font-bold text-zinc-400">
+              {log.targetType || "target"}: {log.targetId || "-"}
+            </div>
+          )}
+          {hasDetails && (
+            <button
+              type="button"
+              onClick={onToggle}
+              className="mt-3 rounded-md border border-zinc-200 px-2 py-1 text-xs font-black text-zinc-700 hover:border-zinc-400"
+            >
+              {expanded ? "收起详情" : "查看详情"}
+            </button>
+          )}
+        </td>
+        <td className="whitespace-nowrap px-4 py-4 align-top">
+          <span className={`rounded-md border px-2 py-1 text-xs font-bold ${statusTone}`}>
+            {log.status}
+          </span>
+        </td>
+        <td className="px-4 py-4 align-top text-sm font-bold text-zinc-700">
+          <div>{log.username || log.userId || "anonymous"}</div>
+          {log.userRole && <div className="mt-1 text-xs text-zinc-500">{log.userRole}</div>}
+        </td>
+        <td className="px-4 py-4 align-top font-mono text-xs text-zinc-500">
+          <div className="max-w-[180px] truncate">{log.requestId || "-"}</div>
+          {log.ip && <div className="mt-1 truncate">{log.ip}</div>}
+        </td>
+      </tr>
+      {expanded && hasDetails && (
+        <tr className="border-b border-zinc-100 bg-[#fbfbf8]">
+          <td />
+          <td colSpan={4} className="px-4 py-4">
+            <div className="text-xs font-black uppercase text-zinc-500">变更详情</div>
+            {changeRows.length > 0 ? (
+              <div className="mt-3 overflow-x-auto rounded-lg border border-zinc-200 bg-white">
+                <table className="min-w-full text-left text-sm">
+                  <thead className="bg-zinc-50 text-xs font-black text-zinc-500">
+                    <tr>
+                      <th className="px-3 py-2">字段</th>
+                      <th className="px-3 py-2">变更前</th>
+                      <th className="px-3 py-2">变更后</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {changeRows.map((row) => (
+                      <tr key={row.path} className="border-t border-zinc-100">
+                        <td className="px-3 py-2 font-bold text-zinc-800">{row.label}</td>
+                        <td className="max-w-xs px-3 py-2 text-zinc-500">{formatAuditValue(row.before, row.path)}</td>
+                        <td className="max-w-xs px-3 py-2 font-semibold text-zinc-900">{formatAuditValue(row.after, row.path)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="mt-2 text-sm font-semibold text-zinc-500">没有结构化字段变更。</div>
+            )}
+            {log.reason && (
+              <div className="mt-3 rounded-lg border border-[#fecdd3] bg-[#fff1f2] px-3 py-2 text-sm font-bold text-[#9f1239]">
+                {log.reason}
+              </div>
+            )}
+            {(log.metadata || log.related) && (
+              <pre className="mt-3 max-h-56 overflow-auto rounded-lg border border-zinc-200 bg-white p-3 text-xs font-semibold leading-5 text-zinc-600">
+                {compactJson({ related: log.related, metadata: log.metadata })}
+              </pre>
+            )}
+          </td>
+        </tr>
+      )}
+    </>
   );
 }
 
@@ -144,6 +277,7 @@ export default function AuditLogsPage() {
   const [category, setCategory] = useState(searchParams.get("category") || "");
   const [status, setStatus] = useState(searchParams.get("status") || "");
   const [action, setAction] = useState(searchParams.get("action") || "");
+  const [expandedLogId, setExpandedLogId] = useState<string | null>(null);
 
   const updateFilters = (next: { category?: string; status?: string; action?: string }) => {
     const nextCategory = next.category ?? category;
@@ -230,7 +364,12 @@ export default function AuditLogsPage() {
               </thead>
               <tbody>
                 {logs.map((log) => (
-                  <LogRow key={log._id} log={log} />
+                  <LogRow
+                    key={log._id}
+                    log={log}
+                    expanded={expandedLogId === log._id}
+                    onToggle={() => setExpandedLogId(expandedLogId === log._id ? null : log._id)}
+                  />
                 ))}
               </tbody>
             </table>

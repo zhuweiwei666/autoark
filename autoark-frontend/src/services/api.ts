@@ -366,6 +366,8 @@ export interface AuditLogEntry {
   targetType?: string
   targetId?: string
   summary?: string
+  before?: Record<string, unknown>
+  after?: Record<string, unknown>
   reason?: string
   related?: Record<string, unknown>
   metadata?: Record<string, unknown>
