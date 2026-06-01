@@ -21,6 +21,7 @@ import {
 } from '../integration/facebook/bulkCreate.api'
 import { facebookClient } from '../integration/facebook/facebookClient'
 import { combineFilters } from '../utils/accessControl'
+import { normalizeForStorage } from '../utils/accountId'
 import { buildTaskOperationalDiagnostics, diagnoseBulkAdError, enrichTaskDiagnostics } from './bulkAd.diagnostics'
 import { assertBulkAdPublishAllowed } from './commercial.service'
 
@@ -32,8 +33,6 @@ import { assertBulkAdPublishAllowed } from './commercial.service'
 // ==================== 草稿管理 ====================
 
 const MIN_BUDGET = 1
-
-const normalizeAdAccountId = (value: any) => String(value || '').trim().replace(/^act_/i, '')
 
 const normalizeObjectIdList = (values: any[] = []) => {
   const unique = Array.from(new Set(values.map(value => value?.toString()).filter(Boolean)))
@@ -100,7 +99,7 @@ const buildFacebookAssetSnapshot = async (draft: any) => {
 
   for (const user of users) {
     for (const account of user.adAccounts || []) {
-      const accountId = normalizeAdAccountId(account.accountId)
+      const accountId = normalizeForStorage(account.accountId)
       if (accountId && account.status !== undefined) {
         adAccountStatuses.set(accountId, account.status)
       }
@@ -108,7 +107,7 @@ const buildFacebookAssetSnapshot = async (draft: any) => {
 
     for (const page of user.pages || []) {
       for (const account of page.accounts || []) {
-        const accountId = normalizeAdAccountId(account.accountId)
+        const accountId = normalizeForStorage(account.accountId)
         if (page.pageId && accountId) {
           pageAccountPairs.add(`${page.pageId}:${accountId}`)
         }
@@ -117,7 +116,7 @@ const buildFacebookAssetSnapshot = async (draft: any) => {
 
     for (const pixel of user.pixels || []) {
       for (const account of pixel.accounts || []) {
-        const accountId = normalizeAdAccountId(account.accountId)
+        const accountId = normalizeForStorage(account.accountId)
         if (pixel.pixelId && accountId) {
           pixelAccountPairs.add(`${pixel.pixelId}:${accountId}`)
         }
@@ -276,7 +275,7 @@ export const validateDraft = async (draftId: string, accessFilter: any = {}) => 
     }
 
     for (const account of draft.accounts) {
-      const accountId = normalizeAdAccountId(account.accountId)
+      const accountId = normalizeForStorage(account.accountId)
       const accountLabel = account.accountName || account.accountId || '未知账户'
       if (!accountId) {
         addError('accounts.accountId', '存在未填写广告账户 ID 的账户配置')

@@ -1,3 +1,5 @@
+import { normalizeForStorage } from '../utils/accountId'
+
 type ChecklistStatus = 'done' | 'warning' | 'pending' | 'blocked'
 type AccountIssueCode = 'ACCOUNT_NOT_ACTIVE' | 'MISSING_PAGE' | 'MISSING_PIXEL'
 type AccountIssue = {
@@ -54,11 +56,12 @@ export function buildFacebookAssetDiagnostics({
 
   for (const user of users) {
     for (const account of user.adAccounts || []) {
-      if (!account.accountId) continue
-      const existing = accountMap.get(account.accountId) || {}
-      accountMap.set(account.accountId, {
-        accountId: account.accountId,
-        name: account.name || existing.name || account.accountId,
+      const accountId = normalizeForStorage(account.accountId)
+      if (!accountId) continue
+      const existing = accountMap.get(accountId) || {}
+      accountMap.set(accountId, {
+        accountId,
+        name: account.name || existing.name || accountId,
         status: account.status ?? existing.status,
         currency: account.currency || existing.currency,
         timezone: account.timezone || existing.timezone,
@@ -67,23 +70,25 @@ export function buildFacebookAssetDiagnostics({
 
     for (const page of user.pages || []) {
       for (const account of page.accounts || []) {
-        if (!page.pageId || !account.accountId) continue
-        const pages = pageMap.get(account.accountId) || []
+        const accountId = normalizeForStorage(account.accountId)
+        if (!page.pageId || !accountId) continue
+        const pages = pageMap.get(accountId) || []
         if (!pages.some(existing => existing.pageId === page.pageId)) {
           pages.push({ pageId: page.pageId, name: page.name })
         }
-        pageMap.set(account.accountId, pages)
+        pageMap.set(accountId, pages)
       }
     }
 
     for (const pixel of user.pixels || []) {
       for (const account of pixel.accounts || []) {
-        if (!pixel.pixelId || !account.accountId) continue
-        const pixels = pixelMap.get(account.accountId) || []
+        const accountId = normalizeForStorage(account.accountId)
+        if (!pixel.pixelId || !accountId) continue
+        const pixels = pixelMap.get(accountId) || []
         if (!pixels.some(existing => existing.pixelId === pixel.pixelId)) {
           pixels.push({ pixelId: pixel.pixelId, name: pixel.name })
         }
-        pixelMap.set(account.accountId, pixels)
+        pixelMap.set(accountId, pixels)
       }
     }
   }

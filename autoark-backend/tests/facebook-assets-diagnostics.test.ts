@@ -23,13 +23,13 @@ describe('facebook asset diagnostics', () => {
           { accountId: 'act_3', name: 'Disabled account', status: 2 },
         ],
         pages: [
-          { pageId: 'page_1', name: 'Page 1', accounts: [{ accountId: 'act_1' }] },
-          { pageId: 'page_2', name: 'Page 2', accounts: [{ accountId: 'act_2' }] },
-          { pageId: 'page_3', name: 'Page 3', accounts: [{ accountId: 'act_3' }] },
+          { pageId: 'page_1', name: 'Page 1', accounts: [{ accountId: '1' }] },
+          { pageId: 'page_2', name: 'Page 2', accounts: [{ accountId: 'ACT_2' }] },
+          { pageId: 'page_3', name: 'Page 3', accounts: [{ accountId: ' act_3 ' }] },
         ],
         pixels: [
-          { pixelId: 'pixel_1', name: 'Pixel 1', accounts: [{ accountId: 'act_1' }] },
-          { pixelId: 'pixel_3', name: 'Pixel 3', accounts: [{ accountId: 'act_3' }] },
+          { pixelId: 'pixel_1', name: 'Pixel 1', accounts: [{ accountId: 'ACT_1' }] },
+          { pixelId: 'pixel_3', name: 'Pixel 3', accounts: [{ accountId: '3' }] },
         ],
       }],
     })
@@ -39,13 +39,13 @@ describe('facebook asset diagnostics', () => {
     expect(diagnostics.summary.readyAccountCount).toBe(1)
     expect(diagnostics.summary.pageLinkedAccountCount).toBe(3)
     expect(diagnostics.summary.pixelLinkedAccountCount).toBe(2)
-    expect(diagnostics.accounts.find(account => account.accountId === 'act_1')?.ready).toBe(true)
-    expect(diagnostics.accounts.find(account => account.accountId === 'act_2')?.issues).toContain('没有可用 Pixel')
-    expect(diagnostics.accounts.find(account => account.accountId === 'act_2')?.issueDetails[0]).toMatchObject({
+    expect(diagnostics.accounts.find(account => account.accountId === '1')?.ready).toBe(true)
+    expect(diagnostics.accounts.find(account => account.accountId === '2')?.issues).toContain('没有可用 Pixel')
+    expect(diagnostics.accounts.find(account => account.accountId === '2')?.issueDetails[0]).toMatchObject({
       code: 'MISSING_PIXEL',
       severity: 'blocked',
     })
-    expect(diagnostics.accounts.find(account => account.accountId === 'act_3')?.issues[0]).toContain('已停用')
-    expect(diagnostics.accounts.find(account => account.accountId === 'act_3')?.issueDetails.map(issue => issue.code)).toContain('ACCOUNT_NOT_ACTIVE')
+    expect(diagnostics.accounts.find(account => account.accountId === '3')?.issues[0]).toContain('已停用')
+    expect(diagnostics.accounts.find(account => account.accountId === '3')?.issueDetails.map(issue => issue.code)).toContain('ACCOUNT_NOT_ACTIVE')
   })
 })
