@@ -161,6 +161,60 @@ const safeFileName = (value: string) => {
   return normalized.slice(0, 80) || "autoark-support-package";
 };
 
+const summaryNumber = (summary: Record<string, number | string | undefined>, key: string) => {
+  const value = summary[key];
+  if (typeof value === "number") return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
+};
+
+const summaryText = (summary: Record<string, number | string | undefined>, key: string) => {
+  const value = summary[key];
+  return typeof value === "string" && value.trim() ? value : undefined;
+};
+
+const supportPackageInsights = (supportPackage: CommercialSupportPackage) => {
+  const summary = supportPackage.facebookAssets.summary;
+  const tokenCount = summaryNumber(summary, "tokenCount");
+  const accountCount = summaryNumber(summary, "accountCount");
+  const readyAccountCount = summaryNumber(summary, "readyAccountCount");
+  const expiredTokenCount = summaryNumber(summary, "expiredTokenCount");
+  const expiringSoonTokenCount = summaryNumber(summary, "expiringSoonTokenCount");
+  const staleTokenCheckCount = summaryNumber(summary, "staleTokenCheckCount");
+  const tokenWithoutExpiryCount = summaryNumber(summary, "tokenWithoutExpiryCount");
+  const earliestTokenExpiresAt = summaryText(summary, "earliestTokenExpiresAt");
+  const primaryRisk =
+    supportPackage.facebookAssets.risks[0]?.message ||
+    supportPackage.readiness.risks[0]?.message ||
+    "暂无关键风险";
+  const topAction = supportPackage.readiness.nextActions[0]?.title || "暂无优先动作";
+  const topIssue = supportPackage.recentTasks[0]?.topIssue?.errorCode || "暂无最近任务错误";
+  const tokenHealthIssues = expiredTokenCount + expiringSoonTokenCount + staleTokenCheckCount + tokenWithoutExpiryCount;
+  const tokenHealthLabel = tokenCount === 0
+    ? "无授权 Token"
+    : tokenHealthIssues > 0
+      ? `${expiredTokenCount} 过期 · ${expiringSoonTokenCount} 临期 · ${staleTokenCheckCount} 待复检`
+      : "授权健康正常";
+
+  return {
+    tokenCount,
+    accountCount,
+    readyAccountCount,
+    expiredTokenCount,
+    expiringSoonTokenCount,
+    staleTokenCheckCount,
+    tokenWithoutExpiryCount,
+    earliestTokenExpiresAt,
+    primaryRisk,
+    topAction,
+    topIssue,
+    tokenHealthLabel,
+  };
+};
+
 function ReadinessGauge({ score }: { score: number }) {
   const color = score >= 80 ? "#0f766e" : score >= 55 ? "#b45309" : "#b4233a";
   return (
@@ -575,23 +629,23 @@ export default function CommercialCenterPage() {
 
   const copySupportSummary = async () => {
     if (!supportPackage) return;
-    const topAction = supportPackage.readiness.nextActions[0]?.title || "暂无优先动作";
-    const topIssue = supportPackage.recentTasks[0]?.topIssue?.errorCode || "暂无最近任务错误";
+    const insights = supportPackageInsights(supportPackage);
     const text = [
       `支持包：${supportPackage.supportId}`,
       `客户：${supportPackage.scope.organizationName}`,
       `状态：${supportPackage.readiness.state.label} / ${supportPackage.readiness.score} 分`,
-      `首要动作：${topAction}`,
-      `授权：${supportPackage.facebookAssets.summary.tokenCount || 0} 个 Token，${supportPackage.facebookAssets.summary.readyAccountCount || 0} 个可投放账户`,
-      `最近任务：${supportPackage.recentTasks.length} 条，主因：${topIssue}`,
+      `首要动作：${insights.topAction}`,
+      `授权健康：${insights.tokenCount} 个 Token，${insights.expiredTokenCount} 过期，${insights.expiringSoonTokenCount} 临期，${insights.staleTokenCheckCount} 待复检`,
+      `资产：${insights.readyAccountCount} 个可投放账户 / ${insights.accountCount} 个广告账户`,
+      `首要风险：${insights.primaryRisk}`,
+      `最近任务：${supportPackage.recentTasks.length} 条，主因：${insights.topIssue}`,
     ].join("\n");
     await navigator.clipboard?.writeText(text);
   };
 
   const downloadSupportPackage = () => {
     if (!supportPackage) return;
-    const topAction = supportPackage.readiness.nextActions[0]?.title || "暂无优先动作";
-    const topIssue = supportPackage.recentTasks[0]?.topIssue?.errorCode || "暂无最近任务错误";
+    const insights = supportPackageInsights(supportPackage);
     const payload = {
       exportedAt: new Date().toISOString(),
       exportType: "autoark_commercial_support_package",
@@ -600,10 +654,17 @@ export default function CommercialCenterPage() {
         customer: supportPackage.scope.organizationName,
         state: supportPackage.readiness.state.label,
         score: supportPackage.readiness.score,
-        topAction,
-        topIssue,
-        readyAccountCount: supportPackage.facebookAssets.summary.readyAccountCount || 0,
-        tokenCount: supportPackage.facebookAssets.summary.tokenCount || 0,
+        topAction: insights.topAction,
+        topIssue: insights.topIssue,
+        primaryRisk: insights.primaryRisk,
+        readyAccountCount: insights.readyAccountCount,
+        accountCount: insights.accountCount,
+        tokenCount: insights.tokenCount,
+        expiredTokenCount: insights.expiredTokenCount,
+        expiringSoonTokenCount: insights.expiringSoonTokenCount,
+        staleTokenCheckCount: insights.staleTokenCheckCount,
+        tokenWithoutExpiryCount: insights.tokenWithoutExpiryCount,
+        earliestTokenExpiresAt: insights.earliestTokenExpiresAt,
         recentTaskCount: supportPackage.recentTasks.length,
       },
       supportPackage,
@@ -662,6 +723,7 @@ export default function CommercialCenterPage() {
       },
     ];
   }, [readiness]);
+  const supportInsights = supportPackage ? supportPackageInsights(supportPackage) : null;
 
   if (isLoading) {
     return (
@@ -820,7 +882,7 @@ export default function CommercialCenterPage() {
               </p>
               <div className="mt-4 grid grid-cols-2 gap-3 text-sm font-bold text-zinc-700">
                 <div>
-                  <div className="font-mono text-2xl font-black text-zinc-950">{supportPackage.facebookAssets.summary.readyAccountCount || 0}</div>
+                  <div className="font-mono text-2xl font-black text-zinc-950">{supportInsights?.readyAccountCount || 0}</div>
                   <div className="text-xs text-zinc-500">可投放账户</div>
                 </div>
                 <div>
@@ -828,8 +890,41 @@ export default function CommercialCenterPage() {
                   <div className="text-xs text-zinc-500">最近问题任务</div>
                 </div>
               </div>
+              {supportInsights && (
+                <div className="mt-4 space-y-3 border-t border-zinc-100 pt-4">
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="rounded-lg border border-zinc-100 bg-white p-3">
+                      <div className="font-mono text-lg font-black text-zinc-950">{supportInsights.expiredTokenCount}</div>
+                      <div className="text-[11px] font-bold text-zinc-500">过期 Token</div>
+                    </div>
+                    <div className="rounded-lg border border-zinc-100 bg-white p-3">
+                      <div className="font-mono text-lg font-black text-zinc-950">{supportInsights.expiringSoonTokenCount}</div>
+                      <div className="text-[11px] font-bold text-zinc-500">临期 Token</div>
+                    </div>
+                    <div className="rounded-lg border border-zinc-100 bg-white p-3">
+                      <div className="font-mono text-lg font-black text-zinc-950">{supportInsights.staleTokenCheckCount}</div>
+                      <div className="text-[11px] font-bold text-zinc-500">待复检</div>
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-zinc-100 bg-white p-3 text-sm">
+                    <div className="font-black text-zinc-950">授权健康</div>
+                    <div className="mt-1 font-semibold leading-6 text-zinc-600">{supportInsights.tokenHealthLabel}</div>
+                    {supportInsights.earliestTokenExpiresAt && (
+                      <div className="mt-1 text-xs font-bold text-zinc-500">
+                        最早过期：{formatDateTime(supportInsights.earliestTokenExpiresAt)}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
             <div className="space-y-3">
+              {supportInsights && (
+                <div className="rounded-lg border border-zinc-100 bg-white p-3">
+                  <div className="text-xs font-black uppercase text-zinc-500">首要风险</div>
+                  <div className="mt-2 text-sm font-bold leading-6 text-zinc-700">{supportInsights.primaryRisk}</div>
+                </div>
+              )}
               <div>
                 <div className="text-xs font-black uppercase text-zinc-500">下一步</div>
                 <div className="mt-2 flex flex-wrap gap-2">
@@ -925,6 +1020,10 @@ export default function CommercialCenterPage() {
                   const organizationName = metadataText(log, "organizationName") || readiness.scope.organizationName;
                   const readyAccountCount = metadataNumber(log, "readyAccountCount");
                   const tokenCount = metadataNumber(log, "tokenCount");
+                  const expiredTokenCount = metadataNumber(log, "expiredTokenCount");
+                  const expiringSoonTokenCount = metadataNumber(log, "expiringSoonTokenCount");
+                  const staleTokenCheckCount = metadataNumber(log, "staleTokenCheckCount");
+                  const firstFacebookAssetRisk = metadataText(log, "firstFacebookAssetRisk");
                   return (
                     <tr key={log._id} className="align-top">
                       <td className="whitespace-nowrap py-4 pr-4 font-mono text-xs font-bold text-zinc-500">
@@ -957,6 +1056,16 @@ export default function CommercialCenterPage() {
                         <div className="mt-1 text-xs text-zinc-500">
                           {typeof tokenCount === "number" ? tokenCount : "-"} 授权 Token
                         </div>
+                        {(typeof expiredTokenCount === "number" || typeof expiringSoonTokenCount === "number" || typeof staleTokenCheckCount === "number") && (
+                          <div className="mt-1 text-xs text-zinc-500">
+                            {expiredTokenCount || 0} 过期 · {expiringSoonTokenCount || 0} 临期 · {staleTokenCheckCount || 0} 待复检
+                          </div>
+                        )}
+                        {firstFacebookAssetRisk && (
+                          <div className="mt-2 max-w-xs rounded-md bg-[#fbfbf8] px-2 py-1 text-xs font-semibold leading-5 text-zinc-600">
+                            {firstFacebookAssetRisk}
+                          </div>
+                        )}
                       </td>
                       <td className="py-4 pl-4 font-bold text-zinc-700">
                         <div>{log.username || log.userId || "anonymous"}</div>
