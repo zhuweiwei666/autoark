@@ -1350,7 +1350,7 @@ export async function getCommercialSupportPackage(
   const readiness = await getCommercialReadiness(user, organizationId)
 
   const activeTokenDocs = await FbToken.find({ ...orgFilter, status: 'active' })
-    .select('_id fbUserId fbUserName expiresAt updatedAt')
+    .select('_id fbUserId fbUserName expiresAt lastCheckedAt updatedAt')
     .sort({ updatedAt: -1 })
     .lean()
   const tokenIds = activeTokenDocs.map((token: any) => token._id).filter(Boolean)

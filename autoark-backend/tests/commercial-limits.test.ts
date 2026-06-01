@@ -16,6 +16,7 @@ import {
   assertBulkAdPublishAllowed,
   CommercialLimitError,
   getCommercialReadiness,
+  getCommercialSupportPackage,
   getCommercialUsageLedger,
 } from '../src/services/commercial.service'
 
@@ -259,6 +260,57 @@ describe('commercial publish limits', () => {
       'renew_expiring_facebook_tokens',
       'refresh_facebook_token_checks',
     ]))
+  })
+
+  it('keeps token last-check health in commercial support packages', async () => {
+    jest.spyOn(User, 'countDocuments')
+      .mockResolvedValueOnce(2 as any)
+      .mockResolvedValueOnce(2 as any)
+    jest.spyOn(Account, 'countDocuments').mockResolvedValue(1 as any)
+    jest.spyOn(FbToken, 'countDocuments').mockResolvedValue(1 as any)
+    jest.spyOn(Material, 'countDocuments').mockResolvedValue(3 as any)
+    jest.spyOn(AdDraft, 'countDocuments').mockResolvedValue(1 as any)
+    jest.spyOn(AdTask, 'countDocuments')
+      .mockResolvedValueOnce(1 as any)
+      .mockResolvedValueOnce(1 as any)
+      .mockResolvedValueOnce(0 as any)
+      .mockResolvedValueOnce(0 as any)
+      .mockResolvedValueOnce(1 as any)
+    jest.spyOn(FacebookApp, 'countDocuments')
+      .mockResolvedValueOnce(1 as any)
+      .mockResolvedValueOnce(1 as any)
+
+    const token = {
+      _id: '665000000000000000000399',
+      fbUserId: 'fb_fresh',
+      fbUserName: 'Fresh User',
+      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      lastCheckedAt: new Date(),
+    }
+    const readinessTokenFind = tokenFindResult([token])
+    const supportTokenFind = tokenFindResult([token])
+    jest.spyOn(FbToken, 'find')
+      .mockReturnValueOnce(readinessTokenFind as any)
+      .mockReturnValueOnce(supportTokenFind as any)
+    jest.spyOn(FacebookUser, 'find').mockReturnValue(leanFindResult([{
+      fbUserId: 'fb_fresh',
+      syncStatus: 'completed',
+      adAccounts: [{ accountId: 'act_1', name: 'Ready account', status: 1 }],
+      pages: [{ pageId: 'page_1', name: 'Page 1', accounts: [{ accountId: 'act_1' }] }],
+      pixels: [{ pixelId: 'pixel_1', name: 'Pixel 1', accounts: [{ accountId: 'act_1' }] }],
+    }]) as any)
+    jest.spyOn(AdTask, 'find')
+      .mockReturnValueOnce(sortedLeanFindResult([]) as any)
+      .mockReturnValueOnce(sortedLeanFindResult([]) as any)
+    jest.spyOn(OpsLog, 'find').mockReturnValue(sortedLeanFindResult([]) as any)
+
+    const supportPackage = await getCommercialSupportPackage({
+      userId: 'admin',
+      role: UserRole.SUPER_ADMIN,
+    } as any)
+
+    expect(supportTokenFind.select).toHaveBeenCalledWith(expect.stringContaining('lastCheckedAt'))
+    expect(supportPackage.facebookAssets.summary.staleTokenCheckCount).toBe(0)
   })
 
   it('caps readiness score when critical commercial blockers exist', async () => {

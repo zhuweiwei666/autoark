@@ -177,7 +177,7 @@ export interface CommercialSupportPackage {
     metrics: Record<string, number>
   }
   facebookAssets: {
-    summary: Record<string, number>
+    summary: Record<string, number | string | undefined>
     risks: Array<{ level: 'critical' | 'warning' | 'info'; message: string }>
     checklist: Array<{ id: string; title: string; status: string; metric?: string }>
     accounts: Array<{
