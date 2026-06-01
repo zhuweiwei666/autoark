@@ -170,17 +170,49 @@ const metadataNumber = (metadata: Record<string, unknown> | undefined, key: stri
   return undefined;
 };
 
+const metadataBoolean = (metadata: Record<string, unknown> | undefined, key: string) => {
+  const value = metadata?.[key];
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string" && value.trim()) {
+    if (value === "true") return true;
+    if (value === "false") return false;
+  }
+  return undefined;
+};
+
 const buildMetadataHighlights = (metadata: Record<string, unknown> | undefined) => {
   const highlights: Array<{ label: string; value: string; tone: string }> = [];
   const errorCode = metadataText(metadata, "errorCode") || metadataText(metadata, "topErrorCode");
   const supportId = metadataText(metadata, "supportId");
   const facebookRisk = metadataText(metadata, "firstFacebookAssetRisk");
   const buildVersion = metadataText(metadata, "buildShortCommit") || metadataText(metadata, "buildCommit");
+  const authorizationMode = metadataText(metadata, "authorizationMode");
+  const publicOauthReady = metadataBoolean(metadata, "publicOauthReady");
   const readyAccountCount = metadataNumber(metadata, "readyAccountCount");
   const tokenCount = metadataNumber(metadata, "tokenCount");
+  const publicOauthGapCount = metadataNumber(metadata, "publicOauthGapCount");
 
   if (errorCode) highlights.push({ label: "错误码", value: errorCode, tone: "bg-[#fff1f2] text-[#b4233a] border-[#fecdd3]" });
   if (supportId) highlights.push({ label: "支持包", value: supportId, tone: "bg-[#f8fafc] text-zinc-700 border-zinc-200" });
+  if (authorizationMode) highlights.push({
+    label: "OAuth 模式",
+    value: authorizationMode === "business_login" ? "Business Login" : "Scope 兜底",
+    tone: authorizationMode === "business_login"
+      ? "bg-[#eef2ff] text-[#3730a3] border-[#c7d2fe]"
+      : "bg-[#fff7ed] text-[#9a3412] border-[#fed7aa]",
+  });
+  if (typeof publicOauthReady === "boolean") highlights.push({
+    label: "Public OAuth",
+    value: publicOauthReady ? "就绪" : "未就绪",
+    tone: publicOauthReady
+      ? "bg-[#e7f3ef] text-[#0f766e] border-[#b7e3d5]"
+      : "bg-[#fff7ed] text-[#9a3412] border-[#fed7aa]",
+  });
+  if (typeof publicOauthGapCount === "number" && publicOauthGapCount > 0) highlights.push({
+    label: "OAuth 缺口",
+    value: String(publicOauthGapCount),
+    tone: "bg-[#fff1f2] text-[#b4233a] border-[#fecdd3]",
+  });
   if (buildVersion) highlights.push({ label: "版本", value: buildVersion, tone: "bg-[#eef2ff] text-[#3730a3] border-[#c7d2fe]" });
   if (typeof readyAccountCount === "number") highlights.push({ label: "可投放账户", value: String(readyAccountCount), tone: "bg-[#e7f3ef] text-[#0f766e] border-[#b7e3d5]" });
   if (typeof tokenCount === "number") highlights.push({ label: "Token", value: String(tokenCount), tone: "bg-[#f8fafc] text-zinc-700 border-zinc-200" });
