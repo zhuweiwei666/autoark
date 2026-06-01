@@ -53,6 +53,12 @@ interface AuthDiagnostics {
     pixelCount: number
     ready: boolean
     issues: string[]
+    issueDetails?: Array<{
+      code: string
+      severity: 'blocked' | 'warning'
+      message: string
+      action: string
+    }>
   }>
   risks: Array<{ level: 'critical' | 'warning' | 'info'; message: string }>
 }
@@ -847,6 +853,11 @@ export default function BulkAdCreatePage() {
                               {account.issues.length > 0 && (
                                 <div className="mt-1 text-[11px] leading-5 text-amber-700">
                                   {account.issues.join(' / ')}
+                                </div>
+                              )}
+                              {account.issueDetails?.[0]?.action && (
+                                <div className="mt-1 text-[11px] leading-5 text-slate-500">
+                                  建议：{account.issueDetails[0].action}
                                 </div>
                               )}
                             </div>

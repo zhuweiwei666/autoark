@@ -1,4 +1,11 @@
 type ChecklistStatus = 'done' | 'warning' | 'pending' | 'blocked'
+type AccountIssueCode = 'ACCOUNT_NOT_ACTIVE' | 'MISSING_PAGE' | 'MISSING_PIXEL'
+type AccountIssue = {
+  code: AccountIssueCode
+  severity: 'blocked' | 'warning'
+  message: string
+  action: string
+}
 
 const accountStatusLabel = (status?: number) => {
   const labels: Record<number, string> = {
@@ -17,6 +24,13 @@ const step = (id: string, title: string, status: ChecklistStatus, metric: string
   status,
   metric,
   description,
+})
+
+const issue = (code: AccountIssueCode, message: string, action: string): AccountIssue => ({
+  code,
+  severity: 'blocked',
+  message,
+  action,
 })
 
 const mostRecentDate = (values: any[]) => {
@@ -79,11 +93,29 @@ export function buildFacebookAssetDiagnostics({
     const pixels = pixelMap.get(account.accountId) || []
     const isActive = account.status === 1
     const isReady = isActive && pages.length > 0 && pixels.length > 0
-    const issues: string[] = []
+    const issueDetails: AccountIssue[] = []
 
-    if (!isActive) issues.push(`账户状态：${accountStatusLabel(account.status)}`)
-    if (pages.length === 0) issues.push('没有可用 Page')
-    if (pixels.length === 0) issues.push('没有可用 Pixel')
+    if (!isActive) {
+      issueDetails.push(issue(
+        'ACCOUNT_NOT_ACTIVE',
+        `账户状态：${accountStatusLabel(account.status)}`,
+        '请在 Meta 广告账户中恢复账户状态，或改用其他活跃广告账户。',
+      ))
+    }
+    if (pages.length === 0) {
+      issueDetails.push(issue(
+        'MISSING_PAGE',
+        '没有可用 Page',
+        '请确认登录用户拥有主页管理权限，并在商务管理平台中把主页分配给该广告账户。',
+      ))
+    }
+    if (pixels.length === 0) {
+      issueDetails.push(issue(
+        'MISSING_PIXEL',
+        '没有可用 Pixel',
+        '请在 Meta 事件管理工具或商务管理平台中把 Pixel 分配给该广告账户，再回到 AutoArk 重新同步。',
+      ))
+    }
 
     return {
       ...account,
@@ -91,7 +123,8 @@ export function buildFacebookAssetDiagnostics({
       pageCount: pages.length,
       pixelCount: pixels.length,
       ready: isReady,
-      issues,
+      issues: issueDetails.map(item => item.message),
+      issueDetails,
     }
   })
 

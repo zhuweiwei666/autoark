@@ -41,6 +41,11 @@ describe('facebook asset diagnostics', () => {
     expect(diagnostics.summary.pixelLinkedAccountCount).toBe(2)
     expect(diagnostics.accounts.find(account => account.accountId === 'act_1')?.ready).toBe(true)
     expect(diagnostics.accounts.find(account => account.accountId === 'act_2')?.issues).toContain('没有可用 Pixel')
+    expect(diagnostics.accounts.find(account => account.accountId === 'act_2')?.issueDetails[0]).toMatchObject({
+      code: 'MISSING_PIXEL',
+      severity: 'blocked',
+    })
     expect(diagnostics.accounts.find(account => account.accountId === 'act_3')?.issues[0]).toContain('已停用')
+    expect(diagnostics.accounts.find(account => account.accountId === 'act_3')?.issueDetails.map(issue => issue.code)).toContain('ACCOUNT_NOT_ACTIVE')
   })
 })
