@@ -17,6 +17,14 @@ const app = express()
 app.use(cors())
 app.use(express.json())
 
+app.get('/healthz', (_req, res) => {
+  res.json({
+    ok: true,
+    service: 'autoark-agent',
+    uptime: process.uptime(),
+  })
+})
+
 // API 路由
 app.use('/api/auth', authRoutes)
 app.use('/api/chat', conversationRoutes)

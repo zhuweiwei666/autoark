@@ -41,6 +41,14 @@ const app = express()
 app.use(cors())
 app.use(express.json())
 
+app.get('/healthz', (_req: Request, res: Response) => {
+  res.json({
+    ok: true,
+    service: 'autoark-backend',
+    uptime: process.uptime(),
+  })
+})
+
 // Request ID (Correlation ID)
 app.use((req: Request, res: Response, next: NextFunction) => {
   const headerId = req.headers['x-request-id']
