@@ -10,6 +10,15 @@ CURL_RETRY_DELAY="${CURL_RETRY_DELAY:-2}"
 
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
+CURL_RETRY_ARGS=(--retry "$CURL_RETRIES" --retry-delay "$CURL_RETRY_DELAY")
+
+if curl --help all 2>/dev/null | grep -q -- '--retry-all-errors'; then
+  CURL_RETRY_ARGS+=(--retry-all-errors)
+fi
+
+if curl --help all 2>/dev/null | grep -q -- '--retry-connrefused'; then
+  CURL_RETRY_ARGS+=(--retry-connrefused)
+fi
 
 log() {
   printf '[autoark-verify] %s\n' "$*"
@@ -32,8 +41,7 @@ check_get() {
 
   status="$(
     curl -sS -L \
-      --retry "$CURL_RETRIES" \
-      --retry-delay "$CURL_RETRY_DELAY" \
+      "${CURL_RETRY_ARGS[@]}" \
       -o "$body" \
       -w '%{http_code}' \
       "$url"
