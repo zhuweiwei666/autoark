@@ -27,9 +27,22 @@ interface Organization {
   createdAt: string
 }
 
+interface CommercialPlan {
+  code: string
+  label: string
+  limits: {
+    maxMembers: number | null
+    maxAdAccounts: number | null
+    maxMaterials: number | null
+    maxConcurrentTasks: number | null
+    monthlyTaskLimit: number | null
+  }
+}
+
 const OrganizationManagementPage: React.FC = () => {
   const { token, isSuperAdmin } = useAuth()
   const [organizations, setOrganizations] = useState<Organization[]>([])
+  const [commercialPlans, setCommercialPlans] = useState<CommercialPlan[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [showEditModal, setShowEditModal] = useState(false)
@@ -79,9 +92,26 @@ const OrganizationManagementPage: React.FC = () => {
     }
   }
 
+  const fetchCommercialPlans = async () => {
+    try {
+      const response = await authFetch('/api/commercial/plans', {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      })
+      const data = await response.json()
+      if (data.success) {
+        setCommercialPlans(data.data)
+      }
+    } catch (error) {
+      console.error('获取套餐默认额度失败:', error)
+    }
+  }
+
   useEffect(() => {
     if (isSuperAdmin && token) {
       fetchOrganizations()
+      fetchCommercialPlans()
     } else {
       setIsLoading(false)
     }
@@ -226,6 +256,9 @@ const OrganizationManagementPage: React.FC = () => {
       </div>
     )
   }
+
+  const selectedPlan = commercialPlans.find((plan) => plan.code === editFormData.plan)
+  const formatLimit = (value: number | null | undefined) => value === null ? '不限' : value ?? '-'
 
   return (
     <div className="p-6">
@@ -525,6 +558,18 @@ const OrganizationManagementPage: React.FC = () => {
                   <p className="mb-3 text-xs font-medium text-gray-500">
                     留空会清除手动覆盖并回到当前套餐默认额度；填 0 表示显式限制为 0。
                   </p>
+                  {selectedPlan && (
+                    <div className="mb-3 rounded-lg border border-emerald-100 bg-emerald-50 p-3 text-xs font-semibold text-emerald-900">
+                      <div className="mb-2 font-bold">{selectedPlan.label} 默认额度</div>
+                      <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+                        <span>成员 {formatLimit(selectedPlan.limits.maxMembers)}</span>
+                        <span>账户 {formatLimit(selectedPlan.limits.maxAdAccounts)}</span>
+                        <span>素材 {formatLimit(selectedPlan.limits.maxMaterials)}</span>
+                        <span>并发 {formatLimit(selectedPlan.limits.maxConcurrentTasks)}</span>
+                        <span>月任务 {formatLimit(selectedPlan.limits.monthlyTaskLimit)}</span>
+                      </div>
+                    </div>
+                  )}
                   <div className="grid grid-cols-2 gap-3">
                     {[
                       ['maxMembers', '成员上限'],
