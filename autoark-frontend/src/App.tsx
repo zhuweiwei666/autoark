@@ -91,9 +91,21 @@ function App() {
               <Route path="/bulk-ad/creative" element={<AssetManagementPage />} />
               <Route path="/bulk-ad/materials" element={<MaterialLibraryPage />} />
               {/* AI Agent Routes */}
-              <Route path="/ai/chat" element={<AgentChatPage />} />
-              <Route path="/ai/agents" element={<AgentManagementPage />} />
-              <Route path="/ai/automation-jobs" element={<AutomationJobsPage />} />
+              <Route path="/ai/chat" element={
+                <ProtectedRoute requireRole="super_admin">
+                  <AgentChatPage />
+                </ProtectedRoute>
+              } />
+              <Route path="/ai/agents" element={
+                <ProtectedRoute requireRole="super_admin">
+                  <AgentManagementPage />
+                </ProtectedRoute>
+              } />
+              <Route path="/ai/automation-jobs" element={
+                <ProtectedRoute requireRole="super_admin">
+                  <AutomationJobsPage />
+                </ProtectedRoute>
+              } />
                     {/* 用户和组织管理 */}
                     <Route path="/users" element={<UserManagementPage />} />
                     <Route path="/audit-logs" element={

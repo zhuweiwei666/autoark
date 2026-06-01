@@ -10,12 +10,26 @@ import {
 } from '../services/automationJob.service'
 import { UserRole } from '../models/User'
 
+const API_CREATABLE_JOB_TYPES = new Set([
+  'RUN_AGENT',
+  'RUN_AGENT_AS_JOBS',
+  'EXECUTE_AGENT_OPERATION',
+  'PUBLISH_DRAFT',
+  'SYNC_FB_USER_ASSETS',
+])
+
 export const createJob = async (req: Request, res: Response) => {
   try {
     if (!req.user) return res.status(401).json({ success: false, error: '未认证' })
 
     const { type, payload, agentId, idempotencyKey, priority } = req.body || {}
     if (!type) return res.status(400).json({ success: false, error: 'type is required' })
+    if (!API_CREATABLE_JOB_TYPES.has(type)) {
+      return res.status(400).json({ success: false, error: 'Unsupported automation job type' })
+    }
+    if (payload?.accessToken) {
+      return res.status(400).json({ success: false, error: 'Raw accessToken is not allowed in automation job payload' })
+    }
 
     const organizationId =
       req.user.organizationId && mongoose.Types.ObjectId.isValid(req.user.organizationId)

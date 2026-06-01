@@ -190,9 +190,9 @@ export default function Layout({ children }: LayoutProps) {
       id: "agent",
       title: "Agent",
       items: [
-        { to: "/ai/chat", label: "对话", icon: ChatCircleText },
-        { to: "/ai/agents", label: "Agent 管理", icon: Robot },
-        { to: "/ai/automation-jobs", label: "自动化任务", icon: Lightning },
+        { to: "/ai/chat", label: "对话", icon: ChatCircleText, superAdminOnly: true },
+        { to: "/ai/agents", label: "Agent 管理", icon: Robot, superAdminOnly: true },
+        { to: "/ai/automation-jobs", label: "自动化任务", icon: Lightning, superAdminOnly: true },
       ],
     },
     {

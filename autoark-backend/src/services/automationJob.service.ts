@@ -3,6 +3,66 @@ import logger from '../utils/logger'
 import AutomationJob from '../models/AutomationJob'
 import { addAutomationJob } from '../queue/automation.queue'
 import FbToken from '../models/FbToken'
+import { combineFilters, objectIdValue, userIdVariants } from '../utils/accessControl'
+
+const buildJobAssetAccessFilter = (doc: any): any => {
+  const organizationId = doc.organizationId?.toString?.() || doc.organizationId
+  if (organizationId) {
+    return { organizationId: objectIdValue(String(organizationId)) }
+  }
+
+  const ownerVariants = userIdVariants(doc.createdBy)
+  if (ownerVariants.length > 0) {
+    return { createdBy: { $in: ownerVariants } }
+  }
+
+  return { _id: null }
+}
+
+const buildJobTokenFilter = (doc: any, tokenId?: string): any => {
+  const filters: any[] = [{ status: 'active' }]
+  if (tokenId) filters.push({ _id: tokenId })
+
+  const organizationId = doc.organizationId?.toString?.() || doc.organizationId
+  if (organizationId) {
+    filters.push({ organizationId: objectIdValue(String(organizationId)) })
+  } else if (doc.createdBy) {
+    filters.push({ userId: doc.createdBy })
+  } else {
+    filters.push({ _id: null })
+  }
+
+  return combineFilters(...filters)
+}
+
+const assertGlobalJobAllowed = (doc: any) => {
+  if (doc.organizationId || doc.createdBy) {
+    throw new Error('Global automation job requires internal scheduler context')
+  }
+}
+
+const assertAgentJobAccess = async (doc: any, agentId: string) => {
+  const organizationId = doc.organizationId?.toString?.() || doc.organizationId
+  if (!organizationId && !doc.createdBy) return
+
+  const { AgentConfig } = await import('../domain/agent/agent.model')
+  const agent: any = await AgentConfig.findById(agentId).select('organizationId createdBy').lean()
+  if (!agent) {
+    throw new Error('Agent not found')
+  }
+
+  if (organizationId) {
+    const agentOrganizationId = agent.organizationId?.toString?.() || agent.organizationId
+    if (String(agentOrganizationId || '') !== String(organizationId)) {
+      throw new Error('Automation job cannot access agent outside its organization')
+    }
+    return
+  }
+
+  if (doc.createdBy && String(agent.createdBy || '') !== String(doc.createdBy)) {
+    throw new Error('Automation job cannot access agent outside its owner scope')
+  }
+}
 
 export const buildIdempotencyKey = (type: string, payload: any, agentId?: string) => {
   const raw = JSON.stringify({ type, agentId: agentId || null, payload: payload || {} })
@@ -81,28 +141,36 @@ export async function executeAutomationJobInline(automationJobId: string) {
       case 'RUN_AGENT': {
         const agentId = String(payload.agentId || doc.agentId || '')
         if (!agentId) throw new Error('agentId is required')
+        await assertAgentJobAccess(doc, agentId)
         result = await agentService.runAgent(agentId)
         break
       }
       case 'RUN_AGENT_AS_JOBS': {
         const agentId = String(payload.agentId || doc.agentId || '')
         if (!agentId) throw new Error('agentId is required')
+        await assertAgentJobAccess(doc, agentId)
         result = await (agentService as any).runAgentAsJobs(agentId)
         break
       }
       case 'EXECUTE_AGENT_OPERATION': {
         const operationId = String(payload.operationId || '')
+        const agentId = String(payload.agentId || doc.agentId || '')
         if (!operationId) throw new Error('operationId is required')
+        if (!agentId && (doc.organizationId || doc.createdBy)) {
+          throw new Error('agentId is required for scoped operation job')
+        }
+        if (agentId) await assertAgentJobAccess(doc, agentId)
         result = await agentService.executeOperation(operationId)
         break
       }
       case 'PUBLISH_DRAFT': {
         const draftId = String(payload.draftId || '')
         if (!draftId) throw new Error('draftId is required')
-        result = await bulkAdService.publishDraft(draftId)
+        result = await bulkAdService.publishDraft(draftId, doc.createdBy, buildJobAssetAccessFilter(doc))
         break
       }
       case 'RUN_FB_FULL_SYNC': {
+        assertGlobalJobAllowed(doc)
         fbSyncService.runFullSync()
         result = { started: true }
         break
@@ -112,14 +180,15 @@ export async function executeAutomationJobInline(automationJobId: string) {
         const tokenId = payload.tokenId ? String(payload.tokenId) : undefined
         if (!fbUserId) throw new Error('fbUserId is required')
 
-        let token: string | undefined = payload.accessToken
-        let organizationId = payload.organizationId
-        if (!token && tokenId) {
-          const t: any = await FbToken.findById(tokenId).lean()
-          token = t?.token
-          organizationId = organizationId || t?.organizationId
+        if (payload.accessToken) {
+          throw new Error('Raw accessToken is not allowed in automation job payload')
         }
-        if (!token) throw new Error('accessToken or tokenId is required')
+        if (!tokenId) throw new Error('tokenId is required')
+
+        const tokenDoc: any = await FbToken.findOne(buildJobTokenFilter(doc, tokenId)).lean()
+        const token = tokenDoc?.token
+        const organizationId = tokenDoc?.organizationId || doc.organizationId
+        if (!token) throw new Error('No accessible active Facebook token found')
 
         result = await syncFacebookUserAssets(fbUserId, token, tokenId, organizationId)
         break

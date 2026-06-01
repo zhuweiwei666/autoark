@@ -311,7 +311,6 @@ export default function AutomationJobsPage() {
                     <option value="RUN_AGENT">RUN_AGENT</option>
                     <option value="EXECUTE_AGENT_OPERATION">EXECUTE_AGENT_OPERATION</option>
                     <option value="PUBLISH_DRAFT">PUBLISH_DRAFT</option>
-                    <option value="RUN_FB_FULL_SYNC">RUN_FB_FULL_SYNC</option>
                     <option value="SYNC_FB_USER_ASSETS">SYNC_FB_USER_ASSETS</option>
                   </select>
                 </div>
@@ -430,4 +429,3 @@ export default function AutomationJobsPage() {
     </div>
   )
 }
-
