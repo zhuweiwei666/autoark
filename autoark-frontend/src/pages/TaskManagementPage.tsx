@@ -68,6 +68,7 @@ interface Task {
   startedAt?: string
   completedAt?: string
   duration?: number
+  operationalDiagnostics?: TaskDiagnostics
 }
 
 interface TaskDiagnostics {
@@ -188,6 +189,20 @@ const DIAGNOSTIC_HEALTH_MAP: Record<TaskDiagnostics['health'], { label: string; 
   blocked: { label: '需处理', color: 'bg-red-100 text-red-700' },
   mixed: { label: '混合问题', color: 'bg-orange-100 text-orange-700' },
   unknown: { label: '未知', color: 'bg-slate-100 text-slate-600' },
+}
+
+const getTaskListDiagnostics = (task: Task) => task.operationalDiagnostics
+
+const getTaskListIssueText = (task: Task) => {
+  const diagnostics = getTaskListDiagnostics(task)
+  const topBucket = diagnostics?.buckets?.[0]
+  if (!diagnostics || diagnostics.summary.totalErrors === 0) {
+    return null
+  }
+  if (topBucket) {
+    return `${topBucket.errorCode} · ${topBucket.customerMessage}`
+  }
+  return `${diagnostics.summary.totalErrors} 个错误`
 }
 
 export default function TaskManagementPage() {
@@ -463,9 +478,16 @@ export default function TaskManagementPage() {
                     className={`p-4 cursor-pointer hover:bg-slate-50 transition-colors ${selectedTask?._id === task._id ? 'bg-blue-50' : ''}`}
                   >
                     <div className="flex items-center justify-between mb-2">
-                      <span className={`text-xs px-2 py-1 rounded ${STATUS_MAP[task.status]?.color || 'bg-slate-100'}`}>
-                        {STATUS_MAP[task.status]?.label || task.status}
-                      </span>
+                      <div className="flex flex-wrap items-center gap-1">
+                        <span className={`text-xs px-2 py-1 rounded ${STATUS_MAP[task.status]?.color || 'bg-slate-100'}`}>
+                          {STATUS_MAP[task.status]?.label || task.status}
+                        </span>
+                        {getTaskListDiagnostics(task) && (
+                          <span className={`text-xs px-2 py-1 rounded ${DIAGNOSTIC_HEALTH_MAP[getTaskListDiagnostics(task)!.health]?.color || DIAGNOSTIC_HEALTH_MAP.unknown.color}`}>
+                            {DIAGNOSTIC_HEALTH_MAP[getTaskListDiagnostics(task)!.health]?.label || getTaskListDiagnostics(task)!.health}
+                          </span>
+                        )}
+                      </div>
                       <span className="text-xs text-slate-400">{formatTime(task.createdAt).split(' ')[0]}</span>
                     </div>
                     <div className="text-sm font-medium text-slate-700 truncate">{task.name || `任务 #${task._id.slice(-6)}`}</div>
@@ -476,6 +498,23 @@ export default function TaskManagementPage() {
                     <div className="mt-2 h-1 bg-slate-100 rounded-full overflow-hidden">
                       <div className={`h-full transition-all ${task.status === 'failed' ? 'bg-red-500' : 'bg-blue-500'}`} style={{ width: `${task.progress.percentage}%` }} />
                     </div>
+                    {getTaskListDiagnostics(task)?.summary.totalErrors ? (
+                      <div className="mt-2 rounded-md border border-slate-200 bg-white px-2 py-1">
+                        <div className="flex items-center justify-between gap-2 text-[11px] font-semibold">
+                          <span className={getTaskListDiagnostics(task)!.summary.blockedErrors > 0 ? 'text-red-700' : 'text-blue-700'}>
+                            {getTaskListDiagnostics(task)!.summary.blockedErrors > 0
+                              ? `${getTaskListDiagnostics(task)!.summary.blockedErrors} 个需处理`
+                              : `${getTaskListDiagnostics(task)!.summary.retryableErrors} 个可重试`}
+                          </span>
+                          <span className="text-slate-400">{getTaskListDiagnostics(task)!.summary.totalErrors} 错误</span>
+                        </div>
+                        {getTaskListIssueText(task) && (
+                          <div className="mt-1 max-h-8 overflow-hidden break-words text-[11px] leading-4 text-slate-500">
+                            {getTaskListIssueText(task)}
+                          </div>
+                        )}
+                      </div>
+                    ) : null}
                   </div>
                 ))
               )}

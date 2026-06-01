@@ -1496,6 +1496,19 @@ export const getTaskSupportPackage = async (taskId: string, accessFilter: any = 
   }
 }
 
+const buildTaskListDiagnostics = (task: any) => {
+  const diagnostics = buildTaskOperationalDiagnostics(task)
+  return {
+    ...diagnostics,
+    buckets: diagnostics.buckets.slice(0, 3).map(bucket => ({
+      ...bucket,
+      accounts: bucket.accounts.slice(0, 3),
+      nextActions: bucket.nextActions.slice(0, 2),
+    })),
+    topNextActions: diagnostics.topNextActions.slice(0, 3),
+  }
+}
+
 /**
  * 获取任务列表
  * @param query 查询参数
@@ -1519,7 +1532,18 @@ export const getTaskList = async (query: any = {}, userFilter: any = {}) => {
     AdTask.countDocuments(filter),
   ])
   
-  return { list: list.map(enrichTaskDiagnostics), total, page, pageSize }
+  return {
+    list: list.map(task => {
+      const enriched = enrichTaskDiagnostics(task)
+      return {
+        ...enriched,
+        operationalDiagnostics: buildTaskListDiagnostics(enriched),
+      }
+    }),
+    total,
+    page,
+    pageSize,
+  }
 }
 
 /**
