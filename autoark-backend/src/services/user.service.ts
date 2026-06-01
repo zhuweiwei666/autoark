@@ -4,6 +4,25 @@ import logger from '../utils/logger'
 import authService from './auth.service'
 
 class UserService {
+  private sanitizeUserUpdates(updates: Partial<IUser>, currentUser: JwtPayload): Partial<IUser> {
+    const sanitized: any = { ...(updates || {}) }
+
+    delete sanitized._id
+    delete sanitized.id
+    delete sanitized.password
+    delete sanitized.createdBy
+    delete sanitized.createdAt
+    delete sanitized.updatedAt
+    delete sanitized.lastLoginAt
+
+    if (currentUser.role !== UserRole.SUPER_ADMIN) {
+      delete sanitized.organizationId
+      delete sanitized.status
+    }
+
+    return sanitized
+  }
+
   /**
    * 获取用户列表（带权限控制）
    */
@@ -118,6 +137,8 @@ class UserService {
       throw new Error('用户不存在')
     }
 
+    const sanitizedUpdates = this.sanitizeUserUpdates(updates, currentUser)
+
     // 权限检查
     if (currentUser.role === UserRole.SUPER_ADMIN) {
       // 超级管理员可以更新任何用户
@@ -126,8 +147,12 @@ class UserService {
       if (user.organizationId?.toString() !== currentUser.organizationId) {
         throw new Error('无权修改此用户')
       }
-      // 组织管理员不能修改角色为超级管理员或组织管理员
-      if (updates.role && updates.role !== UserRole.MEMBER) {
+      const isSelf = user._id.toString() === currentUser.userId
+      if (!isSelf && user.role !== UserRole.MEMBER) {
+        throw new Error('无权修改管理员用户')
+      }
+      // 组织管理员不能提升角色；自己的角色也不能通过资料接口变更。
+      if (sanitizedUpdates.role && (isSelf || sanitizedUpdates.role !== UserRole.MEMBER)) {
         throw new Error('无权修改用户角色')
       }
     } else {
@@ -136,14 +161,10 @@ class UserService {
         throw new Error('无权修改此用户')
       }
       // 普通成员不能修改角色和组织
-      delete updates.role
-      delete updates.organizationId
+      delete sanitizedUpdates.role
     }
 
-    // 不允许直接修改密码（需要通过专门的修改密码接口）
-    delete updates.password
-
-    Object.assign(user, updates)
+    Object.assign(user, sanitizedUpdates)
     await user.save()
 
     logger.info(`User ${user.username} updated`)
@@ -201,6 +222,9 @@ class UserService {
       if (user.organizationId?.toString() !== currentUser.organizationId) {
         throw new Error('无权修改此用户状态')
       }
+      if (user.role !== UserRole.MEMBER) {
+        throw new Error('无权修改管理员用户状态')
+      }
     } else {
       throw new Error('权限不足')
     }
@@ -228,6 +252,9 @@ class UserService {
       // 组织管理员只能重置自己组织的用户密码
       if (user.organizationId?.toString() !== currentUser.organizationId) {
         throw new Error('无权重置此用户密码')
+      }
+      if (user.role !== UserRole.MEMBER) {
+        throw new Error('无权重置管理员用户密码')
       }
     } else {
       throw new Error('权限不足')
