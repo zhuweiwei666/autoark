@@ -980,6 +980,19 @@ export default function BulkAdCreatePage() {
   }
   const tokenHealthItems = authDiagnostics ? getTokenHealthItems(authDiagnostics) : []
   const assetIssueSummary = getAssetIssueSummary(authDiagnostics)
+  const facebookAssetsBlocked = Boolean(
+    authStatus?.authorized &&
+    authDiagnostics &&
+    (authDiagnostics.summary.readyAccountCount || 0) <= 0
+  )
+  const nextDisabled = (
+    (currentStep === 1 && (!authStatus?.authorized || !selectedProduct || facebookAssetsBlocked)) ||
+    (currentStep === 2 && !selectedPixel) ||
+    (currentStep === 3 && (selectedAccounts.length === 0 || selectedAccounts.some(acc => !acc.pageId)))
+  )
+  const nextDisabledTitle = currentStep === 1 && facebookAssetsBlocked
+    ? '当前没有同时具备 Page 和 Pixel 的活跃广告账户，请先完成资产分配并重新同步。'
+    : undefined
   
   return (
     <div className="p-6">
@@ -1976,6 +1989,22 @@ export default function BulkAdCreatePage() {
         </div>
         
         {/* Bottom buttons */}
+        {currentStep === 1 && facebookAssetsBlocked && (
+          <div className="mt-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
+            <div className="font-bold">暂不能进入下一步</div>
+            <div className="mt-1 leading-6">
+              当前没有同时具备 Page 和 Pixel 的活跃广告账户。请先在 Meta 里完成 Page/Pixel 分配，再回到 AutoArk 重新同步。
+            </div>
+            <button
+              type="button"
+              onClick={triggerResync}
+              disabled={resyncing}
+              className="mt-3 rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs font-bold text-amber-800 hover:bg-amber-100 disabled:opacity-60"
+            >
+              {resyncing ? '同步中...' : '重新同步'}
+            </button>
+          </div>
+        )}
         <div className="flex justify-between mt-6">
           <button 
             onClick={() => setCurrentStep(prev => Math.max(1, prev - 1))} 
@@ -1987,11 +2016,8 @@ export default function BulkAdCreatePage() {
           {currentStep < STEPS.length ? (
             <button 
               onClick={() => setCurrentStep(prev => Math.min(STEPS.length, prev + 1))} 
-              disabled={
-                (currentStep === 1 && (!authStatus?.authorized || !selectedProduct)) || // 步骤1: 必须授权并选择产品
-                (currentStep === 2 && !selectedPixel) || // 步骤2: 必须选择 Pixel
-                (currentStep === 3 && (selectedAccounts.length === 0 || selectedAccounts.some(acc => !acc.pageId))) // 步骤3: 必须选择账户且所有账户都有主页
-              }
+              disabled={nextDisabled}
+              title={nextDisabledTitle}
               className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               下一步
