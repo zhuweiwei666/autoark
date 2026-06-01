@@ -63,6 +63,64 @@ interface AuthDiagnostics {
   risks: Array<{ level: 'critical' | 'warning' | 'info'; message: string }>
 }
 
+interface FacebookLoginAttempt {
+  clientId?: string
+  redirectUri?: string
+  authorizationMode?: 'business_login' | 'scope_oauth' | string
+  diagnostics: string[]
+  openedAt: string
+}
+
+function FacebookLoginAttemptPanel({
+  attempt,
+  onStop,
+}: {
+  attempt: FacebookLoginAttempt
+  onStop: () => void
+}) {
+  const modeLabel = attempt.authorizationMode === 'business_login'
+    ? 'Facebook Login for Business'
+    : 'Scope OAuth 兜底'
+
+  return (
+    <div className="mx-auto mt-4 max-w-xl rounded-xl border border-blue-200 bg-white p-4 text-left shadow-sm">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <div className="text-sm font-semibold text-slate-900">授权窗口已打开 · {attempt.openedAt}</div>
+          <div className="mt-1 text-xs leading-5 text-slate-500">
+            如果 Facebook 弹窗显示“功能不可用”，先关闭弹窗，再检查当前 App 的高级权限、Public OAuth 和 Login for Business 配置。
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onStop}
+          className="shrink-0 rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:border-slate-400"
+        >
+          停止等待
+        </button>
+      </div>
+      <div className="mt-3 grid gap-2 text-xs font-semibold text-slate-600 sm:grid-cols-2">
+        <div className="rounded-lg bg-slate-50 px-3 py-2">
+          模式：<span className="text-slate-950">{modeLabel}</span>
+        </div>
+        <div className="rounded-lg bg-slate-50 px-3 py-2">
+          App ID：<span className="font-mono text-slate-950">{attempt.clientId || '-'}</span>
+        </div>
+        <div className="rounded-lg bg-slate-50 px-3 py-2 sm:col-span-2">
+          回调：<span className="font-mono text-slate-950">{attempt.redirectUri || '-'}</span>
+        </div>
+      </div>
+      {attempt.diagnostics.length > 0 && (
+        <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold leading-5 text-amber-800">
+          {attempt.diagnostics.map((item) => (
+            <div key={item}>{item}</div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function BulkAdCreatePage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
@@ -76,6 +134,7 @@ export default function BulkAdCreatePage() {
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null)
   const [authLoading, setAuthLoading] = useState(true)
   const [loginLoading, setLoginLoading] = useState(false)
+  const [loginAttempt, setLoginAttempt] = useState<FacebookLoginAttempt | null>(null)
   const [authDiagnostics, setAuthDiagnostics] = useState<AuthDiagnostics | null>(null)
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
   
@@ -234,6 +293,7 @@ export default function BulkAdCreatePage() {
   const handleFacebookLogin = async () => {
     setLoginLoading(true)
     setError(null)
+    setLoginAttempt(null)
     
     try {
       // 获取登录 URL（传递认证信息以绑定到当前用户）
@@ -245,7 +305,15 @@ export default function BulkAdCreatePage() {
         throw new Error(data.error || '获取登录链接失败')
       }
       
-      const loginUrl = data.data.loginUrl
+      const loginData = data.data
+      const loginUrl = loginData.loginUrl
+      setLoginAttempt({
+        clientId: loginData.clientId,
+        redirectUri: loginData.redirectUri,
+        authorizationMode: loginData.authorizationMode,
+        diagnostics: Array.isArray(loginData.diagnostics) ? loginData.diagnostics : [],
+        openedAt: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+      })
       
       // 打开弹窗进行授权
       const width = 600
@@ -285,6 +353,7 @@ export default function BulkAdCreatePage() {
           window.removeEventListener('message', handleMessage)
           popup.close()
           setLoginLoading(false)
+          setLoginAttempt(null)
           checkAuthStatus()
         } else if (event.data?.type === 'oauth-error') {
           clearInterval(checkPopup)
@@ -302,13 +371,20 @@ export default function BulkAdCreatePage() {
         window.removeEventListener('message', handleMessage)
         if (!popup.closed) {
           setLoginLoading(false)
+          setError('Facebook 授权窗口等待超时。若弹窗显示“功能不可用”，请检查 Facebook App 的 Public OAuth 与 Login for Business 配置。')
         }
       }, 300000)
       
     } catch (err: any) {
       setError(err.message || '登录失败')
       setLoginLoading(false)
+      setLoginAttempt(null)
     }
+  }
+
+  const stopFacebookLoginWait = () => {
+    setLoginLoading(false)
+    setError('已停止等待 Facebook 授权窗口。若弹窗显示“功能不可用”，请先关闭弹窗，再到 App 管理检查 Public OAuth 与 Login for Business 配置。')
   }
   
   // 加载广告账户
@@ -789,6 +865,9 @@ export default function BulkAdCreatePage() {
                     )}
                     使用 Facebook 登录
                   </button>
+                  {loginAttempt && loginLoading && (
+                    <FacebookLoginAttemptPanel attempt={loginAttempt} onStop={stopFacebookLoginWait} />
+                  )}
                 </div>
               ) : (
                 /* 已授权 - 显示状态 + 后台加载 Pixels */
@@ -1013,6 +1092,9 @@ export default function BulkAdCreatePage() {
                   <button onClick={handleFacebookLogin} disabled={loginLoading} className="px-6 py-3 bg-[#1877F2] text-white rounded-xl hover:bg-[#166FE5]">
                     {loginLoading ? '登录中...' : '使用 Facebook 登录'}
                     </button>
+                  {loginAttempt && loginLoading && (
+                    <FacebookLoginAttemptPanel attempt={loginAttempt} onStop={stopFacebookLoginWait} />
+                  )}
                 </div>
               ) : (
                 <>

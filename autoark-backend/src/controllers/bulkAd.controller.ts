@@ -986,14 +986,27 @@ export const getAuthLoginUrl = async (req: Request, res: Response) => {
     
     // 解析 client_id（便于排查 Facebook Login “功能不可用”属于哪个 App）
     let clientIdInUrl: string | null = null
+    let configIdInUrl: string | null = null
+    let scopeInUrl: string | null = null
     try {
-      clientIdInUrl = new URL(loginUrl).searchParams.get('client_id')
+      const parsedLoginUrl = new URL(loginUrl)
+      clientIdInUrl = parsedLoginUrl.searchParams.get('client_id')
+      configIdInUrl = parsedLoginUrl.searchParams.get('config_id')
+      scopeInUrl = parsedLoginUrl.searchParams.get('scope')
     } catch {}
+    const authorizationMode = configIdInUrl ? 'business_login' : 'scope_oauth'
+    const diagnostics: string[] = []
+    if (!configIdInUrl) {
+      diagnostics.push('未使用 Facebook Login for Business config_id，当前为 scope OAuth 兜底模式。')
+    }
+    if (!clientIdInUrl) {
+      diagnostics.push('登录链接中未解析到 client_id，请检查 Facebook App 配置。')
+    }
     
     logger.info(
       `[BulkAd] Generated login URL for user ${req.user.userId}, App: ${appId || 'default-pool'}, client_id: ${
         clientIdInUrl || 'unknown'
-      }`,
+      }, mode: ${authorizationMode}`,
     )
     
     res.json({
@@ -1003,6 +1016,10 @@ export const getAuthLoginUrl = async (req: Request, res: Response) => {
         usingDefaultApp: !appId,
         clientId: clientIdInUrl,
         redirectUri,
+        authorizationMode,
+        businessLoginConfigured: Boolean(configIdInUrl),
+        scopeFallback: Boolean(scopeInUrl),
+        diagnostics,
         serverTime: new Date().toISOString(),
       },
     })

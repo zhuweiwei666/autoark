@@ -1087,6 +1087,9 @@ export interface OAuthConfig {
   configured: boolean
   missing: string[]
   redirectUri: string
+  hasDbApps?: boolean
+  businessLoginConfigIdConfigured?: boolean
+  oauthStateSecretConfigured?: boolean
 }
 
 // 获取 OAuth 配置状态
@@ -1112,7 +1115,8 @@ export async function getFacebookLoginUrl(state?: string): Promise<{ success: bo
   const response = await authFetch(url)
 
   if (!response.ok) {
-    throw new Error('Failed to get Facebook login URL')
+    const error = await response.json().catch(() => ({}))
+    throw new Error(error.message || error.error || 'Failed to get Facebook login URL')
   }
 
   return response.json()

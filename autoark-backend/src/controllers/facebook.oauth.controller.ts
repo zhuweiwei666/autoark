@@ -103,14 +103,19 @@ export const handleCallback = async (req: Request, res: Response, next: NextFunc
  */
 export const getOAuthConfig = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const config = oauthService.validateOAuthConfigSync()
+    const config = await oauthService.validateOAuthConfig()
 
     res.json({
       success: true,
       data: {
         configured: config.valid,
         missing: config.missing,
+        hasDbApps: config.hasDbApps,
         redirectUri: process.env.FACEBOOK_REDIRECT_URI || '',
+        businessLoginConfigIdConfigured: Boolean(
+          process.env.FACEBOOK_BUSINESS_LOGIN_CONFIG_ID || process.env.FACEBOOK_CONFIG_ID,
+        ),
+        oauthStateSecretConfigured: Boolean(process.env.OAUTH_STATE_SECRET),
       },
     })
   } catch (error: any) {
