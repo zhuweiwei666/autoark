@@ -43,7 +43,7 @@ jest.mock('../src/models/Aggregation', () => ({
 
 import summaryRouter from '../src/controllers/summary.controller'
 import { getUserAccountIds } from '../src/middlewares/auth'
-import { AggAccount, AggCountry } from '../src/models/Aggregation'
+import { AggAccount, AggCampaign, AggCountry } from '../src/models/Aggregation'
 
 const createApp = () => {
   const app = express()
@@ -118,7 +118,7 @@ describe('summary route data scoping', () => {
     expect(AggAccount.aggregate).toHaveBeenCalledTimes(1)
     expect((AggAccount.aggregate as jest.Mock).mock.calls[0][0][0]).toMatchObject({
       $match: {
-        accountId: { $in: ['act_123'] },
+        accountId: { $in: ['123', 'act_123'] },
       },
     })
   })
@@ -141,5 +141,31 @@ describe('summary route data scoping', () => {
       cached: true,
     })
     expect(AggAccount.aggregate).not.toHaveBeenCalled()
+  })
+
+  it('matches campaign account filters across act_ account id formats', async () => {
+    mockAuthState.user = {
+      role: UserRole.ORG_ADMIN,
+      organizationId: '665000000000000000000001',
+      userId: '665000000000000000000002',
+    }
+    ;(getUserAccountIds as jest.Mock).mockResolvedValue(['123'])
+    ;(AggCampaign.aggregate as jest.Mock).mockResolvedValue([
+      {
+        data: [{ campaignId: 'cmp_1', accountId: '123', spend: 42 }],
+        total: [{ count: 1 }],
+      },
+    ])
+
+    const response = await request(createApp()).get('/api/summary/campaigns?accountId=act_123&limit=10')
+
+    expect(response.status).toBe(200)
+    expect(response.body.data).toEqual([{ campaignId: 'cmp_1', accountId: '123', spend: 42 }])
+    expect(AggCampaign.aggregate).toHaveBeenCalledTimes(1)
+    expect((AggCampaign.aggregate as jest.Mock).mock.calls[0][0][0]).toMatchObject({
+      $match: {
+        accountId: { $in: ['123', 'act_123'] },
+      },
+    })
   })
 })

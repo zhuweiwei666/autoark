@@ -21,6 +21,7 @@ import MaterialMetrics from '../models/MaterialMetrics'
 import { refreshRecentDays } from '../services/aggregation.service'
 import { UserRole } from '../models/User'
 import { getUserAccountIds, authenticate } from '../middlewares/auth'
+import { getAccountIdsForQuery, normalizeForStorage } from '../utils/accountId'
 
 const router = Router()
 
@@ -59,6 +60,17 @@ const aggregateAccountDaily = async (startDate: string, endDate: string, account
   } as any)
 }
 
+const expandScopedAccountIds = (accountIds: string[] | null): string[] | null => {
+  if (accountIds === null) return null
+  return getAccountIdsForQuery(accountIds)
+}
+
+const hasScopedAccountAccess = (accountIds: string[] | null, accountId: string): boolean => {
+  if (accountIds === null) return true
+  const requested = normalizeForStorage(accountId)
+  return accountIds.some(id => normalizeForStorage(id) === requested)
+}
+
 // ==================== 仪表盘汇总 ====================
 
 /**
@@ -74,6 +86,7 @@ router.get('/dashboard', async (req: Request, res: Response) => {
     const endDate = (req.query.endDate as string) || date
 
     const userAccountIds = await getUserAccountIds(req)
+    const scopedAccountIds = expandScopedAccountIds(userAccountIds)
 
     // 汇总多日数据
     let totalSpend = 0
@@ -84,7 +97,7 @@ router.get('/dashboard', async (req: Request, res: Response) => {
     let activeCampaigns = 0
     let activeAccounts = 0
 
-    if (userAccountIds === null) {
+    if (scopedAccountIds === null) {
       // 从预聚合表读取
       const dailyData = await AggDaily.find({
         date: { $gte: startDate, $lte: endDate }
@@ -99,8 +112,8 @@ router.get('/dashboard', async (req: Request, res: Response) => {
         activeCampaigns = Math.max(activeCampaigns, day.activeCampaigns || 0)
         activeAccounts = Math.max(activeAccounts, day.activeAccounts || 0)
       }
-    } else if (userAccountIds.length > 0) {
-      const scoped = await aggregateAccountDaily(startDate, endDate, userAccountIds)
+    } else if (scopedAccountIds.length > 0) {
+      const scoped = await aggregateAccountDaily(startDate, endDate, scopedAccountIds)
       totalSpend = scoped.totalSpend
       totalRevenue = scoped.totalRevenue
       totalImpressions = scoped.totalImpressions
@@ -159,12 +172,13 @@ router.get('/dashboard/trend', async (req: Request, res: Response) => {
     const startDate = dayjs().subtract(days - 1, 'day').format('YYYY-MM-DD')
 
     const userAccountIds = await getUserAccountIds(req)
-    const dailyData = userAccountIds === null
+    const scopedAccountIds = expandScopedAccountIds(userAccountIds)
+    const dailyData = scopedAccountIds === null
       ? await AggDaily.find({
           date: { $gte: startDate, $lte: endDate }
         }).sort({ date: 1 }).lean()
       : await AggAccount.aggregate([
-          { $match: { date: { $gte: startDate, $lte: endDate }, accountId: { $in: userAccountIds } } },
+          { $match: { date: { $gte: startDate, $lte: endDate }, accountId: { $in: scopedAccountIds } } },
           { $group: { _id: '$date', spend: { $sum: '$spend' }, revenue: { $sum: '$revenue' }, impressions: { $sum: '$impressions' }, clicks: { $sum: '$clicks' } } },
           { $project: { date: '$_id', spend: 1, revenue: 1, impressions: 1, clicks: 1, roas: { $cond: [{ $gt: ['$spend', 0] }, { $divide: ['$revenue', '$spend'] }, 0] } } },
           { $sort: { date: 1 } },
@@ -232,13 +246,14 @@ router.get('/accounts', async (req: Request, res: Response) => {
 
     // 用户数据隔离
     const userAccountIds = await getUserAccountIds(req)
+    const scopedAccountIds = expandScopedAccountIds(userAccountIds)
 
     // 构建查询条件
     const match: any = { date: { $gte: startDate, $lte: endDate } }
     
     // 用户隔离：非超管只能看到自己关联的账户
-    if (userAccountIds !== null) {
-      if (userAccountIds.length === 0) {
+    if (scopedAccountIds !== null) {
+      if (scopedAccountIds.length === 0) {
         return res.json({
           success: true,
           data: [],
@@ -246,12 +261,13 @@ router.get('/accounts', async (req: Request, res: Response) => {
           cached: true,
         })
       }
-      match.accountId = { $in: userAccountIds }
+      match.accountId = { $in: scopedAccountIds }
     }
 
     if (status) match.status = status
     if (accountId) {
-      if (userAccountIds !== null && !userAccountIds.some(id => id.includes(accountId))) {
+      const requestedAccountId = normalizeForStorage(accountId)
+      if (userAccountIds !== null && !userAccountIds.some(id => normalizeForStorage(id).includes(requestedAccountId))) {
         return res.json({
           success: true,
           data: [],
@@ -259,9 +275,9 @@ router.get('/accounts', async (req: Request, res: Response) => {
           cached: true,
         })
       }
-      match.accountId = userAccountIds === null
+      match.accountId = scopedAccountIds === null
         ? { $regex: accountId, $options: 'i' }
-        : { $in: userAccountIds.filter(id => id.includes(accountId)) }
+        : { $in: scopedAccountIds.filter(id => normalizeForStorage(id).includes(requestedAccountId)) }
     }
     if (name) match.accountName = { $regex: name, $options: 'i' }
 
@@ -427,13 +443,14 @@ router.get('/campaigns', async (req: Request, res: Response) => {
 
     // 用户数据隔离
     const userAccountIds = await getUserAccountIds(req)
+    const scopedAccountIds = expandScopedAccountIds(userAccountIds)
 
     // 构建查询条件
     const match: any = { date: { $gte: startDate, $lte: endDate } }
 
     // 用户隔离：非超管只能看到自己关联账户的广告系列
-    if (userAccountIds !== null) {
-      if (userAccountIds.length === 0) {
+    if (scopedAccountIds !== null) {
+      if (scopedAccountIds.length === 0) {
         return res.json({
           success: true,
           data: [],
@@ -441,11 +458,11 @@ router.get('/campaigns', async (req: Request, res: Response) => {
           cached: true,
         })
       }
-      match.accountId = { $in: userAccountIds }
+      match.accountId = { $in: scopedAccountIds }
     }
 
     if (accountId) {
-      if (userAccountIds !== null && !userAccountIds.includes(accountId)) {
+      if (!hasScopedAccountAccess(userAccountIds, accountId)) {
         return res.json({
           success: true,
           data: [],
@@ -453,7 +470,7 @@ router.get('/campaigns', async (req: Request, res: Response) => {
           cached: true,
         })
       }
-      match.accountId = accountId
+      match.accountId = { $in: getAccountIdsForQuery([accountId]) }
     }
     if (status) match.status = status
     if (name) match.campaignName = { $regex: name, $options: 'i' }

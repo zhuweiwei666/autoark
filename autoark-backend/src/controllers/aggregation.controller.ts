@@ -26,13 +26,21 @@ import {
 } from '../models/Aggregation'
 import { authenticate, getUserAccountIds } from '../middlewares/auth'
 import { UserRole } from '../models/User'
+import { getAccountIdsForQuery, normalizeForStorage } from '../utils/accountId'
 
 const router = Router()
 
 router.use(authenticate)
 
 const getAccountScope = async (req: Request): Promise<string[] | null> => {
-  return getUserAccountIds(req)
+  const accountIds = await getUserAccountIds(req)
+  return accountIds === null ? null : getAccountIdsForQuery(accountIds)
+}
+
+const hasScopedAccountAccess = (accountIds: string[] | null, accountId: string): boolean => {
+  if (accountIds === null) return true
+  const requested = normalizeForStorage(accountId)
+  return accountIds.some(id => normalizeForStorage(id) === requested)
 }
 
 const aggregateDailyFromAccounts = async (start: string, end: string, accountIds: string[]) => {
@@ -217,20 +225,30 @@ router.get('/campaigns', async (req: Request, res: Response) => {
 
     const accountIds = await getAccountScope(req)
     const requestedAccountId = accountId as string | undefined
-    const scopedAccountId = accountIds === null
-      ? requestedAccountId
-      : requestedAccountId && accountIds.includes(requestedAccountId)
-        ? requestedAccountId
+    if (requestedAccountId && !hasScopedAccountAccess(accountIds, requestedAccountId)) {
+      return res.json({
+        success: true,
+        data: [],
+        meta: { date, count: 0 },
+      })
+    }
+
+    const scopedAccountIdQuery = requestedAccountId && hasScopedAccountAccess(accountIds, requestedAccountId)
+      ? { $in: getAccountIdsForQuery([requestedAccountId]) }
+      : undefined
+    const accountIdFilter = accountIds === null
+      ? scopedAccountIdQuery
+      : scopedAccountIdQuery
+        ? scopedAccountIdQuery
         : undefined
-    const data = accountIds === null
+    const data = accountIds === null && !accountIdFilter
       ? await getCampaignData(date, {
           optimizer: optimizerFilter,
-          accountId: scopedAccountId,
         })
       : await AggCampaign.find({
           date,
           ...(optimizerFilter ? { optimizer: optimizerFilter } : {}),
-          accountId: scopedAccountId ? scopedAccountId : { $in: accountIds },
+          accountId: accountIdFilter ? accountIdFilter : { $in: accountIds },
         }).sort({ spend: -1 }).lean()
 
     res.json({
