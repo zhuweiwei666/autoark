@@ -1,6 +1,7 @@
 import { Request, Response } from 'express'
 import logger from '../utils/logger'
 import Product from '../models/Product'
+import Account from '../models/Account'
 import * as productMappingService from '../services/productMapping.service'
 import {
   combineFilters,
@@ -8,6 +9,7 @@ import {
   scopedOwnerFilter,
   scopedTokenFilter,
 } from '../utils/accessControl'
+import { getAccountIdsForQuery, normalizeForStorage } from '../utils/accountId'
 
 /**
  * 产品映射控制器
@@ -22,6 +24,36 @@ const getOwnerData = (req: Request): any => ({
   ...(req.user?.organizationId && { organizationId: req.user.organizationId }),
   ...(req.user?.userId && { createdBy: req.user.userId }),
 })
+
+const getScopedAccountAsset = async (req: Request, rawAccountId: any) => {
+  const accountId = normalizeForStorage(Array.isArray(rawAccountId) ? rawAccountId[0] : rawAccountId)
+  if (!accountId) {
+    const error: any = new Error('accountId is required')
+    error.statusCode = 400
+    throw error
+  }
+
+  const account = await Account.findOne(combineFilters(
+    {
+      channel: 'facebook',
+      accountId: { $in: getAccountIdsForQuery([accountId]) },
+    },
+    getProductFilter(req),
+  ))
+    .select('accountId name')
+    .lean()
+
+  if (!account) {
+    const error: any = new Error(`无权绑定广告账户 ${accountId}，请先同步并分配账户资产`)
+    error.statusCode = 403
+    throw error
+  }
+
+  return {
+    accountId,
+    accountName: account.name,
+  }
+}
 
 /**
  * 获取所有产品
@@ -267,24 +299,25 @@ export const getProductAccounts = async (req: Request, res: Response) => {
 export const addAccountToProduct = async (req: Request, res: Response) => {
   try {
     const { accountId, accountName, throughPixelId } = req.body
-    
-    if (!accountId) {
-      return res.status(400).json({ success: false, error: 'accountId is required' })
-    }
+    const scopedAccount = await getScopedAccountAsset(req, accountId)
     
     const product = await Product.findOne(combineFilters({ _id: req.params.id }, getProductFilter(req)))
     if (!product) {
       return res.status(404).json({ success: false, error: 'Product not found' })
     }
+
+    if (throughPixelId && !product.pixels.some((p: any) => p.pixelId === throughPixelId)) {
+      return res.status(400).json({ success: false, error: 'Pixel not linked to this product' })
+    }
     
-    const existing = product.accounts.find((a: any) => a.accountId === accountId)
+    const existing = product.accounts.find((a: any) => normalizeForStorage(a.accountId) === scopedAccount.accountId)
     if (existing) {
       return res.status(400).json({ success: false, error: 'Account already linked to this product' })
     }
     
     product.accounts.push({
-      accountId,
-      accountName,
+      accountId: scopedAccount.accountId,
+      accountName: accountName || scopedAccount.accountName,
       throughPixelId,
       status: 'active',
     })
@@ -294,7 +327,7 @@ export const addAccountToProduct = async (req: Request, res: Response) => {
     res.json({ success: true, data: product })
   } catch (error: any) {
     logger.error('[ProductMapping] Add account failed:', error)
-    res.status(500).json({ success: false, error: error.message })
+    res.status(error.statusCode || 500).json({ success: false, error: error.message })
   }
 }
 
