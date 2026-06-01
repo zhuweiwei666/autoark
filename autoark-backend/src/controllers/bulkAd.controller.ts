@@ -23,6 +23,7 @@ import Account from '../models/Account'
 import FacebookUser from '../models/FacebookUser'
 import * as facebookUserService from '../services/facebookUser.service'
 import { buildFacebookAssetDiagnostics } from '../services/facebookAssets.diagnostics.service'
+import { writeAuditLog } from '../services/auditLog.service'
 import {
   combineFilters,
   sanitizeScopedUpdate,
@@ -43,6 +44,29 @@ const getAssetFilter = (req: Request): any => {
 const getScopedActiveToken = (req: Request) => {
   return FbToken.findOne({ status: 'active', ...scopedTokenFilter(req) }).sort({ updatedAt: -1 })
 }
+
+const writeBulkAdAudit = (req: Request, input: {
+  action: string
+  status?: 'success' | 'failed' | 'warning'
+  targetType?: string
+  targetId?: string
+  summary?: string
+  reason?: string
+  related?: any
+  metadata?: any
+}) => writeAuditLog(req, {
+  category: 'bulk_ad',
+  ...input,
+  organizationId: req.user?.organizationId,
+  userId: req.user?.userId,
+})
+
+const taskAuditMetadata = (task: any) => ({
+  taskStatus: task?.status,
+  accountCount: task?.progress?.totalAccounts || task?.items?.length || 0,
+  successAccounts: task?.progress?.successAccounts || 0,
+  failedAccounts: task?.progress?.failedAccounts || 0,
+})
 
 // ==================== 草稿管理 ====================
 
@@ -157,9 +181,29 @@ export const validateDraft = async (req: Request, res: Response) => {
 export const publishDraft = async (req: Request, res: Response) => {
   try {
     const task = await bulkAdService.publishDraft(req.params.id, req.user?.userId, getAssetFilter(req))
+    await writeBulkAdAudit(req, {
+      action: 'bulk_ad.publish',
+      targetType: 'ad_task',
+      targetId: String(task._id),
+      summary: `发布批量广告任务：${task.name || task._id}`,
+      related: { draftId: req.params.id },
+      metadata: taskAuditMetadata(task),
+    })
     res.json({ success: true, data: task })
   } catch (error: any) {
     logger.error('[BulkAd] Publish draft failed:', error)
+    await writeBulkAdAudit(req, {
+      action: 'bulk_ad.publish',
+      status: 'failed',
+      targetType: 'ad_draft',
+      targetId: req.params.id,
+      summary: '发布批量广告任务失败',
+      reason: error.message,
+      metadata: {
+        errorCode: error.code,
+        details: error.details,
+      },
+    })
     res.status(error.statusCode || 400).json({
       success: false,
       error: error.message,
@@ -208,9 +252,24 @@ export const getTaskList = async (req: Request, res: Response) => {
 export const cancelTask = async (req: Request, res: Response) => {
   try {
     const task = await bulkAdService.cancelTask(req.params.id, getAssetFilter(req))
+    await writeBulkAdAudit(req, {
+      action: 'bulk_ad.cancel',
+      targetType: 'ad_task',
+      targetId: req.params.id,
+      summary: `取消批量广告任务：${task.name || req.params.id}`,
+      metadata: taskAuditMetadata(task),
+    })
     res.json({ success: true, data: task })
   } catch (error: any) {
     logger.error('[BulkAd] Cancel task failed:', error)
+    await writeBulkAdAudit(req, {
+      action: 'bulk_ad.cancel',
+      status: 'failed',
+      targetType: 'ad_task',
+      targetId: req.params.id,
+      summary: '取消批量广告任务失败',
+      reason: error.message,
+    })
     res.status(400).json({ success: false, error: error.message })
   }
 }
@@ -222,9 +281,24 @@ export const cancelTask = async (req: Request, res: Response) => {
 export const retryTask = async (req: Request, res: Response) => {
   try {
     const task = await bulkAdService.retryFailedItems(req.params.id, getAssetFilter(req))
+    await writeBulkAdAudit(req, {
+      action: 'bulk_ad.retry',
+      targetType: 'ad_task',
+      targetId: req.params.id,
+      summary: `重试失败任务项：${task.name || req.params.id}`,
+      metadata: taskAuditMetadata(task),
+    })
     res.json({ success: true, data: task })
   } catch (error: any) {
     logger.error('[BulkAd] Retry task failed:', error)
+    await writeBulkAdAudit(req, {
+      action: 'bulk_ad.retry',
+      status: 'failed',
+      targetType: 'ad_task',
+      targetId: req.params.id,
+      summary: '重试批量广告任务失败',
+      reason: error.message,
+    })
     res.status(400).json({ success: false, error: error.message })
   }
 }
@@ -239,9 +313,33 @@ export const rerunTask = async (req: Request, res: Response) => {
     const multiplier = parseInt(req.body.multiplier) || 1
     const userId = req.user?.userId
     const newTasks = await bulkAdService.rerunTask(req.params.id, multiplier, userId, getAssetFilter(req))
+    await writeBulkAdAudit(req, {
+      action: 'bulk_ad.rerun',
+      targetType: 'ad_task',
+      targetId: req.params.id,
+      summary: `重新执行批量广告任务：${req.params.id}`,
+      related: {
+        newTaskIds: newTasks.map((task: any) => String(task._id)),
+      },
+      metadata: {
+        multiplier,
+        createdTaskCount: newTasks.length,
+      },
+    })
     res.json({ success: true, data: newTasks })
   } catch (error: any) {
     logger.error('[BulkAd] Rerun task failed:', error)
+    await writeBulkAdAudit(req, {
+      action: 'bulk_ad.rerun',
+      status: 'failed',
+      targetType: 'ad_task',
+      targetId: req.params.id,
+      summary: '重新执行批量广告任务失败',
+      reason: error.message,
+      metadata: {
+        multiplier: req.body.multiplier,
+      },
+    })
     res.status(400).json({ success: false, error: error.message })
   }
 }
@@ -1453,10 +1551,26 @@ export const resyncFacebookAssets = async (req: Request, res: Response) => {
     ).catch((err: any) => {
       logger.error('[BulkAd] Resync failed:', err)
     })
+
+    await writeBulkAdAudit(req, {
+      action: 'bulk_ad.facebook_resync',
+      targetType: 'facebook_user',
+      targetId: fbToken.fbUserId,
+      summary: `手动触发 Facebook 资产重同步：${fbToken.fbUserName || fbToken.fbUserId}`,
+      metadata: {
+        tokenId: String(fbToken._id),
+      },
+    })
     
     res.json({ success: true, message: '同步已开始，请稍后刷新' })
   } catch (error: any) {
     logger.error('[BulkAd] Resync trigger failed:', error)
+    await writeBulkAdAudit(req, {
+      action: 'bulk_ad.facebook_resync',
+      status: 'failed',
+      summary: '手动触发 Facebook 资产重同步失败',
+      reason: error.message,
+    })
     res.status(500).json({ success: false, error: error.message })
   }
 }

@@ -119,6 +119,8 @@ export interface AuditLogEntry {
   targetId?: string
   summary?: string
   reason?: string
+  related?: Record<string, unknown>
+  metadata?: Record<string, unknown>
   requestId?: string
   ip?: string
   createdAt: string

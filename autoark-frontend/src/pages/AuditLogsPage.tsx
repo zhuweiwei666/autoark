@@ -8,6 +8,7 @@ const categories = [
   { value: "auth", label: "登录安全" },
   { value: "user", label: "用户管理" },
   { value: "organization", label: "组织管理" },
+  { value: "bulk_ad", label: "批量投放" },
 ];
 
 const statuses = [
@@ -35,6 +36,11 @@ const actionLabel: Record<string, string> = {
   "organization.update": "更新组织",
   "organization.delete": "删除组织",
   "organization.update_status": "更新组织状态",
+  "bulk_ad.publish": "发布批量广告",
+  "bulk_ad.cancel": "取消投放任务",
+  "bulk_ad.retry": "重试失败任务",
+  "bulk_ad.rerun": "重新执行任务",
+  "bulk_ad.facebook_resync": "同步 Facebook 资产",
 };
 
 const formatTime = (value: string) => {
@@ -84,6 +90,11 @@ function LogRow({ log }: { log: AuditLogEntry }) {
         <div className="mt-1 max-w-xl text-sm font-medium leading-6 text-zinc-500">
           {log.summary || log.reason || "-"}
         </div>
+        {(log.targetType || log.targetId) && (
+          <div className="mt-2 font-mono text-[11px] font-bold text-zinc-400">
+            {log.targetType || "target"}: {log.targetId || "-"}
+          </div>
+        )}
       </td>
       <td className="whitespace-nowrap px-4 py-4 align-top">
         <span className={`rounded-md border px-2 py-1 text-xs font-bold ${statusTone}`}>
