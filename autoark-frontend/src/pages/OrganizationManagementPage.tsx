@@ -276,6 +276,17 @@ const OrganizationManagementPage: React.FC = () => {
 
   const selectedPlan = commercialPlans.find((plan) => plan.code === editFormData.plan)
   const formatLimit = (value: number | null | undefined) => value === null ? '不限' : value ?? '-'
+  const planForOrganization = (org: Organization) => (
+    commercialPlans.find((plan) => plan.code === (org.billing?.plan || 'trial'))
+  )
+  const effectiveLimit = (
+    org: Organization,
+    key: keyof CommercialPlan['limits'],
+  ) => org.settings?.[key] ?? planForOrganization(org)?.limits[key]
+  const hasQuotaOverrides = (org: Organization) => (
+    ['maxMembers', 'maxAdAccounts', 'maxMaterials', 'maxConcurrentTasks', 'monthlyTaskLimit']
+      .some((key) => org.settings?.[key as keyof Organization['settings']] !== undefined)
+  )
   const allFeatureCodes = commercialPlans.length > 0
     ? Array.from(new Set(commercialPlans.flatMap((plan) => plan.features)))
     : Object.keys(commercialFeatureLabels)
@@ -367,10 +378,10 @@ const OrganizationManagementPage: React.FC = () => {
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                     <div className="font-medium text-gray-900">{org.billing?.plan || 'trial'} · {org.billing?.status || 'trialing'}</div>
                     <div className="text-xs text-gray-500">
-                      成员 {formatLimit(org.settings?.maxMembers)} · 账户 {formatLimit(org.settings?.maxAdAccounts)} · 月任务 {formatLimit(org.settings?.monthlyTaskLimit)}
+                      成员 {formatLimit(effectiveLimit(org, 'maxMembers'))} · 账户 {formatLimit(effectiveLimit(org, 'maxAdAccounts'))} · 月任务 {formatLimit(effectiveLimit(org, 'monthlyTaskLimit'))}
                     </div>
                     <div className="text-xs text-gray-400">
-                      功能 {org.settings?.features?.length ? `${org.settings.features.length} 项自定义` : '跟随套餐'}
+                      {hasQuotaOverrides(org) ? '含额度覆盖' : '套餐默认额度'} · 功能 {org.settings?.features?.length ? `${org.settings.features.length} 项自定义` : '跟随套餐'}
                     </div>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
