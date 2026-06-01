@@ -25,6 +25,7 @@ const queryClient = new QueryClient({
 })
 import DashboardPage from './pages/DashboardPage'
 import CommercialCenterPage from './pages/CommercialCenterPage'
+import AuditLogsPage from './pages/AuditLogsPage'
 import FacebookTokenPage from './pages/FacebookTokenPage'
 import FacebookAccountsPage from './pages/FacebookAccountsPage'
 import FacebookCampaignsPage from './pages/FacebookCampaignsPage'
@@ -86,6 +87,11 @@ function App() {
               <Route path="/ai/automation-jobs" element={<AutomationJobsPage />} />
                     {/* 用户和组织管理 */}
                     <Route path="/users" element={<UserManagementPage />} />
+                    <Route path="/audit-logs" element={
+                      <ProtectedRoute requireRole="org_admin">
+                        <AuditLogsPage />
+                      </ProtectedRoute>
+                    } />
                     <Route path="/organizations" element={
                       <ProtectedRoute requireRole="super_admin">
                         <OrganizationManagementPage />

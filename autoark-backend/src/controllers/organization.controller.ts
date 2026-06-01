@@ -2,6 +2,7 @@ import { Request, Response } from 'express'
 import organizationService from '../services/organization.service'
 import { OrganizationStatus } from '../models/Organization'
 import logger from '../utils/logger'
+import { writeAuditLog } from '../services/auditLog.service'
 
 class OrganizationController {
   /**
@@ -106,6 +107,21 @@ class OrganizationController {
         req.user
       )
 
+      await writeAuditLog(req, {
+        category: 'organization',
+        action: 'organization.create',
+        status: 'success',
+        organizationId: (result.organization as any)._id,
+        targetType: 'organization',
+        targetId: String((result.organization as any)._id),
+        summary: `创建组织 ${result.organization.name}`,
+        after: {
+          name: result.organization.name,
+          adminId: result.organization.adminId,
+          status: result.organization.status,
+        },
+      })
+
       res.status(201).json({
         success: true,
         data: result,
@@ -136,6 +152,22 @@ class OrganizationController {
         req.user
       )
 
+      await writeAuditLog(req, {
+        category: 'organization',
+        action: 'organization.update',
+        status: 'success',
+        organizationId: (organization as any)._id,
+        targetType: 'organization',
+        targetId: req.params.id,
+        summary: `更新组织 ${organization.name}`,
+        after: {
+          name: organization.name,
+          status: organization.status,
+          settings: organization.settings,
+          billing: organization.billing,
+        },
+      })
+
       res.json({
         success: true,
         data: organization,
@@ -161,6 +193,16 @@ class OrganizationController {
       }
 
       await organizationService.deleteOrganization(req.params.id, req.user)
+
+      await writeAuditLog(req, {
+        category: 'organization',
+        action: 'organization.delete',
+        status: 'success',
+        organizationId: req.params.id,
+        targetType: 'organization',
+        targetId: req.params.id,
+        summary: '删除组织',
+      })
 
       res.json({
         success: true,
@@ -201,6 +243,17 @@ class OrganizationController {
         status,
         req.user
       )
+
+      await writeAuditLog(req, {
+        category: 'organization',
+        action: 'organization.update_status',
+        status: 'success',
+        organizationId: (organization as any)._id,
+        targetType: 'organization',
+        targetId: req.params.id,
+        summary: `更新组织状态为 ${status}`,
+        after: { status: organization.status },
+      })
 
       res.json({
         success: true,

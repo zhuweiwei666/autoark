@@ -103,6 +103,50 @@ export async function getCommercialReadiness(organizationId?: string): Promise<{
   return response.json()
 }
 
+// === 审计日志 ===
+
+export interface AuditLogEntry {
+  _id: string
+  organizationId?: string
+  userId?: string
+  username?: string
+  userEmail?: string
+  userRole?: string
+  category?: string
+  action: string
+  status: 'success' | 'failed' | 'warning'
+  targetType?: string
+  targetId?: string
+  summary?: string
+  reason?: string
+  requestId?: string
+  ip?: string
+  createdAt: string
+}
+
+export async function getAuditLogs(params?: {
+  category?: string
+  action?: string
+  status?: string
+  limit?: number
+}): Promise<{ success: boolean; data: AuditLogEntry[] }> {
+  const queryParams = new URLSearchParams()
+  if (params?.category) queryParams.append('category', params.category)
+  if (params?.action) queryParams.append('action', params.action)
+  if (params?.status) queryParams.append('status', params.status)
+  if (params?.limit) queryParams.append('limit', String(params.limit))
+
+  const url = `${API_BASE_URL}/api/audit-logs${queryParams.toString() ? `?${queryParams.toString()}` : ''}`
+  const response = await authFetch(url)
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}))
+    throw new Error(error.message || 'Failed to fetch audit logs')
+  }
+
+  return response.json()
+}
+
 export interface FbToken {
   id: string
   userId: string

@@ -18,6 +18,7 @@ import authRoutes from './routes/auth.routes' // New: 认证路由
 import userRoutes from './routes/user.routes' // New: 用户管理路由
 import organizationRoutes from './routes/organization.routes' // New: 组织管理路由
 import accountManagementRoutes from './routes/account.management.routes' // New: 账户管理路由
+import auditLogRoutes from './routes/auditLog.routes' // SaaS audit logs
 import aggregationRoutes from './controllers/aggregation.controller' // New: 预聚合数据 API
 import automationJobRoutes from './routes/automationJob.routes' // New: 自动化 Job 编排
 import commercialRoutes from './routes/commercial.routes' // SaaS commercial readiness
@@ -125,6 +126,7 @@ app.use('/api/auth', authRateLimit, authRoutes)
 app.use('/api/users', userRoutes)
 app.use('/api/organizations', organizationRoutes)
 app.use('/api/account-management', accountManagementRoutes)
+app.use('/api/audit-logs', auditLogRoutes)
 // 其他业务路由
 app.use('/api/facebook', facebookRoutes)
 app.use('/api/facebook', facebookSyncRoutes)

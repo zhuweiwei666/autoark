@@ -2,6 +2,7 @@ import { Request, Response } from 'express'
 import userService from '../services/user.service'
 import { UserRole, UserStatus } from '../models/User'
 import logger from '../utils/logger'
+import { writeAuditLog } from '../services/auditLog.service'
 
 class UserController {
   /**
@@ -88,6 +89,17 @@ class UserController {
         req.user
       )
 
+      await writeAuditLog(req, {
+        category: 'user',
+        action: 'user.create',
+        status: 'success',
+        organizationId: (user as any).organizationId,
+        targetType: 'user',
+        targetId: String((user as any)._id),
+        summary: `创建用户 ${user.username}`,
+        after: { username: user.username, email: user.email, role: user.role, status: user.status },
+      })
+
       res.status(201).json({
         success: true,
         data: user,
@@ -118,6 +130,17 @@ class UserController {
         req.user
       )
 
+      await writeAuditLog(req, {
+        category: 'user',
+        action: 'user.update',
+        status: 'success',
+        organizationId: (user as any).organizationId,
+        targetType: 'user',
+        targetId: req.params.id,
+        summary: `更新用户 ${user.username}`,
+        after: { username: user.username, email: user.email, role: user.role, status: user.status },
+      })
+
       res.json({
         success: true,
         data: user,
@@ -143,6 +166,15 @@ class UserController {
       }
 
       await userService.deleteUser(req.params.id, req.user)
+
+      await writeAuditLog(req, {
+        category: 'user',
+        action: 'user.delete',
+        status: 'success',
+        targetType: 'user',
+        targetId: req.params.id,
+        summary: '删除用户',
+      })
 
       res.json({
         success: true,
@@ -184,6 +216,17 @@ class UserController {
         req.user
       )
 
+      await writeAuditLog(req, {
+        category: 'user',
+        action: 'user.update_status',
+        status: 'success',
+        organizationId: (user as any).organizationId,
+        targetType: 'user',
+        targetId: req.params.id,
+        summary: `更新用户状态为 ${status}`,
+        after: { status: user.status },
+      })
+
       res.json({
         success: true,
         data: user,
@@ -223,6 +266,15 @@ class UserController {
         newPassword,
         req.user
       )
+
+      await writeAuditLog(req, {
+        category: 'user',
+        action: 'user.reset_password',
+        status: 'success',
+        targetType: 'user',
+        targetId: req.params.id,
+        summary: '管理员重置用户密码',
+      })
 
       res.json({
         success: true,

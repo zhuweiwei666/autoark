@@ -200,6 +200,7 @@ export default function Layout({ children }: LayoutProps) {
       title: "系统",
       items: [
         { to: "/users", label: "用户管理", icon: UserGear, adminOnly: true },
+        { to: "/audit-logs", label: "审计日志", icon: ClipboardText, adminOnly: true },
         {
           to: "/organizations",
           label: "组织管理",

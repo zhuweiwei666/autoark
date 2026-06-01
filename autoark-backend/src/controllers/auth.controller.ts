@@ -1,6 +1,7 @@
 import { Request, Response } from 'express'
 import authService from '../services/auth.service'
 import logger from '../utils/logger'
+import { writeAuditLog } from '../services/auditLog.service'
 
 class AuthController {
   /**
@@ -21,12 +22,35 @@ class AuthController {
 
       const result = await authService.login({ username, password })
 
+      await writeAuditLog(req, {
+        category: 'auth',
+        action: 'auth.login',
+        status: 'success',
+        userId: (result.user as any)._id,
+        username: (result.user as any).username || username,
+        userEmail: (result.user as any).email,
+        userRole: (result.user as any).role,
+        organizationId: (result.user as any).organizationId,
+        targetType: 'user',
+        targetId: String((result.user as any)._id || ''),
+        summary: '用户登录成功',
+      })
+
       res.json({
         success: true,
         data: result,
       })
     } catch (error: any) {
       logger.error('Login error:', error)
+      await writeAuditLog(req, {
+        category: 'auth',
+        action: 'auth.login',
+        status: 'failed',
+        username: req.body?.username,
+        targetType: 'user',
+        summary: '用户登录失败',
+        reason: error.message || '登录失败',
+      })
       res.status(401).json({
         success: false,
         message: error.message || '登录失败',
@@ -119,6 +143,15 @@ class AuthController {
         oldPassword,
         newPassword
       )
+
+      await writeAuditLog(req, {
+        category: 'auth',
+        action: 'auth.change_password',
+        status: 'success',
+        targetType: 'user',
+        targetId: req.user.userId,
+        summary: '用户修改密码',
+      })
 
       res.json({
         success: true,

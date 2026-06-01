@@ -11,6 +11,7 @@ describe('protected API routes', () => {
     ['POST', '/api/agg/refresh'],
     ['GET', '/api/commercial/readiness'],
     ['GET', '/api/commercial/plans'],
+    ['GET', '/api/audit-logs'],
   ] as const
 
   it.each(protectedRequests)('%s %s requires authentication', async (method, path) => {
