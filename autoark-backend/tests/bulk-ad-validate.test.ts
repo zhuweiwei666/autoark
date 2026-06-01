@@ -4,6 +4,7 @@ import CreativeGroup from '../src/models/CreativeGroup'
 import FacebookUser from '../src/models/FacebookUser'
 import FbToken from '../src/models/FbToken'
 import TargetingPackage from '../src/models/TargetingPackage'
+import Account from '../src/models/Account'
 import { publishDraft, validateDraft } from '../src/services/bulkAd.service'
 
 const draftId = '665000000000000000000010'
@@ -17,6 +18,10 @@ const queryWithLean = (value: any) => ({
 })
 
 const tokenQuery = (value: any) => ({
+  select: jest.fn().mockReturnValue(queryWithLean(value)),
+})
+
+const accountQuery = (value: any) => ({
   select: jest.fn().mockReturnValue(queryWithLean(value)),
 })
 
@@ -154,6 +159,36 @@ describe('bulk ad draft validation preflight', () => {
     expect(validation.isValid).toBe(false)
     expect(validation.errors.map((error: any) => error.field)).toContain('accounts.123.access')
     expect(validation.errors.map((error: any) => error.message).join(' ')).toContain('当前 Facebook 授权未同步到账户 Account 123 的访问权限')
+  })
+
+  it('blocks publish when selected account is not in the organization asset inventory before sync completes', async () => {
+    const draft = baseDraft()
+    jest.spyOn(AdDraft, 'findOne').mockResolvedValue(draft as any)
+    jest.spyOn(FbToken, 'find').mockReturnValue(tokenQuery([{
+      _id: tokenId,
+      fbUserId: 'fb_1',
+    }]) as any)
+    jest.spyOn(FacebookUser, 'find').mockReturnValue(queryWithLean([{
+      fbUserId: 'fb_1',
+      syncStatus: 'syncing',
+      adAccounts: [],
+      pages: [],
+      pixels: [],
+    }]) as any)
+    jest.spyOn(Account, 'findOne').mockReturnValue(accountQuery(null) as any)
+    mockValidPackages()
+
+    const validation = await validateDraft(draftId, {})
+
+    expect(validation.isValid).toBe(false)
+    expect(validation.errors.map((error: any) => error.field)).toContain('accounts.123.access')
+    expect(validation.errors.map((error: any) => error.message).join(' ')).toContain('未分配到当前组织或账户资产尚未同步完成')
+    expect(Account.findOne).toHaveBeenCalledWith({
+      $and: [
+        { channel: 'facebook', accountId: { $in: ['123', 'act_123'] } },
+        { organizationId: '665000000000000000000001' },
+      ],
+    })
   })
 
   it('returns structured validation failure details when publishing an invalid draft directly', async () => {

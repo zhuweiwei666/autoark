@@ -22,7 +22,7 @@ import {
 } from '../integration/facebook/bulkCreate.api'
 import { facebookClient } from '../integration/facebook/facebookClient'
 import { combineFilters } from '../utils/accessControl'
-import { normalizeForStorage } from '../utils/accountId'
+import { getAccountIdsForQuery, normalizeForStorage } from '../utils/accountId'
 import { getBuildInfo } from '../utils/buildInfo'
 import {
   buildTaskOperationalDiagnostics,
@@ -224,6 +224,22 @@ const buildFacebookAssetSnapshot = async (draft: any) => {
   }
 }
 
+const findScopedDraftAccountAsset = async (accountId: string, draft: any) => {
+  if (!draft.organizationId) {
+    return null
+  }
+
+  return Account.findOne(combineFilters(
+    {
+      channel: 'facebook',
+      accountId: { $in: getAccountIdsForQuery([accountId]) },
+    },
+    { organizationId: draft.organizationId },
+  ))
+    .select('_id accountId accountStatus status')
+    .lean()
+}
+
 /**
  * 创建广告草稿
  */
@@ -378,8 +394,14 @@ export const validateDraft = async (draftId: string, accessFilter: any = {}) => 
       }
       seenAccounts.add(accountId)
 
-      if (assetSnapshot.hasCachedAssets && !assetSnapshot.adAccountStatuses.has(accountId)) {
+      const hasCachedAccountAccess = assetSnapshot.adAccountStatuses.has(accountId)
+      if (assetSnapshot.hasCachedAssets && !hasCachedAccountAccess) {
         addError(`accounts.${account.accountId}.access`, `当前 Facebook 授权未同步到账户 ${accountLabel} 的访问权限，请重新授权或更换可访问账户`)
+      } else if (!hasCachedAccountAccess && assetSnapshot.tokenCount > 0) {
+        const accountAsset = await findScopedDraftAccountAsset(accountId, draft)
+        if (!accountAsset) {
+          addError(`accounts.${account.accountId}.access`, `广告账户 ${accountLabel} 未分配到当前组织或账户资产尚未同步完成，请先同步账户资产后重新选择`)
+        }
       }
 
       const cachedStatus = assetSnapshot.adAccountStatuses.get(accountId)
