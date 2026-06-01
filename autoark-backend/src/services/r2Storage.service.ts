@@ -55,6 +55,13 @@ const generateStorageKey = (originalName: string, folder?: string): string => {
   return `${prefix}${date}/${uuid}${ext}`
 }
 
+export const getPublicUrlForKey = (key: string): string => {
+  const normalizedKey = String(key || '').replace(/^\/+/, '')
+  return R2_PUBLIC_URL
+    ? `${R2_PUBLIC_URL.replace(/\/+$/, '')}/${normalizedKey}`
+    : `https://${R2_BUCKET_NAME}.${R2_ACCOUNT_ID}.r2.dev/${normalizedKey}`
+}
+
 /**
  * 上传文件到 R2
  */
@@ -95,9 +102,7 @@ export const uploadToR2 = async (params: {
     logger.info(`[R2] Upload completed in ${duration}ms`)
     
     // 生成公开访问 URL
-    const url = R2_PUBLIC_URL 
-      ? `${R2_PUBLIC_URL}/${key}`
-      : `https://${R2_BUCKET_NAME}.${R2_ACCOUNT_ID}.r2.dev/${key}`
+    const url = getPublicUrlForKey(key)
     
     logger.info(`[R2] File uploaded: ${key}, URL: ${url}`)
     
@@ -211,9 +216,7 @@ export const generatePresignedUploadUrl = async (params: {
     const uploadUrl = await getSignedUrl(client, command, { expiresIn })
     
     // 生成公开访问 URL
-    const publicUrl = R2_PUBLIC_URL 
-      ? `${R2_PUBLIC_URL}/${key}`
-      : `https://${R2_BUCKET_NAME}.${R2_ACCOUNT_ID}.r2.dev/${key}`
+    const publicUrl = getPublicUrlForKey(key)
     
     logger.info(`[R2] Presigned URL generated for: ${key}`)
     
@@ -239,7 +242,7 @@ export const generatePresignedUploadUrls = async (files: Array<{
   fileName: string
   mimeType: string
   size: number
-}>): Promise<{
+}>, folder = 'materials'): Promise<{
   success: boolean
   urls?: Array<{
     fileName: string
@@ -257,7 +260,7 @@ export const generatePresignedUploadUrls = async (files: Array<{
         const result = await generatePresignedUploadUrl({
           fileName: file.fileName,
           mimeType: file.mimeType,
-          folder: 'materials',
+          folder,
         })
         
         if (!result.success) {
@@ -293,4 +296,5 @@ export default {
   checkR2Config,
   generatePresignedUploadUrl,
   generatePresignedUploadUrls,
+  getPublicUrlForKey,
 }

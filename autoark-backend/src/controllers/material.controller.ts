@@ -1,7 +1,7 @@
 import { Request, Response } from 'express'
 import Material from '../models/Material'
 import Folder from '../models/Folder'
-import { uploadToR2, deleteFromR2, getObjectFromR2, checkR2Config, generatePresignedUploadUrl, generatePresignedUploadUrls } from '../services/r2Storage.service'
+import { uploadToR2, deleteFromR2, getObjectFromR2, checkR2Config, generatePresignedUploadUrl, generatePresignedUploadUrls, getPublicUrlForKey } from '../services/r2Storage.service'
 import { 
   calculateFingerprint, 
   checkDuplicate, 
@@ -33,6 +33,38 @@ import {
  */
 const getMaterialFilter = (req: Request): any => {
   return scopedOwnerFilter(req)
+}
+
+const getTenantStorageRoot = (req: Request): string => {
+  if (req.user?.organizationId) return `tenants/org-${req.user.organizationId}`
+  if (req.user?.userId) return `tenants/user-${req.user.userId}`
+  return 'tenants/anonymous'
+}
+
+const getScopedStorageFolder = (req: Request, folder?: string): string => {
+  const requestedFolder = typeof folder === 'string' && folder.trim() ? folder.trim() : 'materials'
+  return `${getTenantStorageRoot(req)}/${requestedFolder.replace(/^\/+/, '')}`
+}
+
+const normalizeStorageKey = (key: string): string => String(key || '').replace(/^\/+/, '')
+
+const resolveScopedStorageKey = (req: Request, key: string): string | null => {
+  const normalizedKey = normalizeStorageKey(key)
+  const root = `${getTenantStorageRoot(req)}/`
+
+  if (!normalizedKey || normalizedKey.includes('..') || !normalizedKey.startsWith(root)) {
+    return null
+  }
+
+  return normalizedKey
+}
+
+const validateScopedStorageKey = (req: Request, res: Response, key: string): string | null => {
+  const scopedKey = resolveScopedStorageKey(req, key)
+  if (!scopedKey) {
+    res.status(400).json({ success: false, error: '素材存储路径不属于当前租户' })
+  }
+  return scopedKey
 }
 
 /**
@@ -106,7 +138,7 @@ export const getPresignedUrl = async (req: Request, res: Response) => {
     const result = await generatePresignedUploadUrl({
       fileName,
       mimeType,
-      folder: folder || 'materials',
+      folder: getScopedStorageFolder(req, folder || 'materials'),
     })
     
     if (!result.success) {
@@ -135,7 +167,7 @@ export const getPresignedUrl = async (req: Request, res: Response) => {
  */
 export const getPresignedUrls = async (req: Request, res: Response) => {
   try {
-    const { files } = req.body
+    const { files, folder } = req.body
     
     if (!files || !Array.isArray(files) || files.length === 0) {
       return res.status(400).json({ success: false, error: '请提供文件列表' })
@@ -153,7 +185,7 @@ export const getPresignedUrls = async (req: Request, res: Response) => {
       }
     }
     
-    const result = await generatePresignedUploadUrls(files)
+    const result = await generatePresignedUploadUrls(files, getScopedStorageFolder(req, folder || 'materials'))
     
     if (!result.success) {
       return res.status(500).json({ success: false, error: result.error })
@@ -178,14 +210,20 @@ export const getPresignedUrls = async (req: Request, res: Response) => {
  */
 export const confirmUpload = async (req: Request, res: Response) => {
   try {
-    const { key, publicUrl, fileName, mimeType, size, folder, tags, notes } = req.body
+    const { key, fileName, mimeType, size, folder, tags, notes } = req.body
     
-    if (!key || !publicUrl || !fileName) {
+    if (!key || !fileName) {
       return res.status(400).json({ success: false, error: '参数不完整' })
     }
+
+    const scopedKey = validateScopedStorageKey(req, res, key)
+    if (!scopedKey) return
     
     const isImage = mimeType?.startsWith('image/')
     const isVideo = mimeType?.startsWith('video/')
+    if (!isImage && !isVideo) {
+      return res.status(400).json({ success: false, error: '只支持图片和视频文件' })
+    }
     
     const material = new Material({
       name: fileName,
@@ -194,8 +232,8 @@ export const confirmUpload = async (req: Request, res: Response) => {
       storage: {
         provider: 'r2',
         bucket: process.env.R2_BUCKET_NAME,
-        key,
-        url: publicUrl,
+        key: scopedKey,
+        url: getPublicUrlForKey(scopedKey),
       },
       file: {
         originalName: fileName,
@@ -239,6 +277,15 @@ export const confirmUploads = async (req: Request, res: Response) => {
       try {
         const isImage = file.mimeType?.startsWith('image/')
         const isVideo = file.mimeType?.startsWith('video/')
+        if (!isImage && !isVideo) {
+          errors.push({ fileName: file.fileName, error: '只支持图片和视频文件' })
+          continue
+        }
+        const scopedKey = resolveScopedStorageKey(req, file.key)
+        if (!scopedKey) {
+          errors.push({ fileName: file.fileName, error: '素材存储路径不属于当前租户' })
+          continue
+        }
         
         const material = new Material({
           name: file.fileName,
@@ -247,8 +294,8 @@ export const confirmUploads = async (req: Request, res: Response) => {
           storage: {
             provider: 'r2',
             bucket: process.env.R2_BUCKET_NAME,
-            key: file.key,
-            url: file.publicUrl,
+            key: scopedKey,
+            url: getPublicUrlForKey(scopedKey),
           },
           file: {
             originalName: file.fileName,
@@ -351,7 +398,7 @@ export const uploadMaterial = async (req: Request, res: Response) => {
       buffer: file.buffer,
       originalName: file.originalname,
       mimeType: file.mimetype,
-      folder: folder || 'materials',
+      folder: getScopedStorageFolder(req, folder || 'materials'),
     })
     logger.info(`[Material] R2 upload result:`, uploadResult.success ? 'success' : uploadResult.error)
     
@@ -424,7 +471,7 @@ export const uploadMaterialBatch = async (req: Request, res: Response) => {
           buffer: file.buffer,
           originalName: file.originalname,
           mimeType: file.mimetype,
-          folder: folder || 'materials',
+          folder: getScopedStorageFolder(req, folder || 'materials'),
         })
         
         if (!uploadResult.success) {
