@@ -5,6 +5,7 @@ import FacebookApp from '../models/FacebookApp'
 import FacebookUser from '../models/FacebookUser'
 import FbToken from '../models/FbToken'
 import Material from '../models/Material'
+import OpsLog from '../models/OpsLog'
 import Organization, {
   IOrganization,
   OrganizationBillingStatus,
@@ -931,6 +932,108 @@ export async function getCommercialOrganizationReadiness(user: JwtPayload) {
     if (stateDiff !== 0) return stateDiff
     return a.score - b.score
   })
+}
+
+export async function getCommercialSupportPackage(
+  user: JwtPayload,
+  requestedOrganizationId?: string,
+) {
+  const { mode, organizationId, organization } = await resolveScope(user, requestedOrganizationId)
+  const orgFilter = scoped(organizationId)
+  const readiness = await getCommercialReadiness(user, organizationId)
+
+  const activeTokenDocs = await FbToken.find({ ...orgFilter, status: 'active' })
+    .select('_id fbUserId fbUserName expiresAt updatedAt')
+    .sort({ updatedAt: -1 })
+    .lean()
+  const tokenIds = activeTokenDocs.map((token: any) => token._id).filter(Boolean)
+  const fbUserIds = activeTokenDocs.map((token: any) => token.fbUserId).filter(Boolean)
+  const facebookUserFilters: any[] = tokenIds.length > 0 ? [{ tokenId: { $in: tokenIds } }] : []
+  if (fbUserIds.length > 0) {
+    facebookUserFilters.push({
+      fbUserId: { $in: fbUserIds },
+      ...(organizationId && { organizationId: objectIdValue(organizationId) }),
+    })
+  }
+  const facebookUsers = activeTokenDocs.length > 0
+    ? await FacebookUser.find({ $or: facebookUserFilters }).lean()
+    : []
+  const facebookAssets = buildFacebookAssetDiagnostics({
+    tokens: activeTokenDocs,
+    users: facebookUsers,
+  })
+
+  const recentTasks = await AdTask.find({
+    ...orgFilter,
+    status: { $in: ['failed', 'partial_success', 'cancelled'] },
+  })
+    .sort({ createdAt: -1 })
+    .limit(5)
+    .lean()
+
+  const recentTaskDiagnostics = recentTasks.map((task: any) => {
+    const diagnostics = buildTaskOperationalDiagnostics(task)
+    return {
+      taskId: String(task._id),
+      taskName: task.name || '',
+      status: task.status,
+      createdAt: task.createdAt,
+      health: diagnostics.health,
+      summary: diagnostics.summary,
+      topIssue: diagnostics.buckets[0]
+        ? {
+          errorCode: diagnostics.buckets[0].errorCode,
+          count: diagnostics.buckets[0].count,
+          retryable: diagnostics.buckets[0].retryable,
+          customerMessage: diagnostics.buckets[0].customerMessage,
+          nextActions: diagnostics.buckets[0].nextActions.slice(0, 3),
+        }
+        : null,
+    }
+  })
+
+  const recentAuditLogs = await OpsLog.find({
+    ...(organizationId ? { organizationId: objectIdValue(organizationId) } : {}),
+  })
+    .select('category action status summary reason requestId createdAt')
+    .sort({ createdAt: -1 })
+    .limit(10)
+    .lean()
+
+  return {
+    supportId: `AUTOARK-${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}-${String(organizationId || 'platform').slice(-6)}`,
+    generatedAt: new Date().toISOString(),
+    scope: {
+      mode,
+      organizationId,
+      organizationName: organization?.name || 'AutoArk Platform',
+      organizationStatus: organization?.status,
+    },
+    readiness: {
+      score: readiness.score,
+      state: readiness.state,
+      risks: readiness.risks.slice(0, 5),
+      nextActions: readiness.nextActions.slice(0, 5),
+      metrics: readiness.metrics,
+    },
+    facebookAssets: {
+      summary: facebookAssets.summary,
+      risks: facebookAssets.risks,
+      checklist: facebookAssets.checklist,
+      accounts: facebookAssets.accounts.slice(0, 20).map((account: any) => ({
+        accountId: account.accountId,
+        name: account.name,
+        status: account.status,
+        statusLabel: account.statusLabel,
+        ready: account.ready,
+        issues: account.issues,
+        pageCount: account.pageCount,
+        pixelCount: account.pixelCount,
+      })),
+    },
+    recentTasks: recentTaskDiagnostics,
+    recentAuditLogs,
+  }
 }
 
 export function getCommercialPlans() {

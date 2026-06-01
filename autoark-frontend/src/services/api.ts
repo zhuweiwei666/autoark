@@ -157,6 +157,80 @@ export async function getCommercialOrganizationReadiness(): Promise<{
   return response.json()
 }
 
+export interface CommercialSupportPackage {
+  supportId: string
+  generatedAt: string
+  scope: {
+    mode: 'organization' | 'platform'
+    organizationId?: string
+    organizationName: string
+    organizationStatus?: string
+  }
+  readiness: {
+    score: number
+    state: CommercialReadiness['state']
+    risks: CommercialReadiness['risks']
+    nextActions: CommercialReadiness['nextActions']
+    metrics: Record<string, number>
+  }
+  facebookAssets: {
+    summary: Record<string, number>
+    risks: Array<{ level: 'critical' | 'warning' | 'info'; message: string }>
+    checklist: Array<{ id: string; title: string; status: string; metric?: string }>
+    accounts: Array<{
+      accountId: string
+      name: string
+      status: number
+      statusLabel: string
+      ready: boolean
+      issues: string[]
+      pageCount: number
+      pixelCount: number
+    }>
+  }
+  recentTasks: Array<{
+    taskId: string
+    taskName: string
+    status: string
+    createdAt?: string
+    health: string
+    summary: Record<string, number>
+    topIssue: null | {
+      errorCode: string
+      count: number
+      retryable: boolean
+      customerMessage: string
+      nextActions: string[]
+    }
+  }>
+  recentAuditLogs: Array<{
+    category?: string
+    action?: string
+    status?: string
+    summary?: string
+    reason?: string
+    requestId?: string
+    createdAt?: string
+  }>
+}
+
+export async function getCommercialSupportPackage(organizationId?: string): Promise<{
+  success: boolean
+  data: CommercialSupportPackage
+}> {
+  const params = new URLSearchParams()
+  if (organizationId) params.append('organizationId', organizationId)
+  const url = `${API_BASE_URL}/api/commercial/support-package${params.toString() ? `?${params.toString()}` : ''}`
+  const response = await authFetch(url)
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}))
+    throw new Error(error.message || 'Failed to fetch commercial support package')
+  }
+
+  return response.json()
+}
+
 export interface OrganizationSummary {
   _id: string
   name: string

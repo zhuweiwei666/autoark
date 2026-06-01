@@ -16,8 +16,10 @@ import {
 import {
   getCommercialOrganizationReadiness,
   getCommercialReadiness,
+  getCommercialSupportPackage,
   getOrganizations,
   type CommercialReadiness,
+  type CommercialSupportPackage,
 } from "../services/api";
 import { useAuth } from "../contexts/AuthContext";
 
@@ -267,6 +269,9 @@ export default function CommercialCenterPage() {
   const { isSuperAdmin } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const [selectedOrganizationId, setSelectedOrganizationId] = useState(searchParams.get("organizationId") || "");
+  const [supportPackage, setSupportPackage] = useState<CommercialSupportPackage | null>(null);
+  const [supportPackageLoading, setSupportPackageLoading] = useState(false);
+  const [supportPackageError, setSupportPackageError] = useState("");
   const updateSelectedOrganization = (organizationId: string) => {
     setSelectedOrganizationId(organizationId);
     setSearchParams(organizationId ? { organizationId } : {});
@@ -293,6 +298,33 @@ export default function CommercialCenterPage() {
   const readiness = data?.data;
   const organizations = organizationsData?.data || [];
   const organizationReadiness = organizationReadinessData?.data || [];
+  const generateSupportPackage = async () => {
+    setSupportPackageLoading(true);
+    setSupportPackageError("");
+    try {
+      const result = await getCommercialSupportPackage(selectedOrganizationId || undefined);
+      setSupportPackage(result.data);
+    } catch (err) {
+      setSupportPackageError((err as Error)?.message || "生成支持包失败");
+    } finally {
+      setSupportPackageLoading(false);
+    }
+  };
+
+  const copySupportSummary = async () => {
+    if (!supportPackage) return;
+    const topAction = supportPackage.readiness.nextActions[0]?.title || "暂无优先动作";
+    const topIssue = supportPackage.recentTasks[0]?.topIssue?.errorCode || "暂无最近任务错误";
+    const text = [
+      `支持包：${supportPackage.supportId}`,
+      `客户：${supportPackage.scope.organizationName}`,
+      `状态：${supportPackage.readiness.state.label} / ${supportPackage.readiness.score} 分`,
+      `首要动作：${topAction}`,
+      `授权：${supportPackage.facebookAssets.summary.tokenCount || 0} 个 Token，${supportPackage.facebookAssets.summary.readyAccountCount || 0} 个可投放账户`,
+      `最近任务：${supportPackage.recentTasks.length} 条，主因：${topIssue}`,
+    ].join("\n");
+    await navigator.clipboard?.writeText(text);
+  };
 
   useEffect(() => {
     const queryOrganizationId = searchParams.get("organizationId") || "";
@@ -433,6 +465,95 @@ export default function CommercialCenterPage() {
         {topMetrics.map((metric) => (
           <MetricCard key={metric.label} {...metric} />
         ))}
+      </section>
+
+      <section className="mt-6 rounded-lg border border-zinc-200 bg-white p-5 shadow-[0_18px_38px_-34px_rgba(24,24,27,0.72)]">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-black text-zinc-950">客户支持包</h2>
+            <p className="mt-1 text-sm font-semibold text-zinc-500">
+              生成当前验收范围的排障摘要，包含 readiness、授权资产、最近失败任务和审计线索。
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={generateSupportPackage}
+              disabled={supportPackageLoading}
+              className="rounded-lg bg-zinc-950 px-4 py-2 text-sm font-black text-white hover:bg-zinc-800 disabled:opacity-60"
+            >
+              {supportPackageLoading ? "生成中" : "生成支持包"}
+            </button>
+            {supportPackage && (
+              <button
+                type="button"
+                onClick={copySupportSummary}
+                className="rounded-lg border border-zinc-200 bg-white px-4 py-2 text-sm font-bold text-zinc-700 hover:border-zinc-400"
+              >
+                复制摘要
+              </button>
+            )}
+          </div>
+        </div>
+        {supportPackageError && (
+          <div className="mt-4 rounded-lg border border-[#fecdd3] bg-[#fff1f2] p-3 text-sm font-bold text-[#9f1239]">
+            {supportPackageError}
+          </div>
+        )}
+        {supportPackage && (
+          <div className="mt-5 grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
+            <div className="rounded-lg border border-zinc-100 bg-[#fbfbf8] p-4">
+              <div className="text-xs font-black uppercase text-zinc-500">{supportPackage.supportId}</div>
+              <h3 className="mt-2 text-xl font-black text-zinc-950">{supportPackage.scope.organizationName}</h3>
+              <p className="mt-2 text-sm font-bold text-zinc-600">
+                {supportPackage.readiness.state.label} · {supportPackage.readiness.score} 分 · {new Date(supportPackage.generatedAt).toLocaleString("zh-CN")}
+              </p>
+              <div className="mt-4 grid grid-cols-2 gap-3 text-sm font-bold text-zinc-700">
+                <div>
+                  <div className="font-mono text-2xl font-black text-zinc-950">{supportPackage.facebookAssets.summary.readyAccountCount || 0}</div>
+                  <div className="text-xs text-zinc-500">可投放账户</div>
+                </div>
+                <div>
+                  <div className="font-mono text-2xl font-black text-zinc-950">{supportPackage.recentTasks.length}</div>
+                  <div className="text-xs text-zinc-500">最近问题任务</div>
+                </div>
+              </div>
+            </div>
+            <div className="space-y-3">
+              <div>
+                <div className="text-xs font-black uppercase text-zinc-500">下一步</div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {supportPackage.readiness.nextActions.slice(0, 3).map((action) => (
+                    <span key={action.id} className={`rounded-md border px-2 py-1 text-xs font-black ${priorityTone[action.priority] || priorityTone.medium}`}>
+                      {action.title}
+                    </span>
+                  ))}
+                  {supportPackage.readiness.nextActions.length === 0 && (
+                    <span className="text-sm font-bold text-[#0f766e]">暂无阻断动作</span>
+                  )}
+                </div>
+              </div>
+              <div>
+                <div className="text-xs font-black uppercase text-zinc-500">最近任务主因</div>
+                <div className="mt-2 space-y-2">
+                  {supportPackage.recentTasks.slice(0, 3).map((task) => (
+                    <div key={task.taskId} className="rounded-lg border border-zinc-100 bg-white p-3 text-sm">
+                      <div className="font-black text-zinc-950">{task.taskName || task.taskId}</div>
+                      <div className="mt-1 font-bold text-zinc-600">
+                        {task.topIssue ? `${task.topIssue.errorCode}：${task.topIssue.customerMessage}` : task.status}
+                      </div>
+                    </div>
+                  ))}
+                  {supportPackage.recentTasks.length === 0 && (
+                    <div className="rounded-lg border border-zinc-100 bg-white p-3 text-sm font-bold text-zinc-500">
+                      暂无最近失败任务
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </section>
 
       {isSuperAdmin && organizationReadiness.length > 0 && (
