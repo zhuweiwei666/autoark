@@ -19,6 +19,7 @@ import {
 } from '../integration/facebook/bulkCreate.api'
 import { facebookClient } from '../integration/facebook/facebookClient'
 import { combineFilters } from '../utils/accessControl'
+import { diagnoseBulkAdError, enrichTaskDiagnostics } from './bulkAd.diagnostics'
 
 /**
  * 批量广告创建服务
@@ -364,6 +365,7 @@ const executeTaskSynchronously = async (taskId: string) => {
     } catch (error: any) {
       item.status = 'failed'
       item.error = error.message
+      item.errors = [diagnoseBulkAdError(error, { fallbackCode: 'EXECUTION_ERROR', entityType: 'general' })]
       failCount++
       logger.error(`[BulkAd] Account ${item.accountId} failed:`, error)
     }
@@ -962,12 +964,14 @@ export const executeTaskForAccount = async (
     // ==================== 6. 完成任务 ====================
     // 如果没有创建任何广告，标记为失败
     const finalStatus = adIds.length > 0 ? 'success' : 'failed'
-    const errorInfo = adIds.length === 0 ? [{
-      entityType: 'ad',
-      errorCode: 'NO_ADS_CREATED',
-      errorMessage: '素材创建失败，未能创建任何广告',
-      timestamp: new Date(),
-    }] : undefined
+    const errorInfo = adIds.length === 0
+      ? [diagnoseBulkAdError({
+        entityType: 'ad',
+        errorCode: 'NO_ADS_CREATED',
+        errorMessage: '素材创建失败，未能创建任何广告',
+        timestamp: new Date(),
+      })]
+      : undefined
     
     // 原子更新状态
     const updateData: any = {
@@ -1049,12 +1053,7 @@ export const executeTaskForAccount = async (
     await updateTaskItemAtomic(taskId, accountId, {
       'items.$.status': 'failed',
       'items.$.completedAt': new Date(),
-      'items.$.errors': [{
-        entityType: 'general',
-        errorCode: 'EXECUTION_ERROR',
-        errorMessage: error.message,
-        timestamp: new Date(),
-      }],
+      'items.$.errors': [diagnoseBulkAdError(error, { fallbackCode: 'EXECUTION_ERROR', entityType: 'general' })],
     })
     
     // 更新总体进度（原子操作）
@@ -1110,7 +1109,7 @@ export const getTask = async (taskId: string, accessFilter: any = {}) => {
   if (!task) {
     throw new Error('Task not found')
   }
-  return task
+  return enrichTaskDiagnostics(task)
 }
 
 /**
@@ -1136,7 +1135,7 @@ export const getTaskList = async (query: any = {}, userFilter: any = {}) => {
     AdTask.countDocuments(filter),
   ])
   
-  return { list, total, page, pageSize }
+  return { list: list.map(enrichTaskDiagnostics), total, page, pageSize }
 }
 
 /**

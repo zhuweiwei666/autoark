@@ -12,6 +12,21 @@ interface AdDetail {
   reviewFeedback?: any
 }
 
+interface TaskError {
+  entityType: string
+  errorCode?: string
+  errorMessage: string
+  customerMessage?: string
+  operatorMessage?: string
+  severity?: 'error' | 'warning'
+  retryable?: boolean
+  nextActions?: string[]
+  source?: 'meta' | 'autoark' | 'worker' | 'validation'
+  rawCode?: string | number
+  rawSubcode?: string | number
+  timestamp?: string
+}
+
 interface TaskItem {
   accountId: string
   accountName: string
@@ -19,7 +34,7 @@ interface TaskItem {
   progress: { current: number; total: number; percentage: number }
   result?: { campaignId?: string; adsetIds?: string[]; adIds?: string[]; createdCount?: number }
   ads?: AdDetail[]  // 广告详情（含审核状态）
-  errors?: Array<{ entityType: string; errorMessage: string }>
+  errors?: TaskError[]
   startedAt?: string
   completedAt?: string
 }
@@ -81,6 +96,28 @@ const REVIEW_STATUS_MAP: Record<string, { label: string; color: string; icon: st
 // 获取审核状态信息
 const getReviewStatusInfo = (status: string) => {
   return REVIEW_STATUS_MAP[status] || { label: status || '未知', color: 'bg-slate-100 text-slate-600', icon: '❓' }
+}
+
+const getErrorSourceLabel = (source?: string) => {
+  const labels: Record<string, string> = {
+    meta: 'Meta',
+    autoark: 'AutoArk',
+    worker: 'Worker',
+    validation: '配置校验',
+  }
+  return source ? labels[source] || source : '未知来源'
+}
+
+const getErrorPrimaryMessage = (error: TaskError) => {
+  return error.customerMessage || error.errorMessage || '任务执行失败'
+}
+
+const getErrorOperatorMessage = (error: TaskError) => {
+  return error.operatorMessage || error.errorMessage
+}
+
+const getErrorCodeLabel = (error: TaskError) => {
+  return error.errorCode || error.entityType || 'EXECUTION_ERROR'
 }
 
 export default function TaskManagementPage() {
@@ -429,21 +466,58 @@ export default function TaskManagementPage() {
                   <h3 className="font-semibold mb-3">账户执行详情</h3>
                   <div className="space-y-2 max-h-[300px] overflow-y-auto">
                     {selectedTask.items.map((item, idx) => (
-                      <div key={idx} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
-                        <div className="flex items-center gap-3">
-                          <span className={`w-2 h-2 rounded-full ${(item.status === 'success' || item.status === 'completed') ? 'bg-green-500' : item.status === 'failed' ? 'bg-red-500' : item.status === 'processing' ? 'bg-blue-500 animate-pulse' : 'bg-slate-300'}`} />
-                          <div>
-                            <div className="font-medium text-sm">{item.accountName || item.accountId}</div>
-                            <div className="text-xs text-slate-500">{item.accountId}</div>
+                      <div key={idx} className="p-3 bg-slate-50 rounded-lg">
+                        <div className="flex items-center justify-between gap-4">
+                          <div className="flex items-center gap-3 min-w-0">
+                            <span className={`w-2 h-2 shrink-0 rounded-full ${(item.status === 'success' || item.status === 'completed') ? 'bg-green-500' : item.status === 'failed' ? 'bg-red-500' : item.status === 'processing' ? 'bg-blue-500 animate-pulse' : 'bg-slate-300'}`} />
+                            <div className="min-w-0">
+                              <div className="font-medium text-sm truncate">{item.accountName || item.accountId}</div>
+                              <div className="text-xs text-slate-500 break-all">{item.accountId}</div>
+                            </div>
+                          </div>
+                          <div className="text-right shrink-0">
+                            <span className={`text-xs px-2 py-0.5 rounded ${STATUS_MAP[item.status]?.color || 'bg-slate-100'}`}>{STATUS_MAP[item.status]?.label || item.status}</span>
+                            {item.result?.createdCount !== undefined && <div className="text-xs text-slate-500 mt-1">创建 {item.result.createdCount} 个广告</div>}
                           </div>
                         </div>
-                        <div className="text-right">
-                          <span className={`text-xs px-2 py-0.5 rounded ${STATUS_MAP[item.status]?.color || 'bg-slate-100'}`}>{STATUS_MAP[item.status]?.label || item.status}</span>
-                          {item.result?.createdCount !== undefined && <div className="text-xs text-slate-500 mt-1">创建 {item.result.createdCount} 个广告</div>}
-                          {item.errors && item.errors.length > 0 && (
-                            <div className="text-xs text-red-500 mt-1 max-w-xs truncate" title={item.errors[0].errorMessage}>{item.errors[0].errorMessage}</div>
-                          )}
-                        </div>
+                        {item.errors && item.errors.length > 0 && (
+                          <div className="mt-3 space-y-3 border-l-2 border-red-300 pl-3">
+                            {item.errors.map((error, errorIdx) => (
+                              <div key={`${getErrorCodeLabel(error)}-${errorIdx}`}>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="rounded bg-red-100 px-2 py-0.5 text-[11px] font-semibold text-red-700">
+                                    {getErrorCodeLabel(error)}
+                                  </span>
+                                  <span className={`rounded px-2 py-0.5 text-[11px] font-medium ${error.retryable ? 'bg-blue-100 text-blue-700' : 'bg-slate-200 text-slate-700'}`}>
+                                    {error.retryable ? '可重试' : '需先处理'}
+                                  </span>
+                                  <span className="text-[11px] text-slate-500">{getErrorSourceLabel(error.source)}</span>
+                                </div>
+                                <div className="mt-1 text-sm font-medium text-red-700 break-words">
+                                  {getErrorPrimaryMessage(error)}
+                                </div>
+                                {error.nextActions && error.nextActions.length > 0 && (
+                                  <div className="mt-2">
+                                    <div className="text-xs font-medium text-slate-600">建议动作</div>
+                                    <ul className="mt-1 list-disc space-y-0.5 pl-4 text-xs leading-5 text-slate-600">
+                                      {error.nextActions.slice(0, 3).map((action, actionIdx) => (
+                                        <li key={actionIdx}>{action}</li>
+                                      ))}
+                                    </ul>
+                                  </div>
+                                )}
+                                {getErrorOperatorMessage(error) && (
+                                  <details className="mt-2 text-xs text-slate-500">
+                                    <summary className="cursor-pointer select-none text-slate-600">原始错误</summary>
+                                    <div className="mt-1 whitespace-pre-wrap break-words rounded bg-white px-2 py-1 text-slate-500">
+                                      {getErrorOperatorMessage(error)}
+                                    </div>
+                                  </details>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -519,4 +593,3 @@ export default function TaskManagementPage() {
     </div>
   )
 }
-

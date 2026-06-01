@@ -4,6 +4,7 @@ import logger from '../utils/logger'
 import AdTask from '../models/AdTask'
 import { executeTaskForAccount } from '../services/bulkAd.service'
 import { addBulkAdJobsBatch } from './bulkAd.queue'
+import { diagnoseBulkAdError } from '../services/bulkAd.diagnostics'
 
 /**
  * 批量广告创建 Worker
@@ -131,12 +132,13 @@ const recoverStuckTasks = async () => {
       for (const item of task.items) {
         if (item.status === 'processing') {
           item.status = 'failed' // Mark as failed instead of pending to avoid infinite loops of death
-          item.errors.push({
+          if (!Array.isArray(item.errors)) item.errors = []
+          item.errors.push(diagnoseBulkAdError({
             entityType: 'general',
             errorCode: 'WORKER_TIMEOUT',
             errorMessage: 'Task execution timed out or worker crashed',
-            timestamp: new Date()
-          })
+            timestamp: new Date(),
+          }))
           updated = true
         }
       }
