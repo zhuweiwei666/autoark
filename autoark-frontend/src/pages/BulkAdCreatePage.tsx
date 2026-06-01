@@ -43,6 +43,12 @@ interface AuthDiagnostics {
     pageLinkedAccountCount: number
     pixelLinkedAccountCount: number
     readyAccountCount: number
+    expiredTokenCount?: number
+    expiringSoonTokenCount?: number
+    staleTokenCheckCount?: number
+    tokenWithoutExpiryCount?: number
+    earliestTokenExpiresAt?: string
+    oldestTokenCheckedAt?: string
     lastSyncedAt?: string
   }
   accounts: Array<{
@@ -123,6 +129,35 @@ const buildPublishBlocker = (data: any): PublishBlocker => {
     nextActions: [...detailActions, ...(preset?.actions || ['按错误提示修正配置后重新发布。'])],
     actionPath: preset?.actionPath,
   }
+}
+
+const formatCompactDateTime = (value?: string) => {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return date.toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+const getTokenHealthItems = (diagnostics: AuthDiagnostics) => {
+  const items: Array<{ label: string; value: string; tone: 'red' | 'amber' | 'slate' }> = []
+  if ((diagnostics.summary.expiredTokenCount || 0) > 0) {
+    items.push({ label: '已过期', value: String(diagnostics.summary.expiredTokenCount), tone: 'red' })
+  }
+  if ((diagnostics.summary.expiringSoonTokenCount || 0) > 0) {
+    items.push({ label: '即将过期', value: String(diagnostics.summary.expiringSoonTokenCount), tone: 'amber' })
+  }
+  if ((diagnostics.summary.staleTokenCheckCount || 0) > 0) {
+    items.push({ label: '待校验', value: String(diagnostics.summary.staleTokenCheckCount), tone: 'amber' })
+  }
+  if ((diagnostics.summary.tokenWithoutExpiryCount || 0) > 0) {
+    items.push({ label: '无过期时间', value: String(diagnostics.summary.tokenWithoutExpiryCount), tone: 'slate' })
+  }
+  return items
 }
 
 function FacebookLoginAttemptPanel({
@@ -860,6 +895,7 @@ export default function BulkAdCreatePage() {
       (publishStrategy.copywritingMode === 'SEQUENTIAL' ? Math.max(1, ad.copywritingPackageIds.length) : 1),
     dailyBudget: campaign.budget * selectedAccounts.length,
   }
+  const tokenHealthItems = authDiagnostics ? getTokenHealthItems(authDiagnostics) : []
   
   return (
     <div className="p-6">
@@ -1006,6 +1042,30 @@ export default function BulkAdCreatePage() {
                           <div className="text-[11px] text-green-700">Pixel 可用</div>
                         </div>
                       </div>
+                      {tokenHealthItems.length > 0 && (
+                        <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-amber-200 bg-white/80 px-3 py-2 text-[11px] font-semibold">
+                          <span className="text-slate-600">授权健康</span>
+                          {tokenHealthItems.map(item => (
+                            <span
+                              key={item.label}
+                              className={`rounded px-2 py-0.5 ${
+                                item.tone === 'red'
+                                  ? 'bg-red-100 text-red-700'
+                                  : item.tone === 'amber'
+                                    ? 'bg-amber-100 text-amber-700'
+                                    : 'bg-slate-100 text-slate-600'
+                              }`}
+                            >
+                              {item.label} {item.value}
+                            </span>
+                          ))}
+                          {authDiagnostics.summary.earliestTokenExpiresAt && (
+                            <span className="text-slate-500">
+                              最近过期 {formatCompactDateTime(authDiagnostics.summary.earliestTokenExpiresAt)}
+                            </span>
+                          )}
+                        </div>
+                      )}
                       {authDiagnostics.risks.length > 0 && (
                         <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
                           {authDiagnostics.risks[0].message}

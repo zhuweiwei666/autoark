@@ -9,6 +9,10 @@ type AccountIssue = {
   action: string
 }
 
+const TOKEN_EXPIRING_SOON_DAYS = 14
+const TOKEN_STALE_CHECK_DAYS = 7
+const DAY_MS = 24 * 60 * 60 * 1000
+
 const accountStatusLabel = (status?: number) => {
   const labels: Record<number, string> = {
     1: '活跃',
@@ -41,6 +45,45 @@ const mostRecentDate = (values: any[]) => {
     .filter(value => Number.isFinite(value) && value > 0)
   if (timestamps.length === 0) return undefined
   return new Date(Math.max(...timestamps))
+}
+
+const buildTokenHealth = (tokens: any[], now = new Date()) => {
+  const expiringSoonAt = new Date(now.getTime() + TOKEN_EXPIRING_SOON_DAYS * DAY_MS)
+  const staleBefore = new Date(now.getTime() - TOKEN_STALE_CHECK_DAYS * DAY_MS)
+  let expiredCount = 0
+  let expiringSoonCount = 0
+  let staleCheckCount = 0
+  let missingExpiryCount = 0
+  let earliestExpiresAt: Date | undefined
+  let oldestCheckedAt: Date | undefined
+
+  for (const token of tokens) {
+    const expiresAt = token?.expiresAt ? new Date(token.expiresAt) : undefined
+    const lastCheckedAt = token?.lastCheckedAt ? new Date(token.lastCheckedAt) : undefined
+
+    if (!expiresAt || Number.isNaN(expiresAt.getTime())) {
+      missingExpiryCount += 1
+    } else {
+      if (!earliestExpiresAt || expiresAt < earliestExpiresAt) earliestExpiresAt = expiresAt
+      if (expiresAt < now) expiredCount += 1
+      else if (expiresAt <= expiringSoonAt) expiringSoonCount += 1
+    }
+
+    if (!lastCheckedAt || Number.isNaN(lastCheckedAt.getTime()) || lastCheckedAt < staleBefore) {
+      staleCheckCount += 1
+    } else if (!oldestCheckedAt || lastCheckedAt < oldestCheckedAt) {
+      oldestCheckedAt = lastCheckedAt
+    }
+  }
+
+  return {
+    expiredCount,
+    expiringSoonCount,
+    staleCheckCount,
+    missingExpiryCount,
+    earliestExpiresAt,
+    oldestCheckedAt,
+  }
 }
 
 export function buildFacebookAssetDiagnostics({
@@ -140,6 +183,7 @@ export function buildFacebookAssetDiagnostics({
   const completedSyncCount = users.filter(user => user.syncStatus === 'completed').length
   const syncingCount = users.filter(user => user.syncStatus === 'syncing').length
   const failedSyncCount = users.filter(user => user.syncStatus === 'failed').length
+  const tokenHealth = buildTokenHealth(tokens)
 
   const checklist = [
     step(
@@ -148,6 +192,19 @@ export function buildFacebookAssetDiagnostics({
       tokens.length > 0 ? 'done' : 'blocked',
       `${tokens.length} 个授权`,
       tokens.length > 0 ? '已有可用授权。' : '还没有可用 Facebook 授权。',
+    ),
+    step(
+      'token_health',
+      '授权有效性',
+      tokens.length === 0
+        ? 'blocked'
+        : tokenHealth.expiredCount > 0
+          ? 'blocked'
+          : tokenHealth.expiringSoonCount > 0 || tokenHealth.staleCheckCount > 0
+            ? 'warning'
+            : 'done',
+      `${tokenHealth.expiringSoonCount} 临期 / ${tokenHealth.staleCheckCount} 待校验`,
+      '授权过期或长期未校验会导致广告账户、Page、Pixel 读取和发布失败。',
     ),
     step(
       'asset_sync',
@@ -190,6 +247,15 @@ export function buildFacebookAssetDiagnostics({
   if (tokens.length === 0) {
     risks.push({ level: 'critical', message: '还没有 Facebook 授权，无法同步资产或创建广告。' })
   }
+  if (tokenHealth.expiredCount > 0) {
+    risks.push({ level: 'critical', message: `${tokenHealth.expiredCount} 个 Facebook 授权已经过期，请重新授权后再创建广告。` })
+  }
+  if (tokenHealth.expiringSoonCount > 0) {
+    risks.push({ level: 'warning', message: `${tokenHealth.expiringSoonCount} 个 Facebook 授权将在 ${TOKEN_EXPIRING_SOON_DAYS} 天内过期，建议提前重新授权。` })
+  }
+  if (tokenHealth.staleCheckCount > 0) {
+    risks.push({ level: 'warning', message: `${tokenHealth.staleCheckCount} 个 Facebook 授权超过 ${TOKEN_STALE_CHECK_DAYS} 天未校验，建议先检查授权状态。` })
+  }
   if (users.length > 0 && completedSyncCount === 0) {
     risks.push({ level: 'warning', message: '授权存在但资产未同步完成，建议点击重新同步。' })
   }
@@ -207,6 +273,12 @@ export function buildFacebookAssetDiagnostics({
       pageLinkedAccountCount,
       pixelLinkedAccountCount,
       readyAccountCount,
+      expiredTokenCount: tokenHealth.expiredCount,
+      expiringSoonTokenCount: tokenHealth.expiringSoonCount,
+      staleTokenCheckCount: tokenHealth.staleCheckCount,
+      tokenWithoutExpiryCount: tokenHealth.missingExpiryCount,
+      earliestTokenExpiresAt: tokenHealth.earliestExpiresAt,
+      oldestTokenCheckedAt: tokenHealth.oldestCheckedAt,
       lastSyncedAt: mostRecentDate(users.map(user => user.lastSyncedAt)),
     },
     checklist,

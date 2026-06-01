@@ -1368,7 +1368,7 @@ export const getAuthDiagnostics = async (req: Request, res: Response) => {
 
     const tokenQuery: any = { status: 'active', ...scopedTokenFilter(req) }
     const tokens: any[] = await FbToken.find(tokenQuery)
-      .select('_id fbUserId fbUserName expiresAt updatedAt')
+      .select('_id fbUserId fbUserName expiresAt lastCheckedAt updatedAt')
       .sort({ updatedAt: -1 })
       .lean()
 

@@ -48,4 +48,29 @@ describe('facebook asset diagnostics', () => {
     expect(diagnostics.accounts.find(account => account.accountId === '3')?.issues[0]).toContain('已停用')
     expect(diagnostics.accounts.find(account => account.accountId === '3')?.issueDetails.map(issue => issue.code)).toContain('ACCOUNT_NOT_ACTIVE')
   })
+
+  it('surfaces expiring and stale token health risks', () => {
+    const now = Date.now()
+    const diagnostics = buildFacebookAssetDiagnostics({
+      tokens: [{
+        _id: 'token_1',
+        fbUserId: 'fb_1',
+        expiresAt: new Date(now + 3 * 24 * 60 * 60 * 1000),
+        lastCheckedAt: new Date(now - 10 * 24 * 60 * 60 * 1000),
+      }],
+      users: [{
+        fbUserId: 'fb_1',
+        syncStatus: 'completed',
+        adAccounts: [{ accountId: 'act_1', name: 'Ready account', status: 1 }],
+        pages: [{ pageId: 'page_1', name: 'Page 1', accounts: [{ accountId: '1' }] }],
+        pixels: [{ pixelId: 'pixel_1', name: 'Pixel 1', accounts: [{ accountId: '1' }] }],
+      }],
+    })
+
+    expect(diagnostics.summary.expiringSoonTokenCount).toBe(1)
+    expect(diagnostics.summary.staleTokenCheckCount).toBe(1)
+    expect(diagnostics.checklist.find(item => item.id === 'token_health')?.status).toBe('warning')
+    expect(diagnostics.risks.map(risk => risk.message).join(' ')).toContain('14 天内过期')
+    expect(diagnostics.risks.map(risk => risk.message).join(' ')).toContain('7 天未校验')
+  })
 })
