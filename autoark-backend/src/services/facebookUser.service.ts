@@ -4,19 +4,41 @@ import { FB_VERSIONED_URL } from '../config/facebook.config'
 
 const FB_BASE_URL = FB_VERSIONED_URL
 
+type FacebookUserScope = {
+  tokenId?: string
+  organizationId?: any
+}
+
+const buildFacebookUserFilter = (fbUserId: string, scope: FacebookUserScope = {}) => {
+  const filter: any = { fbUserId }
+  if (scope.organizationId) {
+    filter.organizationId = scope.organizationId
+  } else if (scope.tokenId) {
+    filter.tokenId = scope.tokenId
+  }
+  return filter
+}
+
 /**
  * 同步 Facebook 用户的所有资产（Pixels、账户、粉丝页、Catalog）
  */
-export const syncFacebookUserAssets = async (fbUserId: string, accessToken: string, tokenId?: string) => {
+export const syncFacebookUserAssets = async (
+  fbUserId: string,
+  accessToken: string,
+  tokenId?: string,
+  organizationId?: any,
+) => {
   logger.info(`[FacebookUser] Starting sync for user ${fbUserId}`)
+  const userFilter = buildFacebookUserFilter(fbUserId, { tokenId, organizationId })
   
   try {
     // 更新同步状态
     await FacebookUser.findOneAndUpdate(
-      { fbUserId },
+      userFilter,
       { 
         fbUserId,
         tokenId,
+        ...(organizationId && { organizationId }),
         syncStatus: 'syncing',
         $unset: { syncError: 1 }
       },
@@ -111,10 +133,11 @@ export const syncFacebookUserAssets = async (fbUserId: string, accessToken: stri
     
     // 4. 保存到数据库
     const result = await FacebookUser.findOneAndUpdate(
-      { fbUserId },
+      userFilter,
       {
         fbUserId,
         tokenId,
+        ...(organizationId && { organizationId }),
         pixels: Array.from(pixelMap.values()),
         adAccounts: accounts.map(acc => ({
           accountId: acc.account_id || acc.id?.replace('act_', ''),
@@ -138,7 +161,7 @@ export const syncFacebookUserAssets = async (fbUserId: string, accessToken: stri
     logger.error(`[FacebookUser] Sync failed for ${fbUserId}:`, error)
     
     await FacebookUser.findOneAndUpdate(
-      { fbUserId },
+      userFilter,
       { 
         syncStatus: 'failed',
         syncError: error.message,
@@ -152,24 +175,24 @@ export const syncFacebookUserAssets = async (fbUserId: string, accessToken: stri
 /**
  * 获取缓存的 Pixels
  */
-export const getCachedPixels = async (fbUserId: string) => {
-  const user = await FacebookUser.findOne({ fbUserId })
+export const getCachedPixels = async (fbUserId: string, scope: FacebookUserScope = {}) => {
+  const user = await FacebookUser.findOne(buildFacebookUserFilter(fbUserId, scope))
   return user?.pixels || []
 }
 
 /**
  * 获取缓存的账户
  */
-export const getCachedAccounts = async (fbUserId: string) => {
-  const user = await FacebookUser.findOne({ fbUserId })
+export const getCachedAccounts = async (fbUserId: string, scope: FacebookUserScope = {}) => {
+  const user = await FacebookUser.findOne(buildFacebookUserFilter(fbUserId, scope))
   return user?.adAccounts || []
 }
 
 /**
  * 获取缓存的粉丝页
  */
-export const getCachedPages = async (fbUserId: string, accountId?: string) => {
-  const user = await FacebookUser.findOne({ fbUserId })
+export const getCachedPages = async (fbUserId: string, accountId?: string, scope: FacebookUserScope = {}) => {
+  const user = await FacebookUser.findOne(buildFacebookUserFilter(fbUserId, scope))
   if (!user?.pages) return []
   
   if (accountId) {
@@ -185,16 +208,16 @@ export const getCachedPages = async (fbUserId: string, accountId?: string) => {
 /**
  * 获取缓存的 Catalogs
  */
-export const getCachedCatalogs = async (fbUserId: string) => {
-  const user = await FacebookUser.findOne({ fbUserId })
+export const getCachedCatalogs = async (fbUserId: string, scope: FacebookUserScope = {}) => {
+  const user = await FacebookUser.findOne(buildFacebookUserFilter(fbUserId, scope))
   return user?.productCatalogs || []
 }
 
 /**
  * 获取同步状态
  */
-export const getSyncStatus = async (fbUserId: string) => {
-  const user = await FacebookUser.findOne({ fbUserId })
+export const getSyncStatus = async (fbUserId: string, scope: FacebookUserScope = {}) => {
+  const user = await FacebookUser.findOne(buildFacebookUserFilter(fbUserId, scope))
   return {
     status: user?.syncStatus || 'pending',
     lastSyncedAt: user?.lastSyncedAt,

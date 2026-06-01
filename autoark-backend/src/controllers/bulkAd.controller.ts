@@ -1069,7 +1069,8 @@ export const handleAuthCallback = async (req: Request, res: Response) => {
     facebookUserService.syncFacebookUserAssets(
       result.fbUserId, 
       result.accessToken,
-      result.tokenId
+      result.tokenId,
+      organizationId,
     ).catch((err: any) => {
       logger.error('[BulkAd OAuth] Failed to sync Facebook user assets:', err)
     })
@@ -1201,12 +1202,14 @@ export const getAuthDiagnostics = async (req: Request, res: Response) => {
     if (tokens.length > 0) {
       const tokenIds = tokens.map(token => token._id).filter(Boolean)
       const fbUserIds = tokens.map(token => token.fbUserId).filter(Boolean)
-      users = await FacebookUser.find({
-        $or: [
-          { tokenId: { $in: tokenIds } },
-          { fbUserId: { $in: fbUserIds } },
-        ],
-      }).lean()
+      const userFilters: any[] = tokenIds.length > 0 ? [{ tokenId: { $in: tokenIds } }] : []
+      if (fbUserIds.length > 0) {
+        userFilters.push({
+          fbUserId: { $in: fbUserIds },
+          ...(req.user.organizationId && { organizationId: req.user.organizationId }),
+        })
+      }
+      users = await FacebookUser.find({ $or: userFilters }).lean()
     }
 
     res.json({
@@ -1441,7 +1444,10 @@ export const getCachedPixels = async (req: Request, res: Response) => {
     
     for (const fbToken of fbTokens) {
       try {
-        const pixels = await facebookUserService.getCachedPixels(fbToken.fbUserId)
+        const pixels = await facebookUserService.getCachedPixels(fbToken.fbUserId, {
+          tokenId: fbToken._id?.toString(),
+          organizationId: fbToken.organizationId,
+        })
         
         for (const p of pixels) {
           const existing = pixelMap.get(p.pixelId)
@@ -1504,7 +1510,10 @@ export const getCachedCatalogs = async (req: Request, res: Response) => {
 
     for (const fbToken of fbTokens) {
       try {
-        const catalogs = await facebookUserService.getCachedCatalogs(fbToken.fbUserId)
+        const catalogs = await facebookUserService.getCachedCatalogs(fbToken.fbUserId, {
+          tokenId: fbToken._id?.toString(),
+          organizationId: fbToken.organizationId,
+        })
         for (const c of catalogs) {
           if (!catalogMap.has(c.catalogId)) {
             catalogMap.set(c.catalogId, {
@@ -1537,7 +1546,10 @@ export const getPixelSyncStatus = async (req: Request, res: Response) => {
       return res.status(401).json({ success: false, error: '未授权 Facebook 账号' })
     }
     
-    const status = await facebookUserService.getSyncStatus(fbToken.fbUserId)
+    const status = await facebookUserService.getSyncStatus(fbToken.fbUserId, {
+      tokenId: fbToken._id?.toString(),
+      organizationId: fbToken.organizationId,
+    })
     
     res.json({ success: true, data: status })
   } catch (error: any) {
@@ -1561,7 +1573,8 @@ export const resyncFacebookAssets = async (req: Request, res: Response) => {
     facebookUserService.syncFacebookUserAssets(
       fbToken.fbUserId, 
       fbToken.token,
-      fbToken._id.toString()
+      fbToken._id.toString(),
+      fbToken.organizationId,
     ).catch((err: any) => {
       logger.error('[BulkAd] Resync failed:', err)
     })

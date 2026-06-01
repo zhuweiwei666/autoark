@@ -391,13 +391,15 @@ export async function getCommercialReadiness(
 
   const tokenIds = activeTokenDocs.map((token: any) => token._id).filter(Boolean)
   const fbUserIds = activeTokenDocs.map((token: any) => token.fbUserId).filter(Boolean)
+  const facebookUserFilters: any[] = tokenIds.length > 0 ? [{ tokenId: { $in: tokenIds } }] : []
+  if (fbUserIds.length > 0) {
+    facebookUserFilters.push({
+      fbUserId: { $in: fbUserIds },
+      ...(organizationId && { organizationId: objectIdValue(organizationId) }),
+    })
+  }
   const facebookUsers = activeTokenDocs.length > 0
-    ? await FacebookUser.find({
-      $or: [
-        { tokenId: { $in: tokenIds } },
-        { fbUserId: { $in: fbUserIds } },
-      ],
-    }).lean()
+    ? await FacebookUser.find({ $or: facebookUserFilters }).lean()
     : []
   const facebookAssets = buildFacebookAssetDiagnostics({
     tokens: activeTokenDocs,

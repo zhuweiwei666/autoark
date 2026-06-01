@@ -91,12 +91,14 @@ const buildFacebookAssetSnapshot = async (draft: any) => {
 
   const tokenIds = tokens.map(token => token._id).filter(Boolean)
   const fbUserIds = tokens.map(token => token.fbUserId).filter(Boolean)
-  const users: any[] = await FacebookUser.find({
-    $or: [
-      { tokenId: { $in: tokenIds } },
-      { fbUserId: { $in: fbUserIds } },
-    ],
-  }).lean()
+  const userFilters: any[] = [{ tokenId: { $in: tokenIds } }]
+  if (fbUserIds.length > 0) {
+    userFilters.push({
+      fbUserId: { $in: fbUserIds },
+      ...(draft.organizationId && { organizationId: draft.organizationId }),
+    })
+  }
+  const users: any[] = await FacebookUser.find({ $or: userFilters }).lean()
 
   const pageAccountPairs = new Set<string>()
   const pixelAccountPairs = new Set<string>()

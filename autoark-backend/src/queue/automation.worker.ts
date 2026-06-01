@@ -96,13 +96,15 @@ export const initAutomationWorker = () => {
             if (!fbUserId) throw new Error('fbUserId is required')
 
             let token: string | undefined = payload.accessToken
+            let organizationId = payload.organizationId
             if (!token && tokenId) {
               const t: any = await FbToken.findById(tokenId).lean()
               token = t?.token
+              organizationId = organizationId || t?.organizationId
             }
             if (!token) throw new Error('accessToken or tokenId is required')
 
-            result = await syncFacebookUserAssets(fbUserId, token, tokenId)
+            result = await syncFacebookUserAssets(fbUserId, token, tokenId, organizationId)
             break
           }
           default:
@@ -138,4 +140,3 @@ export const initAutomationWorker = () => {
 }
 
 export default automationWorker
-

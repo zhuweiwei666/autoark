@@ -36,6 +36,7 @@ const ownerCollections: CollectionPlan[] = [
   { name: 'materials', label: 'Material library' },
   { name: 'products', label: 'Products' },
   { name: 'fbtokens', label: 'Facebook tokens' },
+  { name: 'facebookusers', label: 'Facebook user asset cache' },
   { name: 'addrafts', label: 'Ad drafts' },
   { name: 'adtasks', label: 'Ad tasks' },
   { name: 'targetingpackages', label: 'Targeting packages' },
@@ -77,6 +78,19 @@ const indexPlans: IndexPlan[] = [
   {
     collection: 'fbtokens',
     dropNames: [],
+    key: { fbUserId: 1, organizationId: 1 },
+    options: {
+      unique: true,
+      name: 'fbUserId_1_organizationId_1',
+      partialFilterExpression: {
+        fbUserId: { $exists: true },
+        organizationId: { $exists: true },
+      },
+    },
+  },
+  {
+    collection: 'facebookusers',
+    dropNames: ['fbUserId_1'],
     key: { fbUserId: 1, organizationId: 1 },
     options: {
       unique: true,
@@ -214,13 +228,26 @@ async function buildLookupMaps(db: mongoose.mongo.Db) {
     accountOrgById.get(accountId)!.add(orgId)
   }
 
-  return { userOrgById, accountOrgById }
+  const tokens = await db.collection('fbtokens').find(
+    { organizationId: { $exists: true, $ne: null } },
+    { projection: { _id: 1, organizationId: 1 } },
+  ).toArray()
+
+  const tokenOrgById = new Map<string, string>()
+  for (const token of tokens) {
+    const tokenId = asId(token._id)
+    const orgId = asId(token.organizationId)
+    if (tokenId && orgId) tokenOrgById.set(tokenId, orgId)
+  }
+
+  return { userOrgById, accountOrgById, tokenOrgById }
 }
 
 function inferOrganizationId(
   doc: any,
   userOrgById: Map<string, string>,
   accountOrgById: Map<string, Set<string>>,
+  tokenOrgById: Map<string, string>,
 ): { orgId?: string; reason: string } {
   const byUser = unique([
     userOrgById.get(String(doc.createdBy || '')),
@@ -233,6 +260,18 @@ function inferOrganizationId(
 
   if (byUser.length > 1) {
     return { reason: `ambiguous user ownership: ${byUser.join(',')}` }
+  }
+
+  const byToken = unique([
+    tokenOrgById.get(asId(doc.tokenId) || ''),
+  ])
+
+  if (byToken.length === 1) {
+    return { orgId: byToken[0], reason: 'token ownership' }
+  }
+
+  if (byToken.length > 1) {
+    return { reason: `ambiguous token ownership: ${byToken.join(',')}` }
   }
 
   const byAccount = unique(
@@ -255,6 +294,7 @@ async function backfillOwnerCollection(
   plan: CollectionPlan,
   userOrgById: Map<string, string>,
   accountOrgById: Map<string, Set<string>>,
+  tokenOrgById: Map<string, string>,
 ) {
   if (!(await collectionExists(db, plan.name))) {
     console.log(`- ${plan.label}: collection not found, skip`)
@@ -270,7 +310,7 @@ async function backfillOwnerCollection(
 
   for await (const doc of cursor) {
     scanned += 1
-    const inferred = inferOrganizationId(doc, userOrgById, accountOrgById)
+    const inferred = inferOrganizationId(doc, userOrgById, accountOrgById, tokenOrgById)
     if (!inferred.orgId) {
       skipped += 1
       if (examples.length < 5) examples.push(`${asId(doc._id)} (${inferred.reason})`)
@@ -457,11 +497,11 @@ async function main() {
   const db = mongoose.connection.db
   if (!db) throw new Error('MongoDB connection is not ready')
 
-  const { userOrgById, accountOrgById } = await buildLookupMaps(db)
-  console.log(`Loaded ownership maps: users=${userOrgById.size}, accounts=${accountOrgById.size}`)
+  const { userOrgById, accountOrgById, tokenOrgById } = await buildLookupMaps(db)
+  console.log(`Loaded ownership maps: users=${userOrgById.size}, accounts=${accountOrgById.size}, tokens=${tokenOrgById.size}`)
 
   for (const plan of ownerCollections) {
-    await backfillOwnerCollection(db, plan, userOrgById, accountOrgById)
+    await backfillOwnerCollection(db, plan, userOrgById, accountOrgById, tokenOrgById)
   }
 
   for (const plan of indexPlans) {

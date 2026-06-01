@@ -28,8 +28,11 @@ const catalogSchema = new mongoose.Schema({
 const facebookUserSchema = new mongoose.Schema(
   {
     // Facebook 用户 ID
-    fbUserId: { type: String, required: true, unique: true, index: true },
+    fbUserId: { type: String, required: true, index: true },
     fbUserName: { type: String },
+
+    // 组织隔离：同一个 Facebook 用户可以分别授权给不同客户组织
+    organizationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Organization', index: true },
     
     // 关联的 Token ID
     tokenId: { type: mongoose.Schema.Types.ObjectId, ref: 'Token' },
@@ -81,6 +84,15 @@ facebookUserSchema.index({ 'pixels.pixelId': 1 })
 facebookUserSchema.index({ 'adAccounts.accountId': 1 })
 facebookUserSchema.index({ 'productCatalogs.catalogId': 1 })
 facebookUserSchema.index({ tokenId: 1 })
+facebookUserSchema.index(
+  { fbUserId: 1, organizationId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      fbUserId: { $exists: true },
+      organizationId: { $exists: true },
+    },
+  },
+)
 
 export default mongoose.model('FacebookUser', facebookUserSchema)
-
