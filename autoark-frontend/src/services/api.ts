@@ -282,12 +282,14 @@ export interface AuditLogEntry {
 }
 
 export async function getAuditLogs(params?: {
+  organizationId?: string
   category?: string
   action?: string
   status?: string
   limit?: number
 }): Promise<{ success: boolean; data: AuditLogEntry[] }> {
   const queryParams = new URLSearchParams()
+  if (params?.organizationId) queryParams.append('organizationId', params.organizationId)
   if (params?.category) queryParams.append('category', params.category)
   if (params?.action) queryParams.append('action', params.action)
   if (params?.status) queryParams.append('status', params.status)

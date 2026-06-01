@@ -5,6 +5,7 @@ import {
   ArrowRight,
   CheckCircle,
   Clock,
+  ClockCounterClockwise,
   FolderOpen,
   Lightning,
   ShieldCheck,
@@ -14,10 +15,12 @@ import {
   XCircle,
 } from "@phosphor-icons/react";
 import {
+  getAuditLogs,
   getCommercialOrganizationReadiness,
   getCommercialReadiness,
   getCommercialSupportPackage,
   getOrganizations,
+  type AuditLogEntry,
   type CommercialReadiness,
   type CommercialSupportPackage,
 } from "../services/api";
@@ -110,6 +113,45 @@ const featureLabels: Record<string, string> = {
   automation_agent: "投放 Agent",
   team_management: "团队管理",
   audit_ready: "审计就绪",
+};
+
+const auditStatusTone: Record<string, string> = {
+  success: "bg-[#e7f3ef] text-[#0f766e] border-[#b7e3d5]",
+  failed: "bg-[#fff1f2] text-[#b4233a] border-[#fecdd3]",
+  warning: "bg-[#fff7ed] text-[#b45309] border-[#fed7aa]",
+};
+
+const auditStatusLabels: Record<string, string> = {
+  success: "成功",
+  failed: "失败",
+  warning: "警告",
+};
+
+const formatDateTime = (value?: string) => {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+};
+
+const metadataNumber = (log: AuditLogEntry, key: string) => {
+  const value = log.metadata?.[key];
+  if (typeof value === "number") return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+};
+
+const metadataText = (log: AuditLogEntry, key: string) => {
+  const value = log.metadata?.[key];
+  return typeof value === "string" ? value : undefined;
 };
 
 function ReadinessGauge({ score }: { score: number }) {
@@ -294,16 +336,33 @@ export default function CommercialCenterPage() {
     queryFn: () => getCommercialOrganizationReadiness(),
     enabled: isSuperAdmin,
   });
+  const {
+    data: supportAuditData,
+    isLoading: supportAuditLoading,
+    error: supportAuditError,
+    refetch: refetchSupportAuditLogs,
+    isFetching: supportAuditFetching,
+  } = useQuery({
+    queryKey: ["commercial-support-audit", selectedOrganizationId || "platform"],
+    queryFn: () => getAuditLogs({
+      organizationId: selectedOrganizationId || undefined,
+      category: "commercial",
+      action: "commercial.support_package.generate",
+      limit: 8,
+    }),
+  });
 
   const readiness = data?.data;
   const organizations = organizationsData?.data || [];
   const organizationReadiness = organizationReadinessData?.data || [];
+  const supportAuditLogs = supportAuditData?.data || [];
   const generateSupportPackage = async () => {
     setSupportPackageLoading(true);
     setSupportPackageError("");
     try {
       const result = await getCommercialSupportPackage(selectedOrganizationId || undefined);
       setSupportPackage(result.data);
+      await refetchSupportAuditLogs();
     } catch (err) {
       setSupportPackageError((err as Error)?.message || "生成支持包失败");
     } finally {
@@ -552,6 +611,111 @@ export default function CommercialCenterPage() {
                 </div>
               </div>
             </div>
+          </div>
+        )}
+      </section>
+
+      <section className="mt-6 rounded-lg border border-zinc-200 bg-white p-5 shadow-[0_18px_38px_-34px_rgba(24,24,27,0.72)]">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-black text-zinc-950">支持包历史</h2>
+            <p className="mt-1 text-sm font-semibold text-zinc-500">
+              记录最近生成的客户支持包，便于交付、客服和运营对齐排障口径。
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => refetchSupportAuditLogs()}
+              disabled={supportAuditFetching}
+              className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-bold text-zinc-700 hover:border-zinc-400 disabled:opacity-60"
+            >
+              {supportAuditFetching ? "刷新中" : "刷新历史"}
+            </button>
+            <Link
+              to="/audit-logs"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-bold text-zinc-900 hover:border-zinc-400"
+            >
+              全部审计
+              <ArrowRight size={14} weight="bold" />
+            </Link>
+          </div>
+        </div>
+        {supportAuditLoading ? (
+          <div className="flex h-32 items-center justify-center text-sm font-bold text-zinc-500">
+            正在加载支持包历史...
+          </div>
+        ) : supportAuditError ? (
+          <div className="rounded-lg border border-[#fecdd3] bg-[#fff1f2] p-3 text-sm font-bold text-[#9f1239]">
+            获取支持包历史失败：{(supportAuditError as Error).message}
+          </div>
+        ) : supportAuditLogs.length === 0 ? (
+          <div className="flex h-32 flex-col items-center justify-center text-sm font-bold text-zinc-500">
+            <ClockCounterClockwise size={24} className="mb-2 text-zinc-400" />
+            暂无支持包生成记录
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-zinc-100 text-left text-sm">
+              <thead>
+                <tr className="text-xs font-black uppercase text-zinc-500">
+                  <th className="py-3 pr-4">时间</th>
+                  <th className="px-4 py-3">支持包</th>
+                  <th className="px-4 py-3">状态</th>
+                  <th className="px-4 py-3">资产摘要</th>
+                  <th className="py-3 pl-4">操作者</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-zinc-100">
+                {supportAuditLogs.map((log) => {
+                  const statusTone = auditStatusTone[log.status] || auditStatusTone.warning;
+                  const score = metadataNumber(log, "readinessScore");
+                  const stateLabel = metadataText(log, "readinessLabel");
+                  const organizationName = metadataText(log, "organizationName") || readiness.scope.organizationName;
+                  const readyAccountCount = metadataNumber(log, "readyAccountCount");
+                  const tokenCount = metadataNumber(log, "tokenCount");
+                  return (
+                    <tr key={log._id} className="align-top">
+                      <td className="whitespace-nowrap py-4 pr-4 font-mono text-xs font-bold text-zinc-500">
+                        {formatDateTime(log.createdAt)}
+                      </td>
+                      <td className="px-4 py-4">
+                        <div className="font-black text-zinc-950">{organizationName}</div>
+                        <div className="mt-1 max-w-md text-sm font-semibold leading-6 text-zinc-500">
+                          {log.summary || log.reason || "-"}
+                        </div>
+                        {log.targetId && (
+                          <div className="mt-2 font-mono text-[11px] font-bold text-zinc-400">
+                            {log.targetId}
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-4 py-4">
+                        <span className={`inline-flex rounded-md border px-2 py-0.5 text-xs font-black ${statusTone}`}>
+                          {auditStatusLabels[log.status] || log.status}
+                        </span>
+                        <div className="mt-2 text-xs font-bold text-zinc-500">
+                          {stateLabel || (log.status === "failed" ? "生成失败" : "已生成")}
+                        </div>
+                        {typeof score === "number" && (
+                          <div className="mt-1 font-mono text-lg font-black text-zinc-950">{score}</div>
+                        )}
+                      </td>
+                      <td className="px-4 py-4 font-bold text-zinc-700">
+                        <div>{typeof readyAccountCount === "number" ? readyAccountCount : "-"} 可投放账户</div>
+                        <div className="mt-1 text-xs text-zinc-500">
+                          {typeof tokenCount === "number" ? tokenCount : "-"} 授权 Token
+                        </div>
+                      </td>
+                      <td className="py-4 pl-4 font-bold text-zinc-700">
+                        <div>{log.username || log.userId || "anonymous"}</div>
+                        {log.userRole && <div className="mt-1 text-xs text-zinc-500">{log.userRole}</div>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         )}
       </section>

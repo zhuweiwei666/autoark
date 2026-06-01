@@ -10,6 +10,7 @@ const categories = [
   { value: "organization", label: "组织管理" },
   { value: "bulk_ad", label: "批量投放" },
   { value: "facebook_app", label: "Facebook App" },
+  { value: "commercial", label: "商用中心" },
 ];
 
 const statuses = [
@@ -47,6 +48,7 @@ const actionLabel: Record<string, string> = {
   "facebook_app.delete": "删除 Facebook App",
   "facebook_app.validate": "验证 Facebook App",
   "facebook_app.compliance_update": "更新 App 合规",
+  "commercial.support_package.generate": "生成客户支持包",
 };
 
 const formatTime = (value: string) => {
