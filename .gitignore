@@ -1,1 +1,7 @@
 autoark-backend/node_modules/
+node_modules/
+**/node_modules/
+**/dist/
+deploy/.env
+deploy/certbot/
+deploy/tls/
