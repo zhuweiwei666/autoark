@@ -5,6 +5,7 @@ import { UserRole } from '../models/User'
 import { JwtPayload } from '../utils/jwt'
 import logger from '../utils/logger'
 import { objectIdValue } from '../utils/accessControl'
+import { redactSensitiveData } from '../utils/sensitiveData'
 
 type AuditStatus = 'success' | 'failed' | 'warning'
 
@@ -51,12 +52,12 @@ export async function writeAuditLog(req: Request, input: AuditLogInput): Promise
       status: input.status || 'success',
       targetType: input.targetType,
       targetId: input.targetId,
-      summary: input.summary,
-      before: input.before,
-      after: input.after,
-      reason: input.reason,
-      related: input.related,
-      metadata: input.metadata,
+      summary: redactSensitiveData(input.summary),
+      before: redactSensitiveData(input.before),
+      after: redactSensitiveData(input.after),
+      reason: redactSensitiveData(input.reason),
+      related: redactSensitiveData(input.related),
+      metadata: redactSensitiveData(input.metadata),
       requestId: req.requestId,
       ip: req.ip,
       userAgent: req.get('user-agent'),
