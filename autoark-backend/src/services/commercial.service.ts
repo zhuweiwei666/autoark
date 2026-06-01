@@ -344,10 +344,10 @@ export async function getCommercialReadiness(
     }),
   ])
 
-  const plan = getEffectivePlan(organization)
-  const limits = getEffectiveLimits(organization)
-  const features = getEffectiveFeatures(organization)
-  const billingStatus = organization?.billing?.status || (
+  const plan = mode === 'platform' ? OrganizationPlan.ENTERPRISE : getEffectivePlan(organization)
+  const limits = mode === 'platform' ? PLAN_DEFAULTS[OrganizationPlan.ENTERPRISE].limits : getEffectiveLimits(organization)
+  const features = mode === 'platform' ? COMMERCIAL_FEATURES : getEffectiveFeatures(organization)
+  const billingStatus = mode === 'platform' ? OrganizationBillingStatus.ACTIVE : organization?.billing?.status || (
     plan === OrganizationPlan.TRIAL
       ? OrganizationBillingStatus.TRIALING
       : OrganizationBillingStatus.ACTIVE
@@ -471,9 +471,9 @@ export async function getCommercialReadiness(
       organizationName: organization?.name || 'AutoArk Platform',
     },
     plan: {
-      code: mode === 'platform' ? OrganizationPlan.ENTERPRISE : plan,
+      code: plan,
       label: mode === 'platform' ? '平台运营' : PLAN_DEFAULTS[plan].label,
-      billingStatus: mode === 'platform' ? OrganizationBillingStatus.ACTIVE : billingStatus,
+      billingStatus,
       trialEndsAt: organization?.billing?.trialEndsAt,
       currentPeriodEndsAt: organization?.billing?.currentPeriodEndsAt,
       features,

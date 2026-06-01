@@ -1,10 +1,20 @@
+import Account from '../src/models/Account'
 import AdTask from '../src/models/AdTask'
+import AdDraft from '../src/models/AdDraft'
+import FacebookApp from '../src/models/FacebookApp'
+import FbToken from '../src/models/FbToken'
+import Material from '../src/models/Material'
 import Organization, {
   OrganizationBillingStatus,
   OrganizationPlan,
   OrganizationStatus,
 } from '../src/models/Organization'
-import { assertBulkAdPublishAllowed, CommercialLimitError } from '../src/services/commercial.service'
+import User, { UserRole } from '../src/models/User'
+import {
+  assertBulkAdPublishAllowed,
+  CommercialLimitError,
+  getCommercialReadiness,
+} from '../src/services/commercial.service'
 
 const organizationId = '665000000000000000000001'
 
@@ -83,5 +93,35 @@ describe('commercial publish limits', () => {
       monthlyTaskCount: 12,
       requestedAccounts: 2,
     })
+  })
+
+  it('uses unlimited enterprise limits in platform readiness mode', async () => {
+    jest.spyOn(User, 'countDocuments')
+      .mockResolvedValueOnce(2 as any)
+      .mockResolvedValueOnce(2 as any)
+    jest.spyOn(Account, 'countDocuments').mockResolvedValue(3 as any)
+    jest.spyOn(FbToken, 'countDocuments').mockResolvedValue(1 as any)
+    jest.spyOn(Material, 'countDocuments').mockResolvedValue(10 as any)
+    jest.spyOn(AdDraft, 'countDocuments').mockResolvedValue(1 as any)
+    jest.spyOn(AdTask, 'countDocuments')
+      .mockResolvedValueOnce(4 as any)
+      .mockResolvedValueOnce(2 as any)
+      .mockResolvedValueOnce(0 as any)
+      .mockResolvedValueOnce(1 as any)
+      .mockResolvedValueOnce(4 as any)
+    jest.spyOn(FacebookApp, 'countDocuments')
+      .mockResolvedValueOnce(1 as any)
+      .mockResolvedValueOnce(1 as any)
+
+    const readiness = await getCommercialReadiness({
+      userId: 'admin',
+      role: UserRole.SUPER_ADMIN,
+    } as any)
+
+    expect(readiness.plan.code).toBe(OrganizationPlan.ENTERPRISE)
+    expect(readiness.plan.limits.monthlyTaskLimit).toBeNull()
+    expect(readiness.plan.limits.maxConcurrentTasks).toBeNull()
+    expect(readiness.usage.monthlyTasks.limit).toBeNull()
+    expect(readiness.usage.concurrentTasks.limit).toBeNull()
   })
 })
