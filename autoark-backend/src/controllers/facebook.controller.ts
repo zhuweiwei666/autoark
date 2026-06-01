@@ -318,7 +318,26 @@ export const getCountriesList = async (
         endDate: req.query.endDate as string | undefined,
     }
 
-    const result = await facebookCountriesService.getCountries(filters, { page, limit, sortBy, sortOrder })
+    const accountIds = await getUserAccountIds(req)
+    const tokenFilter: any = {}
+    if (req.user?.role === UserRole.ORG_ADMIN && req.user.organizationId) {
+      tokenFilter.organizationId = req.user.organizationId
+    } else if (req.user?.role !== UserRole.SUPER_ADMIN) {
+      tokenFilter.userId = req.user?.userId
+    }
+
+    const result = await facebookCountriesService.getCountries(
+      filters,
+      { page, limit, sortBy, sortOrder },
+      accountIds === null
+        ? {}
+        : {
+            accountIds,
+            tokenFilter,
+            allowCacheFallback: false,
+            allowCacheWrite: false,
+          },
+    )
     res.json({
       success: true,
       ...result

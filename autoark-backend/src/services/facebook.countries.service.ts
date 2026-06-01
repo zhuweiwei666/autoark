@@ -5,6 +5,7 @@ import { CountrySummary } from '../models/Summary'
 import logger from '../utils/logger'
 import dayjs from 'dayjs'
 import { fetchInsights } from '../integration/facebook/insights.api'
+import { getAccountIdsForQuery, normalizeForApi } from '../utils/accountId'
 
 // 国家代码到名称的映射
 const COUNTRY_NAMES: Record<string, string> = {
@@ -26,17 +27,34 @@ const COUNTRY_NAMES: Record<string, string> = {
  * 获取国家数据 - 直接从 Facebook API 获取实时数据（与广告系列页面一致）
  * 数据会缓存到 CountrySummary，API 失败时回退到缓存
  */
-export const getCountries = async (filters: any = {}, pagination: { page: number, limit: number, sortBy: string, sortOrder: 'asc' | 'desc' }) => {
+type CountryAccessScope = {
+    accountIds?: string[] | null
+    tokenFilter?: any
+    allowCacheFallback?: boolean
+    allowCacheWrite?: boolean
+}
+
+const emptyCountryResult = (pagination: { page: number, limit: number }) => ({
+    data: [],
+    pagination: { page: pagination.page, limit: pagination.limit, total: 0, pages: 0 },
+})
+
+export const getCountries = async (
+    filters: any = {},
+    pagination: { page: number, limit: number, sortBy: string, sortOrder: 'asc' | 'desc' },
+    accessScope: CountryAccessScope = {},
+) => {
     const startTime = Date.now()
     const today = dayjs().format('YYYY-MM-DD')
     const startDate = filters.startDate || today
     const endDate = filters.endDate || startDate
+    const allowCacheFallback = accessScope.allowCacheFallback !== false
     
     try {
         // ========== 优先从 Facebook API 获取实时数据 ==========
         logger.info(`[getCountries] Fetching from Facebook API for ${startDate} to ${endDate}...`)
         
-        const result = await getCountriesFromFacebookAPI(filters, pagination)
+        const result = await getCountriesFromFacebookAPI(filters, pagination, accessScope)
         
         if (result.data.length > 0) {
             logger.info(`[getCountries] Got ${result.pagination.total} countries from Facebook API in ${Date.now() - startTime}ms`)
@@ -44,11 +62,17 @@ export const getCountries = async (filters: any = {}, pagination: { page: number
         }
         
         // ========== API 无数据时，回退到预聚合缓存 ==========
+        if (!allowCacheFallback) {
+            return result
+        }
         logger.info(`[getCountries] No data from Facebook API, falling back to cache...`)
         return await getCountriesFromCache(startDate, endDate, pagination)
         
     } catch (error: any) {
         logger.error(`[getCountries] Facebook API error: ${error.message}, falling back to cache...`)
+        if (!allowCacheFallback) {
+            return emptyCountryResult(pagination)
+        }
         
         // API 出错时回退到缓存
         try {
@@ -153,11 +177,32 @@ async function getCountriesFromCache(startDate: string, endDate: string, paginat
 /**
  * 从 Facebook API 获取国家数据（慢速后备方案）
  */
-async function getCountriesFromFacebookAPI(filters: any, pagination: { page: number, limit: number, sortBy: string, sortOrder: 'asc' | 'desc' }) {
+async function getCountriesFromFacebookAPI(
+    filters: any,
+    pagination: { page: number, limit: number, sortBy: string, sortOrder: 'asc' | 'desc' },
+    accessScope: CountryAccessScope,
+) {
     // 获取所有账户
     let accountQuery: any = {}
-    if (filters.accountId) {
-        accountQuery.accountId = filters.accountId
+    const scopedAccountIds = Array.isArray(accessScope.accountIds)
+        ? getAccountIdsForQuery(accessScope.accountIds)
+        : null
+    if (scopedAccountIds && scopedAccountIds.length === 0) {
+        return emptyCountryResult(pagination)
+    }
+
+    const requestedAccountIds = filters.accountId
+        ? getAccountIdsForQuery([String(filters.accountId)])
+        : []
+
+    if (requestedAccountIds.length > 0 && scopedAccountIds && !requestedAccountIds.some(id => scopedAccountIds.includes(id))) {
+        return emptyCountryResult(pagination)
+    }
+
+    if (requestedAccountIds.length > 0) {
+        accountQuery.accountId = { $in: requestedAccountIds }
+    } else if (scopedAccountIds) {
+        accountQuery.accountId = { $in: scopedAccountIds }
     }
     const accounts = await Account.find(accountQuery).lean()
     
@@ -169,7 +214,7 @@ async function getCountriesFromFacebookAPI(filters: any, pagination: { page: num
     }
 
     // 获取所有活跃的 token
-    const tokens = await FbToken.find({ status: 'active' }).lean()
+    const tokens = await FbToken.find({ status: 'active', ...(accessScope.tokenFilter || {}) }).lean()
     if (tokens.length === 0) {
         return {
             data: [],
@@ -193,18 +238,21 @@ async function getCountriesFromFacebookAPI(filters: any, pagination: { page: num
         mobile_app_install: number,
         campaignIds: Set<string>
     }> = {}
+    const tokenValues = new Set(tokens.map((token: any) => token.token).filter(Boolean))
 
     // 从每个账户获取按国家细分的数据
     for (const account of accounts) {
-        const token = tokens[0]
-        if (!token) continue
+        const accountToken = account.token && tokenValues.has(account.token)
+            ? account.token
+            : tokens[0]?.token
+        if (!accountToken) continue
 
         try {
             const insights = await fetchInsights(
-                `act_${account.accountId}`,
+                normalizeForApi(account.accountId),
                 'campaign',
                 undefined,
-                token.token,
+                accountToken,
                 ['country'],
                 { since: startDate, until: endDate }
             )
@@ -288,37 +336,39 @@ async function getCountriesFromFacebookAPI(filters: any, pagination: { page: num
         }
     }
     
-    // ========== 缓存到 CountrySummary（下次请求将使用缓存）==========
-    try {
-        const bulkOps = countriesWithMetrics.map((data: any) => ({
-            updateOne: {
-                filter: { date: startDate, country: data.country },
-                update: {
-                    $set: {
-                        countryName: data.countryName,
-                        spend: data.spend,
-                        revenue: data.purchase_value,
-                        impressions: data.impressions,
-                        clicks: data.clicks,
-                        installs: data.mobile_app_install,
-                        roas: data.purchase_roas,
-                        ctr: data.ctr * 100, // 存储为百分比格式（与 aggregation 一致）
-                        cpc: data.cpc,
-                        cpm: data.cpm,
-                        campaignCount: data.campaignCount,
-                        lastUpdated: new Date(),
-                    }
-                },
-                upsert: true,
+    if (accessScope.allowCacheWrite !== false) {
+        // ========== 缓存到 CountrySummary（下次请求将使用缓存）==========
+        try {
+            const bulkOps = countriesWithMetrics.map((data: any) => ({
+                updateOne: {
+                    filter: { date: startDate, country: data.country },
+                    update: {
+                        $set: {
+                            countryName: data.countryName,
+                            spend: data.spend,
+                            revenue: data.purchase_value,
+                            impressions: data.impressions,
+                            clicks: data.clicks,
+                            installs: data.mobile_app_install,
+                            roas: data.purchase_roas,
+                            ctr: data.ctr * 100, // 存储为百分比格式（与 aggregation 一致）
+                            cpc: data.cpc,
+                            cpm: data.cpm,
+                            campaignCount: data.campaignCount,
+                            lastUpdated: new Date(),
+                        }
+                    },
+                    upsert: true,
+                }
+            }))
+            
+            if (bulkOps.length > 0) {
+                await CountrySummary.bulkWrite(bulkOps)
+                logger.info(`[getCountries] Cached ${bulkOps.length} countries to CountrySummary for ${startDate}`)
             }
-        }))
-        
-        if (bulkOps.length > 0) {
-            await CountrySummary.bulkWrite(bulkOps)
-            logger.info(`[getCountries] Cached ${bulkOps.length} countries to CountrySummary for ${startDate}`)
+        } catch (cacheError: any) {
+            logger.warn(`[getCountries] Failed to cache country data: ${cacheError.message}`)
         }
-    } catch (cacheError: any) {
-        logger.warn(`[getCountries] Failed to cache country data: ${cacheError.message}`)
     }
 
     // 排序
