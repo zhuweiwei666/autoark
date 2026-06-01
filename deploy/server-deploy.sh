@@ -8,6 +8,42 @@ TLS_CERT_NAME="${TLS_CERT_NAME:-autoark.work}"
 TLS_DOMAINS="${TLS_DOMAINS:-app.autoark.work api.autoark.work}"
 TLS_EMAIL="${TLS_EMAIL:-}"
 
+install_renew_timer() {
+  if [ "$(id -u)" -ne 0 ] || ! command -v systemctl >/dev/null 2>&1; then
+    return
+  fi
+
+  cat > /etc/systemd/system/autoark-cert-renew.service <<EOF_SERVICE
+[Unit]
+Description=Renew AutoArk TLS certificate
+Wants=docker.service
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=$APP_DIR
+Environment="APP_DIR=$APP_DIR"
+Environment="TLS_CERT_NAME=$TLS_CERT_NAME"
+ExecStart=/bin/bash $APP_DIR/deploy/server-renew-cert.sh
+EOF_SERVICE
+
+  cat > /etc/systemd/system/autoark-cert-renew.timer <<EOF_TIMER
+[Unit]
+Description=Daily AutoArk TLS certificate renewal
+
+[Timer]
+OnCalendar=*-*-* 03:17:00
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF_TIMER
+
+  systemctl daemon-reload
+  systemctl enable --now autoark-cert-renew.timer >/dev/null
+}
+
 if ! command -v docker >/dev/null 2>&1; then
   echo "Docker is required. Run deploy/server-bootstrap.sh first."
   exit 1
@@ -88,6 +124,8 @@ if [ "${AUTOARK_ENABLE_LETSENCRYPT:-true}" = "true" ]; then
     echo "Warning: Let's Encrypt certificate issuance failed; gateway is running with the temporary certificate."
   fi
 fi
+
+install_renew_timer
 
 "${COMPOSE[@]}" run --rm backend node ensure-super-admin.js
 "${COMPOSE[@]}" ps
