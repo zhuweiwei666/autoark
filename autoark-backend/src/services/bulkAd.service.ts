@@ -33,6 +33,8 @@ import { assertBulkAdPublishAllowed } from './commercial.service'
 
 const MIN_BUDGET = 1
 
+const normalizeAdAccountId = (value: any) => String(value || '').trim().replace(/^act_/i, '')
+
 const normalizeObjectIdList = (values: any[] = []) => {
   const unique = Array.from(new Set(values.map(value => value?.toString()).filter(Boolean)))
   return {
@@ -98,23 +100,26 @@ const buildFacebookAssetSnapshot = async (draft: any) => {
 
   for (const user of users) {
     for (const account of user.adAccounts || []) {
-      if (account.accountId && account.status !== undefined) {
-        adAccountStatuses.set(account.accountId, account.status)
+      const accountId = normalizeAdAccountId(account.accountId)
+      if (accountId && account.status !== undefined) {
+        adAccountStatuses.set(accountId, account.status)
       }
     }
 
     for (const page of user.pages || []) {
       for (const account of page.accounts || []) {
-        if (page.pageId && account.accountId) {
-          pageAccountPairs.add(`${page.pageId}:${account.accountId}`)
+        const accountId = normalizeAdAccountId(account.accountId)
+        if (page.pageId && accountId) {
+          pageAccountPairs.add(`${page.pageId}:${accountId}`)
         }
       }
     }
 
     for (const pixel of user.pixels || []) {
       for (const account of pixel.accounts || []) {
-        if (pixel.pixelId && account.accountId) {
-          pixelAccountPairs.add(`${pixel.pixelId}:${account.accountId}`)
+        const accountId = normalizeAdAccountId(account.accountId)
+        if (pixel.pixelId && accountId) {
+          pixelAccountPairs.add(`${pixel.pixelId}:${accountId}`)
         }
       }
     }
@@ -271,18 +276,23 @@ export const validateDraft = async (draftId: string, accessFilter: any = {}) => 
     }
 
     for (const account of draft.accounts) {
+      const accountId = normalizeAdAccountId(account.accountId)
       const accountLabel = account.accountName || account.accountId || '未知账户'
-      if (!account.accountId) {
+      if (!accountId) {
         addError('accounts.accountId', '存在未填写广告账户 ID 的账户配置')
         continue
       }
 
-      if (seenAccounts.has(account.accountId)) {
+      if (seenAccounts.has(accountId)) {
         addError(`accounts.${account.accountId}`, `广告账户 ${accountLabel} 被重复选择`)
       }
-      seenAccounts.add(account.accountId)
+      seenAccounts.add(accountId)
 
-      const cachedStatus = assetSnapshot.adAccountStatuses.get(account.accountId)
+      if (assetSnapshot.hasCachedAssets && !assetSnapshot.adAccountStatuses.has(accountId)) {
+        addError(`accounts.${account.accountId}.access`, `当前 Facebook 授权未同步到账户 ${accountLabel} 的访问权限，请重新授权或更换可访问账户`)
+      }
+
+      const cachedStatus = assetSnapshot.adAccountStatuses.get(accountId)
       if (cachedStatus !== undefined && cachedStatus !== 1) {
         addError(`accounts.${account.accountId}.status`, `广告账户 ${accountLabel} 当前状态不可投放，请更换活跃账户`)
       }
@@ -291,7 +301,7 @@ export const validateDraft = async (draftId: string, accessFilter: any = {}) => 
         addError(`accounts.${account.accountId}.pageId`, `账户 ${accountLabel} 未选择 Facebook 主页`)
       } else if (
         assetSnapshot.hasCachedAssets &&
-        !assetSnapshot.pageAccountPairs.has(`${account.pageId}:${account.accountId}`)
+        !assetSnapshot.pageAccountPairs.has(`${account.pageId}:${accountId}`)
       ) {
         addError(`accounts.${account.accountId}.pageId`, `账户 ${accountLabel} 未同步到所选主页权限，请重新同步 Page 或更换主页`)
       }
@@ -302,7 +312,7 @@ export const validateDraft = async (draftId: string, accessFilter: any = {}) => 
       } else if (
         account.pixelId &&
         assetSnapshot.hasCachedAssets &&
-        !assetSnapshot.pixelAccountPairs.has(`${account.pixelId}:${account.accountId}`)
+        !assetSnapshot.pixelAccountPairs.has(`${account.pixelId}:${accountId}`)
       ) {
         addError(`accounts.${account.accountId}.pixelId`, `账户 ${accountLabel} 未同步到所选 Pixel 权限，请重新同步 Pixel 或更换账户`)
       }

@@ -112,9 +112,9 @@ describe('bulk ad draft validation preflight', () => {
     jest.spyOn(FacebookUser, 'find').mockReturnValue(queryWithLean([{
       fbUserId: 'fb_1',
       syncStatus: 'completed',
-      adAccounts: [{ accountId: '123', status: 1 }],
-      pages: [{ pageId: 'page_1', accounts: [{ accountId: '123' }] }],
-      pixels: [{ pixelId: 'pixel_1', accounts: [{ accountId: '123' }] }],
+      adAccounts: [{ accountId: 'act_123', status: 1 }],
+      pages: [{ pageId: 'page_1', accounts: [{ accountId: 'act_123' }] }],
+      pixels: [{ pixelId: 'pixel_1', accounts: [{ accountId: 'act_123' }] }],
     }]) as any)
     mockValidPackages()
 
@@ -122,5 +122,28 @@ describe('bulk ad draft validation preflight', () => {
 
     expect(validation.isValid).toBe(true)
     expect(validation.errors).toHaveLength(0)
+  })
+
+  it('blocks publish when selected account is not accessible by the synced Facebook authorization', async () => {
+    const draft = baseDraft()
+    jest.spyOn(AdDraft, 'findOne').mockResolvedValue(draft as any)
+    jest.spyOn(FbToken, 'find').mockReturnValue(tokenQuery([{
+      _id: tokenId,
+      fbUserId: 'fb_1',
+    }]) as any)
+    jest.spyOn(FacebookUser, 'find').mockReturnValue(queryWithLean([{
+      fbUserId: 'fb_1',
+      syncStatus: 'completed',
+      adAccounts: [{ accountId: '999', status: 1 }],
+      pages: [{ pageId: 'page_1', accounts: [{ accountId: '123' }] }],
+      pixels: [{ pixelId: 'pixel_1', accounts: [{ accountId: '123' }] }],
+    }]) as any)
+    mockValidPackages()
+
+    const validation = await validateDraft(draftId, {})
+
+    expect(validation.isValid).toBe(false)
+    expect(validation.errors.map((error: any) => error.field)).toContain('accounts.123.access')
+    expect(validation.errors.map((error: any) => error.message).join(' ')).toContain('当前 Facebook 授权未同步到账户 Account 123 的访问权限')
   })
 })
