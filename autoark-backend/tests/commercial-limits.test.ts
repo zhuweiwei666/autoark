@@ -379,6 +379,20 @@ describe('commercial publish limits', () => {
       .mockReturnValueOnce(sortedLeanFindResult([]) as any)
       .mockReturnValueOnce(sortedLeanFindResult([]) as any)
     jest.spyOn(OpsLog, 'find').mockReturnValue(sortedLeanFindResult([]) as any)
+    jest.spyOn(FacebookApp, 'find').mockReturnValue(sortedLeanFindResult([{
+      appId: '2165550037551429',
+      appName: 'page-advance',
+      status: 'active',
+      stats: { totalRequests: 10, successRequests: 9 },
+      validation: { isValid: true },
+      config: { enabledForBulkAds: true, businessLoginConfigId: '1544502593866149' },
+      compliance: {
+        appMode: 'dev',
+        businessVerification: 'verified',
+        appReview: 'approved',
+        permissions: [],
+      },
+    }]) as any)
 
     const supportPackage = await getCommercialSupportPackage({
       userId: 'admin',
@@ -393,6 +407,17 @@ describe('commercial publish limits', () => {
       deployedAt: '2026-06-01T12:00:00Z',
     })
     expect(supportPackage.facebookAssets.summary.staleTokenCheckCount).toBe(0)
+    expect(supportPackage.facebookApps.summary).toMatchObject({
+      total: 1,
+      ready: 0,
+      blocked: 1,
+    })
+    expect(supportPackage.facebookApps.apps[0]).toMatchObject({
+      appId: '2165550037551429',
+      publicOauthReady: false,
+      gapCount: expect.any(Number),
+    })
+    expect(supportPackage.facebookApps.apps[0].gapCodes).toContain('APP_MODE_NOT_LIVE')
   })
 
   it('caps readiness score when critical commercial blockers exist', async () => {

@@ -16,6 +16,7 @@ import User, { UserRole, UserStatus } from '../models/User'
 import { JwtPayload } from '../utils/jwt'
 import { objectIdValue } from '../utils/accessControl'
 import { getBuildInfo } from '../utils/buildInfo'
+import { buildPublicOAuthReadiness } from '../utils/facebookAppReadiness'
 import { buildFacebookAssetDiagnostics } from './facebookAssets.diagnostics.service'
 import { buildTaskOperationalDiagnostics } from './bulkAd.diagnostics'
 import { COMMERCIAL_FEATURES, PLAN_DEFAULTS } from '../config/commercialPlans'
@@ -274,6 +275,43 @@ const aggregateRecentTaskIssues = (tasks: any[]) => {
   }
 
   return Array.from(bucketMap.values()).sort((a, b) => b.count - a.count)
+}
+
+const buildFacebookAppSupportDiagnostics = (apps: any[]) => {
+  const items = apps.map((app) => {
+    const readiness = buildPublicOAuthReadiness(app)
+    const totalRequests = Number(app?.stats?.totalRequests || 0)
+    const successRequests = Number(app?.stats?.successRequests || 0)
+    return {
+      appId: String(app?.appId || ''),
+      appName: String(app?.appName || app?.appId || 'Facebook App'),
+      status: app?.status || 'unknown',
+      healthScore: totalRequests > 0 ? Math.round((successRequests / totalRequests) * 100) : 100,
+      validationIsValid: Boolean(app?.validation?.isValid),
+      businessLoginConfigured: readiness.businessLoginConfigured,
+      publicOauthReady: readiness.ready,
+      complianceReady: readiness.complianceReady,
+      runtimeReady: readiness.runtimeReady,
+      gapCount: readiness.gaps.length,
+      gapCodes: readiness.gaps.map((gap) => gap.code),
+      gaps: readiness.gaps.slice(0, 8).map((gap) => ({
+        code: gap.code,
+        label: gap.label,
+        detail: gap.detail,
+        severity: gap.severity,
+      })),
+    }
+  })
+
+  return {
+    summary: {
+      total: items.length,
+      ready: items.filter((app) => app.publicOauthReady).length,
+      blocked: items.filter((app) => !app.publicOauthReady).length,
+      totalGaps: items.reduce((sum, app) => sum + app.gapCount, 0),
+    },
+    apps: items,
+  }
 }
 
 type CommercialIssueTrendAccumulator = {
@@ -1423,6 +1461,12 @@ export async function getCommercialSupportPackage(
     tokens: activeTokenDocs,
     users: facebookUsers,
   })
+  const facebookAppDocs = await FacebookApp.find()
+    .select('appId appName status stats validation config compliance createdAt')
+    .sort({ 'config.priority': -1, createdAt: -1 })
+    .limit(20)
+    .lean()
+  const facebookApps = buildFacebookAppSupportDiagnostics(facebookAppDocs)
 
   const recentTasks = await AdTask.find({
     ...orgFilter,
@@ -1496,6 +1540,7 @@ export async function getCommercialSupportPackage(
         pixelCount: account.pixelCount,
       })),
     },
+    facebookApps,
     recentTasks: recentTaskDiagnostics,
     recentAuditLogs,
   }

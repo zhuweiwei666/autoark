@@ -198,7 +198,11 @@ const supportPackageInsights = (supportPackage: CommercialSupportPackage) => {
   const earliestTokenExpiresAt = summaryText(summary, "earliestTokenExpiresAt");
   const businessLoginConfigured = supportPackage.readiness.deployment.facebookBusinessLoginConfigConfigured;
   const oauthStateSecretConfigured = supportPackage.readiness.deployment.oauthStateSecretConfigured;
+  const appSummary = supportPackage.facebookApps?.summary;
+  const firstBlockedApp = supportPackage.facebookApps?.apps?.find((app) => !app.publicOauthReady);
+  const firstAppGap = firstBlockedApp?.gaps?.[0];
   const primaryRisk =
+    firstAppGap ? `${firstBlockedApp?.appName || "Facebook App"}：${firstAppGap.label}，${firstAppGap.detail}` :
     supportPackage.facebookAssets.risks[0]?.message ||
     supportPackage.readiness.risks[0]?.message ||
     "暂无关键风险";
@@ -225,6 +229,11 @@ const supportPackageInsights = (supportPackage: CommercialSupportPackage) => {
     earliestTokenExpiresAt,
     businessLoginConfigured,
     oauthStateSecretConfigured,
+    appTotal: appSummary?.total || 0,
+    appReady: appSummary?.ready || 0,
+    appBlocked: appSummary?.blocked || 0,
+    appTotalGaps: appSummary?.totalGaps || 0,
+    firstAppGapLabel: firstAppGap?.label || "",
     primaryRisk,
     topAction,
     topIssue,
@@ -654,6 +663,7 @@ export default function CommercialCenterPage() {
       `状态：${supportPackage.readiness.state.label} / ${supportPackage.readiness.score} 分`,
       `首要动作：${insights.topAction}`,
       `Business Login：${insights.businessLoginConfigured ? "已配置 config_id" : "待配置 config_id"}，OAuth state：${insights.oauthStateSecretConfigured ? "已配置" : "待配置"}`,
+      `Facebook App：${insights.appReady}/${insights.appTotal} 个 Public OAuth 就绪，${insights.appTotalGaps} 个缺口`,
       `授权健康：${insights.tokenCount} 个 Token，${insights.expiredTokenCount} 过期，${insights.expiringSoonTokenCount} 临期，${insights.staleTokenCheckCount} 待复检`,
       `资产：${insights.readyAccountCount} 个可投放账户 / ${insights.accountCount} 个广告账户`,
       `资产缺口：${insights.accountsMissingPageCount} 个缺 Page，${insights.accountsMissingPixelCount} 个缺 Pixel，${insights.inactiveAccountCount} 个账户不可投放`,
@@ -694,6 +704,11 @@ export default function CommercialCenterPage() {
         earliestTokenExpiresAt: insights.earliestTokenExpiresAt,
         businessLoginConfigured: insights.businessLoginConfigured,
         oauthStateSecretConfigured: insights.oauthStateSecretConfigured,
+        facebookAppTotal: insights.appTotal,
+        facebookAppReady: insights.appReady,
+        facebookAppBlocked: insights.appBlocked,
+        facebookAppTotalGaps: insights.appTotalGaps,
+        firstFacebookAppGap: insights.firstAppGapLabel,
         recentTaskCount: supportPackage.recentTasks.length,
       },
       supportPackage,
@@ -966,6 +981,14 @@ export default function CommercialCenterPage() {
                     <div className="mt-1 font-semibold leading-6 text-zinc-600">
                       Business Login {supportInsights.businessLoginConfigured ? "已配置" : "待配置"} · OAuth state {supportInsights.oauthStateSecretConfigured ? "已配置" : "待配置"}
                     </div>
+                    <div className="mt-1 font-semibold leading-6 text-zinc-600">
+                      Public OAuth App {supportInsights.appReady}/{supportInsights.appTotal} 就绪 · {supportInsights.appTotalGaps} 个缺口
+                    </div>
+                    {supportInsights.firstAppGapLabel && (
+                      <div className="mt-1 text-xs font-bold text-[#b45309]">
+                        首个 App 缺口：{supportInsights.firstAppGapLabel}
+                      </div>
+                    )}
                   </div>
                 </div>
               )}

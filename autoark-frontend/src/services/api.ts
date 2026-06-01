@@ -203,6 +203,33 @@ export interface CommercialSupportPackage {
       pixelCount: number
     }>
   }
+  facebookApps?: {
+    summary: {
+      total: number
+      ready: number
+      blocked: number
+      totalGaps: number
+    }
+    apps: Array<{
+      appId: string
+      appName: string
+      status: string
+      healthScore: number
+      validationIsValid: boolean
+      businessLoginConfigured: boolean
+      publicOauthReady: boolean
+      complianceReady: boolean
+      runtimeReady: boolean
+      gapCount: number
+      gapCodes: string[]
+      gaps: Array<{
+        code: string
+        label: string
+        detail: string
+        severity: 'critical' | 'warning'
+      }>
+    }>
+  }
   recentTasks: Array<{
     taskId: string
     taskName: string
