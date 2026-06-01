@@ -35,6 +35,27 @@ const UserManagementPage: React.FC = () => {
     status: 'active',
   })
 
+  const getCurrentOrganizationId = () => {
+    const value = user?.organizationId as any
+    if (!value) return ''
+    return typeof value === 'string' ? value : value._id || ''
+  }
+
+  const resetCreateForm = () => {
+    setFormData({
+      username: '',
+      password: '',
+      email: '',
+      role: 'member',
+      organizationId: isOrgAdmin ? getCurrentOrganizationId() : '',
+    })
+  }
+
+  const handleOpenCreateModal = () => {
+    resetCreateForm()
+    setShowCreateModal(true)
+  }
+
   const fetchUsers = async () => {
     try {
       const response = await authFetch('/api/users', {
@@ -99,13 +120,7 @@ const UserManagementPage: React.FC = () => {
       if (data.success) {
         alert('用户创建成功')
         setShowCreateModal(false)
-        setFormData({
-          username: '',
-          password: '',
-          email: '',
-          role: 'member',
-          organizationId: '',
-        })
+        resetCreateForm()
         fetchUsers()
       } else {
         alert(data.message || '创建失败')
@@ -222,7 +237,7 @@ const UserManagementPage: React.FC = () => {
           <h1 className="text-2xl font-bold text-gray-800">用户管理</h1>
           {(isSuperAdmin || isOrgAdmin) && (
             <button
-              onClick={() => setShowCreateModal(true)}
+              onClick={handleOpenCreateModal}
             className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
             >
             + 创建用户
@@ -512,10 +527,9 @@ const UserManagementPage: React.FC = () => {
                 {isOrgAdmin && user?.organizationId && (
                   <input
                     type="hidden"
-                    value={user.organizationId}
-                    onChange={(e) =>
-                      setFormData({ ...formData, organizationId: e.target.value })
-                    }
+                    name="organizationId"
+                    value={formData.organizationId || getCurrentOrganizationId()}
+                    readOnly
                   />
                 )}
                 <div className="flex gap-2 justify-end mt-6">

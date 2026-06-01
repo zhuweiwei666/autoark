@@ -112,13 +112,20 @@ class UserService {
       return authService.createUser(data, currentUser.userId)
     } else if (currentUser.role === UserRole.ORG_ADMIN) {
       // 组织管理员只能在自己的组织内创建普通成员
-      if (data.role !== UserRole.MEMBER) {
+      const requestedRole = data.role || UserRole.MEMBER
+      if (requestedRole !== UserRole.MEMBER) {
         throw new Error('组织管理员只能创建普通成员')
       }
-      if (data.organizationId !== currentUser.organizationId) {
+      if (!currentUser.organizationId) {
+        throw new Error('用户未关联组织，无法创建用户')
+      }
+      if (data.organizationId && data.organizationId !== currentUser.organizationId) {
         throw new Error('只能在自己的组织内创建用户')
       }
-      return authService.createUser(data, currentUser.userId)
+      return authService.createUser(
+        { ...data, role: UserRole.MEMBER, organizationId: currentUser.organizationId },
+        currentUser.userId,
+      )
     } else {
       throw new Error('权限不足')
     }

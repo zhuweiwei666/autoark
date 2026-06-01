@@ -1,4 +1,5 @@
 const mockUserFindById = jest.fn()
+const mockCreateUser = jest.fn()
 const mockResetPassword = jest.fn()
 const mockUpdateUserStatus = jest.fn()
 
@@ -18,6 +19,7 @@ jest.mock('../src/models/User', () => {
 jest.mock('../src/services/auth.service', () => ({
   __esModule: true,
   default: {
+    createUser: mockCreateUser,
     resetPassword: mockResetPassword,
     updateUserStatus: mockUpdateUserStatus,
   },
@@ -47,6 +49,46 @@ const createUserDoc = (overrides: any = {}) => ({
 describe('user service permission boundaries', () => {
   beforeEach(() => {
     jest.clearAllMocks()
+  })
+
+  it('defaults organization id when org admins create members', async () => {
+    mockCreateUser.mockResolvedValue(createUserDoc())
+
+    await userService.createUser(
+      {
+        username: 'new-member',
+        password: 'secret123',
+        email: 'new@example.com',
+        role: UserRole.MEMBER,
+      },
+      currentOrgAdmin as any,
+    )
+
+    expect(mockCreateUser).toHaveBeenCalledWith(
+      expect.objectContaining({
+        username: 'new-member',
+        role: UserRole.MEMBER,
+        organizationId: orgId,
+      }),
+      currentOrgAdmin.userId,
+    )
+  })
+
+  it('blocks org admins from creating members in another organization', async () => {
+    await expect(
+      userService.createUser(
+        {
+          username: 'other-org-member',
+          password: 'secret123',
+          email: 'other@example.com',
+          role: UserRole.MEMBER,
+          organizationId: '665000000000000000000099',
+        },
+        currentOrgAdmin as any,
+      ),
+    ).rejects.toThrow('只能在自己的组织内创建用户')
+
+    expect(mockCreateUser).not.toHaveBeenCalled()
   })
 
   it('blocks org admins from resetting another admin password', async () => {
