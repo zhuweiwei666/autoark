@@ -197,6 +197,17 @@ const UserManagementPage: React.FC = () => {
     return statusMap[status] || status
   }
 
+  const canEditUser = (targetUser: User) => {
+    if (isSuperAdmin) return true
+    return isOrgAdmin && targetUser.role === 'member'
+  }
+
+  const canDeleteUser = (targetUser: User) => {
+    if (targetUser._id === user?._id) return false
+    if (isSuperAdmin) return targetUser.role !== 'super_admin'
+    return isOrgAdmin && targetUser.role === 'member'
+  }
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -270,7 +281,7 @@ const UserManagementPage: React.FC = () => {
                     </span>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 space-x-3">
-                    {(isSuperAdmin || isOrgAdmin) && (
+                    {canEditUser(u) && (
                       <button
                         onClick={() => handleEditClick(u)}
                         className="text-blue-600 hover:text-blue-900"
@@ -279,8 +290,7 @@ const UserManagementPage: React.FC = () => {
                       </button>
                     )}
                     {/* 超级管理员可删除非超管用户，组织管理员只能删除普通成员 */}
-                    {((isSuperAdmin && u.role !== 'superadmin' && u._id !== user?._id) ||
-                      (isOrgAdmin && u.role === 'member')) && (
+                    {canDeleteUser(u) && (
                       <button
                         onClick={() => handleDeleteUser(u._id)}
                         className="text-red-600 hover:text-red-900"

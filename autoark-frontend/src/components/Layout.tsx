@@ -171,7 +171,7 @@ export default function Layout({ children }: LayoutProps) {
           prefetch: prefetchConfig["/fb-materials"],
         },
         { to: "/fb-settings", label: "Token 与像素", icon: Key },
-        { to: "/fb-apps", label: "App 管理", icon: Stack },
+        { to: "/fb-apps", label: "App 管理", icon: Stack, superAdminOnly: true },
       ],
     },
     {

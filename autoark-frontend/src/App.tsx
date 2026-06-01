@@ -80,7 +80,11 @@ function App() {
               {/* 保留旧路由兼容 */}
               <Route path="/fb-token" element={<FacebookTokenPage />} />
               <Route path="/fb-pixels" element={<FacebookPixelsPage />} />
-              <Route path="/fb-apps" element={<FacebookAppPage />} />
+              <Route path="/fb-apps" element={
+                <ProtectedRoute requireRole="super_admin">
+                  <FacebookAppPage />
+                </ProtectedRoute>
+              } />
               {/* Bulk Ad Creation Routes */}
               <Route path="/bulk-ad/create" element={<BulkAdCreatePage />} />
               <Route path="/bulk-ad/tasks" element={<TaskManagementPage />} />
@@ -107,7 +111,11 @@ function App() {
                 </ProtectedRoute>
               } />
                     {/* 用户和组织管理 */}
-                    <Route path="/users" element={<UserManagementPage />} />
+                    <Route path="/users" element={
+                      <ProtectedRoute requireRole="org_admin">
+                        <UserManagementPage />
+                      </ProtectedRoute>
+                    } />
                     <Route path="/audit-logs" element={
                       <ProtectedRoute requireRole="org_admin">
                         <AuditLogsPage />
