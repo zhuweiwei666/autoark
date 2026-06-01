@@ -79,7 +79,7 @@ describe('material storage tenant scoping', () => {
     expect(generatePresignedUploadUrl).toHaveBeenCalledWith(expect.objectContaining({
       fileName: 'creative.jpg',
       mimeType: 'image/jpeg',
-      folder: 'tenants/org-665000000000000000000001/ads',
+      folder: expect.stringMatching(/^tenants\/org-[a-f0-9]{16}\/ads$/),
     }))
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }))
   })
@@ -98,7 +98,7 @@ describe('material storage tenant scoping', () => {
 
     expect(generatePresignedUploadUrls).toHaveBeenCalledWith(
       [{ fileName: 'creative.mp4', mimeType: 'video/mp4', size: 123 }],
-      'tenants/org-665000000000000000000001/batch',
+      expect.stringMatching(/^tenants\/org-[a-f0-9]{16}\/batch$/),
     )
     expect(res.json).toHaveBeenCalledWith({ success: true, data: [] })
   })

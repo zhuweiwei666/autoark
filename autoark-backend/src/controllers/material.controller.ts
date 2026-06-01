@@ -1,4 +1,5 @@
 import { Request, Response } from 'express'
+import { createHash } from 'crypto'
 import Material from '../models/Material'
 import Folder from '../models/Folder'
 import { uploadToR2, deleteFromR2, getObjectFromR2, checkR2Config, generatePresignedUploadUrl, generatePresignedUploadUrls, getPublicUrlForKey } from '../services/r2Storage.service'
@@ -36,10 +37,14 @@ const getMaterialFilter = (req: Request): any => {
 }
 
 const getTenantStorageRoot = (req: Request): string => {
-  if (req.user?.organizationId) return `tenants/org-${req.user.organizationId}`
-  if (req.user?.userId) return `tenants/user-${req.user.userId}`
+  if (req.user?.organizationId) return `tenants/org-${hashStorageScope(req.user.organizationId)}`
+  if (req.user?.userId) return `tenants/user-${hashStorageScope(req.user.userId)}`
   return 'tenants/anonymous'
 }
+
+const hashStorageScope = (value: string): string => (
+  createHash('sha256').update(String(value)).digest('hex').slice(0, 16)
+)
 
 const getScopedStorageFolder = (req: Request, folder?: string): string => {
   const requestedFolder = typeof folder === 'string' && folder.trim() ? folder.trim() : 'materials'
