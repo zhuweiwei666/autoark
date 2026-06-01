@@ -69,6 +69,25 @@ interface AuthDiagnostics {
   risks: Array<{ level: 'critical' | 'warning' | 'info'; message: string }>
 }
 
+const assetIssueLabels: Record<string, string> = {
+  ACCOUNT_NOT_ACTIVE: '账户不可投放',
+  MISSING_PAGE: '缺 Page',
+  MISSING_PIXEL: '缺 Pixel',
+}
+
+const getAssetIssueSummary = (diagnostics: AuthDiagnostics | null) => {
+  if (!diagnostics) return []
+  const counts = new Map<string, number>()
+  for (const account of diagnostics.accounts || []) {
+    for (const issue of account.issueDetails || []) {
+      counts.set(issue.code, (counts.get(issue.code) || 0) + 1)
+    }
+  }
+  return Array.from(counts.entries())
+    .map(([code, count]) => ({ code, label: assetIssueLabels[code] || code, count }))
+    .sort((a, b) => b.count - a.count)
+}
+
 interface FacebookLoginAttempt {
   clientId?: string
   redirectUri?: string
@@ -923,6 +942,7 @@ export default function BulkAdCreatePage() {
     dailyBudget: campaign.budget * selectedAccounts.length,
   }
   const tokenHealthItems = authDiagnostics ? getTokenHealthItems(authDiagnostics) : []
+  const assetIssueSummary = getAssetIssueSummary(authDiagnostics)
   
   return (
     <div className="p-6">
@@ -1110,6 +1130,16 @@ export default function BulkAdCreatePage() {
                       {authDiagnostics.risks.length > 0 && (
                         <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
                           {authDiagnostics.risks[0].message}
+                        </div>
+                      )}
+                      {assetIssueSummary.length > 0 && (
+                        <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-amber-200 bg-white/80 px-3 py-2 text-[11px] font-semibold">
+                          <span className="text-slate-600">资产缺口</span>
+                          {assetIssueSummary.map(item => (
+                            <span key={item.code} className="rounded bg-amber-100 px-2 py-0.5 text-amber-700">
+                              {item.label} {item.count}
+                            </span>
+                          ))}
                         </div>
                       )}
                       {authDiagnostics.accounts.length > 0 && (
