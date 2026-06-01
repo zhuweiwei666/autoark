@@ -96,6 +96,22 @@ app.get('/healthz', (_req: Request, res: Response) => {
   })
 })
 
+app.get('/api/build', (_req: Request, res: Response) => {
+  const commit = process.env.AUTOARK_DEPLOY_COMMIT || process.env.GIT_COMMIT || ''
+  res.json({
+    success: true,
+    data: {
+      service: 'autoark-backend',
+      environment: process.env.NODE_ENV || 'development',
+      ref: process.env.AUTOARK_DEPLOY_REF || 'local',
+      commit: commit || 'unknown',
+      shortCommit: commit ? commit.slice(0, 12) : 'unknown',
+      deployedAt: process.env.AUTOARK_DEPLOYED_AT || null,
+      uptime: process.uptime(),
+    },
+  })
+})
+
 // Request ID (Correlation ID)
 app.use((req: Request, res: Response, next: NextFunction) => {
   const headerId = req.headers['x-request-id']

@@ -18,6 +18,9 @@ services:
       NODE_ENV: production
       PORT: 3001
       REDIS_URL: redis://redis:6379
+      AUTOARK_DEPLOY_REF: ${AUTOARK_DEPLOY_REF:-unknown}
+      AUTOARK_DEPLOY_COMMIT: ${AUTOARK_DEPLOY_COMMIT:-unknown}
+      AUTOARK_DEPLOYED_AT: ${AUTOARK_DEPLOYED_AT:-unknown}
     depends_on:
       - redis
 
@@ -33,6 +36,9 @@ services:
       NODE_ENV: production
       PORT: 3002
       REDIS_URL: redis://redis:6379
+      AUTOARK_DEPLOY_REF: ${AUTOARK_DEPLOY_REF:-unknown}
+      AUTOARK_DEPLOY_COMMIT: ${AUTOARK_DEPLOY_COMMIT:-unknown}
+      AUTOARK_DEPLOYED_AT: ${AUTOARK_DEPLOYED_AT:-unknown}
     depends_on:
       - redis
 

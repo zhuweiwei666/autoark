@@ -104,6 +104,10 @@ else
   git checkout --detach "$REF"
 fi
 DEPLOY_COMMIT="$(git rev-parse HEAD)"
+DEPLOYED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+export AUTOARK_DEPLOY_REF="$REF"
+export AUTOARK_DEPLOY_COMMIT="$DEPLOY_COMMIT"
+export AUTOARK_DEPLOYED_AT="$DEPLOYED_AT"
 log "Deploying ref=$REF commit=$DEPLOY_COMMIT"
 
 if [ ! -f deploy/.env ]; then
@@ -179,7 +183,7 @@ verify_internal
 cat > deploy/.last-deploy <<EOF_DEPLOY
 ref=$REF
 commit=$DEPLOY_COMMIT
-deployed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+deployed_at=$DEPLOYED_AT
 EOF_DEPLOY
 
 log "Current production containers"
