@@ -228,6 +228,12 @@ const limitLabel: Record<string, string> = {
   concurrentTasks: '当前并发任务',
 }
 
+const sentence = (value: string) => {
+  const trimmed = value.trim()
+  if (!trimmed) return ''
+  return /[。.!！?？]$/.test(trimmed) ? trimmed : `${trimmed}。`
+}
+
 const aggregateRecentTaskIssues = (tasks: any[]) => {
   const bucketMap = new Map<string, {
     errorCode: string
@@ -770,7 +776,7 @@ export async function getCommercialReadiness(
       primaryIssue?.retryable ? 'medium' : 'high',
       primaryIssue ? `处理任务失败主因：${primaryIssue.errorCode}` : '处理最近任务失败',
       primaryIssue
-        ? `${primaryIssue.customerMessage}。先按任务诊断处理不可重试项，再重新发布或重试。`
+        ? `${sentence(primaryIssue.customerMessage)}先按任务诊断处理不可重试项，再重新发布或重试。`
         : '失败任务高于成功任务，先从任务管理页查看诊断并处理账户、Page、Pixel 或素材问题。',
       '/bulk-ad/tasks',
       '投放运营',
@@ -782,7 +788,7 @@ export async function getCommercialReadiness(
       'review_recent_task_warnings',
       'low',
       `复盘最近任务提示：${primaryIssue.errorCode}`,
-      `${primaryIssue.customerMessage}。该问题当前没有阻断商用评分，但建议上线前复盘并清理失败项。`,
+      `${sentence(primaryIssue.customerMessage)}该问题当前没有阻断商用评分，但建议上线前复盘并清理失败项。`,
       '/bulk-ad/tasks',
       '投放运营',
       'tasks',
