@@ -24,6 +24,7 @@ import FacebookUser from '../models/FacebookUser'
 import * as facebookUserService from '../services/facebookUser.service'
 import { buildFacebookAssetDiagnostics } from '../services/facebookAssets.diagnostics.service'
 import { writeAuditLog } from '../services/auditLog.service'
+import { buildPublicOAuthReadiness } from '../utils/facebookAppReadiness'
 import {
   combineFilters,
   sanitizeScopedUpdate,
@@ -1079,11 +1080,36 @@ export const getAuthLoginUrl = async (req: Request, res: Response) => {
     } catch {}
     const authorizationMode = configIdInUrl ? 'business_login' : 'scope_oauth'
     const diagnostics: string[] = []
+    const addDiagnostic = (message: string) => {
+      if (!diagnostics.includes(message)) diagnostics.push(message)
+    }
     if (!configIdInUrl) {
-      diagnostics.push('未使用 Facebook Login for Business config_id，当前为 scope OAuth 兜底模式。')
+      addDiagnostic('未使用 Facebook Login for Business config_id，当前为 scope OAuth 兜底模式。')
     }
     if (!clientIdInUrl) {
-      diagnostics.push('登录链接中未解析到 client_id，请检查 Facebook App 配置。')
+      addDiagnostic('登录链接中未解析到 client_id，请检查 Facebook App 配置。')
+    }
+    let publicOauthReady: boolean | undefined
+    let publicOauthGapCodes: string[] = []
+    let publicOauthGapCount = 0
+    if (clientIdInUrl) {
+      const selectedApp: any = await FacebookApp.findOne({ appId: clientIdInUrl })
+      if (selectedApp) {
+        const readiness = buildPublicOAuthReadiness(selectedApp)
+        publicOauthReady = readiness.ready
+        publicOauthGapCodes = readiness.gaps.map((gap) => gap.code)
+        publicOauthGapCount = readiness.gaps.length
+        if (!readiness.ready) {
+          readiness.gaps.slice(0, 4).forEach((gap) => {
+            addDiagnostic(`${gap.label}：${gap.detail}`)
+          })
+          if (readiness.gaps.length > 4) {
+            addDiagnostic(`当前 Facebook App 还有 ${readiness.gaps.length - 4} 项 Public OAuth 缺口，请到 App 管理页查看完整诊断。`)
+          }
+        }
+      } else {
+        addDiagnostic('未在 App 管理中找到登录链接使用的 client_id，请检查 Facebook App 池配置。')
+      }
     }
     
     logger.info(
@@ -1103,6 +1129,9 @@ export const getAuthLoginUrl = async (req: Request, res: Response) => {
         authorizationMode,
         businessLoginConfigured: Boolean(configIdInUrl),
         scopeFallback: Boolean(scopeInUrl),
+        publicOauthReady,
+        publicOauthGapCount,
+        publicOauthGapCodes,
         usingDefaultApp: !appId,
         diagnostics,
       },
@@ -1118,6 +1147,9 @@ export const getAuthLoginUrl = async (req: Request, res: Response) => {
         authorizationMode,
         businessLoginConfigured: Boolean(configIdInUrl),
         scopeFallback: Boolean(scopeInUrl),
+        publicOauthReady,
+        publicOauthGapCount,
+        publicOauthGapCodes,
         diagnostics,
         serverTime: new Date().toISOString(),
       },

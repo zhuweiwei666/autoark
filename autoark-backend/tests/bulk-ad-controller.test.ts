@@ -10,16 +10,104 @@ jest.mock('../src/services/auditLog.service', () => ({
   writeAuditLog: jest.fn(),
 }))
 
+jest.mock('../src/services/facebook.oauth.service', () => ({
+  getFacebookBulkAdRedirectUri: jest.fn(),
+  getFacebookLoginUrl: jest.fn(),
+  parseStateParamWithOptions: jest.fn(),
+}))
+
+jest.mock('../src/models/FacebookApp', () => ({
+  __esModule: true,
+  default: {
+    findOne: jest.fn(),
+  },
+}))
+
 import bulkAdService from '../src/services/bulkAd.service'
 import { writeAuditLog } from '../src/services/auditLog.service'
-import { getTaskSupportPackage, rerunTask } from '../src/controllers/bulkAd.controller'
+import * as oauthService from '../src/services/facebook.oauth.service'
+import FacebookApp from '../src/models/FacebookApp'
+import { getAuthLoginUrl, getTaskSupportPackage, rerunTask } from '../src/controllers/bulkAd.controller'
 
 const mockBulkAdService = bulkAdService as jest.Mocked<typeof bulkAdService>
 const mockWriteAuditLog = writeAuditLog as jest.Mock
+const mockOauthService = oauthService as jest.Mocked<typeof oauthService>
+const mockFacebookApp = FacebookApp as jest.Mocked<typeof FacebookApp>
 
 describe('bulk ad controller', () => {
   beforeEach(() => {
     jest.clearAllMocks()
+  })
+
+  it('includes selected Facebook App readiness gaps in login URL diagnostics', async () => {
+    const loginUrl = 'https://www.facebook.com/v21.0/dialog/oauth?client_id=2165550037551429&redirect_uri=https%3A%2F%2Fapp.autoark.work%2Fapi%2Fbulk-ad%2Fauth%2Fcallback&config_id=1544502593866149'
+    mockOauthService.getFacebookBulkAdRedirectUri.mockReturnValue('https://app.autoark.work/api/bulk-ad/auth/callback')
+    mockOauthService.getFacebookLoginUrl.mockResolvedValue(loginUrl)
+    ;(mockFacebookApp.findOne as jest.Mock).mockResolvedValue({
+      appId: '2165550037551429',
+      status: 'active',
+      validation: { isValid: true },
+      config: { enabledForBulkAds: true, businessLoginConfigId: '1544502593866149' },
+      compliance: {
+        appMode: 'dev',
+        businessVerification: 'verified',
+        appReview: 'approved',
+        permissions: [
+          { name: 'ads_management', access: 'standard', status: 'requested' },
+        ],
+      },
+    })
+    mockWriteAuditLog.mockResolvedValue(undefined)
+
+    const req: any = {
+      query: {},
+      user: {
+        userId: '665000000000000000000002',
+        organizationId: '665000000000000000000001',
+      },
+      get: jest.fn(),
+    }
+    const res: any = {
+      setHeader: jest.fn(),
+      json: jest.fn(),
+      status: jest.fn().mockReturnThis(),
+    }
+
+    await getAuthLoginUrl(req, res)
+
+    expect(mockOauthService.getFacebookLoginUrl).toHaveBeenCalledWith(
+      'bulk-ad|665000000000000000000002|665000000000000000000001',
+      undefined,
+      expect.objectContaining({
+        businessLogin: true,
+        redirectUri: 'https://app.autoark.work/api/bulk-ad/auth/callback',
+      }),
+    )
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      data: expect.objectContaining({
+        clientId: '2165550037551429',
+        authorizationMode: 'business_login',
+        publicOauthReady: false,
+        publicOauthGapCount: expect.any(Number),
+        publicOauthGapCodes: expect.arrayContaining([
+          'APP_MODE_NOT_LIVE',
+          'PERMISSION_ADS_MANAGEMENT_NOT_READY',
+        ]),
+        diagnostics: expect.arrayContaining([
+          expect.stringContaining('App Mode 非 Live'),
+          expect.stringContaining('ads_management 未通过'),
+        ]),
+      }),
+    })
+    expect(mockWriteAuditLog).toHaveBeenCalledWith(req, expect.objectContaining({
+      category: 'bulk_ad',
+      action: 'bulk_ad.facebook_login_url',
+      metadata: expect.objectContaining({
+        publicOauthReady: false,
+        publicOauthGapCodes: expect.arrayContaining(['APP_MODE_NOT_LIVE']),
+      }),
+    }))
   })
 
   it('writes an audit log when a task support package is generated', async () => {
