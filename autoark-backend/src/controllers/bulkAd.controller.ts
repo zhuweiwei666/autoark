@@ -414,9 +414,16 @@ export const rerunTask = async (req: Request, res: Response) => {
       reason: error.message,
       metadata: {
         multiplier: req.body.multiplier,
+        errorCode: error.code,
+        details: error.details,
       },
     })
-    res.status(400).json({ success: false, error: error.message })
+    res.status(error.statusCode || 400).json({
+      success: false,
+      error: error.message,
+      errorCode: error.code,
+      details: error.details,
+    })
   }
 }
 

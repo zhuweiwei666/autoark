@@ -2,6 +2,7 @@ jest.mock('../src/services/bulkAd.service', () => ({
   __esModule: true,
   default: {
     getTaskSupportPackage: jest.fn(),
+    rerunTask: jest.fn(),
   },
 }))
 
@@ -11,7 +12,7 @@ jest.mock('../src/services/auditLog.service', () => ({
 
 import bulkAdService from '../src/services/bulkAd.service'
 import { writeAuditLog } from '../src/services/auditLog.service'
-import { getTaskSupportPackage } from '../src/controllers/bulkAd.controller'
+import { getTaskSupportPackage, rerunTask } from '../src/controllers/bulkAd.controller'
 
 const mockBulkAdService = bulkAdService as jest.Mocked<typeof bulkAdService>
 const mockWriteAuditLog = writeAuditLog as jest.Mock
@@ -115,5 +116,55 @@ describe('bulk ad controller', () => {
     }))
     expect(res.status).toHaveBeenCalledWith(404)
     expect(res.json).toHaveBeenCalledWith({ success: false, error: 'Task not found' })
+  })
+
+  it('preserves commercial quota diagnostics when rerun is blocked', async () => {
+    const error: any = new Error('当前已有 3 个任务在执行，超过当前套餐并发额度 3。')
+    error.code = 'MAX_CONCURRENT_TASKS_REACHED'
+    error.statusCode = 429
+    error.details = {
+      runningTaskCount: 3,
+      requestedTasks: 2,
+      limit: 3,
+      plan: 'starter',
+    }
+    mockBulkAdService.rerunTask.mockRejectedValue(error)
+    mockWriteAuditLog.mockResolvedValue(undefined)
+
+    const req: any = {
+      params: { id: '665000000000000000000401' },
+      body: { multiplier: 2 },
+      user: {
+        userId: '665000000000000000000002',
+        organizationId: '665000000000000000000001',
+      },
+      get: jest.fn(),
+    }
+    const res: any = {
+      json: jest.fn(),
+      status: jest.fn().mockReturnThis(),
+    }
+
+    await rerunTask(req, res)
+
+    expect(mockWriteAuditLog).toHaveBeenCalledWith(req, expect.objectContaining({
+      category: 'bulk_ad',
+      action: 'bulk_ad.rerun',
+      status: 'failed',
+      targetType: 'ad_task',
+      targetId: '665000000000000000000401',
+      metadata: expect.objectContaining({
+        multiplier: 2,
+        errorCode: 'MAX_CONCURRENT_TASKS_REACHED',
+        details: error.details,
+      }),
+    }))
+    expect(res.status).toHaveBeenCalledWith(429)
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      error: error.message,
+      errorCode: 'MAX_CONCURRENT_TASKS_REACHED',
+      details: error.details,
+    })
   })
 })
