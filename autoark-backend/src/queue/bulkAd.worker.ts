@@ -95,11 +95,49 @@ if (bulkAdWorker) {
   })
 }
 
+const buildWorkerTimeoutDiagnosis = (message: string) => diagnoseBulkAdError({
+  entityType: 'general',
+  errorCode: 'WORKER_TIMEOUT',
+  errorMessage: message,
+  timestamp: new Date(),
+})
+
+const recalculateRecoveredTaskStatus = (task: any) => {
+  if (typeof task.updateProgress === 'function') {
+    task.updateProgress()
+    return
+  }
+
+  const items = task.items || []
+  const completed = items.filter((item: any) => ['success', 'completed', 'failed', 'skipped'].includes(item.status))
+  const successful = items.filter((item: any) => ['success', 'completed'].includes(item.status))
+  const failed = items.filter((item: any) => item.status === 'failed')
+  const totalAds = items.reduce((sum: number, item: any) => sum + (item.result?.createdCount || item.result?.adIds?.length || 0), 0)
+
+  task.progress = {
+    ...(task.progress?.toObject?.() || task.progress || {}),
+    totalAccounts: items.length,
+    completedAccounts: completed.length,
+    successAccounts: successful.length,
+    failedAccounts: failed.length,
+    createdAds: totalAds,
+    percentage: items.length > 0 ? Math.round((completed.length / items.length) * 100) : 0,
+  }
+
+  if (items.length > 0 && completed.length === items.length) {
+    task.status = failed.length === 0 ? 'success' : successful.length > 0 ? 'partial_success' : 'failed'
+    task.completedAt = new Date()
+    if (task.startedAt && !task.duration) {
+      task.duration = task.completedAt.getTime() - new Date(task.startedAt).getTime()
+    }
+  }
+}
+
 /**
  * 重置卡住的任务状态
- * 将长时间处于 processing 状态的任务项重置为 pending 或 failed
+ * 将长时间处于 processing / queued / pending 的任务项标记为失败，避免客户任务无限挂起。
  */
-const recoverStuckTasks = async () => {
+export const recoverStuckTasks = async () => {
   try {
     const STUCK_THRESHOLD = 30 * 60 * 1000 // 30 minutes
     const cutoffDate = new Date(Date.now() - STUCK_THRESHOLD)
@@ -127,26 +165,27 @@ const recoverStuckTasks = async () => {
       
       logger.info(`[BulkAdWorker] Recovering stuck task: ${task._id}`)
       
-      // Reset processing items to pending
       let updated = false
       for (const item of task.items) {
         if (item.status === 'processing') {
-          item.status = 'failed' // Mark as failed instead of pending to avoid infinite loops of death
+          item.status = 'failed'
+          item.completedAt = new Date()
           if (!Array.isArray(item.errors)) item.errors = []
-          item.errors.push(diagnoseBulkAdError({
-            entityType: 'general',
-            errorCode: 'WORKER_TIMEOUT',
-            errorMessage: 'Task execution timed out or worker crashed',
-            timestamp: new Date(),
-          }))
+          item.errors.push(buildWorkerTimeoutDiagnosis('Task execution timed out or worker crashed'))
+          updated = true
+        } else if (item.status === 'pending') {
+          item.status = 'failed'
+          item.completedAt = new Date()
+          if (!Array.isArray(item.errors)) item.errors = []
+          item.errors.push(buildWorkerTimeoutDiagnosis('Task stayed queued too long and the worker job was not executed'))
           updated = true
         }
       }
       
       if (updated) {
-        task.status = 'failed' // Or re-calculate status
+        recalculateRecoveredTaskStatus(task)
         await task.save()
-        logger.info(`[BulkAdWorker] Task ${task._id} marked as failed due to timeout`)
+        logger.info(`[BulkAdWorker] Task ${task._id} recovered with timeout diagnostics`)
       }
     }
   } catch (error) {
