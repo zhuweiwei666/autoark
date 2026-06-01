@@ -1,12 +1,34 @@
+import { lazy, Suspense } from 'react'
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AuthProvider } from './contexts/AuthContext'
 import ProtectedRoute from './components/ProtectedRoute'
 import Layout from './components/Layout'
-import LoginPage from './pages/LoginPage'
-import UserManagementPage from './pages/UserManagementPage'
-import OrganizationManagementPage from './pages/OrganizationManagementPage'
-import AccountPoolPage from './pages/AccountPoolPage'
+
+const LoginPage = lazy(() => import('./pages/LoginPage'))
+const UserManagementPage = lazy(() => import('./pages/UserManagementPage'))
+const OrganizationManagementPage = lazy(() => import('./pages/OrganizationManagementPage'))
+const AccountPoolPage = lazy(() => import('./pages/AccountPoolPage'))
+const DashboardPage = lazy(() => import('./pages/DashboardPage'))
+const CommercialCenterPage = lazy(() => import('./pages/CommercialCenterPage'))
+const AuditLogsPage = lazy(() => import('./pages/AuditLogsPage'))
+const FacebookTokenPage = lazy(() => import('./pages/FacebookTokenPage'))
+const FacebookAccountsPage = lazy(() => import('./pages/FacebookAccountsPage'))
+const FacebookCampaignsPage = lazy(() => import('./pages/FacebookCampaignsPage'))
+const FacebookCountriesPage = lazy(() => import('./pages/FacebookCountriesPage'))
+const FacebookPixelsPage = lazy(() => import('./pages/FacebookPixelsPage'))
+const FacebookSettingsPage = lazy(() => import('./pages/FacebookSettingsPage'))
+const BulkAdCreatePage = lazy(() => import('./pages/BulkAdCreatePage'))
+const TaskManagementPage = lazy(() => import('./pages/TaskManagementPage'))
+const AssetManagementPage = lazy(() => import('./pages/AssetManagementPage'))
+const MaterialLibraryPage = lazy(() => import('./pages/MaterialLibraryPage'))
+const OAuthCallbackPage = lazy(() => import('./pages/OAuthCallbackPage'))
+const AgentManagementPage = lazy(() => import('./pages/AgentManagementPage'))
+const MaterialMetricsPage = lazy(() => import('./pages/MaterialMetricsPage'))
+const FacebookAppPage = lazy(() => import('./pages/FacebookAppPage'))
+const AdReviewStatusPage = lazy(() => import('./pages/AdReviewStatusPage'))
+const AutomationJobsPage = lazy(() => import('./pages/AutomationJobsPage'))
+const AgentChatPage = lazy(() => import('./pages/AgentChatPage'))
 
 // 创建 QueryClient 实例，配置全局缓存策略
 // 策略：显示缓存数据的同时后台刷新（stale-while-revalidate）
@@ -23,32 +45,19 @@ const queryClient = new QueryClient({
     },
   },
 })
-import DashboardPage from './pages/DashboardPage'
-import CommercialCenterPage from './pages/CommercialCenterPage'
-import AuditLogsPage from './pages/AuditLogsPage'
-import FacebookTokenPage from './pages/FacebookTokenPage'
-import FacebookAccountsPage from './pages/FacebookAccountsPage'
-import FacebookCampaignsPage from './pages/FacebookCampaignsPage'
-import FacebookCountriesPage from './pages/FacebookCountriesPage'
-import FacebookPixelsPage from './pages/FacebookPixelsPage'
-import FacebookSettingsPage from './pages/FacebookSettingsPage'
-import BulkAdCreatePage from './pages/BulkAdCreatePage'
-import TaskManagementPage from './pages/TaskManagementPage'
-import AssetManagementPage from './pages/AssetManagementPage'
-import MaterialLibraryPage from './pages/MaterialLibraryPage'
-import OAuthCallbackPage from './pages/OAuthCallbackPage'
-import AgentManagementPage from './pages/AgentManagementPage'
-import MaterialMetricsPage from './pages/MaterialMetricsPage'
-import FacebookAppPage from './pages/FacebookAppPage'
-import AdReviewStatusPage from './pages/AdReviewStatusPage'
-import AutomationJobsPage from './pages/AutomationJobsPage'
-import AgentChatPage from './pages/AgentChatPage'
+
+const routeFallback = (
+  <div className="flex min-h-screen items-center justify-center bg-white text-sm font-semibold text-slate-500">
+    加载页面...
+  </div>
+)
 
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <Router>
         <AuthProvider>
+          <Suspense fallback={routeFallback}>
         <Routes>
             {/* 登录页面（无需认证） */}
             <Route path="/login" element={<LoginPage />} />
@@ -108,6 +117,7 @@ function App() {
               </ProtectedRoute>
         } />
         </Routes>
+          </Suspense>
         </AuthProvider>
       </Router>
     </QueryClientProvider>
