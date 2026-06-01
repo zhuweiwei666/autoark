@@ -268,9 +268,12 @@ export default function TaskManagementPage() {
   useEffect(() => {
     if (taskIdFromUrl && tasks.length > 0) {
       const task = tasks.find(t => t._id === taskIdFromUrl)
-      if (task) setSelectedTask(task)
+      if (task && selectedTask?._id !== taskIdFromUrl) {
+        setSelectedTask(task)
+        loadTaskDetail(taskIdFromUrl)
+      }
     }
-  }, [taskIdFromUrl, tasks])
+  }, [taskIdFromUrl, tasks, selectedTask?._id])
   
   const loadTasks = async () => {
     try {
