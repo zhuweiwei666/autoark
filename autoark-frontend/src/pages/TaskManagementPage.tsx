@@ -266,14 +266,10 @@ export default function TaskManagementPage() {
   }, [statusFilter, healthFilter, errorCodeFilter])
   
   useEffect(() => {
-    if (taskIdFromUrl && tasks.length > 0) {
-      const task = tasks.find(t => t._id === taskIdFromUrl)
-      if (task && selectedTask?._id !== taskIdFromUrl) {
-        setSelectedTask(task)
-        loadTaskDetail(taskIdFromUrl)
-      }
+    if (taskIdFromUrl && selectedTask?._id !== taskIdFromUrl) {
+      loadTaskDetail(taskIdFromUrl)
     }
-  }, [taskIdFromUrl, tasks, selectedTask?._id])
+  }, [taskIdFromUrl, selectedTask?._id])
   
   const loadTasks = async () => {
     try {
