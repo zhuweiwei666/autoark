@@ -887,6 +887,9 @@ export default function BulkAdCreatePage() {
                     </div>
                     <button onClick={handleFacebookLogin} className="text-xs text-green-600 hover:underline">切换账号</button>
                   </div>
+                  {loginAttempt && loginLoading && (
+                    <FacebookLoginAttemptPanel attempt={loginAttempt} onStop={stopFacebookLoginWait} />
+                  )}
                   {diagnosticsLoading && (
                     <div className="mt-3 text-xs font-medium text-green-700">正在检查账户、Page 和 Pixel...</div>
                   )}
