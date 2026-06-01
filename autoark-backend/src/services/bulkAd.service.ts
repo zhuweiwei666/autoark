@@ -1542,6 +1542,11 @@ export const rerunTask = async (
   
   const config = originalTask.configSnapshot
   const safeMultiplier = Math.min(20, Math.max(1, multiplier))  // 限制 1-20
+  await assertBulkAdPublishAllowed({
+    organizationId: originalTask.organizationId?.toString(),
+    requestedAccounts: config.accounts.length,
+    requestedTasks: safeMultiplier,
+  })
   
   // 获取用户名
   let userName = 'unknown'

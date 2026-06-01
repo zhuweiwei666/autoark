@@ -103,7 +103,22 @@ describe('commercial publish limits', () => {
       runningTaskCount: 1,
       monthlyTaskCount: 12,
       requestedAccounts: 2,
+      requestedTasks: 1,
     })
+  })
+
+  it('blocks reruns when requested task multiplier would exceed concurrent quota', async () => {
+    jest.spyOn(Organization, 'findById').mockResolvedValue(mockOrganization() as any)
+    jest.spyOn(AdTask, 'countDocuments')
+      .mockResolvedValueOnce(2 as any)
+      .mockResolvedValueOnce(0 as any)
+
+    await expect(assertBulkAdPublishAllowed({ organizationId, requestedAccounts: 2, requestedTasks: 2 }))
+      .rejects.toMatchObject({
+        code: 'MAX_CONCURRENT_TASKS_REACHED',
+        statusCode: 429,
+        details: expect.objectContaining({ requestedTasks: 2 }),
+      } as CommercialLimitError)
   })
 
   it('uses unlimited enterprise limits in platform readiness mode', async () => {

@@ -205,9 +205,11 @@ export class CommercialLimitError extends Error {
 export async function assertBulkAdPublishAllowed({
   organizationId,
   requestedAccounts = 1,
+  requestedTasks = 1,
 }: {
   organizationId?: string
   requestedAccounts?: number
+  requestedTasks?: number
 }) {
   if (!organizationId) {
     return {
@@ -253,6 +255,7 @@ export async function assertBulkAdPublishAllowed({
 
   const limits = getEffectiveLimits(organization)
   const requestedAccountCount = Math.max(1, Number(requestedAccounts) || 1)
+  const requestedTaskCount = Math.max(1, Number(requestedTasks) || 1)
 
   if (limits.maxAdAccounts && requestedAccountCount > limits.maxAdAccounts) {
     throw new CommercialLimitError(
@@ -269,21 +272,21 @@ export async function assertBulkAdPublishAllowed({
     AdTask.countDocuments({ ...orgFilter, createdAt: { $gte: monthStart() } }),
   ])
 
-  if (limits.maxConcurrentTasks && runningTaskCount >= limits.maxConcurrentTasks) {
+  if (limits.maxConcurrentTasks && runningTaskCount + requestedTaskCount > limits.maxConcurrentTasks) {
     throw new CommercialLimitError(
       'MAX_CONCURRENT_TASKS_REACHED',
-      `当前已有 ${runningTaskCount} 个任务在执行，已达到当前套餐并发额度 ${limits.maxConcurrentTasks}。请等待任务完成后再发布。`,
+      `当前已有 ${runningTaskCount} 个任务在执行，本次还将创建 ${requestedTaskCount} 个任务，超过当前套餐并发额度 ${limits.maxConcurrentTasks}。请等待任务完成后再发布。`,
       429,
-      { runningTaskCount, limit: limits.maxConcurrentTasks, plan },
+      { runningTaskCount, requestedTasks: requestedTaskCount, limit: limits.maxConcurrentTasks, plan },
     )
   }
 
-  if (limits.monthlyTaskLimit && monthlyTaskCount >= limits.monthlyTaskLimit) {
+  if (limits.monthlyTaskLimit && monthlyTaskCount + requestedTaskCount > limits.monthlyTaskLimit) {
     throw new CommercialLimitError(
       'MONTHLY_TASK_LIMIT_REACHED',
-      `本月已发布 ${monthlyTaskCount} 个任务，已达到当前套餐月度任务额度 ${limits.monthlyTaskLimit}。`,
+      `本月已发布 ${monthlyTaskCount} 个任务，本次还将创建 ${requestedTaskCount} 个任务，超过当前套餐月度任务额度 ${limits.monthlyTaskLimit}。`,
       403,
-      { monthlyTaskCount, limit: limits.monthlyTaskLimit, plan },
+      { monthlyTaskCount, requestedTasks: requestedTaskCount, limit: limits.monthlyTaskLimit, plan },
     )
   }
 
@@ -296,6 +299,7 @@ export async function assertBulkAdPublishAllowed({
       runningTaskCount,
       monthlyTaskCount,
       requestedAccounts: requestedAccountCount,
+      requestedTasks: requestedTaskCount,
     },
   }
 }
