@@ -75,7 +75,11 @@ function App() {
               <Route path="/fb-accounts" element={<FacebookAccountsPage />} />
               <Route path="/fb-countries" element={<FacebookCountriesPage />} />
               <Route path="/fb-campaigns" element={<FacebookCampaignsPage />} />
-              <Route path="/fb-materials" element={<MaterialMetricsPage />} />
+              <Route path="/fb-materials" element={
+                <ProtectedRoute requireRole="super_admin">
+                  <MaterialMetricsPage />
+                </ProtectedRoute>
+              } />
               <Route path="/fb-settings" element={<FacebookSettingsPage />} />
               {/* 保留旧路由兼容 */}
               <Route path="/fb-token" element={<FacebookTokenPage />} />

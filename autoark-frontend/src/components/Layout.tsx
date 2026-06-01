@@ -169,6 +169,7 @@ export default function Layout({ children }: LayoutProps) {
           label: "素材数据",
           icon: ImageSquare,
           prefetch: prefetchConfig["/fb-materials"],
+          superAdminOnly: true,
         },
         { to: "/fb-settings", label: "Token 与像素", icon: Key },
         { to: "/fb-apps", label: "App 管理", icon: Stack, superAdminOnly: true },
