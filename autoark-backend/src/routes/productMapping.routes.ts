@@ -1,7 +1,10 @@
 import { Router } from 'express'
 import * as productMappingController from '../controllers/productMapping.controller'
+import { authenticate } from '../middlewares/auth'
 
 const router = Router()
+
+router.use(authenticate)
 
 // ==================== 产品 CRUD ====================
 router.get('/products', productMappingController.getProducts)
@@ -31,4 +34,3 @@ router.get('/parse-url', productMappingController.parseUrl)
 router.get('/stats', productMappingController.getStats)
 
 export default router
-

@@ -24,8 +24,11 @@ import {
   AggCampaign,
   AggOptimizer,
 } from '../models/Aggregation'
+import { authenticate } from '../middlewares/auth'
 
 const router = Router()
+
+router.use(authenticate)
 
 // ==================== Dashboard 汇总 ====================
 

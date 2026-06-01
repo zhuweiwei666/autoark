@@ -1,7 +1,10 @@
 import { Router } from 'express'
 import * as userSettingsController from '../controllers/user.settings.controller'
+import { authenticate } from '../middlewares/auth'
 
 const router = Router()
+
+router.use(authenticate)
 
 // 获取用户自定义的广告系列列设置
 router.get('/campaign-columns', userSettingsController.getCampaignColumns)

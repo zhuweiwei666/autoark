@@ -109,7 +109,6 @@ const possiblePaths = [
   path.join(__dirname, '../../autoark-frontend/dist'), // Relative from dist/
   path.join(process.cwd(), 'autoark-frontend/dist'), // From project root
   path.join(process.cwd(), '../autoark-frontend/dist'), // From backend dir
-  '/root/autoark/autoark-frontend/dist', // Absolute path on server
 ]
 
 let frontendDistPath: string | null = null

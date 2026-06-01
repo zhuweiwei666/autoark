@@ -155,10 +155,9 @@ Automatic renewal is installed as:
 - Keep permissions at `600`.
 - Update `deploy/env.example` whenever a new required env var is introduced.
 
-## Legacy Notes
+## Canonical Files
 
-Old PM2 deployment docs and scripts remain in the repository as historical
-references only. For production, use only:
+Old PM2 deployment docs and scripts have been removed. For production, use only:
 
 - `deploy/prod-deploy.sh`
 - `deploy/server-deploy.sh`

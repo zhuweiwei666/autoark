@@ -17,6 +17,7 @@ import Session from '../memory/session.model'
 import {
   AgentContext,
   ConversationMessage,
+  AgentRole,
   DecisionRecord,
   KnowledgeEntry,
   ToolCallRecord,
@@ -37,7 +38,7 @@ class MemoryService {
     organizationId?: string
     userId?: string
     triggerType: 'user_chat' | 'scheduled_run' | 'api_trigger' | 'orchestrator'
-    agentRole: string
+    agentRole: AgentRole
     inputContext?: string
     parentSessionId?: string
   }): Promise<void> {
