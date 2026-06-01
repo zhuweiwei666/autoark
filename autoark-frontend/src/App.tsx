@@ -83,7 +83,11 @@ function App() {
               <Route path="/fb-settings" element={<FacebookSettingsPage />} />
               {/* 保留旧路由兼容 */}
               <Route path="/fb-token" element={<FacebookTokenPage />} />
-              <Route path="/fb-pixels" element={<FacebookPixelsPage />} />
+              <Route path="/fb-pixels" element={
+                <ProtectedRoute requireRole="super_admin">
+                  <FacebookPixelsPage />
+                </ProtectedRoute>
+              } />
               <Route path="/fb-apps" element={
                 <ProtectedRoute requireRole="super_admin">
                   <FacebookAppPage />
