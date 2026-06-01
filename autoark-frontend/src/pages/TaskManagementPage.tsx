@@ -488,6 +488,9 @@ export default function TaskManagementPage() {
   const retryBlocked = Boolean(selectedTaskDiagnostics
     && selectedTaskDiagnostics.summary.retryableErrors === 0
     && selectedTaskDiagnostics.summary.blockedErrors > 0)
+  const rerunBlocked = Boolean(retryBlocked
+    && selectedTask
+    && ['failed', 'partial_success'].includes(selectedTask.status))
   const hasTaskFilters = Boolean(statusFilter || healthFilter || errorCodeFilter.trim())
   
   if (loading) {
@@ -629,7 +632,14 @@ export default function TaskManagementPage() {
                       </button>
                     )}
                     {['success', 'failed', 'partial_success', 'cancelled', 'completed'].includes(selectedTask.status) && (
-                      <button onClick={() => openRerunModal(selectedTask._id)} className="px-3 py-1 text-sm bg-green-600 text-white rounded hover:bg-green-700">🔄 再次执行</button>
+                      <button
+                        onClick={() => openRerunModal(selectedTask._id)}
+                        disabled={rerunBlocked}
+                        title={rerunBlocked ? '当前失败原因需要先处理权限、账户、Page、Pixel 或素材配置' : undefined}
+                        className="px-3 py-1 text-sm bg-green-600 text-white rounded hover:bg-green-700 disabled:bg-slate-300 disabled:cursor-not-allowed"
+                      >
+                        {rerunBlocked ? '需先处理后再执行' : '再次执行'}
+                      </button>
                     )}
                     <button
                       onClick={() => generateTaskSupportPackage(selectedTask._id)}
