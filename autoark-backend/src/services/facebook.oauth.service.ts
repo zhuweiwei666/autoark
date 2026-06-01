@@ -14,8 +14,16 @@ import * as oauthApi from '../integration/facebook/oauth.api'
 /**
  * 生成 Facebook 登录 URL（异步，支持多 App）
  */
-export const getFacebookLoginUrl = async (state?: string, appId?: string): Promise<string> => {
-  return oauthApi.getFacebookLoginUrl(state, appId)
+export const getFacebookLoginUrl = async (
+  state?: string,
+  appId?: string,
+  options: oauthApi.FacebookLoginUrlOptions = {},
+): Promise<string> => {
+  return oauthApi.getFacebookLoginUrl(state, appId, options)
+}
+
+export const getFacebookBulkAdRedirectUri = (): string => {
+  return oauthApi.getFacebookBulkAdRedirectUri()
 }
 
 /**
@@ -64,16 +72,18 @@ export const handleOAuthCallback = async (code: string, state?: string): Promise
 
     // 解析 state 获取 appId
     let appId: string | undefined
+    let redirectUri: string | undefined
     let originalState: string = ''
     if (state) {
       const stateData = oauthApi.parseStateParam(state)
       appId = stateData.appId
+      redirectUri = stateData.redirectUri
       originalState = stateData.originalState
       logger.info(`[OAuth] Using App ${appId || 'default'} from state`)
     }
 
     // 1. 将 code 交换为 Short-Lived Token
-    const shortLivedTokenData = await oauthApi.exchangeCodeForToken(code, appId)
+    const shortLivedTokenData = await oauthApi.exchangeCodeForToken(code, appId, redirectUri)
     const shortLivedToken = shortLivedTokenData.access_token
 
     // 2. 获取用户信息
@@ -157,4 +167,3 @@ export const handleOAuthCallback = async (code: string, state?: string): Promise
     throw error
   }
 }
-

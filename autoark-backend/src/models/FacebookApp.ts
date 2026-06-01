@@ -30,6 +30,7 @@ const facebookAppSchema = new mongoose.Schema(
       requestsPerMinute: { type: Number, default: 200 }, // 每分钟请求限制
       priority: { type: Number, default: 1 }, // 优先级，数字越大优先级越高
       enabledForBulkAds: { type: Boolean, default: true }, // 是否用于批量发广告
+      businessLoginConfigId: { type: String }, // Facebook Login for Business configuration ID
     },
     
     // 当前负载
@@ -127,4 +128,3 @@ facebookAppSchema.index({ status: 1, 'config.priority': -1 })
 facebookAppSchema.index({ 'currentLoad.activeTasks': 1 })
 
 export default mongoose.model('FacebookApp', facebookAppSchema)
-

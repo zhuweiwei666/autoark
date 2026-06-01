@@ -2,6 +2,19 @@ import { Request, Response, NextFunction } from 'express'
 import * as oauthService from '../services/facebook.oauth.service'
 import logger from '../utils/logger'
 
+const isBulkAdState = (state: unknown): boolean => {
+  if (typeof state !== 'string') return false
+  if (state.startsWith('bulk-ad|')) return true
+
+  try {
+    const decoded = Buffer.from(state, 'base64').toString('utf-8')
+    const parsed = JSON.parse(decoded)
+    return typeof parsed?.originalState === 'string' && parsed.originalState.startsWith('bulk-ad|')
+  } catch {
+    return false
+  }
+}
+
 /**
  * 获取 Facebook 登录 URL
  */
@@ -43,7 +56,7 @@ export const handleCallback = async (req: Request, res: Response, next: NextFunc
     
     // 根据 state 参数决定重定向目标
     // bulk-ad 来源使用专门的弹窗回调页面
-    const isBulkAd = state === 'bulk-ad'
+    const isBulkAd = isBulkAdState(state)
     const redirectBase = isBulkAd ? '/oauth/callback' : '/fb-token'
 
     // 检查是否有错误
@@ -59,7 +72,7 @@ export const handleCallback = async (req: Request, res: Response, next: NextFunc
     }
 
     // 处理 OAuth 回调
-    const result = await oauthService.handleOAuthCallback(code as string)
+    const result = await oauthService.handleOAuthCallback(code as string, state as string | undefined)
 
     // 重定向到目标页面，显示成功消息和用户信息
     const params = new URLSearchParams({
@@ -79,7 +92,7 @@ export const handleCallback = async (req: Request, res: Response, next: NextFunc
     res.redirect(`${redirectBase}?${params.toString()}`)
   } catch (error: any) {
     logger.error('[OAuth] Callback handler failed:', error)
-    const isBulkAd = req.query.state === 'bulk-ad'
+    const isBulkAd = isBulkAdState(req.query.state)
     const redirectBase = isBulkAd ? '/oauth/callback' : '/fb-token'
     res.redirect(`${redirectBase}?oauth_error=${encodeURIComponent(error.message || 'OAuth callback failed')}`)
   }
@@ -104,4 +117,3 @@ export const getOAuthConfig = async (req: Request, res: Response, next: NextFunc
     next(error)
   }
 }
-

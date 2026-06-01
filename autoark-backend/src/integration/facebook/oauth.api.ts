@@ -9,7 +9,28 @@ const FB_OAUTH_BASE_URL = 'https://www.facebook.com'
 // 从环境变量读取作为后备
 const ENV_FB_APP_ID = process.env.FACEBOOK_APP_ID || ''
 const ENV_FB_APP_SECRET = process.env.FACEBOOK_APP_SECRET || ''
+const ENV_FB_BUSINESS_LOGIN_CONFIG_ID =
+  process.env.FACEBOOK_BUSINESS_LOGIN_CONFIG_ID || process.env.FACEBOOK_CONFIG_ID || ''
 const FB_REDIRECT_URI = process.env.FACEBOOK_REDIRECT_URI || 'http://localhost:3001/api/facebook/oauth/callback'
+
+const getBulkAdRedirectUri = (): string => {
+  if (process.env.FACEBOOK_BULK_AD_REDIRECT_URI) {
+    return process.env.FACEBOOK_BULK_AD_REDIRECT_URI
+  }
+
+  if (process.env.FACEBOOK_REDIRECT_URI?.includes('/api/facebook/oauth/callback')) {
+    return process.env.FACEBOOK_REDIRECT_URI.replace('/api/facebook/oauth/callback', '/api/bulk-ad/auth/callback')
+  }
+
+  return 'http://localhost:3001/api/bulk-ad/auth/callback'
+}
+
+export const getFacebookBulkAdRedirectUri = (): string => getBulkAdRedirectUri()
+
+export interface FacebookLoginUrlOptions {
+  businessLogin?: boolean
+  redirectUri?: string
+}
 
 /**
  * 获取可用的 App 配置（优先从数据库，后备环境变量）
@@ -17,6 +38,7 @@ const FB_REDIRECT_URI = process.env.FACEBOOK_REDIRECT_URI || 'http://localhost:3
 export const getActiveAppConfig = async (appId?: string): Promise<{
   appId: string
   appSecret: string
+  businessLoginConfigId?: string
   source: 'database' | 'env'
 }> => {
   try {
@@ -27,6 +49,7 @@ export const getActiveAppConfig = async (appId?: string): Promise<{
         return {
           appId: app.appId,
           appSecret: app.appSecret,
+          businessLoginConfigId: app.config?.businessLoginConfigId,
           source: 'database',
         }
       }
@@ -67,6 +90,7 @@ export const getActiveAppConfig = async (appId?: string): Promise<{
       return {
         appId: app.appId,
         appSecret: app.appSecret,
+        businessLoginConfigId: app.config?.businessLoginConfigId,
         source: 'database',
       }
     }
@@ -77,6 +101,7 @@ export const getActiveAppConfig = async (appId?: string): Promise<{
       return {
         appId: ENV_FB_APP_ID,
         appSecret: ENV_FB_APP_SECRET,
+        businessLoginConfigId: ENV_FB_BUSINESS_LOGIN_CONFIG_ID || undefined,
         source: 'env',
       }
     }
@@ -115,8 +140,14 @@ export const getAvailableApps = async (): Promise<Array<{
  * @param state - 状态参数
  * @param appId - 可选，指定使用哪个 App
  */
-export const getFacebookLoginUrl = async (state?: string, appId?: string): Promise<string> => {
+export const getFacebookLoginUrl = async (
+  state?: string,
+  appId?: string,
+  options: FacebookLoginUrlOptions = {},
+): Promise<string> => {
   const config = await getActiveAppConfig(appId)
+  const redirectUri = options.redirectUri || FB_REDIRECT_URI
+  const businessLoginConfigId = config.businessLoginConfigId || ENV_FB_BUSINESS_LOGIN_CONFIG_ID
   
   const scopes = [
     'ads_management',
@@ -124,22 +155,33 @@ export const getFacebookLoginUrl = async (state?: string, appId?: string): Promi
     'business_management',
     'pages_show_list',
     'pages_read_engagement',
+    'pages_manage_ads',
   ].join(',')
 
   // 在 state 中编码 appId，以便回调时知道用哪个 app
   const stateData = {
     originalState: state || '',
     appId: config.appId,
+    redirectUri,
   }
 
   const params = new URLSearchParams({
     client_id: config.appId,
-    redirect_uri: FB_REDIRECT_URI,
-    scope: scopes,
+    redirect_uri: redirectUri,
     response_type: 'code',
     state: Buffer.from(JSON.stringify(stateData)).toString('base64'),
-    auth_type: 'rerequest',
   })
+
+  if (options.businessLogin && businessLoginConfigId) {
+    params.set('config_id', businessLoginConfigId)
+    params.set('override_default_response_type', 'true')
+  } else {
+    params.set('scope', scopes)
+    params.set('auth_type', 'rerequest')
+    if (options.businessLogin && !businessLoginConfigId) {
+      logger.warn('[OAuth] Business Login requested but no config_id is configured; falling back to scope-based OAuth')
+    }
+  }
 
   return `${FB_OAUTH_BASE_URL}/${FB_API_VERSION}/dialog/oauth?${params.toString()}`
 }
@@ -158,16 +200,23 @@ export const getFacebookLoginUrlSync = (state?: string): string => {
     'business_management',
     'pages_show_list',
     'pages_read_engagement',
+    'pages_manage_ads',
   ].join(',')
 
   const params = new URLSearchParams({
     client_id: ENV_FB_APP_ID,
     redirect_uri: FB_REDIRECT_URI,
-    scope: scopes,
     response_type: 'code',
     state: state || '',
-    auth_type: 'rerequest',
   })
+
+  if (ENV_FB_BUSINESS_LOGIN_CONFIG_ID) {
+    params.set('config_id', ENV_FB_BUSINESS_LOGIN_CONFIG_ID)
+    params.set('override_default_response_type', 'true')
+  } else {
+    params.set('scope', scopes)
+    params.set('auth_type', 'rerequest')
+  }
 
   return `${FB_OAUTH_BASE_URL}/${FB_API_VERSION}/dialog/oauth?${params.toString()}`
 }
@@ -178,6 +227,7 @@ export const getFacebookLoginUrlSync = (state?: string): string => {
 export const parseStateParam = (state: string): {
   originalState: string
   appId?: string
+  redirectUri?: string
 } => {
   try {
     const decoded = Buffer.from(state, 'base64').toString('utf-8')
@@ -193,7 +243,7 @@ export const parseStateParam = (state: string): {
  * @param code - 授权码
  * @param appId - 可选，指定使用哪个 App（通常从 state 中解析）
  */
-export const exchangeCodeForToken = async (code: string, appId?: string): Promise<{
+export const exchangeCodeForToken = async (code: string, appId?: string, redirectUri: string = FB_REDIRECT_URI): Promise<{
   access_token: string
   token_type: string
   expires_in?: number
@@ -206,7 +256,7 @@ export const exchangeCodeForToken = async (code: string, appId?: string): Promis
       params: {
         client_id: config.appId,
         client_secret: config.appSecret,
-        redirect_uri: FB_REDIRECT_URI,
+        redirect_uri: redirectUri,
         code,
       },
     })

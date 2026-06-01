@@ -874,7 +874,11 @@ export const getAuthLoginUrl = async (req: Request, res: Response) => {
     // 格式: bulk-ad|userId|organizationId
     const orgId = req.user.organizationId ? String(req.user.organizationId) : ''
     const stateData = `bulk-ad|${req.user.userId}|${orgId}`
-    const loginUrl = await oauthService.getFacebookLoginUrl(stateData, appId)
+    const redirectUri = oauthService.getFacebookBulkAdRedirectUri()
+    const loginUrl = await oauthService.getFacebookLoginUrl(stateData, appId, {
+      businessLogin: true,
+      redirectUri,
+    })
     
     // 解析 client_id（便于排查 Facebook Login “功能不可用”属于哪个 App）
     let clientIdInUrl: string | null = null
@@ -894,6 +898,7 @@ export const getAuthLoginUrl = async (req: Request, res: Response) => {
         loginUrl,
         usingDefaultApp: !appId,
         clientId: clientIdInUrl,
+        redirectUri,
         serverTime: new Date().toISOString(),
       },
     })
@@ -1517,4 +1522,3 @@ export const refreshAdsReviewStatus = async (req: Request, res: Response) => {
     res.status(500).json({ success: false, error: error.message })
   }
 }
-
