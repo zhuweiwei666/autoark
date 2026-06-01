@@ -266,6 +266,46 @@ export const getTaskDiagnostics = async (req: Request, res: Response) => {
 }
 
 /**
+ * 获取任务排障包
+ * GET /api/bulk-ad/tasks/:id/support-package
+ */
+export const getTaskSupportPackage = async (req: Request, res: Response) => {
+  try {
+    const supportPackage = await bulkAdService.getTaskSupportPackage(req.params.id, getAssetFilter(req))
+    const firstBucket = supportPackage.diagnostics?.buckets?.[0]
+    await writeBulkAdAudit(req, {
+      action: 'bulk_ad.task_support_package.generate',
+      targetType: 'ad_task',
+      targetId: req.params.id,
+      summary: `生成任务排障包：${supportPackage.task?.name || req.params.id}`,
+      metadata: {
+        supportId: supportPackage.supportId,
+        taskStatus: supportPackage.task?.status,
+        health: supportPackage.diagnostics?.health,
+        totalErrors: supportPackage.diagnostics?.summary?.totalErrors || 0,
+        retryableErrors: supportPackage.diagnostics?.summary?.retryableErrors || 0,
+        blockedErrors: supportPackage.diagnostics?.summary?.blockedErrors || 0,
+        failedAccounts: supportPackage.diagnostics?.summary?.failedAccounts || 0,
+        failedItemCount: supportPackage.failedItems?.length || 0,
+        topErrorCode: firstBucket?.errorCode,
+      },
+    })
+    res.json({ success: true, data: supportPackage })
+  } catch (error: any) {
+    logger.error('[BulkAd] Get task support package failed:', error)
+    await writeBulkAdAudit(req, {
+      action: 'bulk_ad.task_support_package.generate',
+      status: 'failed',
+      targetType: 'ad_task',
+      targetId: req.params.id,
+      summary: '生成任务排障包失败',
+      reason: error.message,
+    })
+    res.status(error.message === 'Task not found' ? 404 : 500).json({ success: false, error: error.message })
+  }
+}
+
+/**
  * 获取任务列表
  * GET /api/bulk-ad/tasks
  */

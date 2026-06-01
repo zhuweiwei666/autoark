@@ -97,6 +97,40 @@ interface TaskDiagnostics {
   topNextActions: string[]
 }
 
+interface TaskSupportPackage {
+  supportId: string
+  generatedAt: string
+  task: {
+    id: string
+    name?: string
+    status: string
+    platform?: string
+    taskType?: string
+    createdAt?: string
+    startedAt?: string
+    completedAt?: string
+    duration?: number
+    progress?: Task['progress']
+  }
+  diagnostics: TaskDiagnostics
+  failedItems: Array<{
+    accountId: string
+    accountName?: string
+    status: string
+    createdCount?: number
+    errors: TaskError[]
+  }>
+  recentAuditLogs: Array<{
+    category: string
+    action: string
+    status: 'success' | 'failed' | 'warning'
+    summary?: string
+    reason?: string
+    requestId?: string
+    createdAt?: string
+  }>
+}
+
 const STATUS_MAP: Record<string, { label: string; color: string }> = {
   pending: { label: '等待中', color: 'bg-slate-100 text-slate-600' },
   queued: { label: '排队中', color: 'bg-yellow-100 text-yellow-600' },
@@ -168,6 +202,9 @@ export default function TaskManagementPage() {
   const [reviewDetails, setReviewDetails] = useState<any>(null)
   const [taskDiagnostics, setTaskDiagnostics] = useState<TaskDiagnostics | null>(null)
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
+  const [taskSupportPackage, setTaskSupportPackage] = useState<TaskSupportPackage | null>(null)
+  const [supportPackageLoading, setSupportPackageLoading] = useState(false)
+  const [supportPackageError, setSupportPackageError] = useState<string | null>(null)
   
   // 🆕 倍率执行弹窗状态
   const [showRerunModal, setShowRerunModal] = useState(false)
@@ -204,6 +241,7 @@ export default function TaskManagementPage() {
   
   const loadTaskDetail = async (taskId: string) => {
     setRefreshing(true)
+    setSupportPackageError(null)
     try {
       const res = await authFetch(`${API_BASE}/bulk-ad/tasks/${taskId}`)
       const data = await res.json()
@@ -234,6 +272,25 @@ export default function TaskManagementPage() {
       console.error('Failed to load task diagnostics:', err)
     } finally {
       setDiagnosticsLoading(false)
+    }
+  }
+
+  const generateTaskSupportPackage = async (taskId: string) => {
+    setSupportPackageLoading(true)
+    setSupportPackageError(null)
+    try {
+      const res = await authFetch(`${API_BASE}/bulk-ad/tasks/${taskId}/support-package`)
+      const data = await res.json()
+      if (data.success) {
+        setTaskSupportPackage(data.data)
+      } else {
+        setSupportPackageError(data.error || '生成排障包失败')
+      }
+    } catch (err) {
+      console.error('Failed to generate task support package:', err)
+      setSupportPackageError('生成排障包失败，请刷新后重试')
+    } finally {
+      setSupportPackageLoading(false)
     }
   }
   
@@ -351,6 +408,27 @@ export default function TaskManagementPage() {
     return new Date(iso).toLocaleString('zh-CN')
   }
 
+  const selectedTaskSupportPackage = taskSupportPackage?.task.id === selectedTask?._id ? taskSupportPackage : null
+
+  const copyTaskSupportSummary = async () => {
+    if (!selectedTaskSupportPackage) return
+    const topIssue = selectedTaskSupportPackage.diagnostics.buckets[0]
+    const lines = [
+      `排障包：${selectedTaskSupportPackage.supportId}`,
+      `任务：${selectedTaskSupportPackage.task.name || selectedTaskSupportPackage.task.id}`,
+      `状态：${STATUS_MAP[selectedTaskSupportPackage.task.status]?.label || selectedTaskSupportPackage.task.status}`,
+      `健康度：${DIAGNOSTIC_HEALTH_MAP[selectedTaskSupportPackage.diagnostics.health]?.label || selectedTaskSupportPackage.diagnostics.health}`,
+      `账户：成功 ${selectedTaskSupportPackage.diagnostics.summary.successAccounts} / 失败 ${selectedTaskSupportPackage.diagnostics.summary.failedAccounts} / 总计 ${selectedTaskSupportPackage.diagnostics.summary.totalAccounts}`,
+      `错误：总计 ${selectedTaskSupportPackage.diagnostics.summary.totalErrors}，可重试 ${selectedTaskSupportPackage.diagnostics.summary.retryableErrors}，需处理 ${selectedTaskSupportPackage.diagnostics.summary.blockedErrors}`,
+      topIssue ? `首要问题：${topIssue.errorCode} - ${topIssue.customerMessage}` : '首要问题：无',
+      selectedTaskSupportPackage.diagnostics.topNextActions.length > 0
+        ? `建议动作：${selectedTaskSupportPackage.diagnostics.topNextActions.slice(0, 3).join('；')}`
+        : '建议动作：暂无',
+    ]
+    await navigator.clipboard.writeText(lines.join('\n'))
+    alert('排障摘要已复制')
+  }
+
   const selectedTaskDiagnostics = taskDiagnostics?.taskId === selectedTask?._id ? taskDiagnostics : null
   const retryBlocked = Boolean(selectedTaskDiagnostics
     && selectedTaskDiagnostics.summary.retryableErrors === 0
@@ -430,11 +508,23 @@ export default function TaskManagementPage() {
                     {['success', 'failed', 'partial_success', 'cancelled', 'completed'].includes(selectedTask.status) && (
                       <button onClick={() => openRerunModal(selectedTask._id)} className="px-3 py-1 text-sm bg-green-600 text-white rounded hover:bg-green-700">🔄 再次执行</button>
                     )}
+                    <button
+                      onClick={() => generateTaskSupportPackage(selectedTask._id)}
+                      disabled={supportPackageLoading}
+                      className="px-3 py-1 text-sm border border-teal-300 text-teal-700 rounded hover:bg-teal-50 disabled:opacity-50"
+                    >
+                      {supportPackageLoading ? '生成中...' : '生成排障包'}
+                    </button>
                     <button onClick={() => loadTaskDetail(selectedTask._id)} disabled={refreshing} className="px-3 py-1 text-sm border border-slate-300 rounded hover:bg-slate-50 disabled:opacity-50">
                       {refreshing ? '刷新中...' : '刷新'}
                     </button>
                   </div>
                 </div>
+                {supportPackageError && (
+                  <div className="border-b border-red-100 bg-red-50 px-4 py-2 text-sm text-red-700">
+                    {supportPackageError}
+                  </div>
+                )}
                 
                 <div className="p-4 border-b border-slate-200">
                   <div className="grid grid-cols-4 gap-4 text-center">
@@ -518,6 +608,112 @@ export default function TaskManagementPage() {
                         )}
                       </div>
                     ) : null}
+                  </div>
+                )}
+
+                {selectedTaskSupportPackage && (
+                  <div className="p-4 border-b border-slate-200 bg-teal-50/50">
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                      <div>
+                        <h3 className="font-semibold text-sm text-slate-900">任务排障包</h3>
+                        <div className="mt-1 font-mono text-xs text-slate-500">{selectedTaskSupportPackage.supportId}</div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className={`rounded px-2 py-0.5 text-xs font-semibold ${DIAGNOSTIC_HEALTH_MAP[selectedTaskSupportPackage.diagnostics.health]?.color || DIAGNOSTIC_HEALTH_MAP.unknown.color}`}>
+                          {DIAGNOSTIC_HEALTH_MAP[selectedTaskSupportPackage.diagnostics.health]?.label || selectedTaskSupportPackage.diagnostics.health}
+                        </span>
+                        <button
+                          onClick={copyTaskSupportSummary}
+                          className="rounded border border-teal-300 bg-white px-3 py-1 text-xs font-medium text-teal-700 hover:bg-teal-50"
+                        >
+                          复制摘要
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-4 gap-2 text-center">
+                      <div className="rounded-lg bg-white px-2 py-2">
+                        <div className="text-lg font-bold text-slate-800">{selectedTaskSupportPackage.diagnostics.summary.totalErrors}</div>
+                        <div className="text-[11px] text-slate-500">错误数</div>
+                      </div>
+                      <div className="rounded-lg bg-white px-2 py-2">
+                        <div className="text-lg font-bold text-red-700">{selectedTaskSupportPackage.diagnostics.summary.blockedErrors}</div>
+                        <div className="text-[11px] text-red-600">需处理</div>
+                      </div>
+                      <div className="rounded-lg bg-white px-2 py-2">
+                        <div className="text-lg font-bold text-blue-700">{selectedTaskSupportPackage.diagnostics.summary.retryableErrors}</div>
+                        <div className="text-[11px] text-blue-600">可重试</div>
+                      </div>
+                      <div className="rounded-lg bg-white px-2 py-2">
+                        <div className="text-lg font-bold text-slate-800">{selectedTaskSupportPackage.failedItems.length}</div>
+                        <div className="text-[11px] text-slate-500">失败项</div>
+                      </div>
+                    </div>
+
+                    {selectedTaskSupportPackage.diagnostics.buckets[0] && (
+                      <div className="mt-3 rounded-lg border border-teal-200 bg-white px-3 py-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="rounded bg-slate-100 px-2 py-0.5 font-mono text-[11px] font-semibold text-slate-700">
+                            {selectedTaskSupportPackage.diagnostics.buckets[0].errorCode}
+                          </span>
+                          <span className="text-[11px] text-slate-500">
+                            影响 {selectedTaskSupportPackage.diagnostics.buckets[0].count} 次
+                          </span>
+                        </div>
+                        <div className="mt-1 text-sm font-medium text-slate-800">
+                          {selectedTaskSupportPackage.diagnostics.buckets[0].customerMessage}
+                        </div>
+                        {selectedTaskSupportPackage.diagnostics.topNextActions.length > 0 && (
+                          <div className="mt-2 text-xs leading-5 text-slate-600">
+                            建议：{selectedTaskSupportPackage.diagnostics.topNextActions.slice(0, 3).join('；')}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    <div className="mt-3 grid grid-cols-2 gap-3">
+                      <div className="rounded-lg border border-slate-200 bg-white p-3">
+                        <div className="mb-2 text-xs font-semibold text-slate-700">失败账户</div>
+                        {selectedTaskSupportPackage.failedItems.length === 0 ? (
+                          <div className="text-xs text-slate-500">暂无失败账户</div>
+                        ) : (
+                          <div className="space-y-2">
+                            {selectedTaskSupportPackage.failedItems.slice(0, 3).map(item => (
+                              <div key={item.accountId} className="text-xs">
+                                <div className="font-medium text-slate-800">{item.accountName || item.accountId}</div>
+                                <div className="mt-0.5 text-slate-500">
+                                  {(item.errors || []).slice(0, 2).map(error => getErrorCodeLabel(error)).join('、') || item.status}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      <div className="rounded-lg border border-slate-200 bg-white p-3">
+                        <div className="mb-2 text-xs font-semibold text-slate-700">最近审计</div>
+                        {selectedTaskSupportPackage.recentAuditLogs.length === 0 ? (
+                          <div className="text-xs text-slate-500">暂无审计记录</div>
+                        ) : (
+                          <div className="space-y-2">
+                            {selectedTaskSupportPackage.recentAuditLogs.slice(0, 3).map((log, idx) => (
+                              <div key={`${log.action}-${idx}`} className="text-xs">
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="font-medium text-slate-800">{log.summary || log.action}</span>
+                                  <span className={log.status === 'failed' ? 'text-red-600' : log.status === 'warning' ? 'text-orange-600' : 'text-green-600'}>
+                                    {log.status}
+                                  </span>
+                                </div>
+                                <div className="mt-0.5 text-slate-500">{formatTime(log.createdAt)}</div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="mt-3 text-right text-[11px] text-slate-500">
+                      生成时间：{formatTime(selectedTaskSupportPackage.generatedAt)}
+                    </div>
                   </div>
                 )}
                 

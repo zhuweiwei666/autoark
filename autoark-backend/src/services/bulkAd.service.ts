@@ -7,6 +7,7 @@ import CreativeGroup from '../models/CreativeGroup'
 import FbToken from '../models/FbToken'
 import FacebookUser from '../models/FacebookUser'
 import AdMaterialMapping from '../models/AdMaterialMapping'
+import OpsLog from '../models/OpsLog'
 import logger from '../utils/logger'
 import User from '../models/User'
 import Account from '../models/Account'
@@ -1375,6 +1376,126 @@ export const getTaskDiagnostics = async (taskId: string, accessFilter: any = {})
   return buildTaskOperationalDiagnostics(task)
 }
 
+const buildTaskSupportId = (taskId: string, generatedAt: Date) => {
+  const timestamp = generatedAt.toISOString().replace(/\D/g, '').slice(0, 14)
+  const suffix = String(taskId || 'task').slice(-6)
+  return `AUTOARK-TASK-${timestamp}-${suffix}`
+}
+
+const redactSensitiveText = (value: any) => {
+  if (typeof value !== 'string') return value
+  return value
+    .replace(/(access[_-]?token|token|secret|password)(\s*[=:]\s*)[^&\s,;]+/gi, '$1$2[REDACTED]')
+    .replace(/\bEAA[A-Za-z0-9_-]{20,}\b/g, '[REDACTED_TOKEN]')
+}
+
+const safeDiagnosticError = (error: any) => ({
+  entityType: error.entityType,
+  errorCode: error.errorCode,
+  customerMessage: error.customerMessage,
+  operatorMessage: redactSensitiveText(error.operatorMessage),
+  retryable: error.retryable,
+  nextActions: error.nextActions,
+  source: error.source,
+  rawCode: error.rawCode,
+  rawSubcode: error.rawSubcode,
+  timestamp: error.timestamp,
+})
+
+export const getTaskSupportPackage = async (taskId: string, accessFilter: any = {}) => {
+  const task: any = await AdTask.findOne(combineFilters({ _id: taskId }, accessFilter))
+    .populate('draftId')
+    .lean()
+  if (!task) {
+    throw new Error('Task not found')
+  }
+
+  const generatedAt = new Date()
+  const diagnostics = buildTaskOperationalDiagnostics(task)
+  const failedItems = (task.items || [])
+    .filter((item: any) => item.status === 'failed' || (Array.isArray(item.errors) && item.errors.length > 0))
+    .slice(0, 20)
+    .map((item: any) => {
+      const itemErrors = Array.isArray(item.errors) && item.errors.length > 0
+        ? item.errors
+        : item.error || 'Task item failed without structured error'
+      const normalizedErrors = normalizeTaskErrors(itemErrors, {
+        entityType: item.status === 'failed' ? 'general' : undefined,
+      })
+
+      return {
+        accountId: item.accountId,
+        accountName: item.accountName,
+        status: item.status,
+        createdCount: item.result?.createdCount || 0,
+        startedAt: item.startedAt,
+        completedAt: item.completedAt,
+        duration: item.duration,
+        errors: normalizedErrors.map(safeDiagnosticError),
+      }
+    })
+
+  const auditQuery: any = {
+    $or: [
+      { targetType: 'ad_task', targetId: taskId },
+      { 'related.newTaskIds': taskId },
+    ],
+  }
+  if (task.organizationId) {
+    auditQuery.organizationId = task.organizationId
+  }
+  const recentAuditLogs = await OpsLog.find(auditQuery)
+    .sort({ createdAt: -1 })
+    .limit(12)
+    .select('category action status targetType targetId summary reason related requestId createdAt')
+    .lean()
+  const safeRecentAuditLogs = recentAuditLogs.map((log: any) => ({
+    category: log.category,
+    action: log.action,
+    status: log.status,
+    targetType: log.targetType,
+    targetId: log.targetId,
+    summary: redactSensitiveText(log.summary),
+    reason: redactSensitiveText(log.reason),
+    related: log.related,
+    requestId: log.requestId,
+    createdAt: log.createdAt,
+  }))
+
+  return {
+    supportId: buildTaskSupportId(taskId, generatedAt),
+    generatedAt: generatedAt.toISOString(),
+    task: {
+      id: String(task._id),
+      name: task.name,
+      status: task.status,
+      platform: task.platform,
+      taskType: task.taskType,
+      organizationId: task.organizationId ? String(task.organizationId) : undefined,
+      createdBy: task.createdBy,
+      draftId: task.draftId?._id ? String(task.draftId._id) : task.draftId ? String(task.draftId) : undefined,
+      createdAt: task.createdAt,
+      queuedAt: task.queuedAt,
+      startedAt: task.startedAt,
+      completedAt: task.completedAt,
+      duration: task.duration,
+      reviewStatus: task.reviewStatus,
+      progress: task.progress,
+    },
+    diagnostics: {
+      ...diagnostics,
+      buckets: diagnostics.buckets.slice(0, 8).map(bucket => ({
+        ...bucket,
+        accounts: bucket.accounts.slice(0, 10),
+        nextActions: bucket.nextActions.slice(0, 4),
+      })),
+      topNextActions: diagnostics.topNextActions.slice(0, 6),
+    },
+    failedItems,
+    recentAuditLogs: safeRecentAuditLogs,
+  }
+}
+
 /**
  * 获取任务列表
  * @param query 查询参数
@@ -1681,6 +1802,7 @@ export default {
   executeTaskForAccount,
   getTask,
   getTaskDiagnostics,
+  getTaskSupportPackage,
   getTaskList,
   cancelTask,
   retryFailedItems,

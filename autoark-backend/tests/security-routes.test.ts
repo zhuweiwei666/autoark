@@ -15,6 +15,7 @@ describe('protected API routes', () => {
     ['GET', '/api/commercial/plans'],
     ['GET', '/api/audit-logs'],
     ['GET', '/api/bulk-ad/tasks/665000000000000000000001/diagnostics'],
+    ['GET', '/api/bulk-ad/tasks/665000000000000000000001/support-package'],
   ] as const
 
   it.each(protectedRequests)('%s %s requires authentication', async (method, path) => {
