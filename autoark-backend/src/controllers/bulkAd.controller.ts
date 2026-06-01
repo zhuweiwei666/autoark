@@ -32,6 +32,7 @@ import {
   scopedOwnerFilter,
   scopedTokenFilter,
 } from '../utils/accessControl'
+import { getAccountIdsForQuery, normalizeForStorage } from '../utils/accountId'
 
 /**
  * 获取资产过滤条件（文案包/定向包/创意组等）
@@ -45,6 +46,63 @@ const getAssetFilter = (req: Request): any => {
 
 const getScopedActiveToken = (req: Request) => {
   return FbToken.findOne({ status: 'active', ...scopedTokenFilter(req) }).sort({ updatedAt: -1 })
+}
+
+const createHttpError = (message: string, statusCode: number) => {
+  const error: any = new Error(message)
+  error.statusCode = statusCode
+  return error
+}
+
+const parseAccountIdParam = (value: any) => normalizeForStorage(Array.isArray(value) ? value[0] : value)
+
+const assertScopedFacebookAccountAccess = async (req: Request, rawAccountId: any) => {
+  const accountId = parseAccountIdParam(rawAccountId)
+  if (!accountId) {
+    throw createHttpError('accountId is required', 400)
+  }
+
+  if (req.user?.role === UserRole.SUPER_ADMIN) {
+    return accountId
+  }
+
+  const account = await Account.findOne(combineFilters(
+    {
+      channel: 'facebook',
+      accountId: { $in: getAccountIdsForQuery([accountId]) },
+    },
+    getAssetFilter(req),
+  ))
+    .select('_id accountId')
+    .lean()
+
+  if (!account) {
+    throw createHttpError(`无权访问广告账户 ${accountId}，请先同步并分配账户资产`, 403)
+  }
+
+  return accountId
+}
+
+const getScopedTokenForAccount = async (req: Request, rawAccountId: any) => {
+  const accountId = await assertScopedFacebookAccountAccess(req, rawAccountId)
+  const allTokens = await FbToken.find({ status: 'active', ...scopedTokenFilter(req) })
+
+  for (const token of allTokens) {
+    try {
+      const account = await facebookClient.get(`/act_${accountId}`, {
+        access_token: token.token,
+        fields: 'id,name',
+      })
+      if (account?.id) {
+        logger.info(`[BulkAd] Found token for account ${accountId}: ${token.fbUserName}`)
+        return { accountId, fbToken: token }
+      }
+    } catch (error: any) {
+      logger.debug(`[BulkAd] Token ${token.fbUserName || token._id} has no access to account ${accountId}`)
+    }
+  }
+
+  throw createHttpError(`没有找到可访问账户 ${accountId} 的 Facebook Token`, 401)
 }
 
 const writeBulkAdAudit = (req: Request, input: {
@@ -939,20 +997,12 @@ export const searchLocations = async (req: Request, res: Response) => {
 export const getFacebookPages = async (req: Request, res: Response) => {
   try {
     const { accountId } = req.query
-    if (!accountId) {
-      return res.status(400).json({ success: false, error: 'accountId is required' })
-    }
-    
-    const fbToken = await getScopedActiveToken(req)
-    if (!fbToken) {
-      return res.status(400).json({ success: false, error: 'No active Facebook token' })
-    }
-    
-    const result = await getPages(accountId as string, fbToken.token)
+    const { accountId: scopedAccountId, fbToken } = await getScopedTokenForAccount(req, accountId)
+    const result = await getPages(scopedAccountId, fbToken.token)
     res.json({ success: true, data: result.data })
   } catch (error: any) {
     logger.error('[BulkAd] Get Facebook pages failed:', error)
-    res.status(500).json({ success: false, error: error.message })
+    res.status(error.statusCode || 500).json({ success: false, error: error.message })
   }
 }
 
@@ -987,20 +1037,12 @@ export const getFacebookInstagramAccounts = async (req: Request, res: Response) 
 export const getFacebookPixels = async (req: Request, res: Response) => {
   try {
     const { accountId } = req.query
-    if (!accountId) {
-      return res.status(400).json({ success: false, error: 'accountId is required' })
-    }
-    
-    const fbToken = await getScopedActiveToken(req)
-    if (!fbToken) {
-      return res.status(400).json({ success: false, error: 'No active Facebook token' })
-    }
-    
-    const result = await getPixels(accountId as string, fbToken.token)
+    const { accountId: scopedAccountId, fbToken } = await getScopedTokenForAccount(req, accountId)
+    const result = await getPixels(scopedAccountId, fbToken.token)
     res.json({ success: true, data: result.data })
   } catch (error: any) {
     logger.error('[BulkAd] Get Facebook pixels failed:', error)
-    res.status(500).json({ success: false, error: error.message })
+    res.status(error.statusCode || 500).json({ success: false, error: error.message })
   }
 }
 
@@ -1011,20 +1053,12 @@ export const getFacebookPixels = async (req: Request, res: Response) => {
 export const getFacebookCustomConversions = async (req: Request, res: Response) => {
   try {
     const { accountId } = req.query
-    if (!accountId) {
-      return res.status(400).json({ success: false, error: 'accountId is required' })
-    }
-    
-    const fbToken = await getScopedActiveToken(req)
-    if (!fbToken) {
-      return res.status(400).json({ success: false, error: 'No active Facebook token' })
-    }
-    
-    const result = await getCustomConversions(accountId as string, fbToken.token)
+    const { accountId: scopedAccountId, fbToken } = await getScopedTokenForAccount(req, accountId)
+    const result = await getCustomConversions(scopedAccountId, fbToken.token)
     res.json({ success: true, data: result.data })
   } catch (error: any) {
     logger.error('[BulkAd] Get custom conversions failed:', error)
-    res.status(500).json({ success: false, error: error.message })
+    res.status(error.statusCode || 500).json({ success: false, error: error.message })
   }
 }
 
@@ -1575,53 +1609,25 @@ export const getAuthAdAccounts = async (req: Request, res: Response) => {
 export const getAuthPages = async (req: Request, res: Response) => {
   try {
     const { accountId } = req.query
-    if (!accountId) {
-      return res.status(400).json({ success: false, error: 'accountId is required' })
-    }
-    
-    // 🔧 修复：根据账户 ID 找到正确的 token
-    let fbToken: any = null
-    
-    // 1. 尝试找到有权限访问此账户的 token
-    const allTokens = await FbToken.find({ status: 'active', ...scopedTokenFilter(req) })
-    for (const t of allTokens) {
-      try {
-        // 验证此 token 是否有权访问该账户
-        const res = await facebookClient.get(`/act_${accountId}`, { 
-          access_token: t.token,
-          fields: 'id,name'
-        })
-        if (res && res.id) {
-          fbToken = t
-          logger.info(`[BulkAd] Found token for account ${accountId}: ${t.fbUserName}`)
-          break
-        }
-      } catch (e: any) {
-        // 这个 token 没有权限，继续尝试下一个
-      }
-    }
-    
-    if (!fbToken) {
-      return res.status(401).json({ success: false, error: `没有找到可访问账户 ${accountId} 的 Token` })
-    }
+    const { accountId: scopedAccountId, fbToken } = await getScopedTokenForAccount(req, accountId)
     
     // 1. 从广告账户获取 promote_pages（BM 分配的主页）
     let pages: any[] = []
     try {
-      const promoteResult = await facebookClient.get(`/act_${accountId}/promote_pages`, {
+      const promoteResult = await facebookClient.get(`/act_${scopedAccountId}/promote_pages`, {
         access_token: fbToken.token,
         fields: 'id,name,picture',
         limit: 100,
       })
       pages = promoteResult.data || []
-      logger.info(`[BulkAd] Found ${pages.length} promote_pages for account ${accountId}`)
+      logger.info(`[BulkAd] Found ${pages.length} promote_pages for account ${scopedAccountId}`)
     } catch (e: any) {
-      logger.warn(`[BulkAd] Failed to get promote_pages for ${accountId}: ${e.message}`)
+      logger.warn(`[BulkAd] Failed to get promote_pages for ${scopedAccountId}: ${e.message}`)
     }
     
     // 2. 如果没有 promote_pages，回退获取用户管理的主页
     if (pages.length === 0) {
-      logger.info(`[BulkAd] No promote_pages for ${accountId}, falling back to user pages`)
+      logger.info(`[BulkAd] No promote_pages for ${scopedAccountId}, falling back to user pages`)
       try {
         // 使用找到的 token 获取该用户管理的所有主页
         const userPagesResult = await facebookClient.get(`/${fbToken.fbUserId}/accounts`, {
@@ -1648,7 +1654,7 @@ export const getAuthPages = async (req: Request, res: Response) => {
     res.json({ success: true, data: sanitizeFacebookPages(pages) })
   } catch (error: any) {
     logger.error('[BulkAd] Get pages failed:', error)
-    res.status(500).json({ success: false, error: error.message })
+    res.status(error.statusCode || 500).json({ success: false, error: error.message })
   }
 }
 
@@ -1659,16 +1665,9 @@ export const getAuthPages = async (req: Request, res: Response) => {
 export const getAuthPixels = async (req: Request, res: Response) => {
   try {
     const { accountId } = req.query
-    if (!accountId) {
-      return res.status(400).json({ success: false, error: 'accountId is required' })
-    }
+    const { accountId: scopedAccountId, fbToken } = await getScopedTokenForAccount(req, accountId)
     
-    const fbToken: any = await getScopedActiveToken(req)
-    if (!fbToken) {
-      return res.status(401).json({ success: false, error: '未授权 Facebook 账号' })
-    }
-    
-    const result = await facebookClient.get(`/act_${accountId}/adspixels`, {
+    const result = await facebookClient.get(`/act_${scopedAccountId}/adspixels`, {
       access_token: fbToken.token,
       fields: 'id,name,code,last_fired_time',
       limit: 100,
@@ -1677,7 +1676,7 @@ export const getAuthPixels = async (req: Request, res: Response) => {
     res.json({ success: true, data: result.data || [] })
   } catch (error: any) {
     logger.error('[BulkAd] Get pixels failed:', error)
-    res.status(500).json({ success: false, error: error.message })
+    res.status(error.statusCode || 500).json({ success: false, error: error.message })
   }
 }
 

@@ -25,11 +25,22 @@ jest.mock('../src/models/FacebookApp', () => ({
   },
 }))
 
+jest.mock('../src/integration/facebook/facebookClient', () => ({
+  facebookClient: {
+    get: jest.fn(),
+  },
+}))
+
 import bulkAdService from '../src/services/bulkAd.service'
 import { writeAuditLog } from '../src/services/auditLog.service'
 import * as oauthService from '../src/services/facebook.oauth.service'
 import FacebookApp from '../src/models/FacebookApp'
+import Account from '../src/models/Account'
+import FbToken from '../src/models/FbToken'
+import { UserRole } from '../src/models/User'
+import { facebookClient } from '../src/integration/facebook/facebookClient'
 import {
+  getAuthPixels,
   getAuthLoginUrl,
   getTaskSupportPackage,
   rerunTask,
@@ -40,10 +51,21 @@ const mockBulkAdService = bulkAdService as jest.Mocked<typeof bulkAdService>
 const mockWriteAuditLog = writeAuditLog as jest.Mock
 const mockOauthService = oauthService as jest.Mocked<typeof oauthService>
 const mockFacebookApp = FacebookApp as jest.Mocked<typeof FacebookApp>
+const mockFacebookClient = facebookClient as jest.Mocked<typeof facebookClient>
+
+const modelQuery = (value: any) => ({
+  select: jest.fn().mockReturnValue({
+    lean: jest.fn().mockResolvedValue(value),
+  }),
+})
 
 describe('bulk ad controller', () => {
   beforeEach(() => {
     jest.clearAllMocks()
+  })
+
+  afterEach(() => {
+    jest.restoreAllMocks()
   })
 
   it('writes an audit log when draft validation is blocked', async () => {
@@ -321,6 +343,88 @@ describe('bulk ad controller', () => {
       error: error.message,
       errorCode: 'MAX_CONCURRENT_TASKS_REACHED',
       details: error.details,
+    })
+  })
+
+  it('rejects auth pixel reads for accounts outside the requester asset scope', async () => {
+    jest.spyOn(Account, 'findOne').mockReturnValue(modelQuery(null) as any)
+    const tokenFind = jest.spyOn(FbToken, 'find').mockResolvedValue([] as any)
+
+    const req: any = {
+      query: { accountId: 'act_123' },
+      user: {
+        role: UserRole.ORG_ADMIN,
+        userId: '665000000000000000000002',
+        organizationId: '665000000000000000000001',
+      },
+    }
+    const res: any = {
+      json: jest.fn(),
+      status: jest.fn().mockReturnThis(),
+    }
+
+    await getAuthPixels(req, res)
+
+    const accountQuery = (Account.findOne as jest.Mock).mock.calls[0][0]
+    expect(accountQuery.$and[0]).toEqual({ channel: 'facebook', accountId: { $in: ['123', 'act_123'] } })
+    expect(String(accountQuery.$and[1].organizationId)).toBe('665000000000000000000001')
+    expect(tokenFind).not.toHaveBeenCalled()
+    expect(mockFacebookClient.get).not.toHaveBeenCalled()
+    expect(res.status).toHaveBeenCalledWith(403)
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      error: '无权访问广告账户 123，请先同步并分配账户资产',
+    })
+  })
+
+  it('uses the scoped token that can access the requested account when reading pixels', async () => {
+    jest.spyOn(Account, 'findOne').mockReturnValue(modelQuery({
+      _id: '665000000000000000000101',
+      accountId: '123',
+    }) as any)
+    jest.spyOn(FbToken, 'find').mockResolvedValue([
+      { _id: '665000000000000000000201', token: 'TOKEN_WITHOUT_ACCOUNT', fbUserName: 'token-a' },
+      { _id: '665000000000000000000202', token: 'TOKEN_WITH_ACCOUNT', fbUserName: 'token-b' },
+    ] as any)
+    mockFacebookClient.get
+      .mockRejectedValueOnce(new Error('Unsupported get request'))
+      .mockResolvedValueOnce({ id: 'act_123', name: 'Account 123' } as any)
+      .mockResolvedValueOnce({ data: [{ id: 'pixel_1', name: 'Pixel 1' }] } as any)
+
+    const req: any = {
+      query: { accountId: 'act_123' },
+      user: {
+        role: UserRole.ORG_ADMIN,
+        userId: '665000000000000000000002',
+        organizationId: '665000000000000000000001',
+      },
+    }
+    const res: any = {
+      json: jest.fn(),
+      status: jest.fn().mockReturnThis(),
+    }
+
+    await getAuthPixels(req, res)
+
+    const tokenQuery = (FbToken.find as jest.Mock).mock.calls[0][0]
+    expect(tokenQuery.status).toBe('active')
+    expect(String(tokenQuery.organizationId)).toBe('665000000000000000000001')
+    expect(mockFacebookClient.get).toHaveBeenNthCalledWith(1, '/act_123', {
+      access_token: 'TOKEN_WITHOUT_ACCOUNT',
+      fields: 'id,name',
+    })
+    expect(mockFacebookClient.get).toHaveBeenNthCalledWith(2, '/act_123', {
+      access_token: 'TOKEN_WITH_ACCOUNT',
+      fields: 'id,name',
+    })
+    expect(mockFacebookClient.get).toHaveBeenNthCalledWith(3, '/act_123/adspixels', {
+      access_token: 'TOKEN_WITH_ACCOUNT',
+      fields: 'id,name,code,last_fired_time',
+      limit: 100,
+    })
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      data: [{ id: 'pixel_1', name: 'Pixel 1' }],
     })
   })
 })
