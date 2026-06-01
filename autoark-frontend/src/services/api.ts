@@ -117,6 +117,33 @@ export async function getCommercialReadiness(organizationId?: string): Promise<{
   return response.json()
 }
 
+export interface OrganizationSummary {
+  _id: string
+  name: string
+  description?: string
+  status: 'active' | 'inactive' | 'suspended' | string
+  adminId?: {
+    _id?: string
+    username?: string
+    email?: string
+  } | string
+  createdAt?: string
+}
+
+export async function getOrganizations(): Promise<{
+  success: boolean
+  data: OrganizationSummary[]
+}> {
+  const response = await authFetch(`${API_BASE_URL}/api/organizations`)
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}))
+    throw new Error(error.message || 'Failed to fetch organizations')
+  }
+
+  return response.json()
+}
+
 // === 审计日志 ===
 
 export interface AuditLogEntry {

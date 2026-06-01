@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -13,7 +13,12 @@ import {
   WarningCircle,
   XCircle,
 } from "@phosphor-icons/react";
-import { getCommercialReadiness, type CommercialReadiness } from "../services/api";
+import {
+  getCommercialReadiness,
+  getOrganizations,
+  type CommercialReadiness,
+} from "../services/api";
+import { useAuth } from "../contexts/AuthContext";
 
 const statusCopy: Record<string, { label: string; className: string; icon: any }> = {
   done: {
@@ -258,12 +263,20 @@ function NextActionCard({ action }: { action: CommercialReadiness["nextActions"]
 }
 
 export default function CommercialCenterPage() {
+  const { isSuperAdmin } = useAuth();
+  const [selectedOrganizationId, setSelectedOrganizationId] = useState("");
   const { data, isLoading, error, refetch, isFetching } = useQuery({
-    queryKey: ["commercial-readiness"],
-    queryFn: () => getCommercialReadiness(),
+    queryKey: ["commercial-readiness", selectedOrganizationId || "platform"],
+    queryFn: () => getCommercialReadiness(selectedOrganizationId || undefined),
+  });
+  const { data: organizationsData, isLoading: organizationsLoading } = useQuery({
+    queryKey: ["commercial-organizations"],
+    queryFn: () => getOrganizations(),
+    enabled: isSuperAdmin,
   });
 
   const readiness = data?.data;
+  const organizations = organizationsData?.data || [];
   const readinessState = readiness?.state || {
     level: "attention",
     label: "状态计算中",
@@ -339,6 +352,27 @@ export default function CommercialCenterPage() {
           <p className="mt-3 max-w-3xl text-sm font-semibold leading-7 text-zinc-600">
             汇总组织套餐、额度、Facebook 授权、广告账户、素材和任务闭环状态，作为客户交付前的统一验收入口。
           </p>
+          {isSuperAdmin && (
+            <div className="mt-5 flex max-w-xl flex-col gap-2 sm:flex-row sm:items-center">
+              <label htmlFor="commercial-organization-scope" className="text-xs font-black uppercase text-zinc-500">
+                验收范围
+              </label>
+              <select
+                id="commercial-organization-scope"
+                value={selectedOrganizationId}
+                onChange={(event) => setSelectedOrganizationId(event.target.value)}
+                disabled={organizationsLoading}
+                className="h-10 min-w-0 flex-1 rounded-lg border border-zinc-200 bg-white px-3 text-sm font-bold text-zinc-900 outline-none transition hover:border-zinc-400 focus:border-zinc-950 disabled:opacity-60"
+              >
+                <option value="">全平台汇总</option>
+                {organizations.map((organization) => (
+                  <option key={organization._id} value={organization._id}>
+                    {organization.name} · {organization.status === "active" ? "启用" : "停用"}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
           <div className={`mt-5 max-w-4xl rounded-lg border p-4 ${readinessTone.panel}`}>
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div className="flex min-w-0 items-start gap-3">
