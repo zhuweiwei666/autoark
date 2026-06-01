@@ -1509,19 +1509,62 @@ const buildTaskListDiagnostics = (task: any) => {
   }
 }
 
+const toPositiveInt = (value: any, fallback: number) => {
+  const next = Number(value)
+  return Number.isFinite(next) && next > 0 ? Math.floor(next) : fallback
+}
+
+const normalizeDiagnosticFilter = (value: any) => {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  return trimmed && trimmed !== 'all' ? trimmed : undefined
+}
+
+const toTaskListItem = (task: any) => {
+  const enriched = enrichTaskDiagnostics(task)
+  return {
+    ...enriched,
+    operationalDiagnostics: buildTaskListDiagnostics(enriched),
+  }
+}
+
 /**
  * 获取任务列表
  * @param query 查询参数
  * @param userFilter 用户过滤条件（来自 getAssetFilter）
  */
 export const getTaskList = async (query: any = {}, userFilter: any = {}) => {
-  const { status, taskType, platform, page = 1, pageSize = 20 } = query
+  const { status, taskType, platform } = query
+  const page = toPositiveInt(query.page, 1)
+  const pageSize = toPositiveInt(query.pageSize, 20)
+  const diagnosticHealth = normalizeDiagnosticFilter(query.diagnosticHealth || query.health)
+  const diagnosticErrorCode = normalizeDiagnosticFilter(query.errorCode)?.toUpperCase()
   
   // 合并用户过滤条件
   const filter: any = { ...userFilter }
   if (status) filter.status = status
   if (taskType) filter.taskType = taskType
   if (platform) filter.platform = platform
+
+  if (diagnosticHealth || diagnosticErrorCode) {
+    const tasks = await AdTask.find(filter)
+      .sort({ createdAt: -1 })
+      .lean()
+    const filtered = tasks.map(toTaskListItem).filter(task => {
+      const diagnostics = task.operationalDiagnostics
+      if (diagnosticHealth && diagnostics.health !== diagnosticHealth) return false
+      if (diagnosticErrorCode && !diagnostics.buckets.some((bucket: any) => bucket.errorCode === diagnosticErrorCode)) return false
+      return true
+    })
+    const start = (page - 1) * pageSize
+
+    return {
+      list: filtered.slice(start, start + pageSize),
+      total: filtered.length,
+      page,
+      pageSize,
+    }
+  }
   
   const [list, total] = await Promise.all([
     AdTask.find(filter)
@@ -1533,13 +1576,7 @@ export const getTaskList = async (query: any = {}, userFilter: any = {}) => {
   ])
   
   return {
-    list: list.map(task => {
-      const enriched = enrichTaskDiagnostics(task)
-      return {
-        ...enriched,
-        operationalDiagnostics: buildTaskListDiagnostics(enriched),
-      }
-    }),
+    list: list.map(toTaskListItem),
     total,
     page,
     pageSize,

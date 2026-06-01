@@ -191,6 +191,26 @@ const DIAGNOSTIC_HEALTH_MAP: Record<TaskDiagnostics['health'], { label: string; 
   unknown: { label: '未知', color: 'bg-slate-100 text-slate-600' },
 }
 
+const TASK_STATUS_FILTERS = [
+  { value: '', label: '全部状态' },
+  { value: 'queued', label: '排队中' },
+  { value: 'processing', label: '执行中' },
+  { value: 'failed', label: '失败' },
+  { value: 'partial_success', label: '部分成功' },
+  { value: 'success', label: '成功' },
+  { value: 'cancelled', label: '已取消' },
+]
+
+const TASK_HEALTH_FILTERS = [
+  { value: '', label: '全部诊断' },
+  { value: 'blocked', label: '需处理' },
+  { value: 'retryable', label: '可重试' },
+  { value: 'mixed', label: '混合问题' },
+  { value: 'running', label: '执行中' },
+  { value: 'healthy', label: '健康' },
+  { value: 'unknown', label: '未知' },
+]
+
 const getTaskListDiagnostics = (task: Task) => task.operationalDiagnostics
 
 const getTaskListIssueText = (task: Task) => {
@@ -210,6 +230,7 @@ export default function TaskManagementPage() {
   const taskIdFromUrl = searchParams.get('taskId')
   
   const [tasks, setTasks] = useState<Task[]>([])
+  const [taskTotal, setTaskTotal] = useState(0)
   const [selectedTask, setSelectedTask] = useState<Task | null>(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -226,12 +247,15 @@ export default function TaskManagementPage() {
   const [rerunMultiplier, setRerunMultiplier] = useState(1)
   const [rerunTaskId, setRerunTaskId] = useState<string>('')
   const [rerunning, setRerunning] = useState(false)
+  const [statusFilter, setStatusFilter] = useState('')
+  const [healthFilter, setHealthFilter] = useState('')
+  const [errorCodeFilter, setErrorCodeFilter] = useState('')
   
   useEffect(() => {
     loadTasks()
     const interval = setInterval(loadTasks, 5000) // Auto refresh every 5s
     return () => clearInterval(interval)
-  }, [])
+  }, [statusFilter, healthFilter, errorCodeFilter])
   
   useEffect(() => {
     if (taskIdFromUrl && tasks.length > 0) {
@@ -242,10 +266,17 @@ export default function TaskManagementPage() {
   
   const loadTasks = async () => {
     try {
-      const res = await authFetch(`${API_BASE}/bulk-ad/tasks`)
+      const params = new URLSearchParams()
+      if (statusFilter) params.set('status', statusFilter)
+      if (healthFilter) params.set('diagnosticHealth', healthFilter)
+      if (errorCodeFilter.trim()) params.set('errorCode', errorCodeFilter.trim())
+      const query = params.toString()
+      const res = await authFetch(`${API_BASE}/bulk-ad/tasks${query ? `?${query}` : ''}`)
       const data = await res.json()
       if (data.success) {
-        setTasks(data.data?.list || [])
+        const nextTasks = data.data?.list || []
+        setTasks(nextTasks)
+        setTaskTotal(data.data?.total ?? nextTasks.length)
       }
     } catch (err) {
       console.error('Failed to load tasks:', err)
@@ -448,6 +479,7 @@ export default function TaskManagementPage() {
   const retryBlocked = Boolean(selectedTaskDiagnostics
     && selectedTaskDiagnostics.summary.retryableErrors === 0
     && selectedTaskDiagnostics.summary.blockedErrors > 0)
+  const hasTaskFilters = Boolean(statusFilter || healthFilter || errorCodeFilter.trim())
   
   if (loading) {
     return <Loading.Page message="加载任务列表..." />
@@ -465,7 +497,50 @@ export default function TaskManagementPage() {
           {/* Task List */}
           <div className="col-span-1 bg-white rounded-xl border border-slate-200 overflow-hidden">
             <div className="p-4 border-b border-slate-200">
-              <h2 className="font-semibold">任务列表</h2>
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="font-semibold">任务列表</h2>
+                <span className="text-xs text-slate-400">共 {taskTotal} 个</span>
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <select
+                  value={statusFilter}
+                  onChange={(event) => setStatusFilter(event.target.value)}
+                  className="h-9 rounded-md border border-slate-200 bg-white px-2 text-xs font-medium text-slate-700 outline-none focus:border-blue-400"
+                >
+                  {TASK_STATUS_FILTERS.map(option => (
+                    <option key={option.value || 'all-status'} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+                <select
+                  value={healthFilter}
+                  onChange={(event) => setHealthFilter(event.target.value)}
+                  className="h-9 rounded-md border border-slate-200 bg-white px-2 text-xs font-medium text-slate-700 outline-none focus:border-blue-400"
+                >
+                  {TASK_HEALTH_FILTERS.map(option => (
+                    <option key={option.value || 'all-health'} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="mt-2 flex items-center gap-2">
+                <input
+                  value={errorCodeFilter}
+                  onChange={(event) => setErrorCodeFilter(event.target.value)}
+                  placeholder="错误码"
+                  className="h-9 min-w-0 flex-1 rounded-md border border-slate-200 px-2 text-xs font-medium text-slate-700 outline-none placeholder:text-slate-400 focus:border-blue-400"
+                />
+                {hasTaskFilters && (
+                  <button
+                    onClick={() => {
+                      setStatusFilter('')
+                      setHealthFilter('')
+                      setErrorCodeFilter('')
+                    }}
+                    className="h-9 rounded-md border border-slate-200 px-3 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                  >
+                    重置
+                  </button>
+                )}
+              </div>
             </div>
             <div className="divide-y divide-slate-100 max-h-[600px] overflow-y-auto">
               {tasks.length === 0 ? (

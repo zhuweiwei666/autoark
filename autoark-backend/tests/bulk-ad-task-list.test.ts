@@ -62,4 +62,58 @@ describe('bulk ad task list', () => {
       'META_RATE_LIMIT',
     ])
   })
+
+  it('filters task list by diagnostic health and error code', async () => {
+    const blockedTask = {
+      _id: '665000000000000000000601',
+      status: 'failed',
+      items: [{
+        accountId: 'act_blocked',
+        accountName: 'Blocked Account',
+        status: 'failed',
+        errors: ['Selected pixel_id cannot be loaded due to missing permissions'],
+      }],
+      progress: {
+        totalAccounts: 1,
+        completedAccounts: 1,
+        successAccounts: 0,
+        failedAccounts: 1,
+        totalAds: 0,
+        createdAds: 0,
+        percentage: 100,
+      },
+    }
+    const retryableTask = {
+      _id: '665000000000000000000602',
+      status: 'failed',
+      items: [{
+        accountId: 'act_retry',
+        accountName: 'Retry Account',
+        status: 'failed',
+        errors: ['Application request limit reached'],
+      }],
+      progress: {
+        totalAccounts: 1,
+        completedAccounts: 1,
+        successAccounts: 0,
+        failedAccounts: 1,
+        totalAds: 0,
+        createdAds: 0,
+        percentage: 100,
+      },
+    }
+    const findQuery = {
+      sort: jest.fn().mockReturnThis(),
+      lean: jest.fn().mockResolvedValue([blockedTask, retryableTask]),
+    }
+    jest.spyOn(AdTask, 'find').mockReturnValue(findQuery as any)
+
+    const blockedResult = await getTaskList({ diagnosticHealth: 'blocked' }, {})
+    const rateLimitResult = await getTaskList({ errorCode: 'meta_rate_limit' }, {})
+
+    expect(blockedResult.total).toBe(1)
+    expect(blockedResult.list[0]._id).toBe(blockedTask._id)
+    expect(rateLimitResult.total).toBe(1)
+    expect(rateLimitResult.list[0]._id).toBe(retryableTask._id)
+  })
 })
