@@ -11,6 +11,12 @@ const getUserOrgScope = (currentUser: JwtPayload): any => {
   return { organizationId: currentUser.organizationId }
 }
 
+const uniqueAccountIds = (accountIds?: string[]): string[] => {
+  return Array.from(new Set((accountIds || [])
+    .map(accountId => String(accountId || '').trim())
+    .filter(Boolean)))
+}
+
 class AccountManagementService {
   /**
    * 获取账户列表（带组织和标签信息）
@@ -172,6 +178,7 @@ class AccountManagementService {
       currentUser.role === UserRole.SUPER_ADMIN
         ? data.organizationId
         : currentUser.organizationId
+    const requestedAccountIds = uniqueAccountIds(data.accounts)
 
     if (currentUser.role !== UserRole.SUPER_ADMIN && !organizationId) {
       throw new Error('用户未关联组织，无法创建分组')
@@ -191,21 +198,36 @@ class AccountManagementService {
       throw new Error('分组名称已存在')
     }
 
+    let scopedAccountIds: string[] = []
+    if (requestedAccountIds.length > 0) {
+      const accountQuery: any = { accountId: { $in: requestedAccountIds } }
+      if (organizationId) {
+        accountQuery.organizationId = organizationId
+      }
+
+      const scopedAccounts = await Account.find(accountQuery).select('accountId').lean()
+      scopedAccountIds = scopedAccounts.map((account: any) => account.accountId).filter(Boolean)
+
+      if (scopedAccountIds.length !== requestedAccountIds.length) {
+        throw new Error('分组包含不存在或无权访问的账户')
+      }
+    }
+
     const group = new AccountGroup({
       name: data.name,
       description: data.description,
       color: data.color || '#3B82F6',
       organizationId,
-      accounts: data.accounts || [],
+      accounts: scopedAccountIds,
       createdBy: currentUser.userId,
     })
 
     await group.save()
 
     // 更新账户的 groupId
-    if (data.accounts && data.accounts.length > 0) {
+    if (scopedAccountIds.length > 0) {
       await Account.updateMany(
-        { accountId: { $in: data.accounts }, ...(organizationId ? { organizationId } : {}) },
+        { accountId: { $in: scopedAccountIds }, ...(organizationId ? { organizationId } : {}) },
         { $set: { groupId: group._id } }
       )
     }
