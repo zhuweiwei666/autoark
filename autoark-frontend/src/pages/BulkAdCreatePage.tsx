@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import Loading from '../components/Loading'
 import { useAuth } from '../contexts/AuthContext'
@@ -236,6 +236,7 @@ export default function BulkAdCreatePage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const { user, token } = useAuth()  // 获取当前用户信息和认证状态
+  const facebookLoginCleanupRef = useRef<(() => void) | null>(null)
   const [currentStep, setCurrentStep] = useState(1)
   
   const [loading, setLoading] = useState(false)
@@ -251,6 +252,17 @@ export default function BulkAdCreatePage() {
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
   const [resyncing, setResyncing] = useState(false)
   const [resyncMessage, setResyncMessage] = useState<string | null>(null)
+
+  const clearFacebookLoginWait = () => {
+    facebookLoginCleanupRef.current?.()
+    facebookLoginCleanupRef.current = null
+  }
+
+  useEffect(() => {
+    return () => {
+      clearFacebookLoginWait()
+    }
+  }, [])
   
   // 账户资产
   const [accounts, setAccounts] = useState<any[]>([])
@@ -405,6 +417,7 @@ export default function BulkAdCreatePage() {
   
   // Facebook 登录（弹窗方式）
   const handleFacebookLogin = async () => {
+    clearFacebookLoginWait()
     setLoginLoading(true)
     setError(null)
     setPublishBlocker(null)
@@ -444,48 +457,68 @@ export default function BulkAdCreatePage() {
       
       if (!popup) {
         // 弹窗被阻止，回退到页面跳转
+        setLoginLoading(false)
+        setLoginAttempt(null)
+        setError('浏览器拦截了 Facebook 授权弹窗，已切换为当前页面跳转。若没有跳转，请允许弹窗后重试。')
         window.location.href = loginUrl
         return
       }
       
+      let settled = false
+      let checkPopup: ReturnType<typeof setInterval>
+      let timeoutId: ReturnType<typeof setTimeout>
+      let handleMessage: (event: MessageEvent) => void
+      const cleanup = (options: { closePopup?: boolean } = {}) => {
+        if (settled) return
+        settled = true
+        clearInterval(checkPopup)
+        clearTimeout(timeoutId)
+        window.removeEventListener('message', handleMessage)
+        if (options.closePopup && !popup.closed) {
+          popup.close()
+        }
+        if (facebookLoginCleanupRef.current === cleanup) {
+          facebookLoginCleanupRef.current = null
+        }
+      }
+
       // 监听弹窗关闭和消息
-      const checkPopup = setInterval(() => {
+      checkPopup = setInterval(() => {
         if (popup.closed) {
-          clearInterval(checkPopup)
+          cleanup()
           setLoginLoading(false)
+          setLoginAttempt(null)
           // 弹窗关闭后检查授权状态
           checkAuthStatus()
         }
       }, 500)
       
       // 监听来自弹窗的消息
-      const handleMessage = (event: MessageEvent) => {
+      handleMessage = (event: MessageEvent) => {
         if (event.origin !== window.location.origin) {
           return
         }
         if (event.data?.type === 'oauth-success') {
-          clearInterval(checkPopup)
-          window.removeEventListener('message', handleMessage)
-          popup.close()
+          cleanup({ closePopup: true })
           setLoginLoading(false)
           setLoginAttempt(null)
           checkAuthStatus()
         } else if (event.data?.type === 'oauth-error') {
-          clearInterval(checkPopup)
-          window.removeEventListener('message', handleMessage)
-          popup.close()
+          cleanup({ closePopup: true })
           setLoginLoading(false)
+          setLoginAttempt(null)
           setError(event.data.error || '授权失败')
         }
       }
       window.addEventListener('message', handleMessage)
+      facebookLoginCleanupRef.current = cleanup
       
       // 超时处理（5分钟）
-      setTimeout(() => {
-        clearInterval(checkPopup)
-        window.removeEventListener('message', handleMessage)
+      timeoutId = setTimeout(() => {
         if (!popup.closed) {
+          cleanup()
           setLoginLoading(false)
+          setLoginAttempt(null)
           setError('Facebook 授权窗口等待超时。若弹窗显示“功能不可用”，请检查 Facebook App 的 Public OAuth 与 Login for Business 配置。')
         }
       }, 300000)
@@ -498,6 +531,7 @@ export default function BulkAdCreatePage() {
   }
 
   const stopFacebookLoginWait = () => {
+    clearFacebookLoginWait()
     setLoginLoading(false)
     setLoginAttempt(null)
     setPublishBlocker(null)
