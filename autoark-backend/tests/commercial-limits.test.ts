@@ -35,24 +35,33 @@ const mockOrganization = (overrides: any = {}) => ({
 
 const originalBusinessLoginConfigId = process.env.FACEBOOK_BUSINESS_LOGIN_CONFIG_ID
 const originalOauthStateSecret = process.env.OAUTH_STATE_SECRET
+const originalDeployRef = process.env.AUTOARK_DEPLOY_REF
+const originalDeployCommit = process.env.AUTOARK_DEPLOY_COMMIT
+const originalDeployedAt = process.env.AUTOARK_DEPLOYED_AT
 
 describe('commercial publish limits', () => {
   beforeEach(() => {
     process.env.FACEBOOK_BUSINESS_LOGIN_CONFIG_ID = 'test_business_login_config'
     process.env.OAUTH_STATE_SECRET = 'test_oauth_state_secret'
+    process.env.AUTOARK_DEPLOY_REF = 'feat/commercial-saas-foundation'
+    process.env.AUTOARK_DEPLOY_COMMIT = '1234567890abcdef'
+    process.env.AUTOARK_DEPLOYED_AT = '2026-06-01T12:00:00Z'
   })
 
   afterEach(() => {
     jest.restoreAllMocks()
-    if (originalBusinessLoginConfigId === undefined) {
-      delete process.env.FACEBOOK_BUSINESS_LOGIN_CONFIG_ID
-    } else {
-      process.env.FACEBOOK_BUSINESS_LOGIN_CONFIG_ID = originalBusinessLoginConfigId
-    }
-    if (originalOauthStateSecret === undefined) {
-      delete process.env.OAUTH_STATE_SECRET
-    } else {
-      process.env.OAUTH_STATE_SECRET = originalOauthStateSecret
+    for (const [key, value] of Object.entries({
+      FACEBOOK_BUSINESS_LOGIN_CONFIG_ID: originalBusinessLoginConfigId,
+      OAUTH_STATE_SECRET: originalOauthStateSecret,
+      AUTOARK_DEPLOY_REF: originalDeployRef,
+      AUTOARK_DEPLOY_COMMIT: originalDeployCommit,
+      AUTOARK_DEPLOYED_AT: originalDeployedAt,
+    })) {
+      if (value === undefined) {
+        delete process.env[key]
+      } else {
+        process.env[key] = value
+      }
     }
   })
 
@@ -377,6 +386,12 @@ describe('commercial publish limits', () => {
     } as any)
 
     expect(supportTokenFind.select).toHaveBeenCalledWith(expect.stringContaining('lastCheckedAt'))
+    expect(supportPackage.system.build).toMatchObject({
+      ref: 'feat/commercial-saas-foundation',
+      commit: '1234567890abcdef',
+      shortCommit: '1234567890ab',
+      deployedAt: '2026-06-01T12:00:00Z',
+    })
     expect(supportPackage.facebookAssets.summary.staleTokenCheckCount).toBe(0)
   })
 

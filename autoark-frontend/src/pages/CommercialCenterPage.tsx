@@ -650,6 +650,7 @@ export default function CommercialCenterPage() {
     const text = [
       `支持包：${supportPackage.supportId}`,
       `客户：${supportPackage.scope.organizationName}`,
+      `版本：${supportPackage.system?.build?.shortCommit || "unknown"} (${supportPackage.system?.build?.ref || "unknown"})`,
       `状态：${supportPackage.readiness.state.label} / ${supportPackage.readiness.score} 分`,
       `首要动作：${insights.topAction}`,
       `Business Login：${insights.businessLoginConfigured ? "已配置 config_id" : "待配置 config_id"}，OAuth state：${insights.oauthStateSecretConfigured ? "已配置" : "待配置"}`,
@@ -671,6 +672,10 @@ export default function CommercialCenterPage() {
       summary: {
         supportId: supportPackage.supportId,
         customer: supportPackage.scope.organizationName,
+        buildRef: supportPackage.system?.build?.ref,
+        buildCommit: supportPackage.system?.build?.commit,
+        buildShortCommit: supportPackage.system?.build?.shortCommit,
+        buildDeployedAt: supportPackage.system?.build?.deployedAt,
         state: supportPackage.readiness.state.label,
         score: supportPackage.readiness.score,
         topAction: insights.topAction,
@@ -904,6 +909,9 @@ export default function CommercialCenterPage() {
               <p className="mt-2 text-sm font-bold text-zinc-600">
                 {supportPackage.readiness.state.label} · {supportPackage.readiness.score} 分 · {new Date(supportPackage.generatedAt).toLocaleString("zh-CN")}
               </p>
+              <div className="mt-2 inline-flex rounded-md border border-zinc-200 bg-white px-2 py-1 font-mono text-[11px] font-black text-zinc-500">
+                build {supportPackage.system?.build?.shortCommit || "unknown"} · {supportPackage.system?.build?.ref || "unknown"}
+              </div>
               <div className="mt-4 grid grid-cols-2 gap-3 text-sm font-bold text-zinc-700">
                 <div>
                   <div className="font-mono text-2xl font-black text-zinc-950">{supportInsights?.readyAccountCount || 0}</div>

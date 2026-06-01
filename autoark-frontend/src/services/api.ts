@@ -163,6 +163,17 @@ export async function getCommercialOrganizationReadiness(): Promise<{
 export interface CommercialSupportPackage {
   supportId: string
   generatedAt: string
+  system?: {
+    build?: {
+      service?: string
+      environment?: string
+      ref?: string
+      commit?: string
+      shortCommit?: string
+      deployedAt?: string | null
+      uptime?: number
+    }
+  }
   scope: {
     mode: 'organization' | 'platform'
     organizationId?: string

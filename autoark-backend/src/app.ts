@@ -26,6 +26,7 @@ import agentV2Routes from './agent/agent.controller' // Agent V2: LLM-powered mu
 import { handleFeishuInteraction } from './controllers/feishu.webhook.controller'
 import logger from './utils/logger'
 import { errorHandler } from './middlewares/errorHandler'
+import { getBuildInfo } from './utils/buildInfo'
 
 // NOTE: All infrastructure initialization (DB/Redis/Queues/Crons) is done in `server.ts`.
 // `app.ts` should remain side-effect free so it can be imported safely (tests, scripts, etc.).
@@ -97,18 +98,9 @@ app.get('/healthz', (_req: Request, res: Response) => {
 })
 
 app.get('/api/build', (_req: Request, res: Response) => {
-  const commit = process.env.AUTOARK_DEPLOY_COMMIT || process.env.GIT_COMMIT || ''
   res.json({
     success: true,
-    data: {
-      service: 'autoark-backend',
-      environment: process.env.NODE_ENV || 'development',
-      ref: process.env.AUTOARK_DEPLOY_REF || 'local',
-      commit: commit || 'unknown',
-      shortCommit: commit ? commit.slice(0, 12) : 'unknown',
-      deployedAt: process.env.AUTOARK_DEPLOYED_AT || null,
-      uptime: process.uptime(),
-    },
+    data: getBuildInfo(),
   })
 })
 

@@ -175,11 +175,13 @@ const buildMetadataHighlights = (metadata: Record<string, unknown> | undefined) 
   const errorCode = metadataText(metadata, "errorCode") || metadataText(metadata, "topErrorCode");
   const supportId = metadataText(metadata, "supportId");
   const facebookRisk = metadataText(metadata, "firstFacebookAssetRisk");
+  const buildVersion = metadataText(metadata, "buildShortCommit") || metadataText(metadata, "buildCommit");
   const readyAccountCount = metadataNumber(metadata, "readyAccountCount");
   const tokenCount = metadataNumber(metadata, "tokenCount");
 
   if (errorCode) highlights.push({ label: "错误码", value: errorCode, tone: "bg-[#fff1f2] text-[#b4233a] border-[#fecdd3]" });
   if (supportId) highlights.push({ label: "支持包", value: supportId, tone: "bg-[#f8fafc] text-zinc-700 border-zinc-200" });
+  if (buildVersion) highlights.push({ label: "版本", value: buildVersion, tone: "bg-[#eef2ff] text-[#3730a3] border-[#c7d2fe]" });
   if (typeof readyAccountCount === "number") highlights.push({ label: "可投放账户", value: String(readyAccountCount), tone: "bg-[#e7f3ef] text-[#0f766e] border-[#b7e3d5]" });
   if (typeof tokenCount === "number") highlights.push({ label: "Token", value: String(tokenCount), tone: "bg-[#f8fafc] text-zinc-700 border-zinc-200" });
   if (facebookRisk) highlights.push({ label: "Facebook 风险", value: facebookRisk, tone: "bg-[#fff7ed] text-[#9a3412] border-[#fed7aa]" });

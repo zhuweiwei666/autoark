@@ -15,6 +15,7 @@ import Organization, {
 import User, { UserRole, UserStatus } from '../models/User'
 import { JwtPayload } from '../utils/jwt'
 import { objectIdValue } from '../utils/accessControl'
+import { getBuildInfo } from '../utils/buildInfo'
 import { buildFacebookAssetDiagnostics } from './facebookAssets.diagnostics.service'
 import { buildTaskOperationalDiagnostics } from './bulkAd.diagnostics'
 import { COMMERCIAL_FEATURES, PLAN_DEFAULTS } from '../config/commercialPlans'
@@ -1452,6 +1453,9 @@ export async function getCommercialSupportPackage(
   return {
     supportId: `AUTOARK-${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}-${String(organizationId || 'platform').slice(-6)}`,
     generatedAt: new Date().toISOString(),
+    system: {
+      build: getBuildInfo(),
+    },
     scope: {
       mode,
       organizationId,
