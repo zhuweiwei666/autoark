@@ -265,15 +265,6 @@ router.get('/accounts', async (req: Request, res: Response) => {
     }
     if (name) match.accountName = { $regex: name, $options: 'i' }
 
-    if (req.user?.role !== UserRole.SUPER_ADMIN) {
-      return res.json({
-        success: true,
-        data: [],
-        pagination: { page, limit, total: 0, pages: 0 },
-        cached: true,
-      })
-    }
-
     // 多日聚合
     const aggregated = await AggAccount.aggregate([
       { $match: match },
