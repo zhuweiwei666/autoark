@@ -349,6 +349,15 @@ router.get('/countries', async (req: Request, res: Response) => {
     const page = parseInt(req.query.page as string) || 1
     const skip = (page - 1) * limit
 
+    if (req.user?.role !== UserRole.SUPER_ADMIN) {
+      return res.json({
+        success: true,
+        data: [],
+        pagination: { page, limit, total: 0, pages: 0 },
+        cached: true,
+      })
+    }
+
     // 多日聚合
     const aggregated = await AggCountry.aggregate([
       { $match: { date: { $gte: startDate, $lte: endDate } } },
