@@ -180,6 +180,9 @@ export function buildFacebookAssetDiagnostics({
   const pageLinkedAccountCount = accounts.filter(account => account.pageCount > 0).length
   const pixelLinkedAccountCount = accounts.filter(account => account.pixelCount > 0).length
   const readyAccountCount = accounts.filter(account => account.ready).length
+  const inactiveAccountCount = accounts.filter(account => account.status !== 1).length
+  const accountsMissingPageCount = accounts.filter(account => account.pageCount === 0).length
+  const accountsMissingPixelCount = accounts.filter(account => account.pixelCount === 0).length
   const completedSyncCount = users.filter(user => user.syncStatus === 'completed').length
   const syncingCount = users.filter(user => user.syncStatus === 'syncing').length
   const failedSyncCount = users.filter(user => user.syncStatus === 'failed').length
@@ -270,9 +273,12 @@ export function buildFacebookAssetDiagnostics({
       syncedUserCount: completedSyncCount,
       accountCount: accounts.length,
       activeAccountCount,
+      inactiveAccountCount,
       pageLinkedAccountCount,
       pixelLinkedAccountCount,
       readyAccountCount,
+      accountsMissingPageCount,
+      accountsMissingPixelCount,
       expiredTokenCount: tokenHealth.expiredCount,
       expiringSoonTokenCount: tokenHealth.expiringSoonCount,
       staleTokenCheckCount: tokenHealth.staleCheckCount,

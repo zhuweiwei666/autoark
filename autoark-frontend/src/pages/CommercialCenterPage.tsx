@@ -188,6 +188,9 @@ const supportPackageInsights = (supportPackage: CommercialSupportPackage) => {
   const tokenCount = summaryNumber(summary, "tokenCount");
   const accountCount = summaryNumber(summary, "accountCount");
   const readyAccountCount = summaryNumber(summary, "readyAccountCount");
+  const inactiveAccountCount = summaryNumber(summary, "inactiveAccountCount");
+  const accountsMissingPageCount = summaryNumber(summary, "accountsMissingPageCount");
+  const accountsMissingPixelCount = summaryNumber(summary, "accountsMissingPixelCount");
   const expiredTokenCount = summaryNumber(summary, "expiredTokenCount");
   const expiringSoonTokenCount = summaryNumber(summary, "expiringSoonTokenCount");
   const staleTokenCheckCount = summaryNumber(summary, "staleTokenCheckCount");
@@ -212,6 +215,9 @@ const supportPackageInsights = (supportPackage: CommercialSupportPackage) => {
     tokenCount,
     accountCount,
     readyAccountCount,
+    inactiveAccountCount,
+    accountsMissingPageCount,
+    accountsMissingPixelCount,
     expiredTokenCount,
     expiringSoonTokenCount,
     staleTokenCheckCount,
@@ -649,6 +655,7 @@ export default function CommercialCenterPage() {
       `Business Login：${insights.businessLoginConfigured ? "已配置 config_id" : "待配置 config_id"}，OAuth state：${insights.oauthStateSecretConfigured ? "已配置" : "待配置"}`,
       `授权健康：${insights.tokenCount} 个 Token，${insights.expiredTokenCount} 过期，${insights.expiringSoonTokenCount} 临期，${insights.staleTokenCheckCount} 待复检`,
       `资产：${insights.readyAccountCount} 个可投放账户 / ${insights.accountCount} 个广告账户`,
+      `资产缺口：${insights.accountsMissingPageCount} 个缺 Page，${insights.accountsMissingPixelCount} 个缺 Pixel，${insights.inactiveAccountCount} 个账户不可投放`,
       `首要风险：${insights.primaryRisk}`,
       `最近任务：${supportPackage.recentTasks.length} 条，主因：${insights.topIssue}`,
     ].join("\n");
@@ -671,6 +678,9 @@ export default function CommercialCenterPage() {
         primaryRisk: insights.primaryRisk,
         readyAccountCount: insights.readyAccountCount,
         accountCount: insights.accountCount,
+        inactiveAccountCount: insights.inactiveAccountCount,
+        accountsMissingPageCount: insights.accountsMissingPageCount,
+        accountsMissingPixelCount: insights.accountsMissingPixelCount,
         tokenCount: insights.tokenCount,
         expiredTokenCount: insights.expiredTokenCount,
         expiringSoonTokenCount: insights.expiringSoonTokenCount,
@@ -906,6 +916,20 @@ export default function CommercialCenterPage() {
               </div>
               {supportInsights && (
                 <div className="mt-4 space-y-3 border-t border-zinc-100 pt-4">
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="rounded-lg border border-zinc-100 bg-white p-3">
+                      <div className="font-mono text-lg font-black text-zinc-950">{supportInsights.accountsMissingPageCount}</div>
+                      <div className="text-[11px] font-bold text-zinc-500">缺 Page</div>
+                    </div>
+                    <div className="rounded-lg border border-zinc-100 bg-white p-3">
+                      <div className="font-mono text-lg font-black text-zinc-950">{supportInsights.accountsMissingPixelCount}</div>
+                      <div className="text-[11px] font-bold text-zinc-500">缺 Pixel</div>
+                    </div>
+                    <div className="rounded-lg border border-zinc-100 bg-white p-3">
+                      <div className="font-mono text-lg font-black text-zinc-950">{supportInsights.inactiveAccountCount}</div>
+                      <div className="text-[11px] font-bold text-zinc-500">账户异常</div>
+                    </div>
+                  </div>
                   <div className="grid grid-cols-3 gap-2">
                     <div className="rounded-lg border border-zinc-100 bg-white p-3">
                       <div className="font-mono text-lg font-black text-zinc-950">{supportInsights.expiredTokenCount}</div>

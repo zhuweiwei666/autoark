@@ -40,9 +40,12 @@ interface AuthDiagnostics {
     syncedUserCount: number
     accountCount: number
     activeAccountCount: number
+    inactiveAccountCount?: number
     pageLinkedAccountCount: number
     pixelLinkedAccountCount: number
     readyAccountCount: number
+    accountsMissingPageCount?: number
+    accountsMissingPixelCount?: number
     expiredTokenCount?: number
     expiringSoonTokenCount?: number
     staleTokenCheckCount?: number

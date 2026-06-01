@@ -39,6 +39,9 @@ describe('facebook asset diagnostics', () => {
     expect(diagnostics.summary.readyAccountCount).toBe(1)
     expect(diagnostics.summary.pageLinkedAccountCount).toBe(3)
     expect(diagnostics.summary.pixelLinkedAccountCount).toBe(2)
+    expect(diagnostics.summary.inactiveAccountCount).toBe(1)
+    expect(diagnostics.summary.accountsMissingPageCount).toBe(0)
+    expect(diagnostics.summary.accountsMissingPixelCount).toBe(1)
     expect(diagnostics.accounts.find(account => account.accountId === '1')?.ready).toBe(true)
     expect(diagnostics.accounts.find(account => account.accountId === '2')?.issues).toContain('没有可用 Pixel')
     expect(diagnostics.accounts.find(account => account.accountId === '2')?.issueDetails[0]).toMatchObject({
