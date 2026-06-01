@@ -70,6 +70,33 @@ interface Task {
   duration?: number
 }
 
+interface TaskDiagnostics {
+  taskId?: string
+  status?: string
+  health: 'healthy' | 'running' | 'retryable' | 'blocked' | 'mixed' | 'unknown'
+  summary: {
+    totalAccounts: number
+    successAccounts: number
+    failedAccounts: number
+    processingAccounts: number
+    pendingAccounts: number
+    totalErrors: number
+    retryableErrors: number
+    blockedErrors: number
+  }
+  buckets: Array<{
+    errorCode: string
+    entityType: string
+    customerMessage: string
+    retryable: boolean
+    source: 'meta' | 'autoark' | 'worker' | 'validation'
+    count: number
+    accounts: Array<{ accountId: string; accountName?: string }>
+    nextActions: string[]
+  }>
+  topNextActions: string[]
+}
+
 const STATUS_MAP: Record<string, { label: string; color: string }> = {
   pending: { label: '等待中', color: 'bg-slate-100 text-slate-600' },
   queued: { label: '排队中', color: 'bg-yellow-100 text-yellow-600' },
@@ -120,6 +147,15 @@ const getErrorCodeLabel = (error: TaskError) => {
   return error.errorCode || error.entityType || 'EXECUTION_ERROR'
 }
 
+const DIAGNOSTIC_HEALTH_MAP: Record<TaskDiagnostics['health'], { label: string; color: string }> = {
+  healthy: { label: '健康', color: 'bg-green-100 text-green-700' },
+  running: { label: '执行中', color: 'bg-blue-100 text-blue-700' },
+  retryable: { label: '可重试', color: 'bg-blue-100 text-blue-700' },
+  blocked: { label: '需处理', color: 'bg-red-100 text-red-700' },
+  mixed: { label: '混合问题', color: 'bg-orange-100 text-orange-700' },
+  unknown: { label: '未知', color: 'bg-slate-100 text-slate-600' },
+}
+
 export default function TaskManagementPage() {
   const [searchParams] = useSearchParams()
   const taskIdFromUrl = searchParams.get('taskId')
@@ -130,6 +166,8 @@ export default function TaskManagementPage() {
   const [refreshing, setRefreshing] = useState(false)
   const [checkingReview, setCheckingReview] = useState(false)
   const [reviewDetails, setReviewDetails] = useState<any>(null)
+  const [taskDiagnostics, setTaskDiagnostics] = useState<TaskDiagnostics | null>(null)
+  const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
   
   // 🆕 倍率执行弹窗状态
   const [showRerunModal, setShowRerunModal] = useState(false)
@@ -175,11 +213,27 @@ export default function TaskManagementPage() {
         setTasks(tasks.map(t => t._id === taskId ? data.data : t))
         // 加载审核详情
         loadReviewDetails(taskId)
+        loadTaskDiagnostics(taskId)
       }
     } catch (err) {
       console.error('Failed to load task detail:', err)
     } finally {
       setRefreshing(false)
+    }
+  }
+
+  const loadTaskDiagnostics = async (taskId: string) => {
+    setDiagnosticsLoading(true)
+    try {
+      const res = await authFetch(`${API_BASE}/bulk-ad/tasks/${taskId}/diagnostics`)
+      const data = await res.json()
+      if (data.success) {
+        setTaskDiagnostics(data.data)
+      }
+    } catch (err) {
+      console.error('Failed to load task diagnostics:', err)
+    } finally {
+      setDiagnosticsLoading(false)
     }
   }
   
@@ -381,6 +435,76 @@ export default function TaskManagementPage() {
                     </div>
                   </div>
                 </div>
+
+                {(diagnosticsLoading || (taskDiagnostics && taskDiagnostics.taskId === selectedTask._id)) && (
+                  <div className="p-4 border-b border-slate-200 bg-white">
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                      <h3 className="font-semibold text-sm">运营诊断</h3>
+                      {taskDiagnostics && taskDiagnostics.taskId === selectedTask._id && (
+                        <span className={`rounded px-2 py-0.5 text-xs font-semibold ${DIAGNOSTIC_HEALTH_MAP[taskDiagnostics.health]?.color || DIAGNOSTIC_HEALTH_MAP.unknown.color}`}>
+                          {DIAGNOSTIC_HEALTH_MAP[taskDiagnostics.health]?.label || taskDiagnostics.health}
+                        </span>
+                      )}
+                    </div>
+                    {diagnosticsLoading && (!taskDiagnostics || taskDiagnostics.taskId !== selectedTask._id) ? (
+                      <div className="text-sm text-slate-500">正在生成任务诊断...</div>
+                    ) : taskDiagnostics && taskDiagnostics.taskId === selectedTask._id ? (
+                      <div className="space-y-3">
+                        <div className="grid grid-cols-4 gap-2 text-center">
+                          <div className="rounded-lg bg-slate-50 px-2 py-2">
+                            <div className="text-lg font-bold text-slate-800">{taskDiagnostics.summary.totalErrors}</div>
+                            <div className="text-[11px] text-slate-500">错误数</div>
+                          </div>
+                          <div className="rounded-lg bg-blue-50 px-2 py-2">
+                            <div className="text-lg font-bold text-blue-700">{taskDiagnostics.summary.retryableErrors}</div>
+                            <div className="text-[11px] text-blue-600">可重试</div>
+                          </div>
+                          <div className="rounded-lg bg-red-50 px-2 py-2">
+                            <div className="text-lg font-bold text-red-700">{taskDiagnostics.summary.blockedErrors}</div>
+                            <div className="text-[11px] text-red-600">需处理</div>
+                          </div>
+                          <div className="rounded-lg bg-slate-50 px-2 py-2">
+                            <div className="text-lg font-bold text-slate-800">{taskDiagnostics.buckets.length}</div>
+                            <div className="text-[11px] text-slate-500">问题类型</div>
+                          </div>
+                        </div>
+                        {taskDiagnostics.buckets.length === 0 ? (
+                          <div className="rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-sm font-medium text-green-700">
+                            当前任务没有聚合到失败问题。
+                          </div>
+                        ) : (
+                          <div className="space-y-2">
+                            {taskDiagnostics.buckets.slice(0, 4).map(bucket => (
+                              <div key={bucket.errorCode} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="rounded bg-white px-2 py-0.5 font-mono text-[11px] font-semibold text-slate-700">
+                                    {bucket.errorCode}
+                                  </span>
+                                  <span className={`rounded px-2 py-0.5 text-[11px] font-medium ${bucket.retryable ? 'bg-blue-100 text-blue-700' : 'bg-red-100 text-red-700'}`}>
+                                    {bucket.retryable ? '可重试' : '需先处理'}
+                                  </span>
+                                  <span className="text-[11px] text-slate-500">{bucket.count} 次 · {getErrorSourceLabel(bucket.source)}</span>
+                                </div>
+                                <div className="mt-1 text-sm font-medium text-slate-700">{bucket.customerMessage}</div>
+                                {bucket.accounts.length > 0 && (
+                                  <div className="mt-1 text-xs text-slate-500">
+                                    影响账户：{bucket.accounts.slice(0, 3).map(account => account.accountName || account.accountId).join('、')}
+                                    {bucket.accounts.length > 3 ? ` 等 ${bucket.accounts.length} 个` : ''}
+                                  </div>
+                                )}
+                                {bucket.nextActions.length > 0 && (
+                                  <div className="mt-2 text-xs leading-5 text-slate-600">
+                                    建议：{bucket.nextActions.slice(0, 2).join('；')}
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ) : null}
+                  </div>
+                )}
                 
                 {/* 广告审核状态 */}
                 {['success', 'partial_success'].includes(selectedTask.status) && (

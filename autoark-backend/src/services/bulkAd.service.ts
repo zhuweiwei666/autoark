@@ -21,7 +21,7 @@ import {
 } from '../integration/facebook/bulkCreate.api'
 import { facebookClient } from '../integration/facebook/facebookClient'
 import { combineFilters } from '../utils/accessControl'
-import { diagnoseBulkAdError, enrichTaskDiagnostics } from './bulkAd.diagnostics'
+import { buildTaskOperationalDiagnostics, diagnoseBulkAdError, enrichTaskDiagnostics } from './bulkAd.diagnostics'
 import { assertBulkAdPublishAllowed } from './commercial.service'
 
 /**
@@ -1351,6 +1351,14 @@ export const getTask = async (taskId: string, accessFilter: any = {}) => {
   return enrichTaskDiagnostics(task)
 }
 
+export const getTaskDiagnostics = async (taskId: string, accessFilter: any = {}) => {
+  const task = await AdTask.findOne(combineFilters({ _id: taskId }, accessFilter)).lean()
+  if (!task) {
+    throw new Error('Task not found')
+  }
+  return buildTaskOperationalDiagnostics(task)
+}
+
 /**
  * 获取任务列表
  * @param query 查询参数
@@ -1586,6 +1594,7 @@ export default {
   publishDraft,
   executeTaskForAccount,
   getTask,
+  getTaskDiagnostics,
   getTaskList,
   cancelTask,
   retryFailedItems,

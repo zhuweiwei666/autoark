@@ -230,6 +230,20 @@ export const getTask = async (req: Request, res: Response) => {
 }
 
 /**
+ * 获取任务运营诊断
+ * GET /api/bulk-ad/tasks/:id/diagnostics
+ */
+export const getTaskDiagnostics = async (req: Request, res: Response) => {
+  try {
+    const diagnostics = await bulkAdService.getTaskDiagnostics(req.params.id, getAssetFilter(req))
+    res.json({ success: true, data: diagnostics })
+  } catch (error: any) {
+    logger.error('[BulkAd] Get task diagnostics failed:', error)
+    res.status(404).json({ success: false, error: error.message })
+  }
+}
+
+/**
  * 获取任务列表
  * GET /api/bulk-ad/tasks
  */

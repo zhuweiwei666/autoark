@@ -1,4 +1,8 @@
-import { diagnoseBulkAdError, normalizeTaskErrors } from '../src/services/bulkAd.diagnostics'
+import {
+  buildTaskOperationalDiagnostics,
+  diagnoseBulkAdError,
+  normalizeTaskErrors,
+} from '../src/services/bulkAd.diagnostics'
 
 describe('bulk ad diagnostics', () => {
   it('classifies missing Facebook authorization as a non-retryable customer action', () => {
@@ -54,5 +58,50 @@ describe('bulk ad diagnostics', () => {
     expect(errors).toHaveLength(1)
     expect(errors[0].errorCode).toBe('WORKER_TIMEOUT')
     expect(errors[0].customerMessage).toContain('超时')
+  })
+
+  it('aggregates task-level operational diagnostics by error code and actionability', () => {
+    const diagnostics = buildTaskOperationalDiagnostics({
+      _id: 'task_1',
+      status: 'failed',
+      items: [
+        {
+          accountId: 'act_1',
+          accountName: 'Account 1',
+          status: 'failed',
+          errors: [{
+            code: 100,
+            message: 'Selected pixel_id cannot be loaded due to missing permissions',
+          }],
+        },
+        {
+          accountId: 'act_2',
+          accountName: 'Account 2',
+          status: 'failed',
+          errors: ['Application request limit reached'],
+        },
+        {
+          accountId: 'act_3',
+          accountName: 'Account 3',
+          status: 'success',
+          errors: [],
+        },
+      ],
+    })
+
+    expect(diagnostics.health).toBe('mixed')
+    expect(diagnostics.summary.totalAccounts).toBe(3)
+    expect(diagnostics.summary.failedAccounts).toBe(2)
+    expect(diagnostics.summary.retryableErrors).toBe(1)
+    expect(diagnostics.summary.blockedErrors).toBe(1)
+    expect(diagnostics.buckets.map(bucket => bucket.errorCode)).toEqual([
+      'PIXEL_ACCESS_REQUIRED',
+      'META_RATE_LIMIT',
+    ])
+    expect(diagnostics.buckets[0].accounts[0]).toMatchObject({
+      accountId: 'act_1',
+      accountName: 'Account 1',
+    })
+    expect(diagnostics.topNextActions.join(' ')).toContain('Pixel 分配给该广告账户')
   })
 })

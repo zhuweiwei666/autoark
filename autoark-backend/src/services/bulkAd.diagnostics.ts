@@ -16,6 +16,38 @@ export interface BulkAdDiagnostic {
   timestamp: Date
 }
 
+export interface BulkAdTaskDiagnosticBucket {
+  errorCode: string
+  entityType: string
+  customerMessage: string
+  retryable: boolean
+  source: BulkAdDiagnosticSource
+  count: number
+  accounts: Array<{
+    accountId: string
+    accountName?: string
+  }>
+  nextActions: string[]
+}
+
+export interface BulkAdTaskOperationalDiagnostics {
+  taskId?: string
+  status?: string
+  health: 'healthy' | 'running' | 'retryable' | 'blocked' | 'mixed' | 'unknown'
+  summary: {
+    totalAccounts: number
+    successAccounts: number
+    failedAccounts: number
+    processingAccounts: number
+    pendingAccounts: number
+    totalErrors: number
+    retryableErrors: number
+    blockedErrors: number
+  }
+  buckets: BulkAdTaskDiagnosticBucket[]
+  topNextActions: string[]
+}
+
 interface DiagnosisTemplate {
   entityType: string
   customerMessage: string
@@ -392,4 +424,107 @@ export const enrichTaskDiagnostics = (task: any) => {
   })
 
   return output
+}
+
+const addUnique = (values: string[], nextValues: string[]) => {
+  for (const value of nextValues) {
+    if (value && !values.includes(value)) values.push(value)
+  }
+}
+
+const getTaskId = (task: any) => {
+  const id = task?._id || task?.id
+  return id ? String(id) : undefined
+}
+
+const buildSyntheticItemError = (item: any) => diagnoseBulkAdError(
+  item.error || item.status || 'Task item failed without structured error',
+  {
+    fallbackCode: 'EXECUTION_ERROR',
+    entityType: 'general',
+  },
+)
+
+export const buildTaskOperationalDiagnostics = (task: any): BulkAdTaskOperationalDiagnostics => {
+  const enriched = enrichTaskDiagnostics(task)
+  const items = Array.isArray(enriched?.items) ? enriched.items : []
+  const buckets = new Map<string, BulkAdTaskDiagnosticBucket>()
+  const topNextActions: string[] = []
+
+  let retryableErrors = 0
+  let blockedErrors = 0
+  let totalErrors = 0
+
+  for (const item of items) {
+    const itemErrors = Array.isArray(item.errors) && item.errors.length > 0
+      ? item.errors
+      : item.status === 'failed'
+        ? [buildSyntheticItemError(item)]
+        : []
+
+    for (const error of itemErrors) {
+      const diagnosis = diagnoseBulkAdError(error)
+      totalErrors += 1
+      if (diagnosis.retryable) retryableErrors += 1
+      else blockedErrors += 1
+
+      const existing = buckets.get(diagnosis.errorCode)
+      const account = {
+        accountId: item.accountId,
+        accountName: item.accountName,
+      }
+
+      if (existing) {
+        existing.count += 1
+        if (account.accountId && !existing.accounts.some(existingAccount => existingAccount.accountId === account.accountId)) {
+          existing.accounts.push(account)
+        }
+        addUnique(existing.nextActions, diagnosis.nextActions)
+      } else {
+        buckets.set(diagnosis.errorCode, {
+          errorCode: diagnosis.errorCode,
+          entityType: diagnosis.entityType,
+          customerMessage: diagnosis.customerMessage,
+          retryable: diagnosis.retryable,
+          source: diagnosis.source,
+          count: 1,
+          accounts: account.accountId ? [account] : [],
+          nextActions: [...diagnosis.nextActions],
+        })
+      }
+
+      addUnique(topNextActions, diagnosis.nextActions)
+    }
+  }
+
+  const successAccounts = items.filter((item: any) => ['success', 'completed'].includes(item.status)).length
+  const failedAccounts = items.filter((item: any) => item.status === 'failed').length
+  const processingAccounts = items.filter((item: any) => item.status === 'processing').length
+  const pendingAccounts = items.filter((item: any) => ['pending', 'queued'].includes(item.status)).length
+
+  let health: BulkAdTaskOperationalDiagnostics['health'] = 'unknown'
+  if (items.length === 0) health = 'unknown'
+  else if (processingAccounts > 0 || pendingAccounts > 0) health = 'running'
+  else if (failedAccounts === 0 && totalErrors === 0) health = 'healthy'
+  else if (blockedErrors === 0 && retryableErrors > 0) health = 'retryable'
+  else if (retryableErrors === 0 && blockedErrors > 0) health = 'blocked'
+  else health = 'mixed'
+
+  return {
+    taskId: getTaskId(enriched),
+    status: enriched?.status,
+    health,
+    summary: {
+      totalAccounts: items.length,
+      successAccounts,
+      failedAccounts,
+      processingAccounts,
+      pendingAccounts,
+      totalErrors,
+      retryableErrors,
+      blockedErrors,
+    },
+    buckets: Array.from(buckets.values()).sort((a, b) => b.count - a.count),
+    topNextActions: topNextActions.slice(0, 6),
+  }
 }

@@ -38,6 +38,7 @@ router.post('/drafts/:id/publish', bulkAdController.publishDraft)
 
 // ==================== 任务管理 ====================
 router.get('/tasks', bulkAdController.getTaskList)
+router.get('/tasks/:id/diagnostics', bulkAdController.getTaskDiagnostics)
 router.get('/tasks/:id', bulkAdController.getTask)
 router.post('/tasks/:id/cancel', bulkAdController.cancelTask)
 router.post('/tasks/:id/retry', bulkAdController.retryTask)
