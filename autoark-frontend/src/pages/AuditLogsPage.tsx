@@ -155,6 +155,37 @@ const buildChangeRows = (log: AuditLogEntry) => {
 
 const compactJson = (value: unknown) => JSON.stringify(value, null, 2);
 
+const metadataText = (metadata: Record<string, unknown> | undefined, key: string) => {
+  const value = metadata?.[key];
+  return typeof value === "string" && value.trim() ? value : undefined;
+};
+
+const metadataNumber = (metadata: Record<string, unknown> | undefined, key: string) => {
+  const value = metadata?.[key];
+  if (typeof value === "number") return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+};
+
+const buildMetadataHighlights = (metadata: Record<string, unknown> | undefined) => {
+  const highlights: Array<{ label: string; value: string; tone: string }> = [];
+  const errorCode = metadataText(metadata, "errorCode") || metadataText(metadata, "topErrorCode");
+  const supportId = metadataText(metadata, "supportId");
+  const facebookRisk = metadataText(metadata, "firstFacebookAssetRisk");
+  const readyAccountCount = metadataNumber(metadata, "readyAccountCount");
+  const tokenCount = metadataNumber(metadata, "tokenCount");
+
+  if (errorCode) highlights.push({ label: "错误码", value: errorCode, tone: "bg-[#fff1f2] text-[#b4233a] border-[#fecdd3]" });
+  if (supportId) highlights.push({ label: "支持包", value: supportId, tone: "bg-[#f8fafc] text-zinc-700 border-zinc-200" });
+  if (typeof readyAccountCount === "number") highlights.push({ label: "可投放账户", value: String(readyAccountCount), tone: "bg-[#e7f3ef] text-[#0f766e] border-[#b7e3d5]" });
+  if (typeof tokenCount === "number") highlights.push({ label: "Token", value: String(tokenCount), tone: "bg-[#f8fafc] text-zinc-700 border-zinc-200" });
+  if (facebookRisk) highlights.push({ label: "Facebook 风险", value: facebookRisk, tone: "bg-[#fff7ed] text-[#9a3412] border-[#fed7aa]" });
+  return highlights.slice(0, 5);
+};
+
 function SelectFilter({
   value,
   onChange,
@@ -190,6 +221,7 @@ function LogRow({
 }) {
   const statusTone = statusClass[log.status] || statusClass.warning;
   const changeRows = buildChangeRows(log);
+  const metadataHighlights = buildMetadataHighlights(log.metadata);
   const hasDetails = changeRows.length > 0 || Boolean(log.reason || log.metadata || log.related || log.before || log.after);
   return (
     <>
@@ -215,6 +247,19 @@ function LogRow({
             >
               {expanded ? "收起详情" : "查看详情"}
             </button>
+          )}
+          {metadataHighlights.length > 0 && (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {metadataHighlights.map((item) => (
+                <span
+                  key={`${item.label}-${item.value}`}
+                  className={`max-w-xl truncate rounded-md border px-2 py-1 text-[11px] font-black ${item.tone}`}
+                  title={`${item.label}: ${item.value}`}
+                >
+                  {item.label}: {item.value}
+                </span>
+              ))}
+            </div>
           )}
         </td>
         <td className="whitespace-nowrap px-4 py-4 align-top">
