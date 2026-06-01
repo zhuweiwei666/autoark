@@ -79,7 +79,21 @@ const accountSchema = new mongoose.Schema(
       ref: 'User',
     },
   },
-  { timestamps: true }
+  {
+    timestamps: true,
+    toJSON: {
+      transform: (_doc, ret: any) => {
+        delete ret.token
+        return ret
+      },
+    },
+    toObject: {
+      transform: (_doc, ret: any) => {
+        delete ret.token
+        return ret
+      },
+    },
+  }
 )
 
 // 索引

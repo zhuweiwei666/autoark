@@ -33,6 +33,7 @@ class AccountManagementService {
     }
 
     const accounts = await Account.find(query)
+      .select('-token')
       .populate('organizationId', 'name')
       .populate('groupId', 'name color')
       .populate('createdBy', 'username')
@@ -50,7 +51,7 @@ class AccountManagementService {
     tags: string[],
     currentUser: JwtPayload
   ): Promise<IAccount> {
-    const account = await Account.findOne({ accountId, ...getUserOrgScope(currentUser) })
+    const account = await Account.findOne({ accountId, ...getUserOrgScope(currentUser) }).select('-token')
     if (!account) {
       throw new Error('账户不存在')
     }
@@ -73,7 +74,7 @@ class AccountManagementService {
     tags: string[],
     currentUser: JwtPayload
   ): Promise<IAccount> {
-    const account = await Account.findOne({ accountId, ...getUserOrgScope(currentUser) })
+    const account = await Account.findOne({ accountId, ...getUserOrgScope(currentUser) }).select('-token')
     if (!account) {
       throw new Error('账户不存在')
     }
@@ -237,7 +238,7 @@ class AccountManagementService {
     notes: string,
     currentUser: JwtPayload
   ): Promise<IAccount> {
-    const account = await Account.findOne({ accountId, ...getUserOrgScope(currentUser) })
+    const account = await Account.findOne({ accountId, ...getUserOrgScope(currentUser) }).select('-token')
     if (!account) {
       throw new Error('账户不存在')
     }
@@ -263,6 +264,7 @@ class AccountManagementService {
         { organizationId: { $exists: false } },
       ],
     })
+      .select('-token')
       .populate('groupId', 'name color')
       .sort({ createdAt: -1 })
 
