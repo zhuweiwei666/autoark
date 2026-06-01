@@ -195,6 +195,54 @@ describe('commercial publish limits', () => {
     expect(readiness.nextActions.some(action => action.id === 'review_recent_task_warnings')).toBe(true)
   })
 
+  it('warns when active facebook tokens are expiring soon or stale', async () => {
+    jest.spyOn(User, 'countDocuments')
+      .mockResolvedValueOnce(2 as any)
+      .mockResolvedValueOnce(2 as any)
+    jest.spyOn(Account, 'countDocuments').mockResolvedValue(1 as any)
+    jest.spyOn(FbToken, 'countDocuments').mockResolvedValue(1 as any)
+    jest.spyOn(Material, 'countDocuments').mockResolvedValue(3 as any)
+    jest.spyOn(AdDraft, 'countDocuments').mockResolvedValue(1 as any)
+    jest.spyOn(AdTask, 'countDocuments')
+      .mockResolvedValueOnce(1 as any)
+      .mockResolvedValueOnce(1 as any)
+      .mockResolvedValueOnce(0 as any)
+      .mockResolvedValueOnce(0 as any)
+      .mockResolvedValueOnce(1 as any)
+    jest.spyOn(AdTask, 'find').mockReturnValue(sortedLeanFindResult([]) as any)
+    jest.spyOn(FacebookApp, 'countDocuments')
+      .mockResolvedValueOnce(1 as any)
+      .mockResolvedValueOnce(1 as any)
+    jest.spyOn(FbToken, 'find').mockReturnValue(tokenFindResult([{
+      _id: '665000000000000000000299',
+      fbUserId: 'fb_expiring',
+      fbUserName: 'Expiring User',
+      expiresAt: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000),
+      lastCheckedAt: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000),
+    }]) as any)
+    jest.spyOn(FacebookUser, 'find').mockReturnValue(leanFindResult([{
+      fbUserId: 'fb_expiring',
+      syncStatus: 'completed',
+      adAccounts: [{ accountId: 'act_1', name: 'Ready account', status: 1 }],
+      pages: [{ pageId: 'page_1', name: 'Page 1', accounts: [{ accountId: 'act_1' }] }],
+      pixels: [{ pixelId: 'pixel_1', name: 'Pixel 1', accounts: [{ accountId: 'act_1' }] }],
+    }]) as any)
+
+    const readiness = await getCommercialReadiness({
+      userId: 'admin',
+      role: UserRole.SUPER_ADMIN,
+    } as any)
+
+    expect(readiness.checklist.find(item => item.id === 'facebook_token_health')?.status).toBe('warning')
+    expect(readiness.metrics.expiringSoonTokens).toBe(1)
+    expect(readiness.metrics.staleTokenChecks).toBe(1)
+    expect(readiness.risks.some(risk => risk.message.includes('14 天内过期'))).toBe(true)
+    expect(readiness.nextActions.map(action => action.id)).toEqual(expect.arrayContaining([
+      'renew_expiring_facebook_tokens',
+      'refresh_facebook_token_checks',
+    ]))
+  })
+
   it('caps readiness score when critical commercial blockers exist', async () => {
     jest.spyOn(User, 'countDocuments')
       .mockResolvedValueOnce(1 as any)

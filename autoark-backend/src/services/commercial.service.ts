@@ -268,10 +268,59 @@ const QUOTA_ERROR_CODES = [
   'MONTHLY_TASK_LIMIT_REACHED',
 ]
 
+const TOKEN_EXPIRING_SOON_DAYS = 14
+const TOKEN_STALE_CHECK_DAYS = 7
+const DAY_MS = 24 * 60 * 60 * 1000
+
 const sentence = (value: string) => {
   const trimmed = value.trim()
   if (!trimmed) return ''
   return /[。.!！?？]$/.test(trimmed) ? trimmed : `${trimmed}。`
+}
+
+const buildTokenHealth = (tokens: any[], now = new Date()) => {
+  const expiringSoonAt = new Date(now.getTime() + TOKEN_EXPIRING_SOON_DAYS * DAY_MS)
+  const staleBefore = new Date(now.getTime() - TOKEN_STALE_CHECK_DAYS * DAY_MS)
+  let expiredCount = 0
+  let expiringSoonCount = 0
+  let staleCheckCount = 0
+  let missingExpiryCount = 0
+  let earliestExpiresAt: Date | undefined
+  let oldestCheckedAt: Date | undefined
+
+  for (const token of tokens) {
+    const expiresAt = token?.expiresAt ? new Date(token.expiresAt) : undefined
+    const lastCheckedAt = token?.lastCheckedAt ? new Date(token.lastCheckedAt) : undefined
+
+    if (!expiresAt || Number.isNaN(expiresAt.getTime())) {
+      missingExpiryCount += 1
+    } else {
+      if (!earliestExpiresAt || expiresAt < earliestExpiresAt) {
+        earliestExpiresAt = expiresAt
+      }
+      if (expiresAt < now) {
+        expiredCount += 1
+      } else if (expiresAt <= expiringSoonAt) {
+        expiringSoonCount += 1
+      }
+    }
+
+    if (!lastCheckedAt || Number.isNaN(lastCheckedAt.getTime()) || lastCheckedAt < staleBefore) {
+      staleCheckCount += 1
+    } else if (!oldestCheckedAt || lastCheckedAt < oldestCheckedAt) {
+      oldestCheckedAt = lastCheckedAt
+    }
+  }
+
+  return {
+    total: tokens.length,
+    expiredCount,
+    expiringSoonCount,
+    staleCheckCount,
+    missingExpiryCount,
+    earliestExpiresAt,
+    oldestCheckedAt,
+  }
 }
 
 const aggregateRecentTaskIssues = (tasks: any[]) => {
@@ -568,7 +617,7 @@ export async function getCommercialReadiness(
       'validation.isValid': true,
     }),
     FbToken.find({ ...orgFilter, status: 'active' })
-      .select('_id fbUserId fbUserName expiresAt updatedAt')
+      .select('_id fbUserId fbUserName expiresAt lastCheckedAt updatedAt')
       .sort({ updatedAt: -1 })
       .lean(),
     AdTask.find({ ...orgFilter, status: { $in: ['failed', 'partial_success'] } })
@@ -593,6 +642,7 @@ export async function getCommercialReadiness(
     tokens: activeTokenDocs,
     users: facebookUsers,
   })
+  const tokenHealth = buildTokenHealth(activeTokenDocs)
   const recentTaskIssueBuckets = aggregateRecentTaskIssues(recentFailedTasks)
 
   const plan = mode === 'platform' ? OrganizationPlan.ENTERPRISE : getEffectivePlan(organization)
@@ -636,6 +686,20 @@ export async function getCommercialReadiness(
       activeTokenCount > 0 ? 'done' : 'blocked',
       '/bulk-ad/create',
       `${activeTokenCount} 个活跃授权`,
+    ),
+    step(
+      'facebook_token_health',
+      '授权有效性',
+      '活跃授权需要定期校验，且不能处于已过期或临近过期状态。',
+      activeTokenCount === 0
+        ? 'blocked'
+        : tokenHealth.expiredCount > 0
+          ? 'blocked'
+          : tokenHealth.expiringSoonCount > 0 || tokenHealth.staleCheckCount > 0
+            ? 'warning'
+            : 'done',
+      '/fb-settings',
+      `${tokenHealth.expiringSoonCount} 临期 / ${tokenHealth.staleCheckCount} 待校验`,
     ),
     step(
       'ad_accounts',
@@ -716,6 +780,27 @@ export async function getCommercialReadiness(
       level: 'critical',
       message: '该组织还没有活跃 Facebook 授权，无法拉取资产或创建广告。',
       actionPath: '/bulk-ad/create',
+    })
+  }
+  if (tokenHealth.expiredCount > 0) {
+    risks.push({
+      level: 'critical',
+      message: `${tokenHealth.expiredCount} 个活跃 Facebook 授权已过期，客户发布任务可能直接失败。`,
+      actionPath: '/fb-settings',
+    })
+  }
+  if (tokenHealth.expiringSoonCount > 0) {
+    risks.push({
+      level: 'warning',
+      message: `${tokenHealth.expiringSoonCount} 个 Facebook 授权将在 ${TOKEN_EXPIRING_SOON_DAYS} 天内过期，请提前安排客户重新授权。`,
+      actionPath: '/fb-settings',
+    })
+  }
+  if (tokenHealth.staleCheckCount > 0) {
+    risks.push({
+      level: 'warning',
+      message: `${tokenHealth.staleCheckCount} 个 Facebook 授权超过 ${TOKEN_STALE_CHECK_DAYS} 天未完成有效性校验，建议先刷新校验状态。`,
+      actionPath: '/fb-settings',
     })
   }
   if (activeTokenCount > 0 && facebookAssets.summary.pageLinkedAccountCount === 0) {
@@ -804,6 +889,39 @@ export async function getCommercialReadiness(
       '客户需要使用 Facebook Login for Business 登录并授予广告账户、Page、Pixel 相关权限。',
       '/bulk-ad/create',
       '客户管理员',
+      'facebook',
+    ))
+  }
+  if (tokenHealth.expiredCount > 0) {
+    nextActions.push(action(
+      'renew_expired_facebook_tokens',
+      'critical',
+      '重新授权已过期 Facebook Token',
+      '活跃授权中存在已过期 Token，请让客户管理员重新完成 Facebook Login for Business 授权后再发布任务。',
+      '/fb-settings',
+      '客户管理员',
+      'facebook',
+    ))
+  }
+  if (tokenHealth.expiringSoonCount > 0) {
+    nextActions.push(action(
+      'renew_expiring_facebook_tokens',
+      'high',
+      '安排临期授权续期',
+      `有 ${tokenHealth.expiringSoonCount} 个 Facebook 授权将在 ${TOKEN_EXPIRING_SOON_DAYS} 天内过期，建议上线前先重新授权，避免客户投放中断。`,
+      '/fb-settings',
+      '客户管理员',
+      'facebook',
+    ))
+  }
+  if (tokenHealth.staleCheckCount > 0) {
+    nextActions.push(action(
+      'refresh_facebook_token_checks',
+      'medium',
+      '刷新 Facebook 授权校验',
+      `有 ${tokenHealth.staleCheckCount} 个授权超过 ${TOKEN_STALE_CHECK_DAYS} 天未校验，先在 Token 与像素页面检查状态，再继续客户交付。`,
+      '/fb-settings',
+      '平台运营',
       'facebook',
     ))
   }
@@ -971,6 +1089,10 @@ export async function getCommercialReadiness(
       facebookPixelAccounts: facebookAssets.summary.pixelLinkedAccountCount,
       facebookReadyAccounts: facebookAssets.summary.readyAccountCount,
       recentTaskIssueTypes: recentTaskIssueBuckets.length,
+      expiredTokens: tokenHealth.expiredCount,
+      expiringSoonTokens: tokenHealth.expiringSoonCount,
+      staleTokenChecks: tokenHealth.staleCheckCount,
+      tokensWithoutExpiry: tokenHealth.missingExpiryCount,
     },
     checklist,
     score,
