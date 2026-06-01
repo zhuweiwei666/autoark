@@ -1031,12 +1031,22 @@ export const getAuthLoginUrl = async (req: Request, res: Response) => {
     let appId: string | undefined
     const useUserApp = String(req.query.useUserApp || '').toLowerCase() === 'true'
     if (useUserApp) {
-      const userApp = await FacebookApp.findOne({ 
-      createdBy: req.user.userId,
+      const hasGlobalBusinessLoginConfig = Boolean(
+        process.env.FACEBOOK_BUSINESS_LOGIN_CONFIG_ID || process.env.FACEBOOK_CONFIG_ID,
+      )
+      const userApp = await FacebookApp.findOne({
+        createdBy: req.user.userId,
         status: 'active',
         'validation.isValid': true,
-        'config.enabledForBulkAds': true,
-    }).sort({ createdAt: -1 })
+        'config.enabledForBulkAds': { $ne: false },
+        'compliance.publicOauthReady': true,
+        'compliance.appMode': 'live',
+        'compliance.businessVerification': 'verified',
+        'compliance.appReview': 'approved',
+        ...(!hasGlobalBusinessLoginConfig ? {
+          'config.businessLoginConfigId': { $exists: true, $nin: ['', null] },
+        } : {}),
+      }).sort({ createdAt: -1 })
       if (userApp?.appId) {
         appId = userApp.appId
         logger.info(`[BulkAd] OAuth using user's App (forced): ${userApp.appName} (${appId})`)

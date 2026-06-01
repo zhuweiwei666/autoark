@@ -20,6 +20,24 @@ const OAUTH_STATE_SECRET =
   'autoark-oauth-state-dev-secret'
 const OAUTH_STATE_TTL_MS = Number(process.env.OAUTH_STATE_TTL_MS || 10 * 60 * 1000)
 
+const businessLoginConfigFilter = (): Record<string, any> => (
+  ENV_FB_BUSINESS_LOGIN_CONFIG_ID
+    ? {}
+    : { 'config.businessLoginConfigId': { $exists: true, $nin: ['', null] } }
+)
+
+const publicOauthReadyAppQuery = (extra: Record<string, any> = {}): Record<string, any> => ({
+  status: 'active',
+  'validation.isValid': true,
+  'compliance.publicOauthReady': true,
+  'compliance.appMode': 'live',
+  'compliance.businessVerification': 'verified',
+  'compliance.appReview': 'approved',
+  'config.enabledForBulkAds': { $ne: false },
+  ...businessLoginConfigFilter(),
+  ...extra,
+})
+
 const getBulkAdRedirectUri = (): string => {
   if (process.env.FACEBOOK_BULK_AD_REDIRECT_URI) {
     return process.env.FACEBOOK_BULK_AD_REDIRECT_URI
@@ -116,20 +134,11 @@ export const getActiveAppConfig = async (appId?: string): Promise<{
     }
 
     // 1. 优先查找默认 App（且满足公开 OAuth 准入）
-    let app = await FacebookApp.findOne({
-      status: 'active',
-      isDefault: true,
-      'validation.isValid': true,
-      'compliance.publicOauthReady': true,
-    })
+    let app = await FacebookApp.findOne(publicOauthReadyAppQuery({ isDefault: true }))
     
     // 2. 如果没有默认 App，查找负载最低的活跃 App（且满足公开 OAuth 准入）
     if (!app) {
-      app = await FacebookApp.findOne({
-        status: 'active',
-        'validation.isValid': true,
-        'compliance.publicOauthReady': true,
-      }).sort({
+      app = await FacebookApp.findOne(publicOauthReadyAppQuery()).sort({
         'currentLoad.activeTasks': 1,
         'config.priority': -1,
       })

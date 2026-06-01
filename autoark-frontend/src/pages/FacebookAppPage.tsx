@@ -25,6 +25,21 @@ interface FacebookApp {
     lastCheckedAt?: string
   }
   isPublicOauthReady?: boolean
+  publicOauthDiagnostics?: {
+    ready: boolean
+    complianceReady: boolean
+    runtimeReady: boolean
+    permissionsReady: boolean
+    businessLoginConfigured: boolean
+    requiredPermissions: string[]
+    missingPermissions: string[]
+    gaps: Array<{
+      code: string
+      label: string
+      detail: string
+      severity: 'critical' | 'warning'
+    }>
+  }
   stats?: {
     totalRequests?: number
     successRequests?: number
@@ -467,17 +482,24 @@ export default function FacebookAppPage() {
   }
 
   const getPublicOauthBadge = (app: FacebookApp) => {
-    const ok = Boolean(app.isPublicOauthReady)
+    const ok = Boolean(app.publicOauthDiagnostics?.ready ?? app.isPublicOauthReady)
     return ok
       ? { text: 'Public OAuth 就绪', cls: 'bg-emerald-50 border-emerald-200 text-emerald-700' }
       : { text: 'Public OAuth 未就绪', cls: 'bg-amber-50 border-amber-200 text-amber-700' }
   }
 
   const getPublicOauthGaps = (app: FacebookApp) => {
+    if (app.publicOauthDiagnostics?.gaps?.length) {
+      return app.publicOauthDiagnostics.gaps.map((gap) => gap.label)
+    }
     const gaps: string[] = []
     if (app.status !== 'active') gaps.push('App 未启用')
     if (!app.validation?.isValid) gaps.push('App Secret 未验证')
-    if (app.compliance?.appMode && app.compliance.appMode !== 'live') gaps.push('App Mode 非 Live')
+    if (app.config?.enabledForBulkAds === false) gaps.push('批量广告未启用')
+    if (app.compliance?.appMode !== 'live') gaps.push('App Mode 非 Live')
+    if (app.compliance?.businessVerification !== 'verified') gaps.push('Business 未验证')
+    if (app.compliance?.appReview !== 'approved') gaps.push('App Review 未通过')
+    if (!app.config?.businessLoginConfigId && !oauthConfig?.businessLoginConfigIdConfigured) gaps.push('缺少 config_id')
     const permissions = app.compliance?.permissions || []
     const map = new Map(permissions.map((permission) => [permission.name, permission]))
     const missingPermissions = publicOAuthRequirements.filter((name) => {
@@ -485,6 +507,14 @@ export default function FacebookAppPage() {
       return !(permission?.access === 'advanced' && permission.status === 'approved')
     })
     return [...gaps, ...missingPermissions]
+  }
+
+  const getPublicOauthPrimaryAction = (app: FacebookApp) => {
+    const diagnosticGap = app.publicOauthDiagnostics?.gaps?.[0]
+    if (diagnosticGap?.detail) return diagnosticGap.detail
+    const fallbackGap = getPublicOauthGaps(app)[0]
+    if (!fallbackGap) return ''
+    return `请先处理：${fallbackGap}`
   }
 
   const getBusinessLoginLabel = (app: FacebookApp) => {
@@ -693,14 +723,20 @@ export default function FacebookAppPage() {
                     <div className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold border ${getPublicOauthBadge(app).cls}`}>
                       {getPublicOauthBadge(app).text}
                     </div>
-                    {publicOAuthRequirements.length > 0 && !app.isPublicOauthReady && (
+                    {publicOAuthRequirements.length > 0 && !(app.publicOauthDiagnostics?.ready ?? app.isPublicOauthReady) && (
                       <div className="text-xs text-slate-500 mt-2 leading-5">
-                        待处理：{getPublicOauthGaps(app).join(', ') || '无'}
+                        待处理：{getPublicOauthGaps(app).slice(0, 4).join(', ') || '无'}
+                        {getPublicOauthGaps(app).length > 4 ? ` 等 ${getPublicOauthGaps(app).length} 项` : ''}
                       </div>
                     )}
-                    {app.compliance?.publicOauthReady && !app.isPublicOauthReady && (
+                    {!(app.publicOauthDiagnostics?.ready ?? app.isPublicOauthReady) && getPublicOauthPrimaryAction(app) && (
                       <div className="text-xs text-amber-700 mt-2 leading-5">
-                        权限已记录为通过，仍需保持 App 启用且 Secret 验证成功。
+                        {getPublicOauthPrimaryAction(app)}
+                      </div>
+                    )}
+                    {app.compliance?.publicOauthReady && !(app.publicOauthDiagnostics?.ready ?? app.isPublicOauthReady) && (
+                      <div className="text-xs text-amber-700 mt-2 leading-5">
+                        Meta 合规记录已通过，仍需补齐运行条件后才能给客户公开授权。
                       </div>
                     )}
                   </div>

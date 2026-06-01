@@ -511,6 +511,12 @@ export async function getCommercialReadiness(
   const { mode, organizationId, organization } = await resolveScope(user, requestedOrganizationId)
   const orgFilter = scoped(organizationId)
   const thisMonth = monthStart()
+  const hasGlobalBusinessLoginConfig = Boolean(
+    process.env.FACEBOOK_BUSINESS_LOGIN_CONFIG_ID || process.env.FACEBOOK_CONFIG_ID,
+  )
+  const businessLoginConfigQuery = hasGlobalBusinessLoginConfig
+    ? {}
+    : { 'config.businessLoginConfigId': { $exists: true, $nin: ['', null] } }
 
   const [
     memberCount,
@@ -546,6 +552,11 @@ export async function getCommercialReadiness(
       status: 'active',
       'validation.isValid': true,
       'compliance.publicOauthReady': true,
+      'compliance.appMode': 'live',
+      'compliance.businessVerification': 'verified',
+      'compliance.appReview': 'approved',
+      'config.enabledForBulkAds': { $ne: false },
+      ...businessLoginConfigQuery,
     }),
     FacebookApp.countDocuments({
       status: 'active',

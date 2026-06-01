@@ -1,4 +1,5 @@
 import mongoose from 'mongoose'
+import { buildPublicOAuthReadiness } from '../utils/facebookAppReadiness'
 
 const facebookAppSchema = new mongoose.Schema(
   {
@@ -120,7 +121,12 @@ facebookAppSchema.virtual('isAvailable').get(function(this: any) {
 
 // 虚拟字段：是否满足公开 OAuth（更严格：需要 validation 通过 + publicOauthReady）
 facebookAppSchema.virtual('isPublicOauthReady').get(function(this: any) {
-  return Boolean(this.validation?.isValid) && Boolean(this.compliance?.publicOauthReady) && this.status === 'active'
+  return buildPublicOAuthReadiness(this).ready
+})
+
+// 虚拟字段：公开 OAuth 诊断详情
+facebookAppSchema.virtual('publicOauthDiagnostics').get(function(this: any) {
+  return buildPublicOAuthReadiness(this)
 })
 
 // 索引

@@ -4,26 +4,11 @@ import axios from 'axios'
 import logger from '../utils/logger'
 import { FB_BASE_URL, FB_OAUTH_URL } from '../config/facebook.config'
 import { writeAuditLog } from '../services/auditLog.service'
-
-// 公开 OAuth 最低需要的权限（用于“任意 FB 号可授权”）
-const PUBLIC_OAUTH_REQUIRED_PERMISSIONS = [
-  'ads_management',
-  'ads_read',
-  'business_management',
-  'pages_show_list',
-  'pages_read_engagement',
-  'pages_manage_ads',
-]
-
-const computePublicOauthReady = (app: any): boolean => {
-  const perms = Array.isArray(app?.compliance?.permissions) ? app.compliance.permissions : []
-  const map = new Map<string, any>(perms.map((p: any) => [String(p.name), p]))
-  return PUBLIC_OAUTH_REQUIRED_PERMISSIONS.every((name) => {
-    const p: any = map.get(name)
-    // 这里用“Advanced 且 Approved”作为可对外授权的判定
-    return p && p.access === 'advanced' && p.status === 'approved'
-  })
-}
+import {
+  PUBLIC_OAUTH_REQUIRED_PERMISSIONS,
+  buildPublicOAuthReadiness,
+  computePublicOauthComplianceReady,
+} from '../utils/facebookAppReadiness'
 
 const writeFacebookAppAudit = (req: Request, input: {
   action: string
@@ -42,12 +27,15 @@ const writeFacebookAppAudit = (req: Request, input: {
 
 const complianceAuditMetadata = (app: any) => {
   const permissions = Array.isArray(app?.compliance?.permissions) ? app.compliance.permissions : []
+  const readiness = buildPublicOAuthReadiness(app)
   return {
     appId: app?.appId,
     appMode: app?.compliance?.appMode,
     businessVerification: app?.compliance?.businessVerification,
     appReview: app?.compliance?.appReview,
     publicOauthReady: Boolean(app?.compliance?.publicOauthReady),
+    publicOauthRuntimeReady: readiness.ready,
+    publicOauthGapCodes: readiness.gaps.map((gap) => gap.code),
     permissionCount: permissions.length,
     approvedAdvancedPermissions: permissions.filter((permission: any) => (
       permission.access === 'advanced' && permission.status === 'approved'
@@ -184,7 +172,11 @@ export const updateApp = async (req: Request, res: Response) => {
         // 如果传入 permissions，覆盖；否则保留原来的
         ...(compliance.permissions ? { permissions: compliance.permissions } : {}),
       } as any
-      ;(app.compliance as any).publicOauthReady = computePublicOauthReady(app)
+      ;(app.compliance as any).publicOauthReady = computePublicOauthComplianceReady(app)
+      ;(app.compliance as any).lastCheckedAt = new Date()
+    }
+    if (app.compliance) {
+      ;(app.compliance as any).publicOauthReady = computePublicOauthComplianceReady(app)
       ;(app.compliance as any).lastCheckedAt = new Date()
     }
 
@@ -223,7 +215,15 @@ export const getPublicOAuthRequirements = async (req: Request, res: Response) =>
     success: true,
     data: {
       requiredPermissions: PUBLIC_OAUTH_REQUIRED_PERMISSIONS,
-      rule: 'All required permissions must be Advanced + Approved, and app must be valid + active.',
+      criteria: [
+        'App must be active and App Secret validation must pass.',
+        'App Mode must be Live.',
+        'Business Verification must be verified.',
+        'App Review must be approved.',
+        'All required permissions must be Advanced + Approved.',
+        'Facebook Login for Business config_id must be configured globally or on the App.',
+      ],
+      rule: 'Public customer OAuth is ready only when the App is active, valid, Live, verified, approved, has Advanced + Approved permissions, and has a Business Login config_id.',
     },
   })
 }
@@ -245,7 +245,7 @@ export const updateCompliance = async (req: Request, res: Response) => {
       ...(req.body || {}),
       ...(req.body?.permissions ? { permissions: req.body.permissions } : {}),
     }
-    app.compliance.publicOauthReady = computePublicOauthReady(app)
+    app.compliance.publicOauthReady = computePublicOauthComplianceReady(app)
     app.compliance.lastCheckedAt = new Date()
 
     await app.save()
