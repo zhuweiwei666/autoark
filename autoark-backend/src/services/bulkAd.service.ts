@@ -96,6 +96,52 @@ const createDraftValidationFailure = (validation: any) => {
   return error
 }
 
+const FACEBOOK_STEP_ENTITY_TYPES: Record<string, string> = {
+  campaign: 'campaign',
+  adset: 'adset',
+  creative: 'creative',
+  ad: 'ad',
+  image_upload: 'creative',
+  video_upload: 'creative',
+}
+
+const createFacebookStepError = (step: string, errorPayload: any, fallbackMessage: string) => {
+  const payload = errorPayload && typeof errorPayload === 'object'
+    ? errorPayload
+    : { message: errorPayload ? String(errorPayload) : fallbackMessage }
+  const message = payload.userMsg || payload.userTitle || payload.message || fallbackMessage
+  const rawMessage = payload.message && payload.message !== message ? ` (${payload.message})` : ''
+  const error: any = new Error(`${step} failed: ${message}${rawMessage}`)
+  error.entityType = FACEBOOK_STEP_ENTITY_TYPES[step] || 'general'
+  error.code = payload.code
+  error.subcode = payload.subcode
+  error.userMessage = payload.userMsg || payload.userTitle
+  error.operatorMessage = [
+    payload.message ? `原始错误：${payload.message}` : undefined,
+    payload.userMsg || payload.userTitle ? `用户提示：${payload.userMsg || payload.userTitle}` : undefined,
+  ].filter(Boolean).join('；') || undefined
+  error.response = {
+    error: {
+      code: payload.code,
+      error_subcode: payload.subcode,
+      message: payload.message || message,
+      error_user_msg: payload.userMsg,
+      error_user_title: payload.userTitle,
+      type: payload.type,
+    },
+  }
+  error.details = {
+    step,
+    error: error.response.error,
+  }
+  return error
+}
+
+const diagnoseFacebookStepError = (step: string, errorPayload: any, fallbackMessage: string) => diagnoseBulkAdError(
+  createFacebookStepError(step, errorPayload, fallbackMessage),
+  { entityType: FACEBOOK_STEP_ENTITY_TYPES[step] || 'general' },
+)
+
 const buildFacebookAssetSnapshot = async (draft: any) => {
   const tokenAccessFilter = draft.organizationId
     ? { organizationId: draft.organizationId }
@@ -861,7 +907,7 @@ export const executeTaskForAccount = async (
     })
     
     if (!campaignResult.success) {
-      throw new Error(`Campaign creation failed: ${campaignResult.error?.message}`)
+      throw createFacebookStepError('campaign', campaignResult.error, 'Campaign creation failed')
     }
     
     const campaignId = campaignResult.id
@@ -968,7 +1014,7 @@ export const executeTaskForAccount = async (
       })
       
       if (!adsetResult.success) {
-        throw new Error(`AdSet ${adsetIndex + 1} creation failed: ${adsetResult.error?.message}`)
+        throw createFacebookStepError('adset', adsetResult.error, `AdSet ${adsetIndex + 1} creation failed`)
       }
       
       allAdsetIds.push(adsetResult.id)
@@ -1009,6 +1055,7 @@ export const executeTaskForAccount = async (
       materialId?: string
       effectiveStatus?: string
     }> = []
+    const stepDiagnostics: any[] = []
     let globalAdIndex = 0
     
     const adsetsToUse = allAdsetIds.map((id, idx) => ({
@@ -1051,9 +1098,11 @@ export const executeTaskForAccount = async (
               return { url: material.url, video_id: result.id, thumbnail_url: result.thumbnailUrl }
             }
             logger.error(`[BulkAd] Video upload failed: ${result.error?.message}`)
+            stepDiagnostics.push(diagnoseFacebookStepError('video_upload', result.error, `Video upload failed: ${material.name || material.url}`))
             return { url: material.url }
           } catch (err: any) {
             logger.error(`[BulkAd] Video upload error: ${err.message}`)
+            stepDiagnostics.push(diagnoseBulkAdError(err, { fallbackCode: 'CREATIVE_OR_MATERIAL_FAILED', entityType: 'creative' }))
             return { url: material.url }
           }
         })
@@ -1186,6 +1235,7 @@ export const executeTaskForAccount = async (
         
         if (!creativeResult.success) {
           logger.error(`[BulkAd] Failed to create creative for material ${matIndex + 1}:`, creativeResult.error)
+          stepDiagnostics.push(diagnoseFacebookStepError('creative', creativeResult.error, `Creative creation failed for material ${material.name || matIndex + 1}`))
           continue
         }
         
@@ -1234,6 +1284,7 @@ export const executeTaskForAccount = async (
         
         if (!adResult.success) {
           logger.error(`[BulkAd] Failed to create ad for material ${entry.matIndex + 1}:`, adResult.error)
+          stepDiagnostics.push(diagnoseFacebookStepError('ad', adResult.error, `Ad creation failed for material ${material.name || entry.matIndex + 1}`))
           continue
         }
         
@@ -1258,12 +1309,17 @@ export const executeTaskForAccount = async (
     // 如果没有创建任何广告，标记为失败
     const finalStatus = adIds.length > 0 ? 'success' : 'failed'
     const errorInfo = adIds.length === 0
-      ? [diagnoseBulkAdError({
-        entityType: 'ad',
-        errorCode: 'NO_ADS_CREATED',
-        errorMessage: '素材创建失败，未能创建任何广告',
-        timestamp: new Date(),
-      })]
+      ? [
+        ...stepDiagnostics,
+        diagnoseBulkAdError({
+          entityType: 'ad',
+          errorCode: 'NO_ADS_CREATED',
+          errorMessage: stepDiagnostics.length > 0
+            ? '所有素材、创意或广告创建步骤均失败，未能创建任何广告'
+            : '素材创建失败，未能创建任何广告',
+          timestamp: new Date(),
+        }),
+      ]
       : undefined
     
     // 原子更新状态

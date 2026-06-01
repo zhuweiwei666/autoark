@@ -332,6 +332,9 @@ const classifyErrorCode = (
   if (includesAny(text, ['promote_pages', 'page id', 'page_id', 'object_story_spec', 'facebook page', '主页', '公共主页'])) {
     return 'PAGE_ACCESS_REQUIRED'
   }
+  if (includesAny(text, ['creative', 'adcreative', 'image', 'video', 'thumbnail', 'hash', 'upload', 'file_url', '素材', '创意', '图片', '视频'])) {
+    return 'CREATIVE_OR_MATERIAL_FAILED'
+  }
   if (includesAny(text, ['ad account', 'act_', '广告账户', 'account has been disabled', 'disabled ad account', 'no permission to access ad account'])) {
     if (includesAny(text, ['disabled', 'payment', 'billing', 'spend cap', 'risk', '封禁', '停用', '支付', '账单', '风控'])) {
       return 'AD_ACCOUNT_UNAVAILABLE'
@@ -346,9 +349,6 @@ const classifyErrorCode = (
   }
   if (includesAny(text, ['targeting', 'geo_locations', 'audience', 'interest', 'location', '定向', '受众', '地区', '国家'])) {
     return 'TARGETING_INVALID'
-  }
-  if (includesAny(text, ['creative', 'adcreative', 'image', 'video', 'thumbnail', 'hash', 'upload', 'file_url', '素材', '创意', '图片', '视频'])) {
-    return 'CREATIVE_OR_MATERIAL_FAILED'
   }
   if (Number.isFinite(code) && code === 100) {
     return 'META_VALIDATION_ERROR'
