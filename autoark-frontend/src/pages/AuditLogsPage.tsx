@@ -2,7 +2,8 @@ import { useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { ClockCounterClockwise, FunnelSimple, ShieldCheck } from "@phosphor-icons/react";
-import { getAuditLogs, type AuditLogEntry } from "../services/api";
+import { getAuditLogs, getOrganizations, type AuditLogEntry } from "../services/api";
+import { useAuth } from "../contexts/AuthContext";
 
 const categories = [
   { value: "", label: "全部类型" },
@@ -273,39 +274,58 @@ function LogRow({
 }
 
 export default function AuditLogsPage() {
+  const { isSuperAdmin } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const [category, setCategory] = useState(searchParams.get("category") || "");
   const [status, setStatus] = useState(searchParams.get("status") || "");
   const [action, setAction] = useState(searchParams.get("action") || "");
+  const [organizationId, setOrganizationId] = useState(searchParams.get("organizationId") || "");
   const [expandedLogId, setExpandedLogId] = useState<string | null>(null);
 
-  const updateFilters = (next: { category?: string; status?: string; action?: string }) => {
+  const updateFilters = (next: { category?: string; status?: string; action?: string; organizationId?: string }) => {
     const nextCategory = next.category ?? category;
     const nextStatus = next.status ?? status;
     const nextAction = next.action ?? action;
+    const nextOrganizationId = next.organizationId ?? organizationId;
     setCategory(nextCategory);
     setStatus(nextStatus);
     setAction(nextAction);
+    setOrganizationId(nextOrganizationId);
+    setExpandedLogId(null);
     const params: Record<string, string> = {};
     if (nextCategory) params.category = nextCategory;
     if (nextStatus) params.status = nextStatus;
     if (nextAction) params.action = nextAction;
+    if (nextOrganizationId) params.organizationId = nextOrganizationId;
     setSearchParams(params, { replace: true });
   };
 
   const query = useMemo(() => ({
+    organizationId: organizationId || undefined,
     category: category || undefined,
     action: action || undefined,
     status: status || undefined,
     limit: 100,
-  }), [category, action, status]);
+  }), [organizationId, category, action, status]);
 
   const { data, isLoading, error, refetch, isFetching } = useQuery({
     queryKey: ["audit-logs", query],
     queryFn: () => getAuditLogs(query),
   });
+  const organizationsQuery = useQuery({
+    queryKey: ["audit-organizations"],
+    queryFn: () => getOrganizations(),
+    enabled: isSuperAdmin,
+  });
 
   const logs = data?.data || [];
+  const organizationOptions = [
+    { value: "", label: "全部组织" },
+    ...(organizationsQuery.data?.data || []).map((organization) => ({
+      value: organization._id,
+      label: organization.name,
+    })),
+  ];
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
@@ -321,6 +341,13 @@ export default function AuditLogsPage() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
+          {isSuperAdmin && (
+            <SelectFilter
+              value={organizationId}
+              onChange={(value) => updateFilters({ organizationId: value })}
+              options={organizationOptions}
+            />
+          )}
           <SelectFilter value={category} onChange={(value) => updateFilters({ category: value })} options={categories} />
           <SelectFilter value={action} onChange={(value) => updateFilters({ action: value })} options={actionOptions} />
           <SelectFilter value={status} onChange={(value) => updateFilters({ status: value })} options={statuses} />
