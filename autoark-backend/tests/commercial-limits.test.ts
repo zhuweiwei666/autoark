@@ -274,8 +274,8 @@ describe('commercial publish limits', () => {
         accountName: 'Account 1',
         status: 'failed',
         errors: [{
-          errorCode: 'MONTHLY_TASK_LIMIT_REACHED',
-          errorMessage: 'Monthly limit reached',
+          errorCode: 'PAGE_ACCESS_REQUIRED',
+          errorMessage: 'Page access missing',
         }],
       }],
       progress: { totalAccounts: 1, createdAds: 0 },
@@ -326,6 +326,13 @@ describe('commercial publish limits', () => {
       taskName: 'Recent task',
       status: 'failed',
       totalErrors: 1,
+    })
+    expect(ledger.issueTrends[0]).toMatchObject({
+      errorCode: 'PAGE_ACCESS_REQUIRED',
+      count: 1,
+      taskCount: 1,
+      accountCount: 1,
+      retryable: false,
     })
   })
 })

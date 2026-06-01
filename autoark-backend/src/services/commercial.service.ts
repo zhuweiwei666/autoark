@@ -302,6 +302,80 @@ const aggregateRecentTaskIssues = (tasks: any[]) => {
   return Array.from(bucketMap.values()).sort((a, b) => b.count - a.count)
 }
 
+type CommercialIssueTrendAccumulator = {
+  errorCode: string
+  count: number
+  retryable: boolean
+  source: string
+  customerMessage: string
+  nextActions: string[]
+  taskIds: Set<string>
+  accountIds: Set<string>
+  lastSeenAt?: Date
+}
+
+const buildCommercialIssueTrends = (tasks: any[]) => {
+  const trendMap = new Map<string, CommercialIssueTrendAccumulator>()
+
+  for (const task of tasks) {
+    const diagnostics = buildTaskOperationalDiagnostics(task)
+    const taskId = task?._id || task?.id ? String(task._id || task.id) : undefined
+    const createdAt = task?.createdAt ? new Date(task.createdAt) : undefined
+
+    for (const bucket of diagnostics.buckets) {
+      const existing = trendMap.get(bucket.errorCode)
+      if (existing) {
+        existing.count += bucket.count
+        existing.retryable = existing.retryable && bucket.retryable
+        for (const actionText of bucket.nextActions) {
+          if (actionText && !existing.nextActions.includes(actionText)) {
+            existing.nextActions.push(actionText)
+          }
+        }
+        if (createdAt && (!existing.lastSeenAt || createdAt > existing.lastSeenAt)) {
+          existing.lastSeenAt = createdAt
+        }
+      } else {
+        trendMap.set(bucket.errorCode, {
+          errorCode: bucket.errorCode,
+          count: bucket.count,
+          retryable: bucket.retryable,
+          source: bucket.source,
+          customerMessage: bucket.customerMessage,
+          nextActions: [...bucket.nextActions],
+          taskIds: new Set<string>(),
+          accountIds: new Set<string>(),
+          lastSeenAt: createdAt,
+        })
+      }
+
+      const trend = trendMap.get(bucket.errorCode)!
+      if (taskId) trend.taskIds.add(taskId)
+      for (const account of bucket.accounts) {
+        if (account.accountId) trend.accountIds.add(account.accountId)
+      }
+    }
+  }
+
+  return Array.from(trendMap.values())
+    .map(trend => ({
+      errorCode: trend.errorCode,
+      count: trend.count,
+      taskCount: trend.taskIds.size,
+      accountCount: trend.accountIds.size,
+      retryable: trend.retryable,
+      source: trend.source,
+      customerMessage: trend.customerMessage,
+      nextActions: trend.nextActions.slice(0, 3),
+      lastSeenAt: trend.lastSeenAt,
+    }))
+    .sort((a, b) => {
+      const countDiff = b.count - a.count
+      if (countDiff !== 0) return countDiff
+      return b.taskCount - a.taskCount
+    })
+}
+
 export class CommercialLimitError extends Error {
   code: string
   statusCode: number
@@ -927,6 +1001,7 @@ export async function getCommercialUsageLedger(
   const currentMonthStart = monthStart()
   const todayStart = utcDayStart()
   const dailyStart = addUtcDays(todayStart, -13)
+  const issueWindowStart = addUtcDays(todayStart, -29)
 
   const plan = mode === 'platform' ? OrganizationPlan.ENTERPRISE : getEffectivePlan(organization)
   const limits = mode === 'platform' ? PLAN_DEFAULTS[OrganizationPlan.ENTERPRISE].limits : getEffectiveLimits(organization)
@@ -946,6 +1021,7 @@ export async function getCommercialUsageLedger(
     dailyRows,
     recentTaskDocs,
     quotaEventDocs,
+    issueTrendDocs,
   ] = await Promise.all([
     User.countDocuments(userFilter),
     Account.countDocuments({ ...orgFilter, status: { $ne: 'disabled' } }),
@@ -1000,6 +1076,14 @@ export async function getCommercialUsageLedger(
       .sort({ createdAt: -1 })
       .limit(20)
       .select('action status summary reason metadata requestId createdAt username userId userRole')
+      .lean(),
+    AdTask.find({
+      ...orgFilter,
+      status: { $in: ['failed', 'partial_success'] },
+      createdAt: { $gte: issueWindowStart },
+    })
+      .sort({ createdAt: -1 })
+      .limit(50)
       .lean(),
   ])
 
@@ -1081,6 +1165,7 @@ export async function getCommercialUsageLedger(
       currentMonthStart: currentMonthStart.toISOString(),
       dailyStart: dailyStart.toISOString(),
       dailyEnd: todayStart.toISOString(),
+      issueWindowStart: issueWindowStart.toISOString(),
     },
     plan: {
       code: plan,
@@ -1108,6 +1193,7 @@ export async function getCommercialUsageLedger(
       operator: log.username || log.userId || 'anonymous',
       userRole: log.userRole,
     })),
+    issueTrends: buildCommercialIssueTrends(issueTrendDocs as any[]).slice(0, 8),
     recentTasks,
   }
 }

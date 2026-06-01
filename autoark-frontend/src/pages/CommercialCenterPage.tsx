@@ -259,6 +259,7 @@ function UsageLedgerPanel({
 }) {
   const lastSevenDays = ledger?.dailyTaskCounts.slice(-7) || [];
   const quotaEvent = ledger?.quotaEvents[0];
+  const issueTrends = ledger?.issueTrends || [];
   const monthlyTasks = ledger?.usage.monthlyTasks;
   const concurrentTasks = ledger?.usage.concurrentTasks;
 
@@ -378,6 +379,47 @@ function UsageLedgerPanel({
                 </div>
               ) : (
                 <div className="text-sm font-bold text-[#0f766e]">最近没有额度拦截</div>
+              )}
+            </div>
+
+            <div className="rounded-lg border border-zinc-100 bg-white p-4">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div className="text-xs font-black uppercase text-zinc-500">失败主因排行</div>
+                <span className="text-[11px] font-bold text-zinc-400">近 30 天</span>
+              </div>
+              {issueTrends.length === 0 ? (
+                <div className="text-sm font-bold text-[#0f766e]">近 30 天没有集中失败主因</div>
+              ) : (
+                <div className="space-y-3">
+                  {issueTrends.slice(0, 4).map((issue) => (
+                    <div key={issue.errorCode} className="border-b border-zinc-100 pb-3 last:border-b-0 last:pb-0">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="font-mono text-xs font-black text-zinc-950">{issue.errorCode}</div>
+                        <span className={`rounded-md border px-2 py-0.5 text-[11px] font-black ${
+                          issue.retryable
+                            ? "border-[#b7e3d5] bg-[#e7f3ef] text-[#0f766e]"
+                            : "border-[#fecdd3] bg-[#fff1f2] text-[#b4233a]"
+                        }`}>
+                          {issue.retryable ? "可重试" : "需处理"}
+                        </span>
+                      </div>
+                      <div className="mt-1 text-sm font-semibold leading-6 text-zinc-600">
+                        {issue.customerMessage}
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-2 text-[11px] font-bold text-zinc-500">
+                        <span>{issue.count} 次错误</span>
+                        <span>{issue.taskCount} 个任务</span>
+                        <span>{issue.accountCount} 个账户</span>
+                        {issue.lastSeenAt && <span>{formatDateTime(issue.lastSeenAt)}</span>}
+                      </div>
+                      {issue.nextActions[0] && (
+                        <div className="mt-2 rounded-md bg-[#fbfbf8] px-3 py-2 text-xs font-bold leading-5 text-zinc-600">
+                          {issue.nextActions[0]}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
           </div>

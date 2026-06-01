@@ -238,6 +238,7 @@ export interface CommercialUsageLedger {
     currentMonthStart: string
     dailyStart: string
     dailyEnd: string
+    issueWindowStart?: string
   }
   plan: {
     code: string
@@ -272,6 +273,17 @@ export interface CommercialUsageLedger {
     createdAt?: string
     operator?: string
     userRole?: string
+  }>
+  issueTrends: Array<{
+    errorCode: string
+    count: number
+    taskCount: number
+    accountCount: number
+    retryable: boolean
+    source: string
+    customerMessage: string
+    nextActions: string[]
+    lastSeenAt?: string
   }>
   recentTasks: Array<{
     taskId: string
