@@ -877,6 +877,62 @@ export async function getCommercialReadiness(
   }
 }
 
+export async function getCommercialOrganizationReadiness(user: JwtPayload) {
+  if (user.role !== UserRole.SUPER_ADMIN) {
+    throw new Error('无权查看全平台客户商用状态')
+  }
+
+  const organizations = await Organization.find({})
+    .select('_id name status billing updatedAt createdAt')
+    .sort({ updatedAt: -1, createdAt: -1 })
+    .lean()
+
+  const stateRank: Record<ReadinessLevel, number> = {
+    blocked: 0,
+    attention: 1,
+    ready: 2,
+  }
+
+  const items = await Promise.all(organizations.map(async (organization: any) => {
+    const readiness = await getCommercialReadiness(user, String(organization._id))
+    const firstAction = readiness.nextActions[0]
+
+    return {
+      organizationId: String(organization._id),
+      organizationName: organization.name,
+      organizationStatus: organization.status,
+      plan: readiness.plan,
+      score: readiness.score,
+      state: readiness.state,
+      firstAction: firstAction
+        ? {
+          id: firstAction.id,
+          priority: firstAction.priority,
+          title: firstAction.title,
+          owner: firstAction.owner,
+          actionPath: firstAction.actionPath,
+          source: firstAction.source,
+        }
+        : null,
+      metrics: {
+        activeTokens: readiness.metrics.activeTokens || 0,
+        adAccounts: readiness.metrics.adAccounts || 0,
+        facebookReadyAccounts: readiness.metrics.facebookReadyAccounts || 0,
+        materials: readiness.metrics.materials || 0,
+        successfulTasks: readiness.metrics.successfulTasks || 0,
+        failedTasks: readiness.metrics.failedTasks || 0,
+      },
+      updatedAt: organization.updatedAt,
+    }
+  }))
+
+  return items.sort((a, b) => {
+    const stateDiff = stateRank[a.state.level] - stateRank[b.state.level]
+    if (stateDiff !== 0) return stateDiff
+    return a.score - b.score
+  })
+}
+
 export function getCommercialPlans() {
   return Object.entries(PLAN_DEFAULTS).map(([code, config]) => ({
     code,

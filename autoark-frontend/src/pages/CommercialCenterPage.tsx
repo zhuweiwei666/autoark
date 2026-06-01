@@ -14,6 +14,7 @@ import {
   XCircle,
 } from "@phosphor-icons/react";
 import {
+  getCommercialOrganizationReadiness,
   getCommercialReadiness,
   getOrganizations,
   type CommercialReadiness,
@@ -274,9 +275,19 @@ export default function CommercialCenterPage() {
     queryFn: () => getOrganizations(),
     enabled: isSuperAdmin,
   });
+  const {
+    data: organizationReadinessData,
+    refetch: refetchOrganizationReadiness,
+    isFetching: organizationReadinessFetching,
+  } = useQuery({
+    queryKey: ["commercial-organization-readiness"],
+    queryFn: () => getCommercialOrganizationReadiness(),
+    enabled: isSuperAdmin,
+  });
 
   const readiness = data?.data;
   const organizations = organizationsData?.data || [];
+  const organizationReadiness = organizationReadinessData?.data || [];
   const readinessState = readiness?.state || {
     level: "attention",
     label: "状态计算中",
@@ -411,6 +422,88 @@ export default function CommercialCenterPage() {
           <MetricCard key={metric.label} {...metric} />
         ))}
       </section>
+
+      {isSuperAdmin && organizationReadiness.length > 0 && (
+        <section className="mt-6 rounded-lg border border-zinc-200 bg-white p-5 shadow-[0_18px_38px_-34px_rgba(24,24,27,0.72)]">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-black text-zinc-950">客户交付队列</h2>
+              <p className="mt-1 text-sm font-semibold text-zinc-500">
+                按阻塞程度排序，点客户名即可切换到该组织验收视图。
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => refetchOrganizationReadiness()}
+              disabled={organizationReadinessFetching}
+              className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-bold text-zinc-700 hover:border-zinc-400 disabled:opacity-60"
+            >
+              {organizationReadinessFetching ? "刷新中" : "刷新队列"}
+            </button>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-zinc-100 text-left text-sm">
+              <thead>
+                <tr className="text-xs font-black uppercase text-zinc-500">
+                  <th className="py-3 pr-4">客户组织</th>
+                  <th className="px-4 py-3">状态</th>
+                  <th className="px-4 py-3">授权与资产</th>
+                  <th className="px-4 py-3">任务</th>
+                  <th className="py-3 pl-4">首要动作</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-zinc-100">
+                {organizationReadiness.map((item) => {
+                  const tone = stateTone[item.state.level] || stateTone.attention;
+                  return (
+                    <tr key={item.organizationId} className="align-top">
+                      <td className="py-4 pr-4">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedOrganizationId(item.organizationId)}
+                          className="text-left text-sm font-black text-zinc-950 underline-offset-4 hover:underline"
+                        >
+                          {item.organizationName}
+                        </button>
+                        <div className="mt-1 text-xs font-bold text-zinc-500">
+                          {item.plan.label} · {item.organizationStatus === "active" ? "启用" : "停用"}
+                        </div>
+                      </td>
+                      <td className="px-4 py-4">
+                        <span className={`inline-flex rounded-md border px-2 py-0.5 text-xs font-black ${tone.badge}`}>
+                          {item.state.label}
+                        </span>
+                        <div className="mt-2 font-mono text-lg font-black text-zinc-950">{item.score}</div>
+                      </td>
+                      <td className="px-4 py-4 font-bold text-zinc-700">
+                        <div>{item.metrics.activeTokens} 授权 · {item.metrics.adAccounts} 账户</div>
+                        <div className="mt-1 text-xs text-zinc-500">{item.metrics.facebookReadyAccounts} 个可投放账户 · {item.metrics.materials} 素材</div>
+                      </td>
+                      <td className="px-4 py-4 font-bold text-zinc-700">
+                        <div>{item.metrics.successfulTasks} 成功</div>
+                        <div className="mt-1 text-xs text-zinc-500">{item.metrics.failedTasks} 失败</div>
+                      </td>
+                      <td className="py-4 pl-4">
+                        {item.firstAction ? (
+                          <div className="max-w-sm">
+                            <span className={`rounded-md border px-2 py-0.5 text-[11px] font-black ${priorityTone[item.firstAction.priority] || priorityTone.medium}`}>
+                              {priorityLabels[item.firstAction.priority] || item.firstAction.priority}
+                            </span>
+                            <div className="mt-2 font-bold leading-6 text-zinc-900">{item.firstAction.title}</div>
+                            <div className="mt-1 text-xs font-bold text-zinc-500">{item.firstAction.owner}</div>
+                          </div>
+                        ) : (
+                          <span className="text-xs font-bold text-[#0f766e]">暂无阻断动作</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
 
       {nextActions.length > 0 && (
         <section className="mt-6">

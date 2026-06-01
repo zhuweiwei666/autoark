@@ -117,6 +117,46 @@ export async function getCommercialReadiness(organizationId?: string): Promise<{
   return response.json()
 }
 
+export interface CommercialOrganizationReadiness {
+  organizationId: string
+  organizationName: string
+  organizationStatus: string
+  plan: CommercialReadiness['plan']
+  score: number
+  state: CommercialReadiness['state']
+  firstAction: null | {
+    id: string
+    priority: 'critical' | 'high' | 'medium' | 'low'
+    title: string
+    owner: string
+    actionPath?: string
+    source: 'setup' | 'facebook' | 'quota' | 'tasks' | 'team' | 'materials'
+  }
+  metrics: {
+    activeTokens: number
+    adAccounts: number
+    facebookReadyAccounts: number
+    materials: number
+    successfulTasks: number
+    failedTasks: number
+  }
+  updatedAt?: string
+}
+
+export async function getCommercialOrganizationReadiness(): Promise<{
+  success: boolean
+  data: CommercialOrganizationReadiness[]
+}> {
+  const response = await authFetch(`${API_BASE_URL}/api/commercial/organizations/readiness`)
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}))
+    throw new Error(error.message || 'Failed to fetch organization readiness')
+  }
+
+  return response.json()
+}
+
 export interface OrganizationSummary {
   _id: string
   name: string
