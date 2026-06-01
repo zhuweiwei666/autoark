@@ -1,7 +1,7 @@
 import { Request, Response } from 'express'
 import Material from '../models/Material'
 import Folder from '../models/Folder'
-import { uploadToR2, deleteFromR2, checkR2Config, generatePresignedUploadUrl, generatePresignedUploadUrls } from '../services/r2Storage.service'
+import { uploadToR2, deleteFromR2, getObjectFromR2, checkR2Config, generatePresignedUploadUrl, generatePresignedUploadUrls } from '../services/r2Storage.service'
 import { 
   calculateFingerprint, 
   checkDuplicate, 
@@ -80,6 +80,41 @@ export const getConfigStatus = async (req: Request, res: Response) => {
     res.json({ success: true, data: status })
   } catch (error: any) {
     res.status(500).json({ success: false, error: error.message })
+  }
+}
+
+/**
+ * 公开读取 R2 素材
+ * GET /api/materials/public/:key
+ */
+export const streamPublicMaterial = async (req: Request, res: Response) => {
+  try {
+    const rawKey = req.params[0] || ''
+    const key = decodeURIComponent(rawKey).replace(/^\/+/, '')
+
+    if (!key || key.includes('..')) {
+      return res.status(400).json({ success: false, error: '无效的素材路径' })
+    }
+
+    const object = await getObjectFromR2(key)
+    if (object.ContentType) res.setHeader('Content-Type', object.ContentType)
+    if (object.ContentLength) res.setHeader('Content-Length', String(object.ContentLength))
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
+
+    const body = object.Body as any
+    if (body && typeof body.pipe === 'function') {
+      return body.pipe(res)
+    }
+
+    if (body) {
+      return res.send(body)
+    }
+
+    return res.status(404).json({ success: false, error: '素材不存在' })
+  } catch (error: any) {
+    logger.warn('[Material] Public material stream failed:', error.message)
+    const status = error?.$metadata?.httpStatusCode === 404 ? 404 : 500
+    res.status(status).json({ success: false, error: status === 404 ? '素材不存在' : '读取素材失败' })
   }
 }
 
@@ -1158,4 +1193,3 @@ export const recordAdMappingsBatch = async (req: Request, res: Response) => {
     res.status(500).json({ success: false, error: error.message })
   }
 }
-

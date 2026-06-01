@@ -1,4 +1,4 @@
-import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3'
+import { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { v4 as uuidv4 } from 'uuid'
 import path from 'path'
@@ -138,6 +138,20 @@ export const deleteFromR2 = async (key: string): Promise<{
 }
 
 /**
+ * 从 R2 读取文件流，用于公开素材 URL 代理
+ */
+export const getObjectFromR2 = async (key: string) => {
+  const client = getS3Client()
+
+  const command = new GetObjectCommand({
+    Bucket: R2_BUCKET_NAME,
+    Key: key,
+  })
+
+  return client.send(command)
+}
+
+/**
  * 检查 R2 配置是否完整
  */
 export const checkR2Config = (): {
@@ -268,8 +282,8 @@ export const generatePresignedUploadUrls = async (files: Array<{
 export default {
   uploadToR2,
   deleteFromR2,
+  getObjectFromR2,
   checkR2Config,
   generatePresignedUploadUrl,
   generatePresignedUploadUrls,
 }
-

@@ -5,7 +5,10 @@ import { authenticate } from '../middlewares/auth'
 
 const router = Router()
 
-// 所有路由都需要认证
+// 公开素材 URL，由后端代理 R2 文件读取
+router.get(/^\/public\/(.+)$/, materialController.streamPublicMaterial)
+
+// 其他素材管理路由都需要认证
 router.use(authenticate)
 
 // 配置 multer（内存存储）
@@ -111,4 +114,3 @@ router.delete('/:id', materialController.deleteMaterial)
 router.post('/delete-batch', materialController.deleteMaterialBatch)
 
 export default router
-
