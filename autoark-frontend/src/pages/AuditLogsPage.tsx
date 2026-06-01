@@ -25,6 +25,7 @@ const statuses = [
 const actionOptions = [
   { value: "", label: "全部动作" },
   { value: "commercial.support_package.generate", label: "生成客户支持包" },
+  { value: "bulk_ad.draft_validate", label: "草稿发布前预检" },
   { value: "bulk_ad.facebook_login_url", label: "生成 Facebook 授权链接" },
   { value: "bulk_ad.facebook_oauth_callback", label: "Facebook 授权回调" },
   { value: "bulk_ad.task_support_package.generate", label: "生成任务排障包" },
@@ -62,6 +63,7 @@ const actionLabel: Record<string, string> = {
   "bulk_ad.cancel": "取消投放任务",
   "bulk_ad.retry": "重试失败任务",
   "bulk_ad.rerun": "重新执行任务",
+  "bulk_ad.draft_validate": "草稿发布前预检",
   "bulk_ad.facebook_resync": "同步 Facebook 资产",
   "bulk_ad.facebook_login_url": "生成 Facebook 授权链接",
   "bulk_ad.facebook_oauth_callback": "Facebook 授权回调",
@@ -180,6 +182,12 @@ const metadataBoolean = (metadata: Record<string, unknown> | undefined, key: str
   return undefined;
 };
 
+const metadataStringList = (metadata: Record<string, unknown> | undefined, key: string) => {
+  const value = metadata?.[key];
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => String(item)).filter(Boolean);
+};
+
 const buildMetadataHighlights = (metadata: Record<string, unknown> | undefined) => {
   const highlights: Array<{ label: string; value: string; tone: string }> = [];
   const errorCode = metadataText(metadata, "errorCode") || metadataText(metadata, "topErrorCode");
@@ -191,8 +199,14 @@ const buildMetadataHighlights = (metadata: Record<string, unknown> | undefined) 
   const readyAccountCount = metadataNumber(metadata, "readyAccountCount");
   const tokenCount = metadataNumber(metadata, "tokenCount");
   const publicOauthGapCount = metadataNumber(metadata, "publicOauthGapCount");
+  const errorCount = metadataNumber(metadata, "errorCount");
+  const firstErrorField = metadataText(metadata, "firstErrorField");
+  const errorFields = metadataStringList(metadata, "errorFields");
 
   if (errorCode) highlights.push({ label: "错误码", value: errorCode, tone: "bg-[#fff1f2] text-[#b4233a] border-[#fecdd3]" });
+  if (typeof errorCount === "number" && errorCount > 0) highlights.push({ label: "预检错误", value: String(errorCount), tone: "bg-[#fff1f2] text-[#b4233a] border-[#fecdd3]" });
+  if (firstErrorField) highlights.push({ label: "首个字段", value: firstErrorField, tone: "bg-[#fff7ed] text-[#9a3412] border-[#fed7aa]" });
+  if (!firstErrorField && errorFields.length > 0) highlights.push({ label: "涉及字段", value: errorFields.slice(0, 3).join("、"), tone: "bg-[#fff7ed] text-[#9a3412] border-[#fed7aa]" });
   if (supportId) highlights.push({ label: "支持包", value: supportId, tone: "bg-[#f8fafc] text-zinc-700 border-zinc-200" });
   if (authorizationMode) highlights.push({
     label: "OAuth 模式",
