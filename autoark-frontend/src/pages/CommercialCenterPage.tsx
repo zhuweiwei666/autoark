@@ -633,7 +633,7 @@ export default function CommercialCenterPage() {
               {supportAuditFetching ? "刷新中" : "刷新历史"}
             </button>
             <Link
-              to="/audit-logs"
+              to="/audit-logs?category=commercial&action=commercial.support_package.generate"
               className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-bold text-zinc-900 hover:border-zinc-400"
             >
               全部审计

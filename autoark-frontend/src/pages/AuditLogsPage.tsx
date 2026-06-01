@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { ClockCounterClockwise, FunnelSimple, ShieldCheck } from "@phosphor-icons/react";
 import { getAuditLogs, type AuditLogEntry } from "../services/api";
@@ -18,6 +19,19 @@ const statuses = [
   { value: "success", label: "成功" },
   { value: "failed", label: "失败" },
   { value: "warning", label: "警告" },
+];
+
+const actionOptions = [
+  { value: "", label: "全部动作" },
+  { value: "commercial.support_package.generate", label: "生成客户支持包" },
+  { value: "bulk_ad.facebook_login_url", label: "生成 Facebook 授权链接" },
+  { value: "bulk_ad.facebook_oauth_callback", label: "Facebook 授权回调" },
+  { value: "bulk_ad.publish", label: "发布批量广告" },
+  { value: "bulk_ad.retry", label: "重试失败任务" },
+  { value: "bulk_ad.rerun", label: "重新执行任务" },
+  { value: "bulk_ad.facebook_resync", label: "同步 Facebook 资产" },
+  { value: "organization.update", label: "更新组织" },
+  { value: "facebook_app.compliance_update", label: "更新 App 合规" },
 ];
 
 const statusClass: Record<string, string> = {
@@ -124,14 +138,31 @@ function LogRow({ log }: { log: AuditLogEntry }) {
 }
 
 export default function AuditLogsPage() {
-  const [category, setCategory] = useState("");
-  const [status, setStatus] = useState("");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [category, setCategory] = useState(searchParams.get("category") || "");
+  const [status, setStatus] = useState(searchParams.get("status") || "");
+  const [action, setAction] = useState(searchParams.get("action") || "");
+
+  const updateFilters = (next: { category?: string; status?: string; action?: string }) => {
+    const nextCategory = next.category ?? category;
+    const nextStatus = next.status ?? status;
+    const nextAction = next.action ?? action;
+    setCategory(nextCategory);
+    setStatus(nextStatus);
+    setAction(nextAction);
+    const params: Record<string, string> = {};
+    if (nextCategory) params.category = nextCategory;
+    if (nextStatus) params.status = nextStatus;
+    if (nextAction) params.action = nextAction;
+    setSearchParams(params, { replace: true });
+  };
 
   const query = useMemo(() => ({
     category: category || undefined,
+    action: action || undefined,
     status: status || undefined,
     limit: 100,
-  }), [category, status]);
+  }), [category, action, status]);
 
   const { data, isLoading, error, refetch, isFetching } = useQuery({
     queryKey: ["audit-logs", query],
@@ -154,8 +185,9 @@ export default function AuditLogsPage() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
-          <SelectFilter value={category} onChange={setCategory} options={categories} />
-          <SelectFilter value={status} onChange={setStatus} options={statuses} />
+          <SelectFilter value={category} onChange={(value) => updateFilters({ category: value })} options={categories} />
+          <SelectFilter value={action} onChange={(value) => updateFilters({ action: value })} options={actionOptions} />
+          <SelectFilter value={status} onChange={(value) => updateFilters({ status: value })} options={statuses} />
           <button
             type="button"
             onClick={() => refetch()}
