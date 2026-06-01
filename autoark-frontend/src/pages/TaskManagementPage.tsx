@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import type { ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import Loading from '../components/Loading'
 import { authFetch } from '../services/api'
@@ -140,6 +141,24 @@ interface TaskSupportPackage {
   }>
 }
 
+interface ApiErrorData {
+  success?: boolean
+  error?: string
+  message?: string
+  requestId?: string
+  data?: any
+}
+
+interface ScopedMessage {
+  taskId: string
+  message: string
+}
+
+interface TaskNotice {
+  type: 'success' | 'error'
+  text: string
+}
+
 const STATUS_MAP: Record<string, { label: string; color: string }> = {
   pending: { label: '等待中', color: 'bg-slate-100 text-slate-600' },
   queued: { label: '排队中', color: 'bg-yellow-100 text-yellow-600' },
@@ -233,6 +252,64 @@ const getTaskListIssueText = (task: Task) => {
   return `${diagnostics.summary.totalErrors} 个错误`
 }
 
+const readApiJson = async (res: Response): Promise<ApiErrorData> => {
+  try {
+    return await res.json()
+  } catch {
+    return {}
+  }
+}
+
+const formatApiError = (data: ApiErrorData, fallback: string, res?: Response) => {
+  const nestedErrors = Array.isArray(data.data?.errors)
+    ? data.data.errors.filter(Boolean).join('；')
+    : ''
+  const message = data.message
+    || data.error
+    || data.data?.message
+    || data.data?.error
+    || nestedErrors
+    || fallback
+  const requestId = data.requestId || data.data?.requestId || res?.headers.get('x-request-id')
+  return requestId ? `${message}（请求 ID：${requestId}）` : message
+}
+
+const formatUnknownError = (err: unknown, fallback: string) => {
+  return err instanceof Error && err.message ? err.message : fallback
+}
+
+function InlineNotice({
+  type,
+  children,
+  onClose,
+}: {
+  type: 'success' | 'error' | 'warning'
+  children: ReactNode
+  onClose?: () => void
+}) {
+  const toneClass = type === 'success'
+    ? 'border-green-200 bg-green-50 text-green-700'
+    : type === 'warning'
+      ? 'border-orange-200 bg-orange-50 text-orange-700'
+      : 'border-red-200 bg-red-50 text-red-700'
+
+  return (
+    <div className={`rounded-lg border px-3 py-2 text-sm ${toneClass}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 break-words">{children}</div>
+        {onClose && (
+          <button
+            onClick={onClose}
+            className="shrink-0 text-xs font-semibold opacity-70 hover:opacity-100"
+          >
+            关闭
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export default function TaskManagementPage() {
   const [searchParams] = useSearchParams()
   const taskIdFromUrl = searchParams.get('taskId')
@@ -249,12 +326,18 @@ export default function TaskManagementPage() {
   const [taskSupportPackage, setTaskSupportPackage] = useState<TaskSupportPackage | null>(null)
   const [supportPackageLoading, setSupportPackageLoading] = useState(false)
   const [supportPackageError, setSupportPackageError] = useState<string | null>(null)
+  const [taskListError, setTaskListError] = useState<string | null>(null)
+  const [taskDetailError, setTaskDetailError] = useState<ScopedMessage | null>(null)
+  const [diagnosticsError, setDiagnosticsError] = useState<ScopedMessage | null>(null)
+  const [reviewError, setReviewError] = useState<ScopedMessage | null>(null)
+  const [taskNotice, setTaskNotice] = useState<TaskNotice | null>(null)
   
   // 🆕 倍率执行弹窗状态
   const [showRerunModal, setShowRerunModal] = useState(false)
   const [rerunMultiplier, setRerunMultiplier] = useState(1)
   const [rerunTaskId, setRerunTaskId] = useState<string>('')
   const [rerunning, setRerunning] = useState(false)
+  const [rerunError, setRerunError] = useState<string | null>(null)
   const [statusFilter, setStatusFilter] = useState('')
   const [healthFilter, setHealthFilter] = useState('')
   const [errorCodeFilter, setErrorCodeFilter] = useState('')
@@ -279,14 +362,20 @@ export default function TaskManagementPage() {
       if (errorCodeFilter.trim()) params.set('errorCode', errorCodeFilter.trim())
       const query = params.toString()
       const res = await authFetch(`${API_BASE}/bulk-ad/tasks${query ? `?${query}` : ''}`)
-      const data = await res.json()
+      const data = await readApiJson(res)
+      if (!res.ok || !data.success) {
+        setTaskListError(formatApiError(data, '任务列表加载失败', res))
+        return
+      }
       if (data.success) {
         const nextTasks = data.data?.list || []
         setTasks(nextTasks)
         setTaskTotal(data.data?.total ?? nextTasks.length)
+        setTaskListError(null)
       }
     } catch (err) {
       console.error('Failed to load tasks:', err)
+      setTaskListError(formatUnknownError(err, '任务列表加载失败，请检查网络后重试'))
     } finally {
       setLoading(false)
     }
@@ -295,19 +384,25 @@ export default function TaskManagementPage() {
   const loadTaskDetail = async (taskId: string) => {
     setRefreshing(true)
     setSupportPackageError(null)
+    setTaskDetailError(null)
     try {
       const res = await authFetch(`${API_BASE}/bulk-ad/tasks/${taskId}`)
-      const data = await res.json()
+      const data = await readApiJson(res)
+      if (!res.ok || !data.success) {
+        setTaskDetailError({ taskId, message: formatApiError(data, '任务详情加载失败', res) })
+        return
+      }
       if (data.success) {
         setSelectedTask(data.data)
         // Update in list too
-        setTasks(tasks.map(t => t._id === taskId ? data.data : t))
+        setTasks(prev => prev.map(t => t._id === taskId ? data.data : t))
         // 加载审核详情
         loadReviewDetails(taskId)
         loadTaskDiagnostics(taskId)
       }
     } catch (err) {
       console.error('Failed to load task detail:', err)
+      setTaskDetailError({ taskId, message: formatUnknownError(err, '任务详情加载失败，请检查网络后重试') })
     } finally {
       setRefreshing(false)
     }
@@ -315,14 +410,21 @@ export default function TaskManagementPage() {
 
   const loadTaskDiagnostics = async (taskId: string) => {
     setDiagnosticsLoading(true)
+    setDiagnosticsError(null)
     try {
       const res = await authFetch(`${API_BASE}/bulk-ad/tasks/${taskId}/diagnostics`)
-      const data = await res.json()
+      const data = await readApiJson(res)
+      if (!res.ok || !data.success) {
+        setDiagnosticsError({ taskId, message: formatApiError(data, '任务诊断加载失败', res) })
+        return
+      }
       if (data.success) {
         setTaskDiagnostics(data.data)
+        setDiagnosticsError(null)
       }
     } catch (err) {
       console.error('Failed to load task diagnostics:', err)
+      setDiagnosticsError({ taskId, message: formatUnknownError(err, '任务诊断加载失败，请稍后重试') })
     } finally {
       setDiagnosticsLoading(false)
     }
@@ -333,15 +435,17 @@ export default function TaskManagementPage() {
     setSupportPackageError(null)
     try {
       const res = await authFetch(`${API_BASE}/bulk-ad/tasks/${taskId}/support-package`)
-      const data = await res.json()
+      const data = await readApiJson(res)
+      if (!res.ok || !data.success) {
+        setSupportPackageError(formatApiError(data, '生成排障包失败', res))
+        return
+      }
       if (data.success) {
         setTaskSupportPackage(data.data)
-      } else {
-        setSupportPackageError(data.error || '生成排障包失败')
       }
     } catch (err) {
       console.error('Failed to generate task support package:', err)
-      setSupportPackageError('生成排障包失败，请刷新后重试')
+      setSupportPackageError(formatUnknownError(err, '生成排障包失败，请刷新后重试'))
     } finally {
       setSupportPackageLoading(false)
     }
@@ -349,31 +453,42 @@ export default function TaskManagementPage() {
   
   const handleCancel = async (taskId: string) => {
     if (!confirm('确定要取消此任务吗？')) return
+    setTaskNotice(null)
     try {
       const res = await authFetch(`${API_BASE}/bulk-ad/tasks/${taskId}/cancel`, { method: 'POST' })
-      const data = await res.json()
+      const data = await readApiJson(res)
+      if (!res.ok || !data.success) {
+        setTaskNotice({ type: 'error', text: formatApiError(data, '取消任务失败', res) })
+        return
+      }
       if (data.success) {
+        setTaskNotice({ type: 'success', text: '任务取消已提交' })
         loadTasks()
         if (selectedTask?._id === taskId) loadTaskDetail(taskId)
       }
     } catch (err) {
       console.error('Failed to cancel task:', err)
+      setTaskNotice({ type: 'error', text: formatUnknownError(err, '取消任务失败，请稍后重试') })
     }
   }
   
   const handleRetry = async (taskId: string) => {
+    setTaskNotice(null)
     try {
       const res = await authFetch(`${API_BASE}/bulk-ad/tasks/${taskId}/retry`, { method: 'POST' })
-      const data = await res.json()
+      const data = await readApiJson(res)
+      if (!res.ok || !data.success) {
+        setTaskNotice({ type: 'error', text: formatApiError(data, '当前失败项不可重试', res) })
+        return
+      }
       if (data.success) {
+        setTaskNotice({ type: 'success', text: '已提交失败项重试' })
         loadTasks()
         if (selectedTask?._id === taskId) loadTaskDetail(taskId)
-      } else {
-        alert(`重试失败：${data.error || '当前失败项不可重试'}`)
       }
     } catch (err) {
       console.error('Failed to retry task:', err)
-      alert('重试失败，请刷新任务诊断后再试')
+      setTaskNotice({ type: 'error', text: formatUnknownError(err, '重试失败，请刷新任务诊断后再试') })
     }
   }
   
@@ -381,6 +496,7 @@ export default function TaskManagementPage() {
   const openRerunModal = (taskId: string) => {
     setRerunTaskId(taskId)
     setRerunMultiplier(1)
+    setRerunError(null)
     setShowRerunModal(true)
   }
   
@@ -388,26 +504,31 @@ export default function TaskManagementPage() {
   const handleRerun = async () => {
     if (!rerunTaskId) return
     setRerunning(true)
+    setRerunError(null)
+    setTaskNotice(null)
     try {
       const res = await authFetch(`${API_BASE}/bulk-ad/tasks/${rerunTaskId}/rerun`, { 
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ multiplier: rerunMultiplier })
       })
-      const data = await res.json()
+      const data = await readApiJson(res)
+      if (!res.ok || !data.success) {
+        setRerunError(formatApiError(data, '重新执行失败', res))
+        return
+      }
       if (data.success) {
-        const count = data.data.length || 1
-        alert(`已创建 ${count} 个新任务`)
+        const createdTasks = Array.isArray(data.data) ? data.data : []
+        const count = createdTasks.length || 1
+        setTaskNotice({ type: 'success', text: `已创建 ${count} 个新任务` })
         loadTasks()
         setShowRerunModal(false)
         // 选中第一个新任务
-        if (data.data[0]) setSelectedTask(data.data[0])
-      } else {
-        alert(`重新执行失败：${data.error}`)
+        if (createdTasks[0]) setSelectedTask(createdTasks[0])
       }
     } catch (err) {
       console.error('Failed to rerun task:', err)
-      alert('重新执行失败')
+      setRerunError(formatUnknownError(err, '重新执行失败，请稍后重试'))
     } finally {
       setRerunning(false)
     }
@@ -416,20 +537,23 @@ export default function TaskManagementPage() {
   // 检查广告审核状态
   const checkReviewStatus = async (taskId: string) => {
     setCheckingReview(true)
+    setReviewError(null)
+    setTaskNotice(null)
     try {
       const res = await authFetch(`${API_BASE}/bulk-ad/tasks/${taskId}/check-review`, { method: 'POST' })
-      const data = await res.json()
+      const data = await readApiJson(res)
+      if (!res.ok || !data.success) {
+        setReviewError({ taskId, message: formatApiError(data, '检查审核状态失败', res) })
+        return
+      }
       if (data.success) {
         // 重新加载任务详情
-        loadTaskDetail(taskId)
-        // 加载审核详情
-        loadReviewDetails(taskId)
-      } else {
-        alert(`检查审核状态失败：${data.error || data.data?.errors?.join(', ')}`)
+        await loadTaskDetail(taskId)
+        setTaskNotice({ type: 'success', text: '审核状态已刷新' })
       }
     } catch (err) {
       console.error('Failed to check review status:', err)
-      alert('检查审核状态失败')
+      setReviewError({ taskId, message: formatUnknownError(err, '检查审核状态失败，请稍后重试') })
     } finally {
       setCheckingReview(false)
     }
@@ -437,14 +561,21 @@ export default function TaskManagementPage() {
   
   // 加载审核详情
   const loadReviewDetails = async (taskId: string) => {
+    setReviewError(null)
     try {
       const res = await authFetch(`${API_BASE}/bulk-ad/tasks/${taskId}/review-status`)
-      const data = await res.json()
+      const data = await readApiJson(res)
+      if (!res.ok || !data.success) {
+        setReviewError({ taskId, message: formatApiError(data, '审核详情加载失败', res) })
+        return
+      }
       if (data.success) {
         setReviewDetails(data.data)
+        setReviewError(null)
       }
     } catch (err) {
       console.error('Failed to load review details:', err)
+      setReviewError({ taskId, message: formatUnknownError(err, '审核详情加载失败，请稍后重试') })
     }
   }
   
@@ -462,6 +593,15 @@ export default function TaskManagementPage() {
   }
 
   const selectedTaskSupportPackage = taskSupportPackage?.task.id === selectedTask?._id ? taskSupportPackage : null
+  const selectedTaskDetailError = selectedTask
+    ? taskDetailError?.taskId === selectedTask._id ? taskDetailError.message : null
+    : taskDetailError?.message || null
+  const selectedDiagnosticsError = selectedTask && diagnosticsError?.taskId === selectedTask._id
+    ? diagnosticsError.message
+    : null
+  const selectedReviewError = selectedTask && reviewError?.taskId === selectedTask._id
+    ? reviewError.message
+    : null
 
   const copyTaskSupportSummary = async () => {
     if (!selectedTaskSupportPackage) return
@@ -480,7 +620,7 @@ export default function TaskManagementPage() {
         : '建议动作：暂无',
     ]
     await navigator.clipboard.writeText(lines.join('\n'))
-    alert('排障摘要已复制')
+    setTaskNotice({ type: 'success', text: '排障摘要已复制' })
   }
 
   const selectedTaskDiagnostics = taskDiagnostics?.taskId === selectedTask?._id ? taskDiagnostics : null
@@ -503,6 +643,14 @@ export default function TaskManagementPage() {
           <h1 className="text-2xl font-bold text-slate-900">任务管理</h1>
           <p className="text-slate-500 mt-1">查看和管理批量广告创建任务</p>
         </div>
+
+        {taskNotice && (
+          <div className="mb-4">
+            <InlineNotice type={taskNotice.type} onClose={() => setTaskNotice(null)}>
+              {taskNotice.text}
+            </InlineNotice>
+          </div>
+        )}
         
         <div className="grid grid-cols-3 gap-6">
           {/* Task List */}
@@ -552,6 +700,21 @@ export default function TaskManagementPage() {
                   </button>
                 )}
               </div>
+              {taskListError && (
+                <div className="mt-3">
+                  <InlineNotice type="error">
+                    <div className="flex flex-col gap-2">
+                      <span>{taskListError}</span>
+                      <button
+                        onClick={loadTasks}
+                        className="self-start rounded-md border border-red-200 bg-white px-2 py-1 text-xs font-semibold text-red-700 hover:bg-red-50"
+                      >
+                        重新加载
+                      </button>
+                    </div>
+                  </InlineNotice>
+                </div>
+              )}
             </div>
             <div className="divide-y divide-slate-100 max-h-[600px] overflow-y-auto">
               {tasks.length === 0 ? (
@@ -653,8 +816,23 @@ export default function TaskManagementPage() {
                   </div>
                 </div>
                 {supportPackageError && (
-                  <div className="border-b border-red-100 bg-red-50 px-4 py-2 text-sm text-red-700">
-                    {supportPackageError}
+                  <div className="border-b border-red-100 px-4 py-3">
+                    <InlineNotice type="error">{supportPackageError}</InlineNotice>
+                  </div>
+                )}
+                {selectedTaskDetailError && (
+                  <div className="border-b border-red-100 px-4 py-3">
+                    <InlineNotice type="error">
+                      <div className="flex flex-col gap-2">
+                        <span>{selectedTaskDetailError}</span>
+                        <button
+                          onClick={() => loadTaskDetail(selectedTask._id)}
+                          className="self-start rounded-md border border-red-200 bg-white px-2 py-1 text-xs font-semibold text-red-700 hover:bg-red-50"
+                        >
+                          重新加载详情
+                        </button>
+                      </div>
+                    </InlineNotice>
                   </div>
                 )}
                 
@@ -673,7 +851,7 @@ export default function TaskManagementPage() {
                   </div>
                 </div>
 
-                {(diagnosticsLoading || (taskDiagnostics && taskDiagnostics.taskId === selectedTask._id)) && (
+                {(diagnosticsLoading || selectedDiagnosticsError || (taskDiagnostics && taskDiagnostics.taskId === selectedTask._id)) && (
                   <div className="p-4 border-b border-slate-200 bg-white">
                     <div className="mb-3 flex items-center justify-between gap-3">
                       <h3 className="font-semibold text-sm">运营诊断</h3>
@@ -683,6 +861,21 @@ export default function TaskManagementPage() {
                         </span>
                       )}
                     </div>
+                    {selectedDiagnosticsError && (
+                      <div className="mb-3">
+                        <InlineNotice type="error">
+                          <div className="flex flex-col gap-2">
+                            <span>{selectedDiagnosticsError}</span>
+                            <button
+                              onClick={() => loadTaskDiagnostics(selectedTask._id)}
+                              className="self-start rounded-md border border-red-200 bg-white px-2 py-1 text-xs font-semibold text-red-700 hover:bg-red-50"
+                            >
+                              重新加载诊断
+                            </button>
+                          </div>
+                        </InlineNotice>
+                      </div>
+                    )}
                     {diagnosticsLoading && (!taskDiagnostics || taskDiagnostics.taskId !== selectedTask._id) ? (
                       <div className="text-sm text-slate-500">正在生成任务诊断...</div>
                     ) : taskDiagnostics && taskDiagnostics.taskId === selectedTask._id ? (
@@ -865,6 +1058,22 @@ export default function TaskManagementPage() {
                         {checkingReview ? '检查中...' : '🔄 刷新审核状态'}
                       </button>
                     </div>
+
+                    {selectedReviewError && (
+                      <div className="mb-3">
+                        <InlineNotice type="error">
+                          <div className="flex flex-col gap-2">
+                            <span>{selectedReviewError}</span>
+                            <button
+                              onClick={() => loadReviewDetails(selectedTask._id)}
+                              className="self-start rounded-md border border-red-200 bg-white px-2 py-1 text-xs font-semibold text-red-700 hover:bg-red-50"
+                            >
+                              重新加载审核详情
+                            </button>
+                          </div>
+                        </InlineNotice>
+                      </div>
+                    )}
                     
                     {reviewDetails?.summary ? (
                       <div className="grid grid-cols-4 gap-3 text-center">
@@ -999,7 +1208,25 @@ export default function TaskManagementPage() {
                   <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-12 h-12 mx-auto mb-3 text-slate-300">
                     <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 002.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 00-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 00.75-.75 2.25 2.25 0 00-.1-.664m-5.8 0A2.251 2.251 0 0113.5 2.25H15c1.012 0 1.867.668 2.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V19.5a2.25 2.25 0 002.25 2.25h.75m0-3H12m5.25-3.75h-1.5m1.5 3.75h-1.5m-4.5-3.75h1.5m-1.5 3.75h1.5" />
                   </svg>
-                  <p>选择一个任务查看详情</p>
+                  {selectedTaskDetailError ? (
+                    <div className="mt-3 max-w-md text-left">
+                      <InlineNotice type="error">
+                        <div className="flex flex-col gap-2">
+                          <span>{selectedTaskDetailError}</span>
+                          {taskDetailError?.taskId && (
+                            <button
+                              onClick={() => loadTaskDetail(taskDetailError.taskId)}
+                              className="self-start rounded-md border border-red-200 bg-white px-2 py-1 text-xs font-semibold text-red-700 hover:bg-red-50"
+                            >
+                              重新加载详情
+                            </button>
+                          )}
+                        </div>
+                      </InlineNotice>
+                    </div>
+                  ) : (
+                    <p>选择一个任务查看详情</p>
+                  )}
                 </div>
               </div>
             )}
@@ -1013,6 +1240,12 @@ export default function TaskManagementPage() {
           <div className="bg-white rounded-2xl p-6 w-96 shadow-xl">
             <h3 className="text-lg font-semibold mb-4">🔄 再次执行任务</h3>
             <p className="text-sm text-slate-600 mb-4">选择执行次数，将基于原任务配置创建多个新任务。</p>
+
+            {rerunError && (
+              <div className="mb-4">
+                <InlineNotice type="error">{rerunError}</InlineNotice>
+              </div>
+            )}
             
             <div className="mb-6">
               <label className="block text-sm font-medium text-slate-700 mb-2">执行次数（倍率）</label>
