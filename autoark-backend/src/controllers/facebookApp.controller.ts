@@ -43,6 +43,12 @@ const complianceAuditMetadata = (app: any) => {
   }
 }
 
+const assignableBulkAdAppQuery: Record<string, any> = {
+  status: 'active',
+  'validation.isValid': true,
+  'config.enabledForBulkAds': { $ne: false },
+}
+
 /**
  * 获取所有 Facebook Apps
  */
@@ -359,10 +365,7 @@ export const validateApp = async (req: Request, res: Response) => {
 export const getAvailableApps = async (req: Request, res: Response) => {
   try {
     const { count = 1 } = req.query
-    const apps = await FacebookApp.find({
-      status: 'active',
-      'validation.isValid': true,
-    }).sort({
+    const apps = await FacebookApp.find(assignableBulkAdAppQuery).sort({
       'currentLoad.activeTasks': 1,
       'config.priority': -1,
     }).limit(Number(count))
@@ -489,10 +492,7 @@ async function validateAppCredentials(appId: string, appSecret: string): Promise
  * 导出供其他服务使用的函数
  */
 export async function getNextAvailableApp(): Promise<any> {
-  const app = await FacebookApp.findOne({
-    status: 'active',
-    'validation.isValid': true,
-  }).sort({
+  const app = await FacebookApp.findOne(assignableBulkAdAppQuery).sort({
     'currentLoad.activeTasks': 1,
     'config.priority': -1,
   })
