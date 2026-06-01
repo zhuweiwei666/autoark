@@ -1,0 +1,87 @@
+import AdTask from '../src/models/AdTask'
+import Organization, {
+  OrganizationBillingStatus,
+  OrganizationPlan,
+  OrganizationStatus,
+} from '../src/models/Organization'
+import { assertBulkAdPublishAllowed, CommercialLimitError } from '../src/services/commercial.service'
+
+const organizationId = '665000000000000000000001'
+
+const mockOrganization = (overrides: any = {}) => ({
+  _id: organizationId,
+  status: OrganizationStatus.ACTIVE,
+  billing: {
+    plan: OrganizationPlan.STARTER,
+    status: OrganizationBillingStatus.ACTIVE,
+  },
+  settings: {},
+  ...overrides,
+})
+
+describe('commercial publish limits', () => {
+  afterEach(() => {
+    jest.restoreAllMocks()
+  })
+
+  it('blocks organizations with inactive billing', async () => {
+    jest.spyOn(Organization, 'findById').mockResolvedValue(mockOrganization({
+      billing: {
+        plan: OrganizationPlan.STARTER,
+        status: OrganizationBillingStatus.PAUSED,
+      },
+    }) as any)
+
+    await expect(assertBulkAdPublishAllowed({ organizationId, requestedAccounts: 1 }))
+      .rejects.toMatchObject({
+        code: 'BILLING_NOT_ACTIVE',
+        statusCode: 402,
+      } as CommercialLimitError)
+  })
+
+  it('blocks tasks selecting more accounts than the plan allows', async () => {
+    jest.spyOn(Organization, 'findById').mockResolvedValue(mockOrganization({
+      billing: {
+        plan: OrganizationPlan.TRIAL,
+        status: OrganizationBillingStatus.TRIALING,
+      },
+      settings: {},
+    }) as any)
+
+    await expect(assertBulkAdPublishAllowed({ organizationId, requestedAccounts: 4 }))
+      .rejects.toMatchObject({
+        code: 'TASK_ACCOUNT_LIMIT_EXCEEDED',
+        statusCode: 403,
+      } as CommercialLimitError)
+  })
+
+  it('blocks when concurrent task quota is reached', async () => {
+    jest.spyOn(Organization, 'findById').mockResolvedValue(mockOrganization() as any)
+    jest.spyOn(AdTask, 'countDocuments')
+      .mockResolvedValueOnce(3 as any)
+      .mockResolvedValueOnce(0 as any)
+
+    await expect(assertBulkAdPublishAllowed({ organizationId, requestedAccounts: 1 }))
+      .rejects.toMatchObject({
+        code: 'MAX_CONCURRENT_TASKS_REACHED',
+        statusCode: 429,
+      } as CommercialLimitError)
+  })
+
+  it('allows publish when billing and usage are within quota', async () => {
+    jest.spyOn(Organization, 'findById').mockResolvedValue(mockOrganization() as any)
+    jest.spyOn(AdTask, 'countDocuments')
+      .mockResolvedValueOnce(1 as any)
+      .mockResolvedValueOnce(12 as any)
+
+    const result = await assertBulkAdPublishAllowed({ organizationId, requestedAccounts: 2 })
+
+    expect(result.allowed).toBe(true)
+    expect(result.plan).toBe(OrganizationPlan.STARTER)
+    expect(result.usage).toEqual({
+      runningTaskCount: 1,
+      monthlyTaskCount: 12,
+      requestedAccounts: 2,
+    })
+  })
+})

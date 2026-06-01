@@ -20,6 +20,7 @@ import {
 import { facebookClient } from '../integration/facebook/facebookClient'
 import { combineFilters } from '../utils/accessControl'
 import { diagnoseBulkAdError, enrichTaskDiagnostics } from './bulkAd.diagnostics'
+import { assertBulkAdPublishAllowed } from './commercial.service'
 
 /**
  * 批量广告创建服务
@@ -205,6 +206,10 @@ export const publishDraft = async (draftId: string, userId?: string, accessFilte
   
   // 计算预估
   const accountCount = draft.accounts?.length || 0
+  await assertBulkAdPublishAllowed({
+    organizationId: draft.organizationId?.toString(),
+    requestedAccounts: accountCount,
+  })
   const creativeGroupCount = draft.ad?.creativeGroupIds?.length || 1
   const copywritingCount = draft.ad?.copywritingPackageIds?.length || 1
   const adsetMultiplier = Math.min(10, Math.max(1, Number(draft.adset?.multiplier || 1)))

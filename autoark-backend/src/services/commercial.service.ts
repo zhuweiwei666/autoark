@@ -157,6 +157,118 @@ const computeScore = (items: Array<{ status: ChecklistStatus }>) => {
   return Math.round((score / Math.max(items.length, 1)) * 100)
 }
 
+export class CommercialLimitError extends Error {
+  code: string
+  statusCode: number
+  details?: Record<string, any>
+
+  constructor(code: string, message: string, statusCode = 403, details?: Record<string, any>) {
+    super(message)
+    this.name = 'CommercialLimitError'
+    this.code = code
+    this.statusCode = statusCode
+    this.details = details
+  }
+}
+
+export async function assertBulkAdPublishAllowed({
+  organizationId,
+  requestedAccounts = 1,
+}: {
+  organizationId?: string
+  requestedAccounts?: number
+}) {
+  if (!organizationId) {
+    return {
+      allowed: true,
+      plan: OrganizationPlan.ENTERPRISE,
+      billingStatus: OrganizationBillingStatus.ACTIVE,
+      limits: PLAN_DEFAULTS[OrganizationPlan.ENTERPRISE].limits,
+    }
+  }
+
+  const organization = await Organization.findById(organizationId)
+  if (!organization) {
+    throw new CommercialLimitError('ORGANIZATION_NOT_FOUND', '组织不存在或已被移除，无法发布任务。', 403)
+  }
+
+  if (organization.status !== OrganizationStatus.ACTIVE) {
+    throw new CommercialLimitError(
+      'ORGANIZATION_NOT_ACTIVE',
+      '当前组织未启用，无法发布新的批量广告任务。',
+      403,
+      { organizationStatus: organization.status },
+    )
+  }
+
+  const plan = getEffectivePlan(organization)
+  const billingStatus = organization.billing?.status || (
+    plan === OrganizationPlan.TRIAL
+      ? OrganizationBillingStatus.TRIALING
+      : OrganizationBillingStatus.ACTIVE
+  )
+  if ([
+    OrganizationBillingStatus.PAST_DUE,
+    OrganizationBillingStatus.PAUSED,
+    OrganizationBillingStatus.CANCELED,
+  ].includes(billingStatus)) {
+    throw new CommercialLimitError(
+      'BILLING_NOT_ACTIVE',
+      '当前组织账单状态不可用，请处理续费或账单问题后再发布任务。',
+      402,
+      { billingStatus, plan },
+    )
+  }
+
+  const limits = getEffectiveLimits(organization)
+  const requestedAccountCount = Math.max(1, Number(requestedAccounts) || 1)
+
+  if (limits.maxAdAccounts && requestedAccountCount > limits.maxAdAccounts) {
+    throw new CommercialLimitError(
+      'TASK_ACCOUNT_LIMIT_EXCEEDED',
+      `本次选择了 ${requestedAccountCount} 个广告账户，超过当前套餐单次可发布账户额度 ${limits.maxAdAccounts}。`,
+      403,
+      { requestedAccounts: requestedAccountCount, limit: limits.maxAdAccounts, plan },
+    )
+  }
+
+  const orgFilter = scoped(organizationId)
+  const [runningTaskCount, monthlyTaskCount] = await Promise.all([
+    AdTask.countDocuments({ ...orgFilter, status: { $in: ['pending', 'queued', 'processing'] } }),
+    AdTask.countDocuments({ ...orgFilter, createdAt: { $gte: monthStart() } }),
+  ])
+
+  if (limits.maxConcurrentTasks && runningTaskCount >= limits.maxConcurrentTasks) {
+    throw new CommercialLimitError(
+      'MAX_CONCURRENT_TASKS_REACHED',
+      `当前已有 ${runningTaskCount} 个任务在执行，已达到当前套餐并发额度 ${limits.maxConcurrentTasks}。请等待任务完成后再发布。`,
+      429,
+      { runningTaskCount, limit: limits.maxConcurrentTasks, plan },
+    )
+  }
+
+  if (limits.monthlyTaskLimit && monthlyTaskCount >= limits.monthlyTaskLimit) {
+    throw new CommercialLimitError(
+      'MONTHLY_TASK_LIMIT_REACHED',
+      `本月已发布 ${monthlyTaskCount} 个任务，已达到当前套餐月度任务额度 ${limits.monthlyTaskLimit}。`,
+      403,
+      { monthlyTaskCount, limit: limits.monthlyTaskLimit, plan },
+    )
+  }
+
+  return {
+    allowed: true,
+    plan,
+    billingStatus,
+    limits,
+    usage: {
+      runningTaskCount,
+      monthlyTaskCount,
+      requestedAccounts: requestedAccountCount,
+    },
+  }
+}
+
 const resolveScope = async (
   user: JwtPayload,
   requestedOrganizationId?: string,

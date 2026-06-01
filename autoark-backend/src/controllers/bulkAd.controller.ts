@@ -158,7 +158,12 @@ export const publishDraft = async (req: Request, res: Response) => {
     res.json({ success: true, data: task })
   } catch (error: any) {
     logger.error('[BulkAd] Publish draft failed:', error)
-    res.status(400).json({ success: false, error: error.message })
+    res.status(error.statusCode || 400).json({
+      success: false,
+      error: error.message,
+      errorCode: error.code,
+      details: error.details,
+    })
   }
 }
 

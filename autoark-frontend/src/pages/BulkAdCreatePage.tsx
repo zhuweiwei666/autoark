@@ -651,7 +651,10 @@ export default function BulkAdCreatePage() {
       
       const publishRes = await authFetch(`${API_BASE}/bulk-ad/drafts/${draftId}/publish`, { method: 'POST' })
       const publishData = await publishRes.json()
-      if (!publishData.success) throw new Error(publishData.error || '发布失败')
+      if (!publishData.success) {
+        const supportCode = publishData.errorCode ? `（错误码：${publishData.errorCode}）` : ''
+        throw new Error(`${publishData.error || '发布失败'}${supportCode}`)
+      }
       
       navigate(`/bulk-ad/tasks?taskId=${publishData.data._id}`)
     } catch (err: any) {
