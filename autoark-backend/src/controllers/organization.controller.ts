@@ -146,6 +146,17 @@ class OrganizationController {
         return
       }
 
+      const beforeOrganization = await organizationService.getOrganizationById(
+        req.params.id,
+        req.user
+      )
+      const beforeSnapshot = beforeOrganization ? {
+        name: beforeOrganization.name,
+        status: beforeOrganization.status,
+        settings: beforeOrganization.settings,
+        billing: beforeOrganization.billing,
+      } : undefined
+
       const organization = await organizationService.updateOrganization(
         req.params.id,
         req.body,
@@ -160,6 +171,7 @@ class OrganizationController {
         targetType: 'organization',
         targetId: req.params.id,
         summary: `更新组织 ${organization.name}`,
+        before: beforeSnapshot,
         after: {
           name: organization.name,
           status: organization.status,

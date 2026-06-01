@@ -210,8 +210,12 @@ class OrganizationService {
       Object.assign(billingTarget, billingUpdates)
     }
     if (settingsUpdates) {
-      const settingsTarget = (organization as any).settings || ((organization as any).settings = {})
-      Object.assign(settingsTarget, settingsUpdates)
+      if (!(organization as any).settings) {
+        ;(organization as any).settings = {}
+      }
+      for (const [key, value] of Object.entries(settingsUpdates)) {
+        organization.set(`settings.${key}`, value)
+      }
     }
     await organization.save()
 

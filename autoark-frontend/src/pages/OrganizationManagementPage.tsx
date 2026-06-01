@@ -164,9 +164,9 @@ const OrganizationManagementPage: React.FC = () => {
     if (!editingOrg) return
 
     const optionalNumber = (value: string) => {
-      if (value.trim() === '') return undefined
+      if (value.trim() === '') return null
       const parsed = Number(value)
-      return Number.isFinite(parsed) ? parsed : undefined
+      return Number.isFinite(parsed) ? parsed : null
     }
     const payload = {
       name: editFormData.name,
@@ -522,6 +522,9 @@ const OrganizationManagementPage: React.FC = () => {
                 </div>
                 <div className="border-t pt-4">
                   <h3 className="text-sm font-semibold text-gray-800 mb-3">额度覆盖</h3>
+                  <p className="mb-3 text-xs font-medium text-gray-500">
+                    留空会清除手动覆盖并回到当前套餐默认额度；填 0 表示显式限制为 0。
+                  </p>
                   <div className="grid grid-cols-2 gap-3">
                     {[
                       ['maxMembers', '成员上限'],
