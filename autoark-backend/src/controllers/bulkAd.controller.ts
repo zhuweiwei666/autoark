@@ -1802,13 +1802,23 @@ export const getAuthPixels = async (req: Request, res: Response) => {
     const { accountId } = req.query
     const { accountId: scopedAccountId, fbToken } = await getScopedTokenForAccount(req, accountId)
     
-    const result = await facebookClient.get(`/act_${scopedAccountId}/adspixels`, {
-      access_token: fbToken.token,
-      fields: 'id,name,code,last_fired_time',
-      limit: 100,
-    })
+    const result = await fetchFacebookAssetPages(
+      `/act_${scopedAccountId}/adspixels`,
+      fbToken.token,
+      'id,name,code,last_fired_time',
+    )
     
-    res.json({ success: true, data: result.data || [] })
+    res.json({
+      success: true,
+      data: result.items,
+      meta: {
+        pixelCount: result.items.length,
+        fetchedPageCount: result.pageCount,
+        pageSize: AUTH_FACEBOOK_ASSET_PAGE_SIZE,
+        pageLimit: AUTH_FACEBOOK_ASSET_PAGE_LIMIT,
+        paginationTruncated: result.truncated,
+      },
+    })
   } catch (error: any) {
     logger.error('[BulkAd] Get pixels failed:', error)
     res.status(error.statusCode || 500).json({ success: false, error: error.message })

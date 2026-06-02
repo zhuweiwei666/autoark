@@ -928,6 +928,62 @@ describe('bulk ad controller', () => {
     expect(res.json).toHaveBeenCalledWith({
       success: true,
       data: [{ id: 'pixel_1', name: 'Pixel 1' }],
+      meta: expect.objectContaining({
+        pixelCount: 1,
+        fetchedPageCount: 1,
+        pageLimit: 10,
+        paginationTruncated: false,
+      }),
+    })
+  })
+
+  it('paginates auth pixel reads for large ad accounts', async () => {
+    jest.spyOn(FbToken, 'find').mockResolvedValue([
+      { _id: '665000000000000000000202', token: 'TOKEN_WITH_ACCOUNT', fbUserName: 'token-b' },
+    ] as any)
+    mockFacebookClient.get
+      .mockResolvedValueOnce({ id: 'act_123', name: 'Account 123' } as any)
+      .mockResolvedValueOnce({
+        data: [{ id: 'pixel_1', name: 'Pixel 1' }],
+        paging: { next: 'https://graph.facebook.com/next', cursors: { after: 'cursor_1' } },
+      } as any)
+      .mockResolvedValueOnce({
+        data: [{ id: 'pixel_2', name: 'Pixel 2' }],
+      } as any)
+
+    const req: any = {
+      query: { accountId: 'act_123' },
+      user: {
+        role: UserRole.SUPER_ADMIN,
+        userId: '665000000000000000000002',
+      },
+    }
+    const res = resMock()
+
+    await getAuthPixels(req, res as any)
+
+    expect(mockFacebookClient.get).toHaveBeenNthCalledWith(2, '/act_123/adspixels', {
+      access_token: 'TOKEN_WITH_ACCOUNT',
+      fields: 'id,name,code,last_fired_time',
+      limit: 100,
+    })
+    expect(mockFacebookClient.get).toHaveBeenNthCalledWith(3, '/act_123/adspixels', {
+      access_token: 'TOKEN_WITH_ACCOUNT',
+      fields: 'id,name,code,last_fired_time',
+      limit: 100,
+      after: 'cursor_1',
+    })
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      data: [
+        { id: 'pixel_1', name: 'Pixel 1' },
+        { id: 'pixel_2', name: 'Pixel 2' },
+      ],
+      meta: expect.objectContaining({
+        pixelCount: 2,
+        fetchedPageCount: 2,
+        paginationTruncated: false,
+      }),
     })
   })
 })
