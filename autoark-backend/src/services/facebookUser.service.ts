@@ -4,6 +4,8 @@ import { FB_VERSIONED_URL } from '../config/facebook.config'
 import { sanitizeFacebookPages } from '../utils/facebookAssetSanitizer'
 
 const FB_BASE_URL = FB_VERSIONED_URL
+const FACEBOOK_USER_SYNC_PAGE_LIMIT = 10
+const FACEBOOK_USER_SYNC_PAGE_SIZE = 100
 
 type FacebookUserScope = {
   tokenId?: string
@@ -231,69 +233,86 @@ export const getSyncStatus = async (fbUserId: string, scope: FacebookUserScope =
 
 // ============ Helper Functions ============
 
-async function fetchAdAccounts(accessToken: string): Promise<any[]> {
-  const url = `${FB_BASE_URL}/me/adaccounts?fields=id,account_id,name,account_status,currency,timezone_name&limit=100&access_token=${accessToken}`
-  const response = await fetch(url)
-  const data = await response.json()
-  
-  if (data.error) {
-    throw new Error(data.error.message)
+async function fetchGraphCollection(
+  path: string,
+  accessToken: string,
+  params: Record<string, string | number> = {},
+): Promise<any[]> {
+  const items: any[] = []
+  const url = new URL(`${FB_BASE_URL}${path}`)
+  const initialParams = {
+    limit: FACEBOOK_USER_SYNC_PAGE_SIZE,
+    ...params,
+    access_token: accessToken,
   }
-  
-  return data.data || []
+
+  for (const [key, value] of Object.entries(initialParams)) {
+    url.searchParams.set(key, String(value))
+  }
+
+  let nextUrl: string | undefined = url.toString()
+  let pageCount = 0
+  while (nextUrl && pageCount < FACEBOOK_USER_SYNC_PAGE_LIMIT) {
+    const response = await fetch(nextUrl)
+    const data = await response.json()
+    
+    if (data.error) {
+      throw new Error(data.error.message)
+    }
+
+    items.push(...(data.data || []))
+    pageCount += 1
+    if (data.paging?.next) {
+      const next = new URL(data.paging.next)
+      if (!next.searchParams.has('access_token')) {
+        next.searchParams.set('access_token', accessToken)
+      }
+      nextUrl = next.toString()
+    } else {
+      nextUrl = undefined
+    }
+  }
+
+  return items
+}
+
+async function fetchAdAccounts(accessToken: string): Promise<any[]> {
+  return fetchGraphCollection('/me/adaccounts', accessToken, {
+    fields: 'id,account_id,name,account_status,currency,timezone_name',
+  })
 }
 
 async function fetchAccountPixels(accountId: string, accessToken: string): Promise<any[]> {
-  const url = `${FB_BASE_URL}/act_${accountId}/adspixels?fields=id,name&access_token=${accessToken}`
-  const response = await fetch(url)
-  const data = await response.json()
-  
-  if (data.error) {
-    throw new Error(data.error.message)
-  }
-  
-  return data.data || []
+  return fetchGraphCollection(`/act_${accountId}/adspixels`, accessToken, {
+    fields: 'id,name',
+  })
 }
 
 async function fetchAccountPages(accountId: string, accessToken: string): Promise<any[]> {
-  const url = `${FB_BASE_URL}/act_${accountId}/promote_pages?fields=id,name,access_token&access_token=${accessToken}`
-  const response = await fetch(url)
-  const data = await response.json()
-  
-  if (data.error) {
-    throw new Error(data.error.message)
-  }
-  
-  if (data.data?.length) {
-    return data.data
+  const pages = await fetchGraphCollection(`/act_${accountId}/promote_pages`, accessToken, {
+    fields: 'id,name,access_token',
+  })
+
+  if (pages.length > 0) {
+    return pages
   }
 
-  const fallbackUrl = `${FB_BASE_URL}/me/accounts?fields=id,name,access_token&limit=100&access_token=${accessToken}`
-  const fallbackResponse = await fetch(fallbackUrl)
-  const fallbackData = await fallbackResponse.json()
-
-  if (fallbackData.error) {
-    throw new Error(fallbackData.error.message)
-  }
-
-  return fallbackData.data || []
+  return fetchGraphCollection('/me/accounts', accessToken, {
+    fields: 'id,name,access_token',
+  })
 }
 
 async function fetchBusinesses(accessToken: string): Promise<any[]> {
-  const url = `${FB_BASE_URL}/me/businesses?fields=id,name&limit=100&access_token=${accessToken}`
-  const response = await fetch(url)
-  const data = await response.json()
-  if (data.error) throw new Error(data.error.message)
-  return data.data || []
+  return fetchGraphCollection('/me/businesses', accessToken, {
+    fields: 'id,name',
+  })
 }
 
 async function fetchBusinessCatalogs(businessId: string, accessToken: string): Promise<any[]> {
   // owned_product_catalogs 需要 catalog_management；拿不到就会报权限错误
-  const url = `${FB_BASE_URL}/${businessId}/owned_product_catalogs?fields=id,name&limit=200&access_token=${accessToken}`
-  const response = await fetch(url)
-  const data = await response.json()
-  if (data.error) throw new Error(data.error.message)
-  return data.data || []
+  return fetchGraphCollection(`/${businessId}/owned_product_catalogs`, accessToken, {
+    fields: 'id,name',
+  })
 }
 
 export default {
