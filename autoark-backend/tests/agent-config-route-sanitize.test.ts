@@ -4,6 +4,16 @@ import { UserRole } from '../src/models/User'
 
 const mockCreateAgent = jest.fn()
 const mockUpdateAgent = jest.fn()
+const mockRejectOperation = jest.fn()
+const mockGenerateDailyReport = jest.fn()
+const mockChat = jest.fn()
+const mockBatchAnalyzeMaterials = jest.fn()
+const mockOperationLimit = jest.fn()
+const mockOperationSort = jest.fn(() => ({ limit: mockOperationLimit }))
+const mockOperationFind = jest.fn(() => ({ sort: mockOperationSort }))
+const mockDailyReportFindById = jest.fn()
+const mockDailyReportFindOneSort = jest.fn()
+const mockDailyReportFindOne = jest.fn(() => ({ sort: mockDailyReportFindOneSort }))
 
 const mockAuthState: { user: any } = {
   user: {
@@ -28,7 +38,23 @@ jest.mock('../src/domain/agent/agent.service', () => ({
   agentService: {
     createAgent: mockCreateAgent,
     updateAgent: mockUpdateAgent,
+    rejectOperation: mockRejectOperation,
+    generateDailyReport: mockGenerateDailyReport,
+    chat: mockChat,
+    batchAnalyzeMaterials: mockBatchAnalyzeMaterials,
   },
+}))
+
+jest.mock('../src/domain/agent/agent.model', () => ({
+  AgentConfig: {},
+  AgentOperation: {
+    find: mockOperationFind,
+  },
+  DailyReport: {
+    findById: mockDailyReportFindById,
+    findOne: mockDailyReportFindOne,
+  },
+  AiConversation: {},
 }))
 
 import agentRoutes from '../src/domain/agent/agent.controller'
@@ -50,6 +76,12 @@ describe('agent config route sanitization', () => {
     }
     mockCreateAgent.mockResolvedValue({ _id: 'agent_1', name: 'Launch Agent' })
     mockUpdateAgent.mockResolvedValue({ _id: 'agent_1', name: 'Updated Agent' })
+    mockRejectOperation.mockResolvedValue({ _id: 'operation_1', status: 'rejected' })
+    mockGenerateDailyReport.mockResolvedValue({ _id: 'report_1', status: 'ready' })
+    mockChat.mockResolvedValue('ok')
+    mockBatchAnalyzeMaterials.mockResolvedValue([{ id: 'material_1' }])
+    mockOperationLimit.mockResolvedValue([])
+    mockDailyReportFindOneSort.mockResolvedValue({ _id: 'report_latest', status: 'ready' })
   })
 
   it('sanitizes agent creation payloads before saving', async () => {
@@ -186,5 +218,146 @@ describe('agent config route sanitization', () => {
     expect(response.status).toBe(400)
     expect(response.body).toEqual({ success: false, error: '请输入 Agent 名称' })
     expect(mockCreateAgent).not.toHaveBeenCalled()
+  })
+
+  it('sanitizes operation history filters and caps the limit', async () => {
+    const response = await request(createApp())
+      .get('/api/agent/operations')
+      .query({
+        status: 'approved',
+        agentId: '  agent_1  ',
+        accountId: { $ne: '' },
+        limit: 9999,
+      })
+
+    expect(response.status).toBe(200)
+    expect(mockOperationFind).toHaveBeenCalledWith({
+      status: 'approved',
+      agentId: 'agent_1',
+    })
+    expect(mockOperationLimit).toHaveBeenCalledWith(100)
+  })
+
+  it('sanitizes operation rejection reasons', async () => {
+    const response = await request(createApp())
+      .post('/api/agent/operations/operation_1/reject')
+      .send({ reason: ` ${'r'.repeat(1200)} ` })
+
+    expect(response.status).toBe(200)
+    expect(mockRejectOperation).toHaveBeenCalledWith(
+      'operation_1',
+      '665000000000000000000002',
+      'r'.repeat(1000),
+    )
+  })
+
+  it('sanitizes report generation inputs', async () => {
+    const response = await request(createApp())
+      .post('/api/agent/reports/generate')
+      .send({
+        date: '2026-02-31',
+        accountId: { $ne: '' },
+      })
+
+    expect(response.status).toBe(200)
+    const [date, accountId] = mockGenerateDailyReport.mock.calls[0]
+    expect(date).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+    expect(date).not.toBe('2026-02-31')
+    expect(accountId).toBeUndefined()
+  })
+
+  it('keeps the latest report route reachable before report id routing', async () => {
+    const response = await request(createApp())
+      .get('/api/agent/reports/latest')
+      .query({ accountId: { $ne: '' } })
+
+    expect(response.status).toBe(200)
+    expect(mockDailyReportFindOne).toHaveBeenCalledWith({ status: 'ready' })
+    expect(mockDailyReportFindById).not.toHaveBeenCalled()
+  })
+
+  it('sanitizes agent chat messages and context before invoking AI', async () => {
+    const response = await request(createApp())
+      .post('/api/agent/chat')
+      .send({
+        message: ` ${'m'.repeat(5000)} `,
+        context: {
+          accountId: ' act_123 ',
+          '$where': 'bad',
+          'bad.key': 'bad',
+          longNote: ` ${'n'.repeat(1200)} `,
+          nested: {
+            campaignId: ' camp_1 ',
+            constructor: 'bad',
+          },
+          ids: [' one ', { unsafe: { $ne: '' } }, ' two '],
+        },
+      })
+
+    expect(response.status).toBe(200)
+    const [userId, message, context] = mockChat.mock.calls[0]
+    expect(userId).toBe('665000000000000000000002')
+    expect(message).toHaveLength(4000)
+    expect(context.accountId).toBe('act_123')
+    expect(context.longNote).toHaveLength(1000)
+    expect(context.nested).toEqual({ campaignId: 'camp_1' })
+    expect(context.ids).toEqual(['one', 'two'])
+    expect(context).not.toHaveProperty('$where')
+    expect(context).not.toHaveProperty('bad.key')
+  })
+
+  it('rejects unsafe chat messages before invoking AI', async () => {
+    const response = await request(createApp())
+      .post('/api/agent/chat')
+      .send({ message: { $ne: '' } })
+
+    expect(response.status).toBe(400)
+    expect(mockChat).not.toHaveBeenCalled()
+  })
+
+  it('sanitizes analysis suggestion prompts and context', async () => {
+    const response = await request(createApp())
+      .post('/api/agent/analysis/suggest')
+      .send({
+        accountId: { $ne: '' },
+        campaignId: ` ${'c'.repeat(120)} `,
+        question: ` ${'q'.repeat(5000)} `,
+      })
+
+    expect(response.status).toBe(200)
+    expect(mockChat).toHaveBeenCalledWith(
+      '665000000000000000000002',
+      'q'.repeat(4000),
+      { campaignId: 'c'.repeat(80) },
+    )
+  })
+
+  it('sanitizes batch material analysis ids before invoking AI', async () => {
+    const materialIds = [
+      ' material_1 ',
+      { $ne: '' },
+      'material_1',
+      ...Array.from({ length: 150 }, (_, index) => `material_${index + 2}`),
+    ]
+
+    const response = await request(createApp())
+      .post('/api/agent/materials/analyze-batch')
+      .send({ materialIds })
+
+    expect(response.status).toBe(200)
+    const sanitized = mockBatchAnalyzeMaterials.mock.calls[0][0]
+    expect(sanitized).toHaveLength(100)
+    expect(sanitized[0]).toBe('material_1')
+    expect(sanitized).not.toContainEqual({ $ne: '' })
+    expect(new Set(sanitized).size).toBe(100)
+  })
+
+  it('rejects material batch analysis without safe ids', async () => {
+    const response = await request(createApp())
+      .post('/api/agent/materials/analyze-batch')
+      .send({ materialIds: [{ $ne: '' }] })
+
+    expect(response.status).toBe(400)
+    expect(mockBatchAnalyzeMaterials).not.toHaveBeenCalled()
   })
 })

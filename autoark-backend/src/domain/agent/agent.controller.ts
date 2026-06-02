@@ -4,7 +4,7 @@ import { AgentConfig, AgentOperation, DailyReport, AiConversation } from './agen
 import logger from '../../utils/logger'
 import { authenticate, authorize } from '../../middlewares/auth'
 import { UserRole } from '../../models/User'
-import { pickAllowedString, pickSafeQueryString } from '../../utils/pagination'
+import { parseLimitedNumber, pickAllowedString, pickSafeQueryString } from '../../utils/pagination'
 import { sanitizeScopedUpdate } from '../../utils/accessControl'
 
 const router = Router()
@@ -20,8 +20,20 @@ const AGENT_DESCRIPTION_MAX_LENGTH = 1000
 const AGENT_ID_MAX_LENGTH = 80
 const AGENT_ACCOUNT_MAX_COUNT = 500
 const AGENT_ASSET_MAX_COUNT = 500
+const AGENT_LIST_MAX_LIMIT = 100
+const AGENT_REPORT_MAX_LIMIT = 100
+const AGENT_CHAT_HISTORY_MAX_LIMIT = 50
+const AGENT_MESSAGE_MAX_LENGTH = 4000
+const AGENT_REASON_MAX_LENGTH = 1000
+const AGENT_CONTEXT_KEY_MAX_LENGTH = 80
+const AGENT_CONTEXT_STRING_MAX_LENGTH = 1000
+const AGENT_CONTEXT_MAX_KEYS = 50
+const AGENT_CONTEXT_MAX_ARRAY_LENGTH = 20
+const AGENT_CONTEXT_MAX_DEPTH = 4
+const AGENT_BATCH_MATERIAL_MAX_COUNT = 100
 const AGENT_STATUS_VALUES = ['active', 'paused', 'disabled'] as const
 const AGENT_MODE_VALUES = ['observe', 'suggest', 'auto'] as const
+const AGENT_OPERATION_STATUS_VALUES = ['pending', 'approved', 'rejected', 'executed', 'failed'] as const
 const AGENT_FEISHU_RECEIVE_ID_TYPES = ['open_id', 'chat_id', 'user_id', 'email'] as const
 const AGENT_WEIGHT_KEYS = ['cpm', 'ctr', 'hookRate', 'cpc', 'cpa', 'roas', 'atcRate'] as const
 
@@ -41,6 +53,54 @@ const pickBoundedNumber = (
 const pickBoolean = (value: any): boolean | undefined => (
   typeof value === 'boolean' ? value : undefined
 )
+
+const pickDateOnly = (value: any): string | undefined => {
+  const text = pickSafeQueryString(value, 10)
+  if (!text || !/^\d{4}-\d{2}-\d{2}$/.test(text)) return undefined
+  const parsed = new Date(`${text}T00:00:00.000Z`)
+  if (Number.isNaN(parsed.getTime())) return undefined
+  return parsed.toISOString().slice(0, 10) === text ? text : undefined
+}
+
+const isSafeContextKey = (key: string): boolean => (
+  Boolean(key)
+  && !key.startsWith('$')
+  && !key.includes('.')
+  && !['__proto__', 'prototype', 'constructor'].includes(key)
+)
+
+const sanitizeAgentRuntimeContextValue = (value: any, depth: number): any => {
+  if (typeof value === 'string') return pickSafeQueryString(value, AGENT_CONTEXT_STRING_MAX_LENGTH)
+  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined
+  if (typeof value === 'boolean') return value
+  if (Array.isArray(value)) {
+    const items = value
+      .slice(0, AGENT_CONTEXT_MAX_ARRAY_LENGTH)
+      .map((item) => sanitizeAgentRuntimeContextValue(item, depth + 1))
+      .filter((item) => item !== undefined)
+    return items.length > 0 ? items : undefined
+  }
+  if (value && typeof value === 'object') {
+    return sanitizeAgentRuntimeContext(value, depth + 1)
+  }
+  return undefined
+}
+
+const sanitizeAgentRuntimeContext = (context: any, depth = 0): any | undefined => {
+  if (!context || typeof context !== 'object' || Array.isArray(context) || depth > AGENT_CONTEXT_MAX_DEPTH) {
+    return undefined
+  }
+
+  const data: any = {}
+  for (const [rawKey, rawValue] of Object.entries(context).slice(0, AGENT_CONTEXT_MAX_KEYS)) {
+    const key = pickSafeQueryString(rawKey, AGENT_CONTEXT_KEY_MAX_LENGTH)
+    if (!key || !isSafeContextKey(key)) continue
+    const value = sanitizeAgentRuntimeContextValue(rawValue, depth)
+    if (value !== undefined) data[key] = value
+  }
+
+  return Object.keys(data).length > 0 ? data : undefined
+}
 
 const pickStringList = (value: any, maxCount: number, maxLength = AGENT_ID_MAX_LENGTH): string[] | undefined => {
   if (!Array.isArray(value)) return undefined
@@ -424,15 +484,18 @@ router.get('/operations/pending', async (req: Request, res: Response) => {
 // 获取操作历史
 router.get('/operations', async (req: Request, res: Response) => {
   try {
-    const { status, agentId, accountId, limit = 50 } = req.query
     const query: any = {}
+    const status = pickAllowedString(req.query.status, AGENT_OPERATION_STATUS_VALUES, '')
+    const agentId = pickSafeQueryString(req.query.agentId, AGENT_ID_MAX_LENGTH)
+    const accountId = pickSafeQueryString(req.query.accountId, 64)
     if (status) query.status = status
     if (agentId) query.agentId = agentId
     if (accountId) query.accountId = accountId
+    const limit = parseLimitedNumber(req.query.limit, 50, AGENT_LIST_MAX_LIMIT)
     
     const operations = await AgentOperation.find(query)
       .sort({ createdAt: -1 })
-      .limit(Number(limit))
+      .limit(limit)
     res.json({ success: true, data: operations })
   } catch (error: any) {
     res.status(500).json({ success: false, error: error.message })
@@ -454,7 +517,8 @@ router.post('/operations/:id/approve', async (req: Request, res: Response) => {
 router.post('/operations/:id/reject', async (req: Request, res: Response) => {
   try {
     const userId = req.user?.userId || 'unknown'
-    const result = await agentService.rejectOperation(req.params.id, userId, req.body.reason)
+    const reason = pickSafeQueryString(req.body?.reason, AGENT_REASON_MAX_LENGTH)
+    const result = await agentService.rejectOperation(req.params.id, userId, reason)
     res.json({ success: true, data: result })
   } catch (error: any) {
     res.status(500).json({ success: false, error: error.message })
@@ -466,8 +530,8 @@ router.post('/operations/:id/reject', async (req: Request, res: Response) => {
 // 生成报告
 router.post('/reports/generate', async (req: Request, res: Response) => {
   try {
-    const { date, accountId } = req.body
-    const reportDate = date || new Date().toISOString().split('T')[0]
+    const reportDate = pickDateOnly(req.body?.date) || new Date().toISOString().split('T')[0]
+    const accountId = pickSafeQueryString(req.body?.accountId, 64)
     const report = await agentService.generateDailyReport(reportDate, accountId)
     res.json({ success: true, data: report })
   } catch (error: any) {
@@ -479,8 +543,11 @@ router.post('/reports/generate', async (req: Request, res: Response) => {
 // 获取报告列表
 router.get('/reports', async (req: Request, res: Response) => {
   try {
-    const { startDate, endDate, accountId, limit = 30 } = req.query
     const query: any = {}
+    const startDate = pickDateOnly(req.query.startDate)
+    const endDate = pickDateOnly(req.query.endDate)
+    const accountId = pickSafeQueryString(req.query.accountId, 64)
+    const limit = parseLimitedNumber(req.query.limit, 30, AGENT_REPORT_MAX_LIMIT)
     
     if (startDate && endDate) {
       query.date = { $gte: startDate, $lte: endDate }
@@ -494,8 +561,22 @@ router.get('/reports', async (req: Request, res: Response) => {
     
     const reports = await DailyReport.find(query)
       .sort({ date: -1 })
-      .limit(Number(limit))
+      .limit(limit)
     res.json({ success: true, data: reports })
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message })
+  }
+})
+
+// 获取最新报告
+router.get('/reports/latest', async (req: Request, res: Response) => {
+  try {
+    const accountId = pickSafeQueryString(req.query.accountId, 64)
+    const query: any = { status: 'ready' }
+    if (accountId) query.accountId = accountId
+
+    const report = await DailyReport.findOne(query).sort({ date: -1 })
+    res.json({ success: true, data: report })
   } catch (error: any) {
     res.status(500).json({ success: false, error: error.message })
   }
@@ -514,29 +595,16 @@ router.get('/reports/:id', async (req: Request, res: Response) => {
   }
 })
 
-// 获取最新报告
-router.get('/reports/latest', async (req: Request, res: Response) => {
-  try {
-    const { accountId } = req.query
-    const query: any = { status: 'ready' }
-    if (accountId) query.accountId = accountId
-    
-    const report = await DailyReport.findOne(query).sort({ date: -1 })
-    res.json({ success: true, data: report })
-  } catch (error: any) {
-    res.status(500).json({ success: false, error: error.message })
-  }
-})
-
 // ==================== AI 对话 ====================
 
 // 发送消息（需要认证，每个用户独立对话历史）
 router.post('/chat', async (req: Request, res: Response) => {
   try {
-    const { message, context } = req.body
+    const message = pickSafeQueryString(req.body?.message, AGENT_MESSAGE_MAX_LENGTH)
     if (!message) {
       return res.status(400).json({ success: false, error: 'Message is required' })
     }
+    const context = sanitizeAgentRuntimeContext(req.body?.context)
     
     // 使用当前登录用户的 ID
     const userId = req.user?.userId || 'default-user'
@@ -551,12 +619,12 @@ router.post('/chat', async (req: Request, res: Response) => {
 // 获取对话历史（需要认证，只返回当前用户的对话）
 router.get('/chat/history', async (req: Request, res: Response) => {
   try {
-    const { limit = 10 } = req.query
+    const limit = parseLimitedNumber(req.query.limit, 10, AGENT_CHAT_HISTORY_MAX_LIMIT)
     const userId = req.user?.userId || 'default-user'
     
     const conversations = await AiConversation.find({ userId })
       .sort({ createdAt: -1 })
-      .limit(Number(limit))
+      .limit(limit)
     res.json({ success: true, data: conversations })
   } catch (error: any) {
     res.status(500).json({ success: false, error: error.message })
@@ -583,7 +651,7 @@ router.delete('/chat/clear', async (req: Request, res: Response) => {
 // 获取账户健康度分析
 router.get('/analysis/health', async (req: Request, res: Response) => {
   try {
-    const { accountId } = req.query
+    const accountId = pickSafeQueryString(req.query.accountId, 64)
     
     // 获取最近 7 天数据
     const endDate = new Date()
@@ -663,14 +731,16 @@ router.get('/analysis/health', async (req: Request, res: Response) => {
 // 获取 AI 分析建议
 router.post('/analysis/suggest', async (req: Request, res: Response) => {
   try {
-    const { accountId, campaignId, question } = req.body
+    const accountId = pickSafeQueryString(req.body?.accountId, 64)
+    const campaignId = pickSafeQueryString(req.body?.campaignId, 80)
     
     const context: any = {}
     if (accountId) context.accountId = accountId
     if (campaignId) context.campaignId = campaignId
     
-    const prompt = question || '请分析当前投放情况并给出优化建议'
-    const response = await agentService.chat('default-user', prompt, context)
+    const prompt = pickSafeQueryString(req.body?.question, AGENT_MESSAGE_MAX_LENGTH) || '请分析当前投放情况并给出优化建议'
+    const userId = req.user?.userId || 'default-user'
+    const response = await agentService.chat(userId, prompt, Object.keys(context).length > 0 ? context : undefined)
     
     res.json({ success: true, data: { response } })
   } catch (error: any) {
@@ -694,8 +764,8 @@ router.get('/materials/:id/analyze', async (req: Request, res: Response) => {
 // 🤖 批量 AI 分析素材
 router.post('/materials/analyze-batch', async (req: Request, res: Response) => {
   try {
-    const { materialIds } = req.body
-    if (!materialIds || !Array.isArray(materialIds)) {
+    const materialIds = pickStringList(req.body?.materialIds, AGENT_BATCH_MATERIAL_MAX_COUNT, AGENT_ID_MAX_LENGTH)
+    if (!materialIds || materialIds.length === 0) {
       return res.status(400).json({ success: false, error: 'materialIds array is required' })
     }
     const results = await agentService.batchAnalyzeMaterials(materialIds)
