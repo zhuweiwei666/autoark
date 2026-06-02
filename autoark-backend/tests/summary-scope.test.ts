@@ -169,6 +169,48 @@ describe('summary route data scoping', () => {
     expect(findQuery.sort).toHaveBeenCalledWith({ date: 1 })
   })
 
+  it('caps summary aggregation date ranges before querying account rows', async () => {
+    mockAuthState.user = {
+      role: UserRole.SUPER_ADMIN,
+      userId: '665000000000000000000003',
+    }
+    ;(getUserAccountIds as jest.Mock).mockResolvedValue(null)
+    ;(AggAccount.aggregate as jest.Mock).mockResolvedValue([
+      {
+        data: [{ accountId: 'act_999', accountName: 'Large account', spend: 99 }],
+        total: [{ count: 1 }],
+      },
+    ])
+
+    const response = await request(createApp())
+      .get('/api/summary/accounts?startDate=2020-01-01&endDate=2026-06-02&limit=10')
+
+    expect(response.status).toBe(200)
+    const pipeline = (AggAccount.aggregate as jest.Mock).mock.calls[0][0]
+    expect(pipeline[0]).toMatchObject({
+      $match: {
+        date: { $gte: '2026-03-05', $lte: '2026-06-02' },
+      },
+    })
+  })
+
+  it('rejects invalid summary date filters before querying aggregates', async () => {
+    mockAuthState.user = {
+      role: UserRole.SUPER_ADMIN,
+      userId: '665000000000000000000003',
+    }
+
+    const response = await request(createApp()).get('/api/summary/dashboard?startDate=2026-02-30')
+
+    expect(response.status).toBe(400)
+    expect(response.body).toMatchObject({
+      success: false,
+      error: 'startDate must be a valid YYYY-MM-DD date',
+      meta: { maxDays: 90 },
+    })
+    expect(AggDaily.find).not.toHaveBeenCalled()
+  })
+
   it('returns empty account summary when organization user has no linked accounts', async () => {
     mockAuthState.user = {
       role: UserRole.ORG_ADMIN,

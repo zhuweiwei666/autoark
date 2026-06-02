@@ -74,6 +74,8 @@ const hasScopedAccountAccess = (accountIds: string[] | null, accountId: string):
 
 const SUMMARY_MAX_LIMIT = 100
 const SUMMARY_MAX_TREND_DAYS = 90
+const SUMMARY_MAX_RANGE_DAYS = 90
+const SUMMARY_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/
 const ACCOUNT_SORT_FIELDS = [
   'accountId',
   'accountName',
@@ -151,6 +153,73 @@ const parseSummaryPagination = (req: Request, defaultLimit: number) => {
   return { page, limit: pageSize, skip }
 }
 
+class SummaryDateRangeError extends Error {
+  statusCode = 400
+}
+
+const parseSummaryDate = (value: any, fieldName: string): string | undefined => {
+  if (value === undefined || value === null || value === '') return undefined
+  if (typeof value !== 'string' || !SUMMARY_DATE_PATTERN.test(value)) {
+    throw new SummaryDateRangeError(`${fieldName} must be a valid YYYY-MM-DD date`)
+  }
+
+  const parsed = dayjs(value)
+  if (!parsed.isValid() || parsed.format('YYYY-MM-DD') !== value) {
+    throw new SummaryDateRangeError(`${fieldName} must be a valid YYYY-MM-DD date`)
+  }
+
+  return value
+}
+
+const parseSummaryDateRange = (
+  req: Request,
+  options: { defaultDays?: number } = {},
+) => {
+  const defaultDays = Math.max(1, options.defaultDays || 1)
+  const today = dayjs().format('YYYY-MM-DD')
+  const requestedDate = parseSummaryDate(req.query.date, 'date')
+  const requestedStartDate = parseSummaryDate(req.query.startDate, 'startDate')
+  const requestedEndDate = parseSummaryDate(req.query.endDate, 'endDate')
+
+  const endDate = requestedEndDate || requestedDate || today
+  let startDate = requestedStartDate || requestedDate
+  if (!startDate) {
+    startDate = dayjs(endDate).subtract(defaultDays - 1, 'day').format('YYYY-MM-DD')
+  }
+
+  const start = dayjs(startDate)
+  const end = dayjs(endDate)
+  if (start.isAfter(end)) {
+    throw new SummaryDateRangeError('startDate must be earlier than or equal to endDate')
+  }
+
+  const requestedDays = end.diff(start, 'day') + 1
+  const capped = requestedDays > SUMMARY_MAX_RANGE_DAYS
+  if (capped) {
+    startDate = end.subtract(SUMMARY_MAX_RANGE_DAYS - 1, 'day').format('YYYY-MM-DD')
+  }
+
+  return {
+    date: requestedDate || endDate,
+    startDate,
+    endDate,
+    requestedDays,
+    capped,
+  }
+}
+
+const sendSummaryDateRangeError = (res: Response, error: any) => {
+  if (error instanceof SummaryDateRangeError) {
+    res.status(error.statusCode).json({
+      success: false,
+      error: error.message,
+      meta: { maxDays: SUMMARY_MAX_RANGE_DAYS },
+    })
+    return true
+  }
+  return false
+}
+
 // ==================== 仪表盘汇总 ====================
 
 /**
@@ -161,9 +230,7 @@ const parseSummaryPagination = (req: Request, defaultLimit: number) => {
 router.get('/dashboard', async (req: Request, res: Response) => {
   try {
     const startTime = Date.now()
-    const date = (req.query.date as string) || dayjs().format('YYYY-MM-DD')
-    const startDate = (req.query.startDate as string) || date
-    const endDate = (req.query.endDate as string) || date
+    const { date, startDate, endDate } = parseSummaryDateRange(req)
 
     const userAccountIds = await getUserAccountIds(req)
     const scopedAccountIds = expandScopedAccountIds(userAccountIds)
@@ -234,6 +301,7 @@ router.get('/dashboard', async (req: Request, res: Response) => {
       duration,
     })
   } catch (error: any) {
+    if (sendSummaryDateRangeError(res, error)) return
     logger.error('[SummaryController] Get dashboard failed:', error)
     res.status(500).json({ success: false, error: error.message })
   }
@@ -309,9 +377,7 @@ router.get('/dashboard/trend', async (req: Request, res: Response) => {
 router.get('/accounts', async (req: Request, res: Response) => {
   try {
     const startTime = Date.now()
-    const today = dayjs().format('YYYY-MM-DD')
-    const startDate = (req.query.startDate as string) || (req.query.date as string) || today
-    const endDate = (req.query.endDate as string) || (req.query.date as string) || today
+    const { startDate, endDate } = parseSummaryDateRange(req)
     const sortBy = pickAllowedString(req.query.sortBy, ACCOUNT_SORT_FIELDS, 'spend')
     const sortOrder = (req.query.sortOrder as string) === 'asc' ? 1 : -1
     const { page, limit, skip } = parseSummaryPagination(req, 100)
@@ -410,6 +476,7 @@ router.get('/accounts', async (req: Request, res: Response) => {
       duration,
     })
   } catch (error: any) {
+    if (sendSummaryDateRangeError(res, error)) return
     logger.error('[SummaryController] Get accounts failed:', error)
     res.status(500).json({ success: false, error: error.message })
   }
@@ -425,9 +492,7 @@ router.get('/accounts', async (req: Request, res: Response) => {
 router.get('/countries', async (req: Request, res: Response) => {
   try {
     const startTime = Date.now()
-    const today = dayjs().format('YYYY-MM-DD')
-    const startDate = (req.query.startDate as string) || today
-    const endDate = (req.query.endDate as string) || today
+    const { startDate, endDate } = parseSummaryDateRange(req)
     const sortBy = pickAllowedString(req.query.sortBy, COUNTRY_SORT_FIELDS, 'spend')
     const sortOrder = (req.query.order as string) === 'asc' ? 1 : -1
     const { page, limit, skip } = parseSummaryPagination(req, 50)
@@ -490,6 +555,7 @@ router.get('/countries', async (req: Request, res: Response) => {
       duration,
     })
   } catch (error: any) {
+    if (sendSummaryDateRangeError(res, error)) return
     logger.error('[SummaryController] Get countries failed:', error)
     res.status(500).json({ success: false, error: error.message })
   }
@@ -505,9 +571,7 @@ router.get('/countries', async (req: Request, res: Response) => {
 router.get('/campaigns', async (req: Request, res: Response) => {
   try {
     const startTime = Date.now()
-    const today = dayjs().format('YYYY-MM-DD')
-    const startDate = (req.query.startDate as string) || today
-    const endDate = (req.query.endDate as string) || today
+    const { startDate, endDate } = parseSummaryDateRange(req)
     const accountId = req.query.accountId as string
     const status = req.query.status as string
     const name = req.query.name as string
@@ -609,6 +673,7 @@ router.get('/campaigns', async (req: Request, res: Response) => {
       duration,
     })
   } catch (error: any) {
+    if (sendSummaryDateRangeError(res, error)) return
     logger.error('[SummaryController] Get campaigns failed:', error)
     res.status(500).json({ success: false, error: error.message })
   }
@@ -624,9 +689,7 @@ router.get('/campaigns', async (req: Request, res: Response) => {
 router.get('/materials', async (req: Request, res: Response) => {
   try {
     const startTime = Date.now()
-    const today = dayjs().format('YYYY-MM-DD')
-    const startDate = (req.query.startDate as string) || dayjs().subtract(6, 'day').format('YYYY-MM-DD')
-    const endDate = (req.query.endDate as string) || today
+    const { startDate, endDate } = parseSummaryDateRange(req, { defaultDays: 7 })
     const materialType = req.query.type as string
     const sortBy = pickAllowedString(req.query.sortBy, MATERIAL_SORT_FIELDS, 'spend')
     const order = req.query.order === 'asc' ? 1 : -1
@@ -704,6 +767,7 @@ router.get('/materials', async (req: Request, res: Response) => {
       duration,
     })
   } catch (error: any) {
+    if (sendSummaryDateRangeError(res, error)) return
     logger.error('[SummaryController] Get materials failed:', error)
     res.status(500).json({ success: false, error: error.message })
   }
