@@ -5,8 +5,8 @@ import {
   checkAndUpdateTokenStatus,
 } from '../services/fbToken.validation.service'
 import logger from '../utils/logger'
-import { UserRole } from '../models/User'
 import { combineFilters, scopedIdFilter, scopedTokenFilter } from '../utils/accessControl'
+import { parsePagination } from '../utils/pagination'
 
 /**
  * 获取 Token 过滤条件
@@ -120,6 +120,14 @@ export const getTokens = async (
 ) => {
   try {
     const { optimizer, startDate, endDate, status } = req.query
+    const { page, pageSize, skip } = parsePagination(
+      {
+        page: req.query.page,
+        pageSize: req.query.pageSize,
+        limit: req.query.limit,
+      },
+      { defaultPageSize: 50, maxPageSize: 200 },
+    )
 
     // 构建查询条件 - 根据用户角色过滤
     const query: any = { ...getTokenFilter(req) }
@@ -145,6 +153,8 @@ export const getTokens = async (
     // 查询 tokens
     const tokens = await FbToken.find(query)
       .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(pageSize)
       .lean()
 
     // 移除敏感信息（token）
@@ -166,6 +176,10 @@ export const getTokens = async (
       success: true,
       data: safeTokens,
       count: safeTokens.length,
+      pagination: {
+        page,
+        pageSize,
+      },
     })
   } catch (error: any) {
     logger.error('[Token Get] Error:', error)
