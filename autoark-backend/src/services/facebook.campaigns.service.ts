@@ -631,8 +631,7 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
                     })
                     
                     const allInsights = (await Promise.all(accountPromises)).flat()
-                    
-                    logger.info(`[getCampaigns] Raw insights from Facebook API: ${JSON.stringify(allInsights.slice(0, 3))}`)
+                    logger.info(`[getCampaigns] Fetched ${allInsights.length} raw insights from Facebook API before mapping`)
                     
                     // 转换 insights 为 metricsData 格式
                     metricsData = allInsights.map((insight: any) => {
@@ -765,7 +764,8 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
         
         // 调试日志：如果 purchase_value 仍然为 0，记录相关信息
         if (campaignObj.campaignId && (!purchase_value || purchase_value === 0)) {
-            logger.debug(`[getCampaigns] Campaign ${campaignObj.campaignId}: purchase_value=${purchase_value}, metricsObj.purchase_value=${metricsObj.purchase_value}, actionValues.length=${actionValues?.length || 0}, extractedActionValues=${JSON.stringify(extractedActionValues)}`)
+            const extractedActionValueKeys = Object.keys(extractedActionValues).slice(0, 20).join(',')
+            logger.debug(`[getCampaigns] Campaign ${campaignObj.campaignId}: purchase_value=0, rawPurchaseValue=${metricsObj.purchase_value ?? 'missing'}, actionValues.length=${actionValues?.length || 0}, extractedActionValueKeys=${extractedActionValueKeys}`)
         }
         
         // 从 raw 中过滤掉会覆盖正确计算值的字段

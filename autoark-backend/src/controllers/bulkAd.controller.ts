@@ -853,11 +853,11 @@ const getScopedTokenForAccount = async (req: Request, rawAccountId: any) => {
         fields: 'id,name',
       })
       if (account?.id) {
-        logger.info(`[BulkAd] Found token for account ${accountId}: ${token.fbUserName}`)
+        logger.info(`[BulkAd] Found scoped token for account ${accountId}`)
         return { accountId, fbToken: token }
       }
     } catch (error: any) {
-      logger.debug(`[BulkAd] Token ${token.fbUserName || token._id} has no access to account ${accountId}`)
+      logger.debug(`[BulkAd] Scoped token candidate has no access to account ${accountId}`)
     }
   }
 
@@ -944,12 +944,9 @@ const buildPackageListFilter = (req: Request) => {
  */
 export const createDraft = async (req: Request, res: Response) => {
   try {
-    // Debug: 打印接收到的账户配置
-    logger.info('[BulkAd] createDraft received accounts:', JSON.stringify(req.body.accounts?.map((a: any) => ({
-      accountId: a.accountId,
-      pixelId: a.pixelId,
-      pixelName: a.pixelName
-    }))))
+    const draftAccounts = Array.isArray(req.body.accounts) ? req.body.accounts : []
+    const pixelCount = new Set(draftAccounts.map((account: any) => account?.pixelId).filter(Boolean)).size
+    logger.info(`[BulkAd] createDraft received ${draftAccounts.length} account configs, ${pixelCount} pixels`)
     
     // 添加创建者信息
     const draftData = {
@@ -1418,7 +1415,7 @@ export const createCopywritingPackage = async (req: Request, res: Response) => {
           domain: parsed.domain,
           autoExtracted: true,
         }
-        logger.info(`[BulkAd] Auto-extracted product: ${data.product.name} from ${data.links.websiteUrl}`)
+        logger.info('[BulkAd] Auto-extracted product metadata for copywriting package')
       }
     }
     
@@ -1456,7 +1453,7 @@ export const updateCopywritingPackage = async (req: Request, res: Response) => {
             domain: parsed.domain,
             autoExtracted: true,
           }
-          logger.info(`[BulkAd] Auto-updated product: ${data.product.name} from ${data.links.websiteUrl}`)
+          logger.info('[BulkAd] Auto-updated product metadata for copywriting package')
         }
       }
     }

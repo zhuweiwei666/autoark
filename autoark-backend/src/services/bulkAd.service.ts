@@ -943,12 +943,12 @@ export const executeTaskForAccount = async (
         if (res && res.id) {
           fbToken = t
           // 可选：缓存这个绑定关系
-          logger.info(`[BulkAd] Found token for account ${accountId}: ${t.fbUserName}`)
+          logger.info(`[BulkAd] Found scoped token for account ${accountId}`)
           break
         }
       } catch (e: any) {
         // 这个 token 没有权限，继续尝试下一个
-        logger.debug(`[BulkAd] Token ${t.fbUserName} has no access to account ${accountId}`)
+        logger.debug(`[BulkAd] Scoped token candidate has no access to account ${accountId}`)
       }
     }
   }
