@@ -169,14 +169,31 @@ const getTaskOrganizationId = (task: any) => {
   return task?.organizationId || task?.toObject?.()?.organizationId
 }
 
-const getActiveTokenForTask = async (task: any) => {
-  const organizationId = getTaskOrganizationId(task)
+const getActiveTokenForOrganization = async (organizationId?: any) => {
   const query: any = { status: 'active' }
   if (organizationId) {
     query.organizationId = organizationId
   }
 
   return FbToken.findOne(query).sort({ updatedAt: -1 }).lean()
+}
+
+const getActiveTokenForTask = async (task: any) => (
+  getActiveTokenForOrganization(getTaskOrganizationId(task))
+)
+
+const groupAdsByOrganization = (ads: any[]) => {
+  const groups = new Map<string, { organizationId?: any; ads: any[] }>()
+
+  for (const ad of ads) {
+    const organizationId = ad.organizationId
+    const key = organizationId ? String(organizationId) : 'platform'
+    const group = groups.get(key) || { organizationId, ads: [] }
+    group.ads.push(ad)
+    groups.set(key, group)
+  }
+
+  return Array.from(groups.values())
 }
 
 /**
@@ -554,82 +571,83 @@ export async function refreshAllReviewStatus(): Promise<{
       return result
     }
     
-    // 获取有效 token
-    const activeToken = await FbToken.findOne({ status: 'active' })
-    if (!activeToken) {
-      result.errors.push('没有可用的 Facebook Token')
-      return result
-    }
-    
-    // 批量查询状态
-    const adIds = ads.map(ad => ad.adId)
-    const statusMap = await fetchAdReviewStatus(adIds, activeToken.token)
-    
-    // 收集所有需要查询名称的 Campaign 和 AdSet ID
-    const campaignIdsToFetch = new Set<string>()
-    const adsetIdsToFetch = new Set<string>()
-    
-    // 先更新广告状态，同时收集需要查询的 ID
-    for (const [adId, data] of statusMap) {
-      if (data.error) {
-        result.errors.push(`Ad ${adId}: ${data.error}`)
+    for (const group of groupAdsByOrganization(ads as any[])) {
+      const activeToken = await getActiveTokenForOrganization(group.organizationId)
+      if (!activeToken) {
+        result.errors.push(`组织 ${group.organizationId || 'platform'} 没有可用的 Facebook Token`)
         continue
       }
+
+      // 批量查询状态
+      const adIds = group.ads.map(ad => ad.adId)
+      const statusMap = await fetchAdReviewStatus(adIds, activeToken.token)
       
-      const reviewFeedback = parseReviewFeedback(data.reviewFeedback)
+      // 收集所有需要查询名称的 Campaign 和 AdSet ID
+      const campaignIdsToFetch = new Set<string>()
+      const adsetIdsToFetch = new Set<string>()
       
-      // 更新广告基本信息
-      const updateData: any = {
-        effectiveStatus: data.effectiveStatus,
-        name: data.name,
-        reviewFeedback,
-        reviewStatusUpdatedAt: new Date(),
-      }
-      
-      // 更新 adsetId 和 campaignId（如果有）
-      if (data.adsetId) {
-        updateData.adsetId = data.adsetId
-        adsetIdsToFetch.add(data.adsetId)
-      }
-      if (data.campaignId) {
-        updateData.campaignId = data.campaignId
-        campaignIdsToFetch.add(data.campaignId)
-      }
-      
-      await Ad.findOneAndUpdate(
-        { adId },
-        { $set: updateData }
-      )
-      
-      result.updated++
-    }
-    
-    // 批量获取 Campaign 名称并更新
-    if (campaignIdsToFetch.size > 0) {
-      logger.info(`[AdReview] Fetching names for ${campaignIdsToFetch.size} campaigns...`)
-      const campaignNames = await fetchCampaignNames(Array.from(campaignIdsToFetch), activeToken.token)
-      
-      for (const [campaignId, campaignName] of campaignNames) {
-        await Ad.updateMany(
-          { campaignId },
-          { $set: { campaignName } }
+      // 先更新广告状态，同时收集需要查询的 ID
+      for (const [adId, data] of statusMap) {
+        if (data.error) {
+          result.errors.push(`Ad ${adId}: ${data.error}`)
+          continue
+        }
+        
+        const reviewFeedback = parseReviewFeedback(data.reviewFeedback)
+        
+        // 更新广告基本信息
+        const updateData: any = {
+          effectiveStatus: data.effectiveStatus,
+          name: data.name,
+          reviewFeedback,
+          reviewStatusUpdatedAt: new Date(),
+        }
+        
+        // 更新 adsetId 和 campaignId（如果有）
+        if (data.adsetId) {
+          updateData.adsetId = data.adsetId
+          adsetIdsToFetch.add(data.adsetId)
+        }
+        if (data.campaignId) {
+          updateData.campaignId = data.campaignId
+          campaignIdsToFetch.add(data.campaignId)
+        }
+        
+        await Ad.findOneAndUpdate(
+          { adId },
+          { $set: updateData }
         )
+        
+        result.updated++
       }
-      logger.info(`[AdReview] Updated ${campaignNames.size} campaign names`)
-    }
-    
-    // 批量获取 AdSet 名称并更新
-    if (adsetIdsToFetch.size > 0) {
-      logger.info(`[AdReview] Fetching names for ${adsetIdsToFetch.size} adsets...`)
-      const adsetNames = await fetchAdSetNames(Array.from(adsetIdsToFetch), activeToken.token)
       
-      for (const [adsetId, adsetName] of adsetNames) {
-        await Ad.updateMany(
-          { adsetId },
-          { $set: { adsetName } }
-        )
+      // 批量获取 Campaign 名称并更新
+      if (campaignIdsToFetch.size > 0) {
+        logger.info(`[AdReview] Fetching names for ${campaignIdsToFetch.size} campaigns...`)
+        const campaignNames = await fetchCampaignNames(Array.from(campaignIdsToFetch), activeToken.token)
+        
+        for (const [campaignId, campaignName] of campaignNames) {
+          await Ad.updateMany(
+            { campaignId },
+            { $set: { campaignName } }
+          )
+        }
+        logger.info(`[AdReview] Updated ${campaignNames.size} campaign names`)
       }
-      logger.info(`[AdReview] Updated ${adsetNames.size} adset names`)
+      
+      // 批量获取 AdSet 名称并更新
+      if (adsetIdsToFetch.size > 0) {
+        logger.info(`[AdReview] Fetching names for ${adsetIdsToFetch.size} adsets...`)
+        const adsetNames = await fetchAdSetNames(Array.from(adsetIdsToFetch), activeToken.token)
+        
+        for (const [adsetId, adsetName] of adsetNames) {
+          await Ad.updateMany(
+            { adsetId },
+            { $set: { adsetName } }
+          )
+        }
+        logger.info(`[AdReview] Updated ${adsetNames.size} adset names`)
+      }
     }
     
     logger.info(`[AdReview] Refresh all completed: ${result.total} total, ${result.updated} updated`)
@@ -675,35 +693,36 @@ export async function checkPendingAdsReview(): Promise<{
     
     result.checked = pendingAds.length
     
-    // 获取有效 token
-    const activeToken = await FbToken.findOne({ status: 'active' })
-    if (!activeToken) {
-      result.errors.push('没有可用的 Facebook Token')
-      return result
-    }
-    
-    // 批量查询状态
-    const adIds = pendingAds.map(ad => ad.adId)
-    const statusMap = await fetchAdReviewStatus(adIds, activeToken.token)
-    
-    // 更新状态
-    for (const [adId, data] of statusMap) {
-      if (data.error) continue
+    for (const group of groupAdsByOrganization(pendingAds as any[])) {
+      const activeToken = await getActiveTokenForOrganization(group.organizationId)
+      if (!activeToken) {
+        result.errors.push(`组织 ${group.organizationId || 'platform'} 没有可用的 Facebook Token`)
+        continue
+      }
+
+      // 批量查询状态
+      const adIds = group.ads.map(ad => ad.adId)
+      const statusMap = await fetchAdReviewStatus(adIds, activeToken.token)
       
-      const reviewFeedback = parseReviewFeedback(data.reviewFeedback)
-      
-      await Ad.findOneAndUpdate(
-        { adId },
-        {
-          $set: {
-            effectiveStatus: data.effectiveStatus,
-            reviewFeedback,
-            reviewStatusUpdatedAt: new Date(),
-          },
-        }
-      )
-      
-      result.updated++
+      // 更新状态
+      for (const [adId, data] of statusMap) {
+        if (data.error) continue
+        
+        const reviewFeedback = parseReviewFeedback(data.reviewFeedback)
+        
+        await Ad.findOneAndUpdate(
+          { adId },
+          {
+            $set: {
+              effectiveStatus: data.effectiveStatus,
+              reviewFeedback,
+              reviewStatusUpdatedAt: new Date(),
+            },
+          }
+        )
+        
+        result.updated++
+      }
     }
     
     logger.info(`[AdReview] Batch check completed: ${result.checked} checked, ${result.updated} updated`)

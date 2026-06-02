@@ -9,7 +9,11 @@ import Ad from '../src/models/Ad'
 import AdTask from '../src/models/AdTask'
 import FbToken from '../src/models/FbToken'
 import { facebookClient } from '../src/integration/facebook/facebookClient'
-import { updateTaskAdsReviewStatus } from '../src/services/adReview.service'
+import {
+  checkPendingAdsReview,
+  refreshAllReviewStatus,
+  updateTaskAdsReviewStatus,
+} from '../src/services/adReview.service'
 
 const mockFacebookClient = facebookClient as jest.Mocked<typeof facebookClient>
 
@@ -18,6 +22,10 @@ const buildTokenQuery = (token: string | null) => {
   const sort = jest.fn().mockReturnValue({ lean })
   return { sort, lean }
 }
+
+const limitedFind = (value: any[]) => ({
+  limit: jest.fn().mockResolvedValue(value),
+})
 
 describe('ad review tenant scope', () => {
   afterEach(() => {
@@ -104,5 +112,69 @@ describe('ad review tenant scope', () => {
       updated: 0,
       errors: ['没有可用的 Facebook Token'],
     })
+  })
+
+  it('uses each ad organization token when refreshing all review statuses', async () => {
+    const orgA = new mongoose.Types.ObjectId('665000000000000000000721')
+    const orgB = new mongoose.Types.ObjectId('665000000000000000000722')
+
+    jest.spyOn(Ad, 'find').mockReturnValue(limitedFind([
+      { adId: 'ad_a', organizationId: orgA },
+      { adId: 'ad_b', organizationId: orgB },
+    ]) as any)
+    jest.spyOn(FbToken, 'findOne').mockImplementation((query: any) => (
+      buildTokenQuery(String(query.organizationId) === String(orgA) ? 'TOKEN_A' : 'TOKEN_B') as any
+    ))
+    jest.spyOn(Ad, 'findOneAndUpdate').mockResolvedValue({} as any)
+    mockFacebookClient.get.mockResolvedValue({
+      effective_status: 'ACTIVE',
+      status: 'ACTIVE',
+      name: 'Scoped ad',
+    })
+
+    const result = await refreshAllReviewStatus()
+
+    expect(FbToken.findOne).toHaveBeenCalledWith({ status: 'active', organizationId: orgA })
+    expect(FbToken.findOne).toHaveBeenCalledWith({ status: 'active', organizationId: orgB })
+    expect(mockFacebookClient.get).toHaveBeenCalledWith('/ad_a', expect.objectContaining({
+      access_token: 'TOKEN_A',
+    }))
+    expect(mockFacebookClient.get).toHaveBeenCalledWith('/ad_b', expect.objectContaining({
+      access_token: 'TOKEN_B',
+    }))
+    expect(result).toMatchObject({
+      total: 2,
+      updated: 2,
+      errors: [],
+    })
+  })
+
+  it('does not borrow another organization token when checking pending ads', async () => {
+    const orgA = new mongoose.Types.ObjectId('665000000000000000000731')
+    const orgB = new mongoose.Types.ObjectId('665000000000000000000732')
+
+    jest.spyOn(Ad, 'find').mockReturnValue(limitedFind([
+      { adId: 'ad_a', organizationId: orgA },
+      { adId: 'ad_b', organizationId: orgB },
+    ]) as any)
+    jest.spyOn(FbToken, 'findOne').mockImplementation((query: any) => (
+      buildTokenQuery(String(query.organizationId) === String(orgA) ? 'TOKEN_A' : null) as any
+    ))
+    jest.spyOn(Ad, 'findOneAndUpdate').mockResolvedValue({} as any)
+    mockFacebookClient.get.mockResolvedValue({
+      effective_status: 'ACTIVE',
+      status: 'ACTIVE',
+    })
+
+    const result = await checkPendingAdsReview()
+
+    expect(mockFacebookClient.get).toHaveBeenCalledTimes(1)
+    expect(mockFacebookClient.get).toHaveBeenCalledWith('/ad_a', expect.objectContaining({
+      access_token: 'TOKEN_A',
+    }))
+    expect(Ad.findOneAndUpdate).toHaveBeenCalledTimes(1)
+    expect(result.checked).toBe(2)
+    expect(result.updated).toBe(1)
+    expect(result.errors).toContain(`组织 ${orgB} 没有可用的 Facebook Token`)
   })
 })
