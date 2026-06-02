@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import type { ReactNode } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import Loading from '../components/Loading'
 import { authFetch } from '../services/api'
 
@@ -220,6 +220,132 @@ const getErrorSourceLabel = (source?: string) => {
   return source ? labels[source] || source : '未知来源'
 }
 
+const ERROR_CODE_INFO: Record<string, {
+  label: string
+  owner: string
+  actionPath?: string
+  actionLabel?: string
+}> = {
+  FACEBOOK_AUTH_REQUIRED: {
+    label: '授权失效',
+    owner: '授权',
+    actionPath: '/fb-settings',
+    actionLabel: '去重新授权',
+  },
+  FACEBOOK_PERMISSION_DENIED: {
+    label: '权限不足',
+    owner: 'App 权限',
+    actionPath: '/fb-apps',
+    actionLabel: '查看 App',
+  },
+  AD_ACCOUNT_ACCESS_DENIED: {
+    label: '账户无权限',
+    owner: '账户资产',
+    actionPath: '/fb-accounts',
+    actionLabel: '看账户',
+  },
+  AD_ACCOUNT_UNAVAILABLE: {
+    label: '账户不可投放',
+    owner: '账户/账单',
+    actionPath: '/fb-accounts',
+    actionLabel: '看账户',
+  },
+  PAGE_ACCESS_REQUIRED: {
+    label: '主页不可用',
+    owner: 'Page 资产',
+    actionPath: '/fb-settings',
+    actionLabel: '同步资产',
+  },
+  PIXEL_ACCESS_REQUIRED: {
+    label: 'Pixel 不可用',
+    owner: 'Pixel 资产',
+    actionPath: '/fb-settings',
+    actionLabel: '同步 Pixel',
+  },
+  INSTAGRAM_ACCESS_REQUIRED: {
+    label: 'Instagram 不可用',
+    owner: '主页/IG 资产',
+    actionPath: '/fb-settings',
+    actionLabel: '同步主页',
+  },
+  CATALOG_ACCESS_REQUIRED: {
+    label: '商品目录不可用',
+    owner: 'Catalog 资产',
+    actionPath: '/bulk-ad/assets',
+    actionLabel: '看资产',
+  },
+  DESTINATION_URL_INVALID: {
+    label: '落地页无效',
+    owner: '文案包',
+    actionPath: '/bulk-ad/copywriting',
+    actionLabel: '改文案包',
+  },
+  AD_POLICY_REVIEW: {
+    label: '广告政策/审核',
+    owner: '素材/文案',
+    actionPath: '/bulk-ad/review',
+    actionLabel: '看审核',
+  },
+  BUDGET_OR_BID_INVALID: {
+    label: '预算/出价错误',
+    owner: '草稿配置',
+    actionPath: '/bulk-ad/create',
+    actionLabel: '改草稿',
+  },
+  TARGETING_INVALID: {
+    label: '定向错误',
+    owner: '定向包',
+    actionPath: '/bulk-ad/assets',
+    actionLabel: '改定向',
+  },
+  CREATIVE_OR_MATERIAL_FAILED: {
+    label: '素材/创意失败',
+    owner: '素材组',
+    actionPath: '/bulk-ad/materials',
+    actionLabel: '看素材',
+  },
+  META_RATE_LIMIT: {
+    label: 'Meta 限流',
+    owner: '并发/API',
+    actionPath: '/commercial',
+    actionLabel: '看额度',
+  },
+  WORKER_TIMEOUT: {
+    label: '执行超时',
+    owner: '队列',
+    actionLabel: '刷新任务',
+  },
+  NO_ADS_CREATED: {
+    label: '未创建广告',
+    owner: '任务配置',
+    actionPath: '/bulk-ad/create',
+    actionLabel: '检查配置',
+  },
+  META_VALIDATION_ERROR: {
+    label: 'Meta 校验拒绝',
+    owner: '草稿配置',
+    actionPath: '/bulk-ad/create',
+    actionLabel: '改草稿',
+  },
+  EXECUTION_ERROR: {
+    label: '执行错误',
+    owner: '系统排查',
+  },
+}
+
+const QUICK_ERROR_FILTERS = [
+  'PIXEL_ACCESS_REQUIRED',
+  'PAGE_ACCESS_REQUIRED',
+  'FACEBOOK_PERMISSION_DENIED',
+  'AD_ACCOUNT_UNAVAILABLE',
+  'CREATIVE_OR_MATERIAL_FAILED',
+  'AD_POLICY_REVIEW',
+  'DESTINATION_URL_INVALID',
+  'META_RATE_LIMIT',
+]
+
+const getDiagnosticInfo = (code?: string) => code ? ERROR_CODE_INFO[code] : undefined
+
 const getErrorPrimaryMessage = (error: TaskError) => {
   return error.customerMessage || error.errorMessage || '任务执行失败'
 }
@@ -230,6 +356,11 @@ const getErrorOperatorMessage = (error: TaskError) => {
 
 const getErrorCodeLabel = (error: TaskError) => {
   return error.errorCode || error.entityType || 'EXECUTION_ERROR'
+}
+
+const getReadableErrorTitle = (code?: string, fallback?: string) => {
+  const info = getDiagnosticInfo(code)
+  return info ? `${info.label} · ${code}` : (fallback || code || 'EXECUTION_ERROR')
 }
 
 const DIAGNOSTIC_HEALTH_MAP: Record<TaskDiagnostics['health'], { label: string; color: string }> = {
@@ -270,7 +401,7 @@ const getTaskListIssueText = (task: Task) => {
     return null
   }
   if (topBucket) {
-    return `${topBucket.errorCode} · ${topBucket.customerMessage}`
+    return `${getReadableErrorTitle(topBucket.errorCode)} · ${topBucket.customerMessage}`
   }
   return `${diagnostics.summary.totalErrors} 个错误`
 }
@@ -335,6 +466,7 @@ function InlineNotice({
 
 export default function TaskManagementPage() {
   const [searchParams] = useSearchParams()
+  const navigate = useNavigate()
   const taskIdFromUrl = searchParams.get('taskId')
   
   const [tasks, setTasks] = useState<Task[]>([])
@@ -624,6 +756,8 @@ export default function TaskManagementPage() {
   const selectedTaskSupportFailedItemTotal = selectedTaskSupportFailedItemLimit?.total ?? selectedTaskSupportPackage?.failedItems.length ?? 0
   const selectedTaskSupportFailedItemReturned = selectedTaskSupportFailedItemLimit?.returned ?? selectedTaskSupportPackage?.failedItems.length ?? 0
   const selectedTaskSupportItemErrorLimit = selectedTaskSupportPackage?.limits?.itemErrors?.maxReturned
+  const selectedTaskSupportTopBucket = selectedTaskSupportPackage?.diagnostics.buckets[0]
+  const selectedTaskSupportTopInfo = getDiagnosticInfo(selectedTaskSupportTopBucket?.errorCode)
   const selectedTaskDetailError = selectedTask
     ? taskDetailError?.taskId === selectedTask._id ? taskDetailError.message : null
     : taskDetailError?.message || null
@@ -637,6 +771,7 @@ export default function TaskManagementPage() {
   const copyTaskSupportSummary = async () => {
     if (!selectedTaskSupportPackage) return
     const topIssue = selectedTaskSupportPackage.diagnostics.buckets[0]
+    const topIssueInfo = getDiagnosticInfo(topIssue?.errorCode)
     const lines = [
       `排障包：${selectedTaskSupportPackage.supportId}`,
       `任务：${selectedTaskSupportPackage.task.name || selectedTaskSupportPackage.task.id}`,
@@ -646,7 +781,7 @@ export default function TaskManagementPage() {
       `账户：成功 ${selectedTaskSupportPackage.diagnostics.summary.successAccounts} / 失败 ${selectedTaskSupportPackage.diagnostics.summary.failedAccounts} / 总计 ${selectedTaskSupportPackage.diagnostics.summary.totalAccounts}`,
       `错误：总计 ${selectedTaskSupportPackage.diagnostics.summary.totalErrors}，可重试 ${selectedTaskSupportPackage.diagnostics.summary.retryableErrors}，需处理 ${selectedTaskSupportPackage.diagnostics.summary.blockedErrors}`,
       `失败项：展示 ${selectedTaskSupportFailedItemReturned} / 总计 ${selectedTaskSupportFailedItemTotal}`,
-      topIssue ? `首要问题：${topIssue.errorCode} - ${topIssue.customerMessage}` : '首要问题：无',
+      topIssue ? `首要问题：${topIssueInfo?.label || topIssue.errorCode}（${topIssue.errorCode}）- ${topIssue.customerMessage}` : '首要问题：无',
       selectedTaskSupportPackage.diagnostics.topNextActions.length > 0
         ? `建议动作：${selectedTaskSupportPackage.diagnostics.topNextActions.slice(0, 3).join('；')}`
         : '建议动作：暂无',
@@ -732,6 +867,26 @@ export default function TaskManagementPage() {
                     重置
                   </button>
                 )}
+              </div>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {QUICK_ERROR_FILTERS.map(code => {
+                  const info = getDiagnosticInfo(code)
+                  const selected = errorCodeFilter === code
+                  return (
+                    <button
+                      key={code}
+                      type="button"
+                      onClick={() => setErrorCodeFilter(selected ? '' : code)}
+                      className={`rounded border px-2 py-1 text-[11px] font-semibold transition-colors ${
+                        selected
+                          ? 'border-blue-300 bg-blue-50 text-blue-700'
+                          : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:text-slate-700'
+                      }`}
+                    >
+                      {info?.label || code}
+                    </button>
+                  )
+                })}
               </div>
               {diagnosticScan?.truncated && (
                 <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] font-medium leading-5 text-amber-700">
@@ -942,16 +1097,21 @@ export default function TaskManagementPage() {
                           </div>
                         ) : (
                           <div className="space-y-2">
-                            {taskDiagnostics.buckets.slice(0, 4).map(bucket => (
+                            {taskDiagnostics.buckets.slice(0, 4).map(bucket => {
+                              const info = getDiagnosticInfo(bucket.errorCode)
+                              return (
                               <div key={bucket.errorCode} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
                                 <div className="flex flex-wrap items-center gap-2">
-                                  <span className="rounded bg-white px-2 py-0.5 font-mono text-[11px] font-semibold text-slate-700">
+                                  <span className="rounded bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-800">
+                                    {info?.label || bucket.errorCode}
+                                  </span>
+                                  <span className="rounded bg-white px-2 py-0.5 font-mono text-[11px] font-semibold text-slate-500">
                                     {bucket.errorCode}
                                   </span>
                                   <span className={`rounded px-2 py-0.5 text-[11px] font-medium ${bucket.retryable ? 'bg-blue-100 text-blue-700' : 'bg-red-100 text-red-700'}`}>
                                     {bucket.retryable ? '可重试' : '需先处理'}
                                   </span>
-                                  <span className="text-[11px] text-slate-500">{bucket.count} 次 · {getErrorSourceLabel(bucket.source)}</span>
+                                  <span className="text-[11px] text-slate-500">{bucket.count} 次 · {getErrorSourceLabel(bucket.source)} · {info?.owner || bucket.entityType}</span>
                                 </div>
                                 <div className="mt-1 text-sm font-medium text-slate-700">{bucket.customerMessage}</div>
                                 {bucket.accounts.length > 0 && (
@@ -965,8 +1125,18 @@ export default function TaskManagementPage() {
                                     建议：{bucket.nextActions.slice(0, 2).join('；')}
                                   </div>
                                 )}
+                                {info?.actionPath && (
+                                  <button
+                                    type="button"
+                                    onClick={() => navigate(info.actionPath!)}
+                                    className="mt-2 rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                                  >
+                                    {info.actionLabel || '去处理'}
+                                  </button>
+                                )}
                               </div>
-                            ))}
+                              )
+                            })}
                           </div>
                         )}
                       </div>
@@ -1021,23 +1191,35 @@ export default function TaskManagementPage() {
                       </div>
                     )}
 
-                    {selectedTaskSupportPackage.diagnostics.buckets[0] && (
+                    {selectedTaskSupportTopBucket && (
                       <div className="mt-3 rounded-lg border border-teal-200 bg-white px-3 py-2">
                         <div className="flex flex-wrap items-center gap-2">
+                          <span className="rounded bg-teal-50 px-2 py-0.5 text-[11px] font-semibold text-teal-800">
+                            {selectedTaskSupportTopInfo?.label || selectedTaskSupportTopBucket.errorCode}
+                          </span>
                           <span className="rounded bg-slate-100 px-2 py-0.5 font-mono text-[11px] font-semibold text-slate-700">
-                            {selectedTaskSupportPackage.diagnostics.buckets[0].errorCode}
+                            {selectedTaskSupportTopBucket.errorCode}
                           </span>
                           <span className="text-[11px] text-slate-500">
-                            影响 {selectedTaskSupportPackage.diagnostics.buckets[0].count} 次
+                            影响 {selectedTaskSupportTopBucket.count} 次 · {selectedTaskSupportTopInfo?.owner || selectedTaskSupportTopBucket.entityType}
                           </span>
                         </div>
                         <div className="mt-1 text-sm font-medium text-slate-800">
-                          {selectedTaskSupportPackage.diagnostics.buckets[0].customerMessage}
+                          {selectedTaskSupportTopBucket.customerMessage}
                         </div>
                         {selectedTaskSupportPackage.diagnostics.topNextActions.length > 0 && (
                           <div className="mt-2 text-xs leading-5 text-slate-600">
                             建议：{selectedTaskSupportPackage.diagnostics.topNextActions.slice(0, 3).join('；')}
                           </div>
+                        )}
+                        {selectedTaskSupportTopInfo?.actionPath && (
+                          <button
+                            type="button"
+                            onClick={() => navigate(selectedTaskSupportTopInfo.actionPath!)}
+                            className="mt-2 rounded-md border border-teal-300 bg-teal-50 px-2.5 py-1 text-xs font-semibold text-teal-800 hover:bg-teal-100"
+                          >
+                            {selectedTaskSupportTopInfo.actionLabel || '去处理'}
+                          </button>
                         )}
                       </div>
                     )}
@@ -1058,7 +1240,7 @@ export default function TaskManagementPage() {
                               <div key={item.accountId} className="text-xs">
                                 <div className="font-medium text-slate-800">{item.accountName || item.accountId}</div>
                                 <div className="mt-0.5 text-slate-500">
-                                  {(item.errors || []).slice(0, 2).map(error => getErrorCodeLabel(error)).join('、') || item.status}
+                                  {(item.errors || []).slice(0, 2).map(error => getReadableErrorTitle(error.errorCode, getErrorCodeLabel(error))).join('、') || item.status}
                                 </div>
                                 {item.errorsTruncated && (
                                   <div className="mt-0.5 text-[11px] text-amber-600">
@@ -1218,12 +1400,12 @@ export default function TaskManagementPage() {
                               <div key={`${getErrorCodeLabel(error)}-${errorIdx}`}>
                                 <div className="flex flex-wrap items-center gap-2">
                                   <span className="rounded bg-red-100 px-2 py-0.5 text-[11px] font-semibold text-red-700">
-                                    {getErrorCodeLabel(error)}
+                                    {getReadableErrorTitle(error.errorCode, getErrorCodeLabel(error))}
                                   </span>
                                   <span className={`rounded px-2 py-0.5 text-[11px] font-medium ${error.retryable ? 'bg-blue-100 text-blue-700' : 'bg-slate-200 text-slate-700'}`}>
                                     {error.retryable ? '可重试' : '需先处理'}
                                   </span>
-                                  <span className="text-[11px] text-slate-500">{getErrorSourceLabel(error.source)}</span>
+                                  <span className="text-[11px] text-slate-500">{getErrorSourceLabel(error.source)} · {getDiagnosticInfo(error.errorCode)?.owner || error.entityType}</span>
                                 </div>
                                 <div className="mt-1 text-sm font-medium text-red-700 break-words">
                                   {getErrorPrimaryMessage(error)}
