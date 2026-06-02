@@ -70,4 +70,36 @@ describe('material reusable controller', () => {
       data: visibleMaterials,
     })
   })
+
+  it('sanitizes reusable material filters before querying recommendations', async () => {
+    const lean = jest.fn().mockResolvedValue([])
+
+    ;(getReusableMaterials as jest.Mock).mockResolvedValue([])
+    ;(Material.find as jest.Mock).mockReturnValue({ lean })
+
+    const res = createResponse()
+
+    await getReusable(createRequest({
+      type: 'document',
+      minRoas: 'Infinity',
+      minSpend: 'NaN',
+      minQualityScore: '-1',
+      limit: '9999',
+      sortBy: 'unsafeField',
+    }), res as any)
+
+    expect(getReusableMaterials).toHaveBeenCalledWith(expect.objectContaining({
+      type: undefined,
+      minRoas: 1,
+      minSpend: 50,
+      minQualityScore: 60,
+      limit: 100,
+      sortBy: 'qualityScore',
+      scopeFilter: expect.any(Object),
+    }))
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      data: [],
+    })
+  })
 })

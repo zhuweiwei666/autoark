@@ -25,7 +25,7 @@ import {
   scopedOwnerFilter,
 } from '../utils/accessControl'
 import { normalizeForApi, normalizeForStorage } from '../utils/accountId'
-import { parseLimitedNumber, parsePagination } from '../utils/pagination'
+import { parseLimitedNumber, parsePagination, pickAllowedString } from '../utils/pagination'
 import {
   MAX_DIRECT_UPLOAD_FILES,
   validateMaterialFileMeta,
@@ -55,6 +55,27 @@ const MATERIAL_SORT_FIELDS = new Set([
   'metrics.avgRoas',
   'metrics.qualityScore',
 ])
+const MATERIAL_TYPE_FILTERS = ['image', 'video'] as const
+const REUSABLE_MATERIAL_SORT_FIELDS = ['roas', 'spend', 'qualityScore'] as const
+const REUSABLE_MIN_SPEND_MAX = 1_000_000
+const REUSABLE_MIN_ROAS_MAX = 100
+const REUSABLE_MIN_QUALITY_SCORE_MAX = 100
+
+const parseBoundedMaterialNumber = (
+  value: any,
+  fallback: number,
+  options: { min?: number; max: number; integer?: boolean },
+) => {
+  const min = options.min ?? 0
+  const next = Number(value)
+  if (!Number.isFinite(next) || next < min) return fallback
+  const bounded = Math.min(options.max, next)
+  return options.integer ? Math.floor(bounded) : bounded
+}
+
+const pickOptionalMaterialType = (value: any) => (
+  pickAllowedString(value, MATERIAL_TYPE_FILTERS, '') || undefined
+)
 
 const getTenantStorageRoot = (req: Request): string => {
   if (req.user?.organizationId) return `tenants/org-${hashStorageScope(req.user.organizationId)}`
@@ -1214,14 +1235,20 @@ export const getReusable = async (req: Request, res: Response) => {
       limit = '20',
       sortBy = 'qualityScore',
     } = req.query
+
+    const safeType = pickOptionalMaterialType(type)
+    const safeSortBy = pickAllowedString(sortBy, REUSABLE_MATERIAL_SORT_FIELDS, 'qualityScore')
     
     const materials = await getReusableMaterials({
-      type: type as 'image' | 'video' | undefined,
-      minRoas: parseFloat(minRoas as string),
-      minSpend: parseFloat(minSpend as string),
-      minQualityScore: parseInt(minQualityScore as string),
+      type: safeType as 'image' | 'video' | undefined,
+      minRoas: parseBoundedMaterialNumber(minRoas, 1, { max: REUSABLE_MIN_ROAS_MAX }),
+      minSpend: parseBoundedMaterialNumber(minSpend, 50, { max: REUSABLE_MIN_SPEND_MAX }),
+      minQualityScore: parseBoundedMaterialNumber(minQualityScore, 60, {
+        max: REUSABLE_MIN_QUALITY_SCORE_MAX,
+        integer: true,
+      }),
       limit: parseLimitedNumber(limit, 20, 100),
-      sortBy: sortBy as 'roas' | 'spend' | 'qualityScore',
+      sortBy: safeSortBy as 'roas' | 'spend' | 'qualityScore',
       scopeFilter: getMaterialFilter(req),
     })
     const visibleMaterials = await Material.find(combineFilters(
