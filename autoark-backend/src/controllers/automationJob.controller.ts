@@ -9,6 +9,9 @@ import {
   retryAutomationJob,
 } from '../services/automationJob.service'
 import { UserRole } from '../models/User'
+import { parsePagination } from '../utils/pagination'
+
+const AUTOMATION_JOB_MAX_PAGE_SIZE = 100
 
 const API_CREATABLE_JOB_TYPES = new Set([
   'RUN_AGENT',
@@ -57,10 +60,14 @@ export const getJobs = async (req: Request, res: Response) => {
   try {
     if (!req.user) return res.status(401).json({ success: false, error: '未认证' })
 
-    const { status, type, agentId, page, pageSize } = req.query
+    const { status, type, agentId } = req.query
+    const { page, pageSize } = parsePagination(req.query, {
+      defaultPageSize: 20,
+      maxPageSize: AUTOMATION_JOB_MAX_PAGE_SIZE,
+    })
 
     if (req.user.role !== UserRole.SUPER_ADMIN && !req.user.organizationId) {
-      return res.json({ success: true, data: { list: [], total: 0, page: Number(page || 1), pageSize: Number(pageSize || 20) } })
+      return res.json({ success: true, data: { list: [], total: 0, page, pageSize } })
     }
 
     const organizationId =
@@ -75,8 +82,8 @@ export const getJobs = async (req: Request, res: Response) => {
       status: status as string,
       type: type as string,
       agentId: agentId as string,
-      page: Number(page || 1),
-      pageSize: Number(pageSize || 20),
+      page,
+      pageSize,
     })
 
     res.json({ success: true, data })

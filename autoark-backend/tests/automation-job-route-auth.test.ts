@@ -29,6 +29,7 @@ jest.mock('../src/middlewares/auth', () => {
 })
 
 import automationJobRoutes from '../src/routes/automationJob.routes'
+import * as automationJobService from '../src/services/automationJob.service'
 
 const createApp = () => {
   const app = express()
@@ -38,6 +39,21 @@ const createApp = () => {
 }
 
 describe('automation job route authorization', () => {
+  beforeEach(() => {
+    jest.clearAllMocks()
+    mockAuthState.user = {
+      role: UserRole.MEMBER,
+      userId: '665000000000000000000002',
+      organizationId: '665000000000000000000001',
+    }
+    ;(automationJobService.listAutomationJobs as jest.Mock).mockResolvedValue({
+      list: [],
+      total: 0,
+      page: 1,
+      pageSize: 20,
+    })
+  })
+
   it.each([
     ['GET', '/api/automation-jobs', undefined],
     ['POST', '/api/automation-jobs', { type: 'PUBLISH_DRAFT', payload: { draftId: '665000000000000000000099' } }],
@@ -53,5 +69,39 @@ describe('automation job route authorization', () => {
       success: false,
       message: '权限不足',
     })
+  })
+
+  it('caps automation job list page size for organization admins', async () => {
+    mockAuthState.user = {
+      role: UserRole.ORG_ADMIN,
+      userId: '665000000000000000000002',
+      organizationId: '665000000000000000000001',
+    }
+
+    const response = await request(createApp()).get('/api/automation-jobs?page=2&pageSize=9999')
+
+    expect(response.status).toBe(200)
+    expect(automationJobService.listAutomationJobs).toHaveBeenCalledWith(expect.objectContaining({
+      page: 2,
+      pageSize: 100,
+    }))
+  })
+
+  it('returns sanitized empty pagination for organization admins without an organization', async () => {
+    mockAuthState.user = {
+      role: UserRole.ORG_ADMIN,
+      userId: '665000000000000000000002',
+    }
+
+    const response = await request(createApp()).get('/api/automation-jobs?page=3&pageSize=9999')
+
+    expect(response.status).toBe(200)
+    expect(response.body.data).toMatchObject({
+      list: [],
+      total: 0,
+      page: 3,
+      pageSize: 100,
+    })
+    expect(automationJobService.listAutomationJobs).not.toHaveBeenCalled()
   })
 })
