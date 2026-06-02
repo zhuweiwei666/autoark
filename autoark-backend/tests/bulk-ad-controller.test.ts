@@ -42,6 +42,7 @@ import { facebookClient } from '../src/integration/facebook/facebookClient'
 import {
   getAuthPixels,
   getAuthLoginUrl,
+  publishDraft as publishDraftController,
   getTaskSupportPackage,
   rerunTask,
   validateDraft as validateDraftController,
@@ -343,6 +344,76 @@ describe('bulk ad controller', () => {
       error: error.message,
       errorCode: 'MAX_CONCURRENT_TASKS_REACHED',
       details: error.details,
+    })
+  })
+
+  it('limits member draft publishing to their own organization task assets', async () => {
+    mockBulkAdService.publishDraft.mockResolvedValue({
+      _id: '665000000000000000000501',
+      name: 'member_task',
+      status: 'pending',
+    } as any)
+    mockWriteAuditLog.mockResolvedValue(undefined)
+
+    const req: any = {
+      params: { id: '665000000000000000000010' },
+      user: {
+        role: UserRole.MEMBER,
+        userId: '665000000000000000000002',
+        organizationId: '665000000000000000000001',
+      },
+      get: jest.fn(),
+    }
+    const res: any = {
+      json: jest.fn(),
+      status: jest.fn().mockReturnThis(),
+    }
+
+    await publishDraftController(req, res)
+
+    const accessFilter = mockBulkAdService.publishDraft.mock.calls[0][2] as any
+    expect(String(accessFilter.$and[0].organizationId)).toBe('665000000000000000000001')
+    expect(accessFilter.$and[1].createdBy.$in.map(String)).toEqual(expect.arrayContaining([
+      '665000000000000000000002',
+    ]))
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      data: expect.objectContaining({ name: 'member_task' }),
+    })
+  })
+
+  it('limits member task reruns to their own organization tasks', async () => {
+    mockBulkAdService.rerunTask.mockResolvedValue([{
+      _id: '665000000000000000000502',
+      name: 'member_rerun',
+    }] as any)
+    mockWriteAuditLog.mockResolvedValue(undefined)
+
+    const req: any = {
+      params: { id: '665000000000000000000401' },
+      body: { multiplier: 1 },
+      user: {
+        role: UserRole.MEMBER,
+        userId: '665000000000000000000002',
+        organizationId: '665000000000000000000001',
+      },
+      get: jest.fn(),
+    }
+    const res: any = {
+      json: jest.fn(),
+      status: jest.fn().mockReturnThis(),
+    }
+
+    await rerunTask(req, res)
+
+    const accessFilter = mockBulkAdService.rerunTask.mock.calls[0][3] as any
+    expect(String(accessFilter.$and[0].organizationId)).toBe('665000000000000000000001')
+    expect(accessFilter.$and[1].createdBy.$in.map(String)).toEqual(expect.arrayContaining([
+      '665000000000000000000002',
+    ]))
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      data: [expect.objectContaining({ name: 'member_rerun' })],
     })
   })
 

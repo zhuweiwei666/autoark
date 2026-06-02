@@ -44,6 +44,17 @@ const getAssetFilter = (req: Request): any => {
   return scopedOwnerFilter(req)
 }
 
+const getControlFilter = (req: Request): any => {
+  if (req.user?.role !== UserRole.MEMBER) {
+    return getAssetFilter(req)
+  }
+
+  return combineFilters(
+    getAssetFilter(req),
+    scopedOwnerFilter(req, { memberOwnOnly: true }),
+  )
+}
+
 const getScopedActiveToken = (req: Request) => {
   return FbToken.findOne({ status: 'active', ...scopedTokenFilter(req) }).sort({ updatedAt: -1 })
 }
@@ -203,7 +214,7 @@ export const updateDraft = async (req: Request, res: Response) => {
       req.params.id,
       sanitizeScopedUpdate(req.body),
       req.user?.userId,
-      getAssetFilter(req),
+      getControlFilter(req),
     )
     res.json({ success: true, data: draft })
   } catch (error: any) {
@@ -248,7 +259,7 @@ export const getDraftList = async (req: Request, res: Response) => {
  */
 export const deleteDraft = async (req: Request, res: Response) => {
   try {
-    await bulkAdService.deleteDraft(req.params.id, getAssetFilter(req))
+    await bulkAdService.deleteDraft(req.params.id, getControlFilter(req))
     res.json({ success: true })
   } catch (error: any) {
     logger.error('[BulkAd] Delete draft failed:', error)
@@ -298,7 +309,7 @@ export const validateDraft = async (req: Request, res: Response) => {
  */
 export const publishDraft = async (req: Request, res: Response) => {
   try {
-    const task = await bulkAdService.publishDraft(req.params.id, req.user?.userId, getAssetFilter(req))
+    const task = await bulkAdService.publishDraft(req.params.id, req.user?.userId, getControlFilter(req))
     await writeBulkAdAudit(req, {
       action: 'bulk_ad.publish',
       targetType: 'ad_task',
@@ -427,7 +438,7 @@ export const getTaskList = async (req: Request, res: Response) => {
  */
 export const cancelTask = async (req: Request, res: Response) => {
   try {
-    const task = await bulkAdService.cancelTask(req.params.id, getAssetFilter(req))
+    const task = await bulkAdService.cancelTask(req.params.id, getControlFilter(req))
     await writeBulkAdAudit(req, {
       action: 'bulk_ad.cancel',
       targetType: 'ad_task',
@@ -456,7 +467,7 @@ export const cancelTask = async (req: Request, res: Response) => {
  */
 export const retryTask = async (req: Request, res: Response) => {
   try {
-    const task = await bulkAdService.retryFailedItems(req.params.id, getAssetFilter(req))
+    const task = await bulkAdService.retryFailedItems(req.params.id, getControlFilter(req))
     await writeBulkAdAudit(req, {
       action: 'bulk_ad.retry',
       targetType: 'ad_task',
@@ -488,7 +499,7 @@ export const rerunTask = async (req: Request, res: Response) => {
   try {
     const multiplier = parseInt(req.body.multiplier) || 1
     const userId = req.user?.userId
-    const newTasks = await bulkAdService.rerunTask(req.params.id, multiplier, userId, getAssetFilter(req))
+    const newTasks = await bulkAdService.rerunTask(req.params.id, multiplier, userId, getControlFilter(req))
     await writeBulkAdAudit(req, {
       action: 'bulk_ad.rerun',
       targetType: 'ad_task',
