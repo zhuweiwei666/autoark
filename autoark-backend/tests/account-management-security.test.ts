@@ -1,5 +1,6 @@
 import Account from '../src/models/Account'
 import AccountGroup from '../src/models/AccountGroup'
+import Organization from '../src/models/Organization'
 import { UserRole } from '../src/models/User'
 import accountManagementService from '../src/services/account.management.service'
 
@@ -64,6 +65,78 @@ describe('account management security', () => {
     expect(findSpy).toHaveBeenCalledWith({
       tags: { $in: ['vip', 'agency.a+'] },
     })
+  })
+
+  it('sanitizes bulk account ids before assigning accounts to an organization', async () => {
+    jest.spyOn(Organization, 'findById').mockResolvedValue({ name: 'Acme' } as any)
+    const updateManySpy = jest.spyOn(Account, 'updateMany').mockResolvedValue({ modifiedCount: 1 } as any)
+
+    const count = await accountManagementService.assignToOrganization(
+      [' act_1 ', { $ne: 'act_2' } as any, '', null as any],
+      ' 665000000000000000000001 ',
+      {
+        userId: 'admin',
+        role: UserRole.SUPER_ADMIN,
+      } as any,
+    )
+
+    expect(Organization.findById).toHaveBeenCalledWith('665000000000000000000001')
+    expect(updateManySpy).toHaveBeenCalledWith(
+      { accountId: { $in: ['act_1'] } },
+      {
+        $set: expect.objectContaining({
+          organizationId: '665000000000000000000001',
+          assignedBy: 'admin',
+        }),
+      },
+    )
+    expect(count).toBe(1)
+  })
+
+  it('sanitizes account tags before saving them', async () => {
+    const account: any = {
+      tags: ['existing'],
+      save: jest.fn().mockResolvedValue(undefined),
+    }
+    const findOneSpy = jest.spyOn(Account, 'findOne').mockReturnValue({
+      select: jest.fn().mockResolvedValue(account),
+    } as any)
+    const longTag = 'x'.repeat(80)
+
+    await accountManagementService.addTags(
+      ' act_123 ',
+      [' vip ', { $ne: 'bad' } as any, longTag],
+      {
+        userId: 'admin',
+        role: UserRole.SUPER_ADMIN,
+      } as any,
+    )
+
+    expect(findOneSpy).toHaveBeenCalledWith({ accountId: 'act_123' })
+    expect(account.tags).toEqual(['existing', 'vip', longTag.slice(0, 30)])
+    expect(account.save).toHaveBeenCalled()
+  })
+
+  it('sanitizes account notes before saving them', async () => {
+    const account: any = {
+      save: jest.fn().mockResolvedValue(undefined),
+    }
+    jest.spyOn(Account, 'findOne').mockReturnValue({
+      select: jest.fn().mockResolvedValue(account),
+    } as any)
+    const note = `  ${'n'.repeat(600)}  `
+
+    await accountManagementService.updateAccountNotes(
+      ' act_123 ',
+      note,
+      {
+        userId: 'admin',
+        role: UserRole.SUPER_ADMIN,
+      } as any,
+    )
+
+    expect(account.notes).toBe('n'.repeat(500))
+    expect(account.save).toHaveBeenCalled()
   })
 
   it('does not select account tokens for unassigned account pools', async () => {
