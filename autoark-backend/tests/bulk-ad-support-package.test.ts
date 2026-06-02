@@ -115,6 +115,52 @@ describe('bulk ad task support package', () => {
     expect(JSON.stringify(supportPackage)).not.toMatch(/accessToken/)
   })
 
+  it('bounds failed items and per-item errors while reporting truncation metadata', async () => {
+    const failedItems = Array.from({ length: 25 }, (_, index) => ({
+      accountId: `act_${index + 1}`,
+      accountName: `Account ${index + 1}`,
+      status: 'failed',
+      errors: Array.from({ length: 7 }, (__, errorIndex) => ({
+        code: 100,
+        message: `Pixel permission issue ${errorIndex + 1} access_token=EAA123456789012345678901234567890`,
+      })),
+    }))
+
+    jest.spyOn(AdTask, 'findOne').mockReturnValue(taskQuery({
+      _id: taskId,
+      name: 'large_failure_task',
+      status: 'failed',
+      platform: 'facebook',
+      taskType: 'BULK_AD_CREATE',
+      organizationId: '665000000000000000000001',
+      createdBy: '665000000000000000000002',
+      progress: { totalAccounts: 25, successAccounts: 0, failedAccounts: 25, createdAds: 0, percentage: 100 },
+      items: failedItems,
+    }) as any)
+    jest.spyOn(OpsLog, 'find').mockReturnValue(auditQuery([]) as any)
+
+    const supportPackage = await getTaskSupportPackage(taskId, { organizationId: '665000000000000000000001' })
+
+    expect(supportPackage.failedItems).toHaveLength(20)
+    expect(supportPackage.failedItems[0].errors).toHaveLength(5)
+    expect(supportPackage.failedItems[0]).toMatchObject({
+      errorTotal: 7,
+      errorsTruncated: true,
+    })
+    expect(supportPackage.limits).toMatchObject({
+      failedItems: {
+        total: 25,
+        returned: 20,
+        maxReturned: 20,
+        truncated: true,
+      },
+      itemErrors: {
+        maxReturned: 5,
+      },
+    })
+    expect(JSON.stringify(supportPackage)).not.toMatch(/EAA123456789012345678901234567890/)
+  })
+
   it('throws when the task is not visible in the current scope', async () => {
     jest.spyOn(AdTask, 'findOne').mockReturnValue(taskQuery(null) as any)
 

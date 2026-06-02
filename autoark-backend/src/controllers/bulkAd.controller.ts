@@ -398,7 +398,9 @@ export const getTaskSupportPackage = async (req: Request, res: Response) => {
         retryableErrors: supportPackage.diagnostics?.summary?.retryableErrors || 0,
         blockedErrors: supportPackage.diagnostics?.summary?.blockedErrors || 0,
         failedAccounts: supportPackage.diagnostics?.summary?.failedAccounts || 0,
-        failedItemCount: supportPackage.failedItems?.length || 0,
+        failedItemCount: supportPackage.limits?.failedItems?.total || supportPackage.failedItems?.length || 0,
+        failedItemReturned: supportPackage.limits?.failedItems?.returned || supportPackage.failedItems?.length || 0,
+        failedItemsTruncated: Boolean(supportPackage.limits?.failedItems?.truncated),
         topErrorCode: firstBucket?.errorCode,
       },
     })

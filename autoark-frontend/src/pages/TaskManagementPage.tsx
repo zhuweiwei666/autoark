@@ -128,8 +128,21 @@ interface TaskSupportPackage {
     accountName?: string
     status: string
     createdCount?: number
+    errorTotal?: number
+    errorsTruncated?: boolean
     errors: TaskError[]
   }>
+  limits?: {
+    failedItems?: {
+      total: number
+      returned: number
+      maxReturned: number
+      truncated: boolean
+    }
+    itemErrors?: {
+      maxReturned: number
+    }
+  }
   recentAuditLogs: Array<{
     category: string
     action: string
@@ -593,6 +606,10 @@ export default function TaskManagementPage() {
   }
 
   const selectedTaskSupportPackage = taskSupportPackage?.task.id === selectedTask?._id ? taskSupportPackage : null
+  const selectedTaskSupportFailedItemLimit = selectedTaskSupportPackage?.limits?.failedItems
+  const selectedTaskSupportFailedItemTotal = selectedTaskSupportFailedItemLimit?.total ?? selectedTaskSupportPackage?.failedItems.length ?? 0
+  const selectedTaskSupportFailedItemReturned = selectedTaskSupportFailedItemLimit?.returned ?? selectedTaskSupportPackage?.failedItems.length ?? 0
+  const selectedTaskSupportItemErrorLimit = selectedTaskSupportPackage?.limits?.itemErrors?.maxReturned
   const selectedTaskDetailError = selectedTask
     ? taskDetailError?.taskId === selectedTask._id ? taskDetailError.message : null
     : taskDetailError?.message || null
@@ -614,6 +631,7 @@ export default function TaskManagementPage() {
       `健康度：${DIAGNOSTIC_HEALTH_MAP[selectedTaskSupportPackage.diagnostics.health]?.label || selectedTaskSupportPackage.diagnostics.health}`,
       `账户：成功 ${selectedTaskSupportPackage.diagnostics.summary.successAccounts} / 失败 ${selectedTaskSupportPackage.diagnostics.summary.failedAccounts} / 总计 ${selectedTaskSupportPackage.diagnostics.summary.totalAccounts}`,
       `错误：总计 ${selectedTaskSupportPackage.diagnostics.summary.totalErrors}，可重试 ${selectedTaskSupportPackage.diagnostics.summary.retryableErrors}，需处理 ${selectedTaskSupportPackage.diagnostics.summary.blockedErrors}`,
+      `失败项：展示 ${selectedTaskSupportFailedItemReturned} / 总计 ${selectedTaskSupportFailedItemTotal}`,
       topIssue ? `首要问题：${topIssue.errorCode} - ${topIssue.customerMessage}` : '首要问题：无',
       selectedTaskSupportPackage.diagnostics.topNextActions.length > 0
         ? `建议动作：${selectedTaskSupportPackage.diagnostics.topNextActions.slice(0, 3).join('；')}`
@@ -973,10 +991,15 @@ export default function TaskManagementPage() {
                         <div className="text-[11px] text-blue-600">可重试</div>
                       </div>
                       <div className="rounded-lg bg-white px-2 py-2">
-                        <div className="text-lg font-bold text-slate-800">{selectedTaskSupportPackage.failedItems.length}</div>
+                        <div className="text-lg font-bold text-slate-800">{selectedTaskSupportFailedItemTotal}</div>
                         <div className="text-[11px] text-slate-500">失败项</div>
                       </div>
                     </div>
+                    {selectedTaskSupportFailedItemLimit?.truncated && (
+                      <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
+                        失败项较多，当前排障包展示前 {selectedTaskSupportFailedItemReturned} 个，共 {selectedTaskSupportFailedItemTotal} 个；完整数量已用于上方诊断统计。
+                      </div>
+                    )}
 
                     {selectedTaskSupportPackage.diagnostics.buckets[0] && (
                       <div className="mt-3 rounded-lg border border-teal-200 bg-white px-3 py-2">
@@ -1001,7 +1024,12 @@ export default function TaskManagementPage() {
 
                     <div className="mt-3 grid grid-cols-2 gap-3">
                       <div className="rounded-lg border border-slate-200 bg-white p-3">
-                        <div className="mb-2 text-xs font-semibold text-slate-700">失败账户</div>
+                        <div className="mb-2 flex items-center justify-between gap-2 text-xs font-semibold text-slate-700">
+                          <span>失败账户</span>
+                          <span className="font-normal text-slate-400">
+                            {selectedTaskSupportFailedItemReturned}/{selectedTaskSupportFailedItemTotal}
+                          </span>
+                        </div>
                         {selectedTaskSupportPackage.failedItems.length === 0 ? (
                           <div className="text-xs text-slate-500">暂无失败账户</div>
                         ) : (
@@ -1012,6 +1040,11 @@ export default function TaskManagementPage() {
                                 <div className="mt-0.5 text-slate-500">
                                   {(item.errors || []).slice(0, 2).map(error => getErrorCodeLabel(error)).join('、') || item.status}
                                 </div>
+                                {item.errorsTruncated && (
+                                  <div className="mt-0.5 text-[11px] text-amber-600">
+                                    已展示前 {selectedTaskSupportItemErrorLimit || item.errors.length} 条错误，共 {item.errorTotal || item.errors.length} 条
+                                  </div>
+                                )}
                               </div>
                             ))}
                           </div>

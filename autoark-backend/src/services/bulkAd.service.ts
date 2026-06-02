@@ -1523,6 +1523,9 @@ const safeDiagnosticError = (error: any) => ({
   timestamp: error.timestamp,
 })
 
+const TASK_SUPPORT_FAILED_ITEM_LIMIT = 20
+const TASK_SUPPORT_ITEM_ERROR_LIMIT = 5
+
 export const getTaskSupportPackage = async (taskId: string, accessFilter: any = {}) => {
   const task: any = await AdTask.findOne(combineFilters({ _id: taskId }, accessFilter))
     .populate('draftId')
@@ -1533,9 +1536,10 @@ export const getTaskSupportPackage = async (taskId: string, accessFilter: any = 
 
   const generatedAt = new Date()
   const diagnostics = buildTaskOperationalDiagnostics(task)
-  const failedItems = (task.items || [])
+  const allFailedItems = (task.items || [])
     .filter((item: any) => item.status === 'failed' || (Array.isArray(item.errors) && item.errors.length > 0))
-    .slice(0, 20)
+  const failedItems = allFailedItems
+    .slice(0, TASK_SUPPORT_FAILED_ITEM_LIMIT)
     .map((item: any) => {
       const itemErrors = Array.isArray(item.errors) && item.errors.length > 0
         ? item.errors
@@ -1543,6 +1547,7 @@ export const getTaskSupportPackage = async (taskId: string, accessFilter: any = 
       const normalizedErrors = normalizeTaskErrors(itemErrors, {
         entityType: item.status === 'failed' ? 'general' : undefined,
       })
+      const errorTotal = normalizedErrors.length
 
       return {
         accountId: item.accountId,
@@ -1552,7 +1557,11 @@ export const getTaskSupportPackage = async (taskId: string, accessFilter: any = 
         startedAt: item.startedAt,
         completedAt: item.completedAt,
         duration: item.duration,
-        errors: normalizedErrors.map(safeDiagnosticError),
+        errorTotal,
+        errorsTruncated: errorTotal > TASK_SUPPORT_ITEM_ERROR_LIMIT,
+        errors: normalizedErrors
+          .slice(0, TASK_SUPPORT_ITEM_ERROR_LIMIT)
+          .map(safeDiagnosticError),
       }
     })
 
@@ -1616,6 +1625,17 @@ export const getTaskSupportPackage = async (taskId: string, accessFilter: any = 
       topNextActions: diagnostics.topNextActions.slice(0, 6),
     },
     failedItems,
+    limits: {
+      failedItems: {
+        total: allFailedItems.length,
+        returned: failedItems.length,
+        maxReturned: TASK_SUPPORT_FAILED_ITEM_LIMIT,
+        truncated: allFailedItems.length > failedItems.length,
+      },
+      itemErrors: {
+        maxReturned: TASK_SUPPORT_ITEM_ERROR_LIMIT,
+      },
+    },
     recentAuditLogs: safeRecentAuditLogs,
   }
 }
