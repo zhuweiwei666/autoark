@@ -2,6 +2,9 @@ import express from 'express'
 import request from 'supertest'
 import { UserRole } from '../src/models/User'
 
+const mockProductFind = jest.fn()
+const mockProductCountDocuments = jest.fn()
+
 const mockAuthState: { user: any } = {
   user: {
     role: UserRole.MEMBER,
@@ -21,6 +24,14 @@ jest.mock('../src/middlewares/auth', () => {
   }
 })
 
+jest.mock('../src/models/Product', () => ({
+  __esModule: true,
+  default: {
+    find: mockProductFind,
+    countDocuments: mockProductCountDocuments,
+  },
+}))
+
 import productMappingRoutes from '../src/routes/productMapping.routes'
 
 const createApp = () => {
@@ -30,7 +41,25 @@ const createApp = () => {
   return app
 }
 
+const productListQuery = (value: any[]) => ({
+  sort: jest.fn().mockReturnThis(),
+  skip: jest.fn().mockReturnThis(),
+  limit: jest.fn().mockReturnThis(),
+  populate: jest.fn().mockResolvedValue(value),
+})
+
 describe('product mapping route authorization', () => {
+  beforeEach(() => {
+    jest.clearAllMocks()
+    mockAuthState.user = {
+      role: UserRole.MEMBER,
+      userId: '665000000000000000000002',
+      organizationId: '665000000000000000000001',
+    }
+    mockProductFind.mockReturnValue(productListQuery([]))
+    mockProductCountDocuments.mockResolvedValue(0)
+  })
+
   it.each([
     ['POST', '/api/product-mapping/products', { name: 'Demo', identifier: 'demo' }],
     ['PUT', '/api/product-mapping/products/665000000000000000000301', { name: 'Demo 2' }],
@@ -51,5 +80,37 @@ describe('product mapping route authorization', () => {
       success: false,
       message: '权限不足',
     })
+  })
+
+  it('caps product list pagination and escapes search input', async () => {
+    mockAuthState.user = {
+      role: UserRole.ORG_ADMIN,
+      userId: '665000000000000000000002',
+      organizationId: '665000000000000000000001',
+    }
+    const query = productListQuery([{ name: 'Demo' }])
+    mockProductFind.mockReturnValue(query)
+    mockProductCountDocuments.mockResolvedValue(250)
+
+    const response = await request(createApp())
+      .get('/api/product-mapping/products?page=3&limit=9999&status[$ne]=archived&search=a.b%2B[x]')
+
+    expect(response.status).toBe(200)
+    expect(query.skip).toHaveBeenCalledWith(200)
+    expect(query.limit).toHaveBeenCalledWith(100)
+    expect(response.body).toMatchObject({
+      success: true,
+      total: 250,
+      pagination: {
+        page: 3,
+        pageSize: 100,
+        total: 250,
+        totalPages: 3,
+      },
+    })
+
+    const productQueryText = JSON.stringify(mockProductFind.mock.calls[0][0])
+    expect(productQueryText).toContain('a\\\\.b\\\\+\\\\[x\\\\]')
+    expect(productQueryText).not.toContain('$ne')
   })
 })

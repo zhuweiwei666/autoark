@@ -12,6 +12,7 @@ import {
   scopedTokenFilter,
 } from '../utils/accessControl'
 import { getAccountIdsForQuery, normalizeForStorage } from '../utils/accountId'
+import { parsePagination } from '../utils/pagination'
 
 /**
  * 产品映射控制器
@@ -20,7 +21,23 @@ import { getAccountIdsForQuery, normalizeForStorage } from '../utils/accountId'
 
 // ==================== 产品 CRUD ====================
 
+const PRODUCT_LIST_MAX_PAGE_SIZE = 100
+const PRODUCT_SEARCH_MAX_LENGTH = 80
+const PRODUCT_STATUS_FILTERS = ['active', 'inactive', 'archived'] as const
+
 const getProductFilter = (req: Request): any => scopedOwnerFilter(req)
+
+const escapeRegexLiteral = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+const pickProductStatus = (value: any): string | undefined => (
+  typeof value === 'string' && (PRODUCT_STATUS_FILTERS as readonly string[]).includes(value) ? value : undefined
+)
+
+const normalizeProductSearch = (value: any): string | undefined => {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim().slice(0, PRODUCT_SEARCH_MAX_LENGTH)
+  return trimmed ? escapeRegexLiteral(trimmed) : undefined
+}
 
 const getOwnerData = (req: Request): any => ({
   ...(req.user?.organizationId && { organizationId: req.user.organizationId }),
@@ -107,31 +124,48 @@ const getScopedPixelAsset = async (req: Request, rawPixelId: any) => {
 export const getProducts = async (req: Request, res: Response) => {
   try {
     const { status, hasPixel, hasAccount, search } = req.query
+    const { page, pageSize, skip } = parsePagination(req.query, {
+      defaultPageSize: 50,
+      maxPageSize: PRODUCT_LIST_MAX_PAGE_SIZE,
+    })
     let query: any = getProductFilter(req)
     
-    if (status) query = combineFilters(query, { status })
+    const safeStatus = pickProductStatus(status)
+    if (safeStatus) query = combineFilters(query, { status: safeStatus })
     if (hasPixel === 'true') query = combineFilters(query, { 'pixels.0': { $exists: true } })
     if (hasPixel === 'false') query = combineFilters(query, { 'pixels.0': { $exists: false } })
     if (hasAccount === 'true') query = combineFilters(query, { 'accounts.0': { $exists: true } })
     if (hasAccount === 'false') query = combineFilters(query, { 'accounts.0': { $exists: false } })
-    if (search) {
+    const safeSearch = normalizeProductSearch(search)
+    if (safeSearch) {
       query = combineFilters(query, {
         $or: [
-        { name: { $regex: search, $options: 'i' } },
-        { identifier: { $regex: search, $options: 'i' } },
-        { primaryDomain: { $regex: search, $options: 'i' } },
+          { name: { $regex: safeSearch, $options: 'i' } },
+          { identifier: { $regex: safeSearch, $options: 'i' } },
+          { primaryDomain: { $regex: safeSearch, $options: 'i' } },
         ],
       })
     }
     
-    const products = await Product.find(query)
-      .sort({ updatedAt: -1 })
-      .populate('copywritingPackageIds', 'name')
+    const [products, total] = await Promise.all([
+      Product.find(query)
+        .sort({ updatedAt: -1 })
+        .skip(skip)
+        .limit(pageSize)
+        .populate('copywritingPackageIds', 'name'),
+      Product.countDocuments(query),
+    ])
     
     res.json({
       success: true,
       data: products,
-      total: products.length,
+      total,
+      pagination: {
+        page,
+        pageSize,
+        total,
+        totalPages: Math.ceil(total / pageSize),
+      },
     })
   } catch (error: any) {
     logger.error('[ProductMapping] Get products failed:', error)
