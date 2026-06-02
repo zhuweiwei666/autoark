@@ -39,6 +39,54 @@ describe('material metrics backfill guardrails', () => {
     jest.clearAllMocks()
   })
 
+  it('rejects invalid ranking dates before querying material rankings', async () => {
+    const response = await request(createApp())
+      .get('/api/material-metrics/rankings')
+      .query({ startDate: '2026-02-31', endDate: '2026-03-01' })
+
+    expect(response.status).toBe(400)
+    expect(response.body).toMatchObject({
+      success: false,
+      error: 'startDate must be a valid YYYY-MM-DD date',
+    })
+    expect(materialMetricsService.getMaterialRankings).not.toHaveBeenCalled()
+  })
+
+  it('rejects ranking windows longer than the bounded range', async () => {
+    const response = await request(createApp())
+      .get('/api/material-metrics/rankings')
+      .query({ startDate: '2026-01-01', endDate: '2026-04-15' })
+
+    expect(response.status).toBe(400)
+    expect(response.body).toMatchObject({
+      success: false,
+      meta: {
+        requestedDays: 105,
+        maxDays: 90,
+      },
+    })
+    expect(materialMetricsService.getMaterialRankings).not.toHaveBeenCalled()
+  })
+
+  it('normalizes ranking date defaults and caps ranking limit', async () => {
+    materialMetricsService.getMaterialRankings.mockResolvedValue([])
+
+    const response = await request(createApp())
+      .get('/api/material-metrics/rankings')
+      .query({ endDate: '2026-06-02', limit: '9999' })
+
+    expect(response.status).toBe(200)
+    expect(materialMetricsService.getMaterialRankings).toHaveBeenCalledWith(expect.objectContaining({
+      dateRange: { start: '2026-05-26', end: '2026-06-02' },
+      limit: 100,
+    }))
+    expect(response.body.query).toMatchObject({
+      startDate: '2026-05-26',
+      endDate: '2026-06-02',
+      limit: 100,
+    })
+  })
+
   it('rejects invalid aggregate dates before running material aggregation', async () => {
     const response = await request(createApp())
       .post('/api/material-metrics/aggregate')

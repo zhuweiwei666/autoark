@@ -16,11 +16,61 @@ import { parseLimitedNumber } from '../utils/pagination'
 
 const router = Router()
 const MAX_BACKFILL_DAYS = 31
+const MAX_RANKING_DAYS = 90
+const DEFAULT_RANKING_LOOKBACK_DAYS = 7
 
 const parseMaterialMetricsDate = (value: any) => {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null
   const parsed = dayjs(value)
   return parsed.isValid() && parsed.format('YYYY-MM-DD') === value ? parsed : null
+}
+
+const resolveMaterialMetricsDateRange = (
+  input: { startDate?: any; endDate?: any },
+  options: { defaultLookbackDays: number; maxDays: number },
+) => {
+  const end = input.endDate === undefined
+    ? dayjs()
+    : parseMaterialMetricsDate(input.endDate)
+
+  if (!end) {
+    return {
+      error: 'endDate must be a valid YYYY-MM-DD date',
+    }
+  }
+
+  const start = input.startDate === undefined
+    ? end.subtract(options.defaultLookbackDays, 'day')
+    : parseMaterialMetricsDate(input.startDate)
+
+  if (!start) {
+    return {
+      error: 'startDate must be a valid YYYY-MM-DD date',
+    }
+  }
+
+  const dayCount = end.diff(start, 'day') + 1
+  if (dayCount <= 0) {
+    return {
+      error: 'endDate must be on or after startDate',
+    }
+  }
+
+  if (dayCount > options.maxDays) {
+    return {
+      error: `一次最多查询 ${options.maxDays} 天素材排行榜，请缩小日期范围`,
+      meta: {
+        requestedDays: dayCount,
+        maxDays: options.maxDays,
+      },
+    }
+  }
+
+  return {
+    startDate: start.format('YYYY-MM-DD'),
+    endDate: end.format('YYYY-MM-DD'),
+    dayCount,
+  }
 }
 
 // 所有路由都需要认证
@@ -37,17 +87,28 @@ router.use(authorize(UserRole.SUPER_ADMIN))
 router.get('/rankings', async (req: Request, res: Response) => {
   try {
     const {
-      startDate = dayjs().subtract(7, 'day').format('YYYY-MM-DD'),
-      endDate = dayjs().format('YYYY-MM-DD'),
       sortBy = 'roas',
       limit = '20',
       type,
       country,  // 🌍 新增：国家筛选
     } = req.query
+
+    const dateRange = resolveMaterialMetricsDateRange(
+      { startDate: req.query.startDate, endDate: req.query.endDate },
+      { defaultLookbackDays: DEFAULT_RANKING_LOOKBACK_DAYS, maxDays: MAX_RANKING_DAYS },
+    )
+
+    if ('error' in dateRange) {
+      return res.status(400).json({
+        success: false,
+        error: dateRange.error,
+        meta: dateRange.meta,
+      })
+    }
     
     const safeLimit = parseLimitedNumber(limit, 20, 100)
     const rankings = await getMaterialRankings({
-      dateRange: { start: startDate as string, end: endDate as string },
+      dateRange: { start: dateRange.startDate, end: dateRange.endDate },
       sortBy: sortBy as any,
       limit: safeLimit,
       materialType: type as any,
@@ -57,7 +118,14 @@ router.get('/rankings', async (req: Request, res: Response) => {
     res.json({
       success: true,
       data: rankings,
-      query: { startDate, endDate, sortBy, limit: safeLimit, type, country },
+      query: {
+        startDate: dateRange.startDate,
+        endDate: dateRange.endDate,
+        sortBy,
+        limit: safeLimit,
+        type,
+        country,
+      },
     })
   } catch (error: any) {
     logger.error('[MaterialController] Get rankings failed:', error)
