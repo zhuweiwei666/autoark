@@ -8,6 +8,9 @@ import { URL } from 'url'
 import { combineFilters } from '../utils/accessControl'
 import { normalizeForStorage } from '../utils/accountId'
 
+const PRODUCT_MAPPING_FACEBOOK_PAGE_LIMIT = 10
+const PRODUCT_MAPPING_FACEBOOK_PAGE_SIZE = 100
+
 /**
  * 产品映射服务
  * 实现文案包 → 产品 → Pixel → 账户的关系映射
@@ -205,6 +208,35 @@ const getScopedTokenForAccount = async (account: any, tokens: any[]) => {
   return null
 }
 
+const fetchAccountPixelsFromFacebook = async (
+  accountId: string,
+  accessToken: string,
+  fields: string,
+) => {
+  const pixels: any[] = []
+  let after: string | undefined
+  let pageCount = 0
+
+  while (pageCount < PRODUCT_MAPPING_FACEBOOK_PAGE_LIMIT) {
+    const result = await facebookClient.get(`/act_${accountId}/adspixels`, {
+      access_token: accessToken,
+      fields,
+      limit: PRODUCT_MAPPING_FACEBOOK_PAGE_SIZE,
+      ...(after && { after }),
+    })
+
+    pixels.push(...(result.data || []))
+    pageCount += 1
+
+    after = result.paging?.cursors?.after
+    if (!after || !result.paging?.next) {
+      break
+    }
+  }
+
+  return pixels
+}
+
 /**
  * 从所有授权账户获取 Pixels
  */
@@ -233,13 +265,7 @@ export async function fetchAllPixels(accountFilter: any = {}, tokenFilter: any =
           logger.warn(`[ProductMapping] No scoped Facebook token can access account ${accountId}`)
           continue
         }
-        const result = await facebookClient.get(`/act_${accountId}/adspixels`, {
-          access_token: fbToken.token,
-          fields: 'id,name',
-          limit: 100,
-        })
-        
-        const pixels = result.data || []
+        const pixels = await fetchAccountPixelsFromFacebook(accountId, fbToken.token, 'id,name')
         for (const pixel of pixels) {
           allPixels.push({
             id: pixel.id,
@@ -435,13 +461,7 @@ export async function discoverAccountsByPixels(
           logger.warn(`[ProductMapping] No scoped Facebook token can access account ${accountId}`)
           continue
         }
-        const pixelsResult = await facebookClient.get(`/act_${accountId}/adspixels`, {
-          access_token: fbToken.token,
-          fields: 'id',
-          limit: 100,
-        })
-        
-        const pixels = pixelsResult.data || []
+        const pixels = await fetchAccountPixelsFromFacebook(accountId, fbToken.token, 'id')
         for (const pixel of pixels) {
           const existing = pixelToAccounts.get(pixel.id) || []
           existing.push({ accountId, accountName: account.name })
