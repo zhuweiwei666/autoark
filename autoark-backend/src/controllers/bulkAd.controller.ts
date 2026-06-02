@@ -67,34 +67,51 @@ const createHttpError = (message: string, statusCode: number) => {
 }
 
 const parseAccountIdParam = (value: any) => normalizeForStorage(Array.isArray(value) ? value[0] : value)
-const AUTH_AD_ACCOUNTS_PAGE_LIMIT = 10
-const AUTH_AD_ACCOUNTS_PAGE_SIZE = 100
+const AUTH_FACEBOOK_ASSET_PAGE_LIMIT = 10
+const AUTH_FACEBOOK_ASSET_PAGE_SIZE = 100
 
-const fetchAuthAdAccountsPages = async (accessToken: string) => {
-  const accounts: any[] = []
+const fetchFacebookAssetPages = async (
+  endpoint: string,
+  accessToken: string,
+  fields: string,
+) => {
+  const items: any[] = []
   let after: string | undefined
   let pageCount = 0
   let truncated = false
 
-  while (pageCount < AUTH_AD_ACCOUNTS_PAGE_LIMIT) {
-    const result = await facebookClient.get('/me/adaccounts', {
+  while (pageCount < AUTH_FACEBOOK_ASSET_PAGE_LIMIT) {
+    const result = await facebookClient.get(endpoint, {
       access_token: accessToken,
-      fields: 'id,account_id,name,account_status,currency,timezone_name,amount_spent,balance',
-      limit: AUTH_AD_ACCOUNTS_PAGE_SIZE,
+      fields,
+      limit: AUTH_FACEBOOK_ASSET_PAGE_SIZE,
       ...(after && { after }),
     })
 
     pageCount += 1
-    accounts.push(...(result.data || []))
+    items.push(...(result.data || []))
 
     after = result.paging?.cursors?.after
     if (!after || !result.paging?.next) {
-      return { accounts, pageCount, truncated }
+      return { items, pageCount, truncated }
     }
   }
 
   truncated = Boolean(after)
-  return { accounts, pageCount, truncated }
+  return { items, pageCount, truncated }
+}
+
+const fetchAuthAdAccountsPages = async (accessToken: string) => {
+  const result = await fetchFacebookAssetPages(
+    '/me/adaccounts',
+    accessToken,
+    'id,account_id,name,account_status,currency,timezone_name,amount_spent,balance',
+  )
+  return {
+    accounts: result.items,
+    pageCount: result.pageCount,
+    truncated: result.truncated,
+  }
 }
 
 const assertScopedFacebookAccountAccess = async (req: Request, rawAccountId: any) => {
@@ -1668,8 +1685,8 @@ export const getAuthAdAccounts = async (req: Request, res: Response) => {
         accountCount: filteredAccounts.length,
         sourceAccountCount: allAccounts.length,
         fetchedPageCount,
-        pageSize: AUTH_AD_ACCOUNTS_PAGE_SIZE,
-        pageLimitPerToken: AUTH_AD_ACCOUNTS_PAGE_LIMIT,
+        pageSize: AUTH_FACEBOOK_ASSET_PAGE_SIZE,
+        pageLimitPerToken: AUTH_FACEBOOK_ASSET_PAGE_LIMIT,
         paginationTruncated,
       },
     })
@@ -1694,15 +1711,23 @@ export const getAuthPages = async (req: Request, res: Response) => {
     
     // 1. 从广告账户获取 promote_pages（BM 分配的主页）
     let pages: any[] = []
+    let source: 'promote_pages' | 'user_pages' | 'none' = 'none'
+    let fetchedPageCount = 0
+    let paginationTruncated = false
+    let promotePagesFailed = false
     try {
-      const promoteResult = await facebookClient.get(`/act_${scopedAccountId}/promote_pages`, {
-        access_token: fbToken.token,
-        fields: 'id,name,picture',
-        limit: 100,
-      })
-      pages = promoteResult.data || []
+      const promoteResult = await fetchFacebookAssetPages(
+        `/act_${scopedAccountId}/promote_pages`,
+        fbToken.token,
+        'id,name,picture',
+      )
+      pages = promoteResult.items.filter((p: any) => p.id && p.name)
+      fetchedPageCount += promoteResult.pageCount
+      paginationTruncated = paginationTruncated || promoteResult.truncated
+      if (pages.length > 0) source = 'promote_pages'
       logger.info(`[BulkAd] Found ${pages.length} promote_pages for account ${scopedAccountId}`)
     } catch (e: any) {
+      promotePagesFailed = true
       logger.warn(`[BulkAd] Failed to get promote_pages for ${scopedAccountId}: ${e.message}`)
     }
     
@@ -1711,28 +1736,57 @@ export const getAuthPages = async (req: Request, res: Response) => {
       logger.info(`[BulkAd] No promote_pages for ${scopedAccountId}, falling back to user pages`)
       try {
         // 使用找到的 token 获取该用户管理的所有主页
-        const userPagesResult = await facebookClient.get(`/${fbToken.fbUserId}/accounts`, {
-          access_token: fbToken.token,
-          fields: 'id,name,picture',
-          limit: 100,
-        })
-        pages = (userPagesResult.data || []).filter((p: any) => p.id && p.name)
+        const userPagesResult = await fetchFacebookAssetPages(
+          `/${fbToken.fbUserId}/accounts`,
+          fbToken.token,
+          'id,name,picture',
+        )
+        pages = userPagesResult.items.filter((p: any) => p.id && p.name)
+        fetchedPageCount += userPagesResult.pageCount
+        paginationTruncated = paginationTruncated || userPagesResult.truncated
+        if (pages.length > 0) source = 'user_pages'
         logger.info(`[BulkAd] Found ${pages.length} user pages for account ${accountId}`)
       } catch (e: any) {
         logger.warn(`[BulkAd] Failed to get user pages: ${e.message}`)
       }
     }
+
+    const pageMap = new Map<string, any>()
+    for (const page of pages) {
+      if (page?.id && !pageMap.has(page.id)) pageMap.set(page.id, page)
+    }
+    const sanitizedPages = sanitizeFacebookPages(Array.from(pageMap.values()))
     
     // 如果还是没有主页，返回警告
-    if (pages.length === 0) {
+    if (sanitizedPages.length === 0) {
       return res.json({ 
         success: true, 
         data: [],
-        warning: '此账户没有可用的 Facebook 主页。请确保您有主页管理权限。'
+        warning: '此账户没有可用的 Facebook 主页。请确保您有主页管理权限。',
+        meta: {
+          source,
+          fetchedPageCount,
+          pageSize: AUTH_FACEBOOK_ASSET_PAGE_SIZE,
+          pageLimit: AUTH_FACEBOOK_ASSET_PAGE_LIMIT,
+          paginationTruncated,
+          promotePagesFailed,
+        },
       })
     }
     
-    res.json({ success: true, data: sanitizeFacebookPages(pages) })
+    res.json({
+      success: true,
+      data: sanitizedPages,
+      meta: {
+        source,
+        pageCount: sanitizedPages.length,
+        fetchedPageCount,
+        pageSize: AUTH_FACEBOOK_ASSET_PAGE_SIZE,
+        pageLimit: AUTH_FACEBOOK_ASSET_PAGE_LIMIT,
+        paginationTruncated,
+        promotePagesFailed,
+      },
+    })
   } catch (error: any) {
     logger.error('[BulkAd] Get pages failed:', error)
     res.status(error.statusCode || 500).json({ success: false, error: error.message })

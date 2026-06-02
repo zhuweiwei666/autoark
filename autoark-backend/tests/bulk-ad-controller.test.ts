@@ -57,6 +57,7 @@ import {
   deleteCreativeGroup,
   deleteTargetingPackage,
   getAuthAdAccounts,
+  getAuthPages,
   getAuthPixels,
   getAuthLoginUrl,
   handleAuthCallback,
@@ -443,6 +444,109 @@ describe('bulk ad controller', () => {
         fetchedPageCount: 10,
         pageLimitPerToken: 10,
         paginationTruncated: true,
+      }),
+    })
+  })
+
+  it('paginates and deduplicates promote pages for an authorized ad account', async () => {
+    jest.spyOn(FbToken, 'find').mockResolvedValue([
+      { token: 'TOKEN_A', fbUserName: 'Operator A', fbUserId: 'fb_user_1' },
+    ] as any)
+    mockFacebookClient.get
+      .mockResolvedValueOnce({ id: 'act_123', name: 'Account 123' } as any)
+      .mockResolvedValueOnce({
+        data: [
+          { id: 'page_1', name: 'Page 1', access_token: 'PAGE_TOKEN' },
+        ],
+        paging: { next: 'https://graph.facebook.com/next', cursors: { after: 'cursor_1' } },
+      } as any)
+      .mockResolvedValueOnce({
+        data: [
+          { id: 'page_1', name: 'Page 1 duplicate', access_token: 'PAGE_TOKEN' },
+          { id: 'page_2', name: 'Page 2' },
+        ],
+      } as any)
+
+    const req: any = {
+      query: { accountId: 'act_123' },
+      user: {
+        role: UserRole.SUPER_ADMIN,
+        userId: '665000000000000000000002',
+      },
+    }
+    const res = resMock()
+
+    await getAuthPages(req, res as any)
+
+    expect(mockFacebookClient.get).toHaveBeenNthCalledWith(1, '/act_123', {
+      access_token: 'TOKEN_A',
+      fields: 'id,name',
+    })
+    expect(mockFacebookClient.get).toHaveBeenNthCalledWith(2, '/act_123/promote_pages', {
+      access_token: 'TOKEN_A',
+      fields: 'id,name,picture',
+      limit: 100,
+    })
+    expect(mockFacebookClient.get).toHaveBeenNthCalledWith(3, '/act_123/promote_pages', {
+      access_token: 'TOKEN_A',
+      fields: 'id,name,picture',
+      limit: 100,
+      after: 'cursor_1',
+    })
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      data: [
+        expect.objectContaining({ id: 'page_1', name: 'Page 1' }),
+        expect.objectContaining({ id: 'page_2', name: 'Page 2' }),
+      ],
+      meta: expect.objectContaining({
+        source: 'promote_pages',
+        pageCount: 2,
+        fetchedPageCount: 2,
+        pageLimit: 10,
+        paginationTruncated: false,
+        promotePagesFailed: false,
+      }),
+    })
+    expect((res.json as jest.Mock).mock.calls[0][0].data[0]).not.toHaveProperty('access_token')
+  })
+
+  it('falls back to paginated user pages when promote pages cannot be read', async () => {
+    jest.spyOn(FbToken, 'find').mockResolvedValue([
+      { token: 'TOKEN_A', fbUserName: 'Operator A', fbUserId: 'fb_user_1' },
+    ] as any)
+    mockFacebookClient.get
+      .mockResolvedValueOnce({ id: 'act_123', name: 'Account 123' } as any)
+      .mockRejectedValueOnce(new Error('promote_pages permission denied'))
+      .mockResolvedValueOnce({
+        data: [{ id: 'page_fallback', name: 'Fallback Page' }],
+      } as any)
+
+    const req: any = {
+      query: { accountId: 'act_123' },
+      user: {
+        role: UserRole.SUPER_ADMIN,
+        userId: '665000000000000000000002',
+      },
+    }
+    const res = resMock()
+
+    await getAuthPages(req, res as any)
+
+    expect(mockFacebookClient.get).toHaveBeenNthCalledWith(3, '/fb_user_1/accounts', {
+      access_token: 'TOKEN_A',
+      fields: 'id,name,picture',
+      limit: 100,
+    })
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      data: [expect.objectContaining({ id: 'page_fallback', name: 'Fallback Page' })],
+      meta: expect.objectContaining({
+        source: 'user_pages',
+        pageCount: 1,
+        fetchedPageCount: 1,
+        paginationTruncated: false,
+        promotePagesFailed: true,
       }),
     })
   })
