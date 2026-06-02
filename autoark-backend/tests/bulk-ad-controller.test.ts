@@ -19,6 +19,13 @@ jest.mock('../src/services/facebook.oauth.service', () => ({
   parseStateParamWithOptions: jest.fn(),
 }))
 
+jest.mock('../src/services/facebookUser.service', () => ({
+  syncFacebookUserAssets: jest.fn(),
+  getCachedPixels: jest.fn(),
+  getCachedCatalogs: jest.fn(),
+  getSyncStatus: jest.fn(),
+}))
+
 jest.mock('../src/models/FacebookApp', () => ({
   __esModule: true,
   default: {
@@ -35,6 +42,7 @@ jest.mock('../src/integration/facebook/facebookClient', () => ({
 import bulkAdService from '../src/services/bulkAd.service'
 import { writeAuditLog } from '../src/services/auditLog.service'
 import * as oauthService from '../src/services/facebook.oauth.service'
+import * as facebookUserService from '../src/services/facebookUser.service'
 import FacebookApp from '../src/models/FacebookApp'
 import Account from '../src/models/Account'
 import FbToken from '../src/models/FbToken'
@@ -65,6 +73,7 @@ import {
 const mockBulkAdService = bulkAdService as jest.Mocked<typeof bulkAdService>
 const mockWriteAuditLog = writeAuditLog as jest.Mock
 const mockOauthService = oauthService as jest.Mocked<typeof oauthService>
+const mockFacebookUserService = facebookUserService as jest.Mocked<typeof facebookUserService>
 const mockFacebookApp = FacebookApp as jest.Mocked<typeof FacebookApp>
 const mockFacebookClient = facebookClient as jest.Mocked<typeof facebookClient>
 
@@ -279,6 +288,66 @@ describe('bulk ad controller', () => {
       reason: 'Invalid OAuth state',
     }))
     expect(res.redirect).toHaveBeenCalledWith('/oauth/callback?oauth_error=Invalid OAuth state')
+  })
+
+  it('keeps user scope and audits background asset sync failures after OAuth success', async () => {
+    mockWriteAuditLog.mockResolvedValue(undefined)
+    mockOauthService.parseStateParamWithOptions.mockReturnValue({
+      originalState: 'bulk-ad|665000000000000000000002|665000000000000000000001',
+    } as any)
+    mockOauthService.handleOAuthCallback.mockResolvedValue({
+      tokenId: '665000000000000000000901',
+      fbUserId: 'fb_1',
+      fbUserName: 'FB User',
+      accessToken: 'EAA123456789012345678901234567890',
+    } as any)
+    jest.spyOn(FbToken, 'findByIdAndUpdate').mockResolvedValue({} as any)
+    mockFacebookUserService.syncFacebookUserAssets.mockRejectedValue(new Error('sync failed'))
+
+    const req: any = {
+      query: { code: 'oauth-code', state: 'signed-state' },
+      get: jest.fn(),
+    }
+    const res: any = {
+      redirect: jest.fn(),
+    }
+
+    await handleAuthCallback(req, res)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(FbToken.findByIdAndUpdate).toHaveBeenCalledWith('665000000000000000000901', {
+      userId: '665000000000000000000002',
+      organizationId: '665000000000000000000001',
+    })
+    expect(mockFacebookUserService.syncFacebookUserAssets).toHaveBeenCalledWith(
+      'fb_1',
+      'EAA123456789012345678901234567890',
+      '665000000000000000000901',
+      '665000000000000000000001',
+    )
+    expect(mockWriteAuditLog).toHaveBeenCalledWith(req, expect.objectContaining({
+      category: 'bulk_ad',
+      action: 'bulk_ad.facebook_oauth_callback',
+      status: 'success',
+      userId: '665000000000000000000002',
+      organizationId: '665000000000000000000001',
+    }))
+    expect(mockWriteAuditLog).toHaveBeenCalledWith(req, expect.objectContaining({
+      category: 'bulk_ad',
+      action: 'bulk_ad.facebook_asset_sync',
+      status: 'failed',
+      userId: '665000000000000000000002',
+      organizationId: '665000000000000000000001',
+      reason: 'sync failed',
+      metadata: expect.objectContaining({
+        tokenId: '665000000000000000000901',
+        fbUserId: 'fb_1',
+      }),
+    }))
+    expect(res.redirect).toHaveBeenCalledWith(expect.stringContaining('/oauth/callback?oauth_success=true'))
+    expect(res.redirect).toHaveBeenCalledWith(expect.stringContaining('token_id=665000000000000000000901'))
+    expect(res.redirect).toHaveBeenCalledWith(expect.stringContaining('fb_user_id=fb_1'))
   })
 
   it('writes an audit log when a task support package is generated', async () => {

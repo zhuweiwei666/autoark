@@ -126,11 +126,13 @@ const writeBulkAdAudit = (req: Request, input: {
   reason?: string
   related?: any
   metadata?: any
+  organizationId?: any
+  userId?: any
 }) => writeAuditLog(req, {
   category: 'bulk_ad',
   ...input,
-  organizationId: req.user?.organizationId,
-  userId: req.user?.userId,
+  organizationId: input.organizationId || req.user?.organizationId,
+  userId: input.userId || req.user?.userId,
 })
 
 const taskAuditMetadata = (task: any) => ({
@@ -1375,8 +1377,22 @@ export const handleAuthCallback = async (req: Request, res: Response) => {
       result.accessToken,
       result.tokenId,
       organizationId,
-    ).catch((err: any) => {
+    ).catch(async (err: any) => {
       logger.error('[BulkAd OAuth] Failed to sync Facebook user assets:', err)
+      await writeBulkAdAudit(req, {
+        action: 'bulk_ad.facebook_asset_sync',
+        status: 'failed',
+        userId: autoarkUserId,
+        organizationId,
+        targetType: 'facebook_token',
+        targetId: result.tokenId,
+        summary: `Facebook 授权后资产同步失败：${result.fbUserName || result.fbUserId}`,
+        reason: err.message,
+        metadata: {
+          tokenId: result.tokenId,
+          fbUserId: result.fbUserId,
+        },
+      })
     })
     
     // 重定向到专门的 OAuth 回调页面
@@ -1859,8 +1875,20 @@ export const resyncFacebookAssets = async (req: Request, res: Response) => {
       fbToken.token,
       fbToken._id.toString(),
       fbToken.organizationId,
-    ).catch((err: any) => {
+    ).catch(async (err: any) => {
       logger.error('[BulkAd] Resync failed:', err)
+      await writeBulkAdAudit(req, {
+        action: 'bulk_ad.facebook_resync',
+        status: 'failed',
+        targetType: 'facebook_user',
+        targetId: fbToken.fbUserId,
+        summary: `Facebook 资产重同步后台失败：${fbToken.fbUserName || fbToken.fbUserId}`,
+        reason: err.message,
+        metadata: {
+          tokenId: String(fbToken._id),
+          fbUserId: fbToken.fbUserId,
+        },
+      })
     })
 
     await writeBulkAdAudit(req, {
