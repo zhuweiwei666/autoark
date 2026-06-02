@@ -13,6 +13,9 @@ import { generateFingerprint } from './materialSync.service'
  * 将广告级别的数据聚合到素材级别
  */
 
+const MATERIAL_USAGE_AD_DETAIL_LIMIT = 20
+const MATERIAL_USAGE_CREATIVE_DETAIL_LIMIT = 20
+
 // 从广告数据中提取素材信息
 // 优先使用 Ad 模型中存储的字段（同步时已提取），其次从 raw 数据中提取
 const extractCreativeInfo = (ad: any): { creativeId?: string; imageHash?: string; videoId?: string; thumbnailUrl?: string } => {
@@ -713,36 +716,47 @@ export const getMaterialUsage = async (params: { imageHash?: string; videoId?: s
   if (params.videoId) match.videoId = params.videoId
   if (params.creativeId) match.creativeId = params.creativeId
   
-  // 找到所有使用该素材的 Creative
-  const creatives = await Creative.find(match).lean()
-  const creativeIds = creatives.map((c: any) => c.creativeId)
-  
-  // 找到所有使用这些 Creative 的 Ad
-  const ads = await Ad.find({ creativeId: { $in: creativeIds } })
-    .select('adId name status campaignId adsetId accountId')
-    .lean()
-  
-  // 获取这些广告的历史表现
-  const adIds = ads.map((a: any) => a.adId)
-  const metrics = await MaterialMetrics.aggregate([
-    {
-      $match: {
-        adIds: { $elemMatch: { $in: adIds } }
-      }
-    },
-    {
-      $group: {
-        _id: null,
-        totalSpend: { $sum: '$spend' },
-        totalRevenue: { $sum: '$purchaseValue' },
-        totalImpressions: { $sum: '$impressions' },
-        totalClicks: { $sum: '$clicks' },
-        daysActive: { $sum: 1 },
-      }
-    }
+  const [creatives, creativeCount, ads, adStats, metrics] = await Promise.all([
+    Creative.find(match)
+      .select('creativeId thumbnailUrl type imageHash videoId')
+      .limit(MATERIAL_USAGE_CREATIVE_DETAIL_LIMIT)
+      .lean(),
+    Creative.countDocuments(match),
+    Ad.find(match)
+      .select('adId name status campaignId adsetId accountId')
+      .limit(MATERIAL_USAGE_AD_DETAIL_LIMIT)
+      .lean(),
+    Ad.aggregate([
+      { $match: match },
+      {
+        $group: {
+          _id: null,
+          adCount: { $sum: 1 },
+          accounts: { $addToSet: '$accountId' },
+          campaigns: { $addToSet: '$campaignId' },
+        },
+      },
+    ]),
+    MaterialMetrics.aggregate([
+      { $match: match },
+      {
+        $group: {
+          _id: null,
+          totalSpend: { $sum: '$spend' },
+          totalRevenue: { $sum: '$purchaseValue' },
+          totalImpressions: { $sum: '$impressions' },
+          totalClicks: { $sum: '$clicks' },
+          daysActive: { $sum: 1 },
+        },
+      },
+    ]),
   ])
   
+  const adUsage = adStats[0] || { adCount: 0, accounts: [], campaigns: [] }
   const performance = metrics[0] || { totalSpend: 0, totalRevenue: 0, totalImpressions: 0, totalClicks: 0, daysActive: 0 }
+
+  const safeAccounts = Array.isArray(adUsage.accounts) ? adUsage.accounts.filter(Boolean) : []
+  const safeCampaigns = Array.isArray(adUsage.campaigns) ? adUsage.campaigns.filter(Boolean) : []
   
   return {
     material: {
@@ -752,10 +766,10 @@ export const getMaterialUsage = async (params: { imageHash?: string; videoId?: s
       type: creatives[0]?.type,
     },
     usage: {
-      creativeCount: creatives.length,
-      adCount: ads.length,
-      accountCount: new Set(ads.map((a: any) => a.accountId)).size,
-      campaignCount: new Set(ads.map((a: any) => a.campaignId)).size,
+      creativeCount,
+      adCount: adUsage.adCount || 0,
+      accountCount: safeAccounts.length,
+      campaignCount: safeCampaigns.length,
     },
     performance: {
       spend: Math.round(performance.totalSpend * 100) / 100,
@@ -765,7 +779,21 @@ export const getMaterialUsage = async (params: { imageHash?: string; videoId?: s
       clicks: performance.totalClicks,
       daysActive: performance.daysActive,
     },
-    ads: ads.slice(0, 20), // 限制返回数量
+    ads,
+    limits: {
+      ads: {
+        total: adUsage.adCount || 0,
+        returned: ads.length,
+        maxReturned: MATERIAL_USAGE_AD_DETAIL_LIMIT,
+        truncated: (adUsage.adCount || 0) > ads.length,
+      },
+      creatives: {
+        total: creativeCount,
+        returned: creatives.length,
+        maxReturned: MATERIAL_USAGE_CREATIVE_DETAIL_LIMIT,
+        truncated: creativeCount > creatives.length,
+      },
+    },
   }
 }
 
@@ -1196,4 +1224,3 @@ export default {
   getRecommendedMaterials,
   getDecliningMaterials,
 }
-
