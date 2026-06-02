@@ -113,6 +113,26 @@ describe('commercial publish limits', () => {
       } as CommercialLimitError)
   })
 
+  it('caps oversized requested account counts before quota checks', async () => {
+    jest.spyOn(Organization, 'findById').mockResolvedValue(mockOrganization({
+      billing: {
+        plan: OrganizationPlan.TRIAL,
+        status: OrganizationBillingStatus.TRIALING,
+      },
+      settings: {},
+    }) as any)
+
+    await expect(assertBulkAdPublishAllowed({
+      organizationId,
+      requestedAccounts: 999999,
+    })).rejects.toMatchObject({
+      code: 'TASK_ACCOUNT_LIMIT_EXCEEDED',
+      details: expect.objectContaining({
+        requestedAccounts: 10000,
+      }),
+    } as CommercialLimitError)
+  })
+
   it('blocks when concurrent task quota is reached', async () => {
     jest.spyOn(Organization, 'findById').mockResolvedValue(mockOrganization() as any)
     jest.spyOn(AdTask, 'countDocuments')
@@ -124,6 +144,24 @@ describe('commercial publish limits', () => {
         code: 'MAX_CONCURRENT_TASKS_REACHED',
         statusCode: 429,
       } as CommercialLimitError)
+  })
+
+  it('falls back on non-finite requested counts before quota checks', async () => {
+    jest.spyOn(Organization, 'findById').mockResolvedValue(mockOrganization() as any)
+    jest.spyOn(AdTask, 'countDocuments')
+      .mockResolvedValueOnce(0 as any)
+      .mockResolvedValueOnce(0 as any)
+
+    const result = await assertBulkAdPublishAllowed({
+      organizationId,
+      requestedAccounts: Number.POSITIVE_INFINITY,
+      requestedTasks: Number.POSITIVE_INFINITY,
+    })
+
+    expect(result.usage).toMatchObject({
+      requestedAccounts: 1,
+      requestedTasks: 1,
+    })
   })
 
   it('blocks publish when bulk ad create feature is disabled by organization override', async () => {
@@ -174,6 +212,24 @@ describe('commercial publish limits', () => {
         statusCode: 429,
         details: expect.objectContaining({ requestedTasks: 2 }),
       } as CommercialLimitError)
+  })
+
+  it('caps oversized requested task counts before quota checks', async () => {
+    jest.spyOn(Organization, 'findById').mockResolvedValue(mockOrganization() as any)
+    jest.spyOn(AdTask, 'countDocuments')
+      .mockResolvedValueOnce(0 as any)
+      .mockResolvedValueOnce(0 as any)
+
+    await expect(assertBulkAdPublishAllowed({
+      organizationId,
+      requestedAccounts: 1,
+      requestedTasks: 999999,
+    })).rejects.toMatchObject({
+      code: 'MAX_CONCURRENT_TASKS_REACHED',
+      details: expect.objectContaining({
+        requestedTasks: 10000,
+      }),
+    } as CommercialLimitError)
   })
 
   it('uses unlimited enterprise limits in platform readiness mode', async () => {

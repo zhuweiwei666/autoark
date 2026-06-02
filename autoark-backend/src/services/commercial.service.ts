@@ -20,6 +20,7 @@ import { buildPublicOAuthReadiness } from '../utils/facebookAppReadiness'
 import { buildFacebookAssetDiagnostics } from './facebookAssets.diagnostics.service'
 import { buildTaskOperationalDiagnostics } from './bulkAd.diagnostics'
 import { COMMERCIAL_FEATURES, PLAN_DEFAULTS } from '../config/commercialPlans'
+import { parseLimitedNumber } from '../utils/pagination'
 
 type ChecklistStatus = 'done' | 'warning' | 'pending' | 'blocked'
 type ScopeMode = 'organization' | 'platform'
@@ -35,6 +36,8 @@ type CommercialNextAction = {
   owner: string
   source: 'setup' | 'facebook' | 'quota' | 'tasks' | 'team' | 'materials'
 }
+
+const COMMERCIAL_REQUEST_COUNT_MAX = 10000
 
 const monthStart = () => {
   const now = new Date()
@@ -463,8 +466,8 @@ export async function assertBulkAdPublishAllowed({
       { feature: 'bulk_ad_create', plan, enabledFeatures: features },
     )
   }
-  const requestedAccountCount = Math.max(1, Number(requestedAccounts) || 1)
-  const requestedTaskCount = Math.max(1, Number(requestedTasks) || 1)
+  const requestedAccountCount = parseLimitedNumber(requestedAccounts, 1, COMMERCIAL_REQUEST_COUNT_MAX)
+  const requestedTaskCount = parseLimitedNumber(requestedTasks, 1, COMMERCIAL_REQUEST_COUNT_MAX)
 
   if (limits.maxAdAccounts && requestedAccountCount > limits.maxAdAccounts) {
     throw new CommercialLimitError(
