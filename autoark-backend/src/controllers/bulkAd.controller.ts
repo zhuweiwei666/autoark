@@ -74,6 +74,9 @@ const createHttpError = (message: string, statusCode: number) => {
 const parseAccountIdParam = (value: any) => normalizeForStorage(Array.isArray(value) ? value[0] : value)
 const AUTH_FACEBOOK_ASSET_PAGE_LIMIT = 10
 const AUTH_FACEBOOK_ASSET_PAGE_SIZE = 100
+const BULK_AD_OAUTH_CODE_MAX_LENGTH = 2048
+const BULK_AD_OAUTH_ERROR_MAX_LENGTH = 1000
+const BULK_AD_OAUTH_STATE_MAX_LENGTH = 4096
 const TARGETING_INTEREST_SEARCH_TYPES = ['adinterest', 'adinterestsuggestion'] as const
 const TARGETING_LOCATION_SEARCH_TYPES = ['adgeolocation'] as const
 const TARGETING_SEARCH_QUERY_MAX_LENGTH = 120
@@ -118,6 +121,11 @@ const pickTrimmedString = (value: any, maxLength: number): string | undefined =>
   if (typeof value !== 'string') return undefined
   const trimmed = value.trim().slice(0, maxLength)
   return trimmed || undefined
+}
+
+const pickOAuthCallbackString = (value: any, maxLength: number): string | undefined => {
+  if (Array.isArray(value)) return pickTrimmedString(value[0], maxLength)
+  return pickTrimmedString(value, maxLength)
 }
 
 const pickNonNegativeNumber = (value: any, max: number, integer = true): number | undefined => {
@@ -1820,11 +1828,14 @@ export const getAuthLoginUrl = async (req: Request, res: Response) => {
 export const handleAuthCallback = async (req: Request, res: Response) => {
   let stateAudit: ReturnType<typeof parseBulkAdOAuthStateForAudit> = {}
   try {
-    const { code, error, error_description, state } = req.query
+    const code = pickOAuthCallbackString(req.query.code, BULK_AD_OAUTH_CODE_MAX_LENGTH)
+    const error = pickOAuthCallbackString(req.query.error, BULK_AD_OAUTH_ERROR_MAX_LENGTH)
+    const errorDescription = pickOAuthCallbackString(req.query.error_description, BULK_AD_OAUTH_ERROR_MAX_LENGTH)
+    const state = pickOAuthCallbackString(req.query.state, BULK_AD_OAUTH_STATE_MAX_LENGTH)
     stateAudit = parseBulkAdOAuthStateForAudit(state)
     
     if (error) {
-      logger.error('[BulkAd OAuth] Facebook returned error:', { error, error_description })
+      logger.error('[BulkAd OAuth] Facebook returned error:', { error, errorDescription })
       await writeAuditLog(req, {
         category: 'bulk_ad',
         action: 'bulk_ad.facebook_oauth_callback',
@@ -1833,15 +1844,15 @@ export const handleAuthCallback = async (req: Request, res: Response) => {
         organizationId: stateAudit.organizationId,
         targetType: 'facebook_oauth',
         summary: 'Facebook 授权回调失败',
-        reason: String(error_description || error),
+        reason: errorDescription || error,
         metadata: {
           facebookError: error,
-          facebookErrorDescription: error_description,
+          facebookErrorDescription: errorDescription,
           stateParseError: stateAudit.error,
         },
       })
       return res.redirect(
-        `/oauth/callback?oauth_error=${encodeURIComponent(error_description as string || error as string)}`
+        `/oauth/callback?oauth_error=${encodeURIComponent(errorDescription || error)}`
       )
     }
     
@@ -1870,7 +1881,7 @@ export const handleAuthCallback = async (req: Request, res: Response) => {
       if (!state) {
         throw new Error('Missing OAuth state')
       }
-      const stateObj = oauthService.parseStateParamWithOptions(state as string, { requireSignature: true })
+      const stateObj = oauthService.parseStateParamWithOptions(state, { requireSignature: true })
       const originalState = stateObj.originalState || ''
       const parts = originalState.split('|')
       if (parts[0] !== 'bulk-ad' || !parts[1]) {
@@ -1896,7 +1907,7 @@ export const handleAuthCallback = async (req: Request, res: Response) => {
     }
     
     // 处理 OAuth 回调（传递 state 以解析使用的 App）
-    const result = await oauthService.handleOAuthCallback(code as string, state as string | undefined)
+    const result = await oauthService.handleOAuthCallback(code, state)
     
     // 更新 Token 的 userId 和 organizationId（关联到 AutoArk 用户）
     if (autoarkUserId) {

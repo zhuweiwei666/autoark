@@ -407,6 +407,36 @@ describe('bulk ad controller', () => {
     expect(res.redirect).toHaveBeenCalledWith('/oauth/callback?oauth_error=Invalid OAuth state')
   })
 
+  it('sanitizes Facebook OAuth callback error parameters before auditing', async () => {
+    mockWriteAuditLog.mockResolvedValue(undefined)
+    const longDescription = 'x'.repeat(1500)
+
+    const req: any = {
+      query: {
+        error: ' OAuthException ',
+        error_description: ` ${longDescription} `,
+        state: { $ne: 'signed-state' },
+      },
+    }
+    const res: any = {
+      redirect: jest.fn(),
+    }
+
+    await handleAuthCallback(req, res)
+
+    expect(mockOauthService.handleOAuthCallback).not.toHaveBeenCalled()
+    expect(mockWriteAuditLog).toHaveBeenCalledWith(req, expect.objectContaining({
+      action: 'bulk_ad.facebook_oauth_callback',
+      status: 'failed',
+      reason: 'x'.repeat(1000),
+      metadata: expect.objectContaining({
+        facebookError: 'OAuthException',
+        facebookErrorDescription: 'x'.repeat(1000),
+      }),
+    }))
+    expect(res.redirect).toHaveBeenCalledWith(`/oauth/callback?oauth_error=${encodeURIComponent('x'.repeat(1000))}`)
+  })
+
   it('rejects signed bulk ad OAuth callbacks without a bulk-ad state payload', async () => {
     mockWriteAuditLog.mockResolvedValue(undefined)
     mockOauthService.parseStateParamWithOptions.mockReturnValue({
