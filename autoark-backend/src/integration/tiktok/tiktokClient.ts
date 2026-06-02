@@ -3,6 +3,13 @@ import logger from '../../utils/logger'
 
 const TIKTOK_BASE_URL = 'https://business-api.tiktok.com/open_api/v1.3'
 
+const summarizeTiktokApiError = (error: any) => ({
+  status: error.response?.status,
+  code: error.response?.data?.code,
+  message: error.response?.data?.message || error.message,
+  requestId: error.response?.data?.request_id,
+})
+
 export const tiktokClient = {
   async get(path: string, params: any = {}, accessToken?: string) {
     try {
@@ -17,7 +24,7 @@ export const tiktokClient = {
       
       return response.data.data
     } catch (error: any) {
-      logger.error(`[TikTokClient] GET ${path} failed:`, error.response?.data || error.message)
+      logger.error(`[TikTokClient] GET ${path} failed:`, JSON.stringify(summarizeTiktokApiError(error)))
       throw error
     }
   },
@@ -34,7 +41,7 @@ export const tiktokClient = {
       
       return response.data.data
     } catch (error: any) {
-      logger.error(`[TikTokClient] POST ${path} failed:`, error.response?.data || error.message)
+      logger.error(`[TikTokClient] POST ${path} failed:`, JSON.stringify(summarizeTiktokApiError(error)))
       throw error
     }
   }

@@ -3,6 +3,13 @@ import logger from '../../utils/logger'
 
 const TIKTOK_AUTH_BASE_URL = 'https://business-api.tiktok.com/open_api/v1.3'
 
+const summarizeTiktokOAuthError = (error: any) => ({
+  status: error.response?.status,
+  code: error.response?.data?.code,
+  message: error.response?.data?.message || error.message,
+  requestId: error.response?.data?.request_id,
+})
+
 /**
  * TikTok OAuth API
  */
@@ -24,7 +31,7 @@ export const exchangeTiktokCodeForToken = async (
 
     return response.data.data
   } catch (error: any) {
-    logger.error(`[TikTokOAuth] exchange token failed:`, error.response?.data || error.message)
+    logger.error('[TikTokOAuth] exchange token failed:', JSON.stringify(summarizeTiktokOAuthError(error)))
     throw error
   }
 }
@@ -47,7 +54,7 @@ export const refreshTiktokToken = async (
 
     return response.data.data
   } catch (error: any) {
-    logger.error(`[TikTokOAuth] refresh token failed:`, error.response?.data || error.message)
+    logger.error('[TikTokOAuth] refresh token failed:', JSON.stringify(summarizeTiktokOAuthError(error)))
     throw error
   }
 }

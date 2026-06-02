@@ -22,6 +22,14 @@ class FacebookApiError extends Error {
   }
 }
 
+const summarizeFacebookErrorData = (data: any) => ({
+  code: data?.error?.code,
+  subcode: data?.error?.error_subcode,
+  type: data?.error?.type,
+  message: data?.error?.message,
+  userTitle: data?.error?.error_user_title,
+})
+
 const handleApiError = (context: string, error: any, token?: string) => {
   const errMsg = error.response?.data?.error?.message || error.message
   const errorCode = error.response?.data?.error?.code
@@ -46,7 +54,7 @@ const handleApiError = (context: string, error: any, token?: string) => {
   logger.error(
     `Facebook API Error [${context}]: ${errMsg}`,
   )
-  logger.error(`Facebook API Full Response: ${JSON.stringify(error.response?.data, null, 2)}`)
+  logger.error(`Facebook API Response Summary: ${JSON.stringify(summarizeFacebookErrorData(error.response?.data))}`)
   const apiError = new FacebookApiError(`Facebook API [${context}] failed: ${errMsg}`, error.response?.data)
   throw apiError
 }
@@ -190,4 +198,3 @@ const request = async (method: 'GET' | 'POST', endpoint: string, dataOrParams: a
   // 所有重试都失败
   throw new Error(`Facebook API [${method} ${endpoint}] failed after ${maxRetries} retries`)
 }
-

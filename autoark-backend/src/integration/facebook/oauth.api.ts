@@ -20,6 +20,14 @@ const OAUTH_STATE_SECRET =
   'autoark-oauth-state-dev-secret'
 const OAUTH_STATE_TTL_MS = Number(process.env.OAUTH_STATE_TTL_MS || 10 * 60 * 1000)
 
+const summarizeOAuthError = (error: any) => ({
+  status: error.response?.status,
+  code: error.response?.data?.error?.code,
+  subcode: error.response?.data?.error?.error_subcode,
+  type: error.response?.data?.error?.type,
+  message: error.response?.data?.error?.message || error.message,
+})
+
 const businessLoginConfigFilter = (): Record<string, any> => (
   ENV_FB_BUSINESS_LOGIN_CONFIG_ID
     ? {}
@@ -433,7 +441,7 @@ export const exchangeCodeForToken = async (code: string, appId?: string, redirec
     logger.info('[OAuth] Successfully exchanged code for access token')
     return response.data
   } catch (error: any) {
-    logger.error('[OAuth] Failed to exchange code for token:', error.response?.data || error.message)
+    logger.error('[OAuth] Failed to exchange code for token:', JSON.stringify(summarizeOAuthError(error)))
     
     // 记录请求失败
     if (appId) {
@@ -492,7 +500,7 @@ export const exchangeForLongLivedToken = async (shortLivedToken: string, appId?:
     logger.info(`[OAuth] Successfully exchanged for long-lived token, expires in ${response.data.expires_in} seconds`)
     return response.data
   } catch (error: any) {
-    logger.error('[OAuth] Failed to exchange for long-lived token:', error.response?.data || error.message)
+    logger.error('[OAuth] Failed to exchange for long-lived token:', JSON.stringify(summarizeOAuthError(error)))
     throw new Error(
       `Failed to exchange for long-lived token: ${error.response?.data?.error?.message || error.message}`
     )
@@ -521,7 +529,7 @@ export const getUserInfo = async (accessToken: string): Promise<{
       email: response.data.email,
     }
   } catch (error: any) {
-    logger.error('[OAuth] Failed to get user info:', error.response?.data || error.message)
+    logger.error('[OAuth] Failed to get user info:', JSON.stringify(summarizeOAuthError(error)))
     throw new Error(`Failed to get user info: ${error.response?.data?.error?.message || error.message}`)
   }
 }
