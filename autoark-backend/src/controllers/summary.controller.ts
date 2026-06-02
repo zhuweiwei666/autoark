@@ -22,6 +22,7 @@ import { refreshRecentDays } from '../services/aggregation.service'
 import { UserRole } from '../models/User'
 import { getUserAccountIds, authenticate } from '../middlewares/auth'
 import { getAccountIdsForQuery, normalizeForStorage } from '../utils/accountId'
+import { parsePagination, pickAllowedString } from '../utils/pagination'
 
 const router = Router()
 
@@ -69,6 +70,84 @@ const hasScopedAccountAccess = (accountIds: string[] | null, accountId: string):
   if (accountIds === null) return true
   const requested = normalizeForStorage(accountId)
   return accountIds.some(id => normalizeForStorage(id) === requested)
+}
+
+const SUMMARY_MAX_LIMIT = 100
+const ACCOUNT_SORT_FIELDS = [
+  'accountId',
+  'accountName',
+  'campaigns',
+  'clicks',
+  'ctr',
+  'impressions',
+  'installs',
+  'periodSpend',
+  'purchase_value',
+  'revenue',
+  'roas',
+  'spend',
+  'status',
+]
+const COUNTRY_SORT_FIELDS = [
+  'campaigns',
+  'clicks',
+  'country',
+  'countryName',
+  'ctr',
+  'impressions',
+  'installs',
+  'purchase_roas',
+  'purchase_value',
+  'revenue',
+  'roas',
+  'spend',
+]
+const CAMPAIGN_SORT_FIELDS = [
+  'accountId',
+  'accountName',
+  'campaignId',
+  'campaignName',
+  'clicks',
+  'cpc',
+  'cpi',
+  'cpm',
+  'ctr',
+  'impressions',
+  'installs',
+  'mobile_app_install',
+  'objective',
+  'optimizer',
+  'purchase_roas',
+  'purchase_value',
+  'revenue',
+  'roas',
+  'spend',
+  'status',
+]
+const MATERIAL_SORT_FIELDS = [
+  'adsCount',
+  'campaignsCount',
+  'clicks',
+  'cpc',
+  'cpi',
+  'cpm',
+  'ctr',
+  'daysActive',
+  'impressions',
+  'installs',
+  'purchases',
+  'qualityScore',
+  'revenue',
+  'roas',
+  'spend',
+]
+
+const parseSummaryPagination = (req: Request, defaultLimit: number) => {
+  const { page, pageSize, skip } = parsePagination(
+    { page: req.query.page, limit: req.query.limit },
+    { defaultPageSize: defaultLimit, maxPageSize: SUMMARY_MAX_LIMIT },
+  )
+  return { page, limit: pageSize, skip }
 }
 
 // ==================== 仪表盘汇总 ====================
@@ -232,11 +311,9 @@ router.get('/accounts', async (req: Request, res: Response) => {
     const today = dayjs().format('YYYY-MM-DD')
     const startDate = (req.query.startDate as string) || (req.query.date as string) || today
     const endDate = (req.query.endDate as string) || (req.query.date as string) || today
-    const sortBy = (req.query.sortBy as string) || 'spend'
+    const sortBy = pickAllowedString(req.query.sortBy, ACCOUNT_SORT_FIELDS, 'spend')
     const sortOrder = (req.query.sortOrder as string) === 'asc' ? 1 : -1
-    const limit = parseInt(req.query.limit as string) || 100
-    const page = parseInt(req.query.page as string) || 1
-    const skip = (page - 1) * limit
+    const { page, limit, skip } = parseSummaryPagination(req, 100)
 
     // 提取筛选条件
     const optimizer = req.query.optimizer as string
@@ -350,11 +427,9 @@ router.get('/countries', async (req: Request, res: Response) => {
     const today = dayjs().format('YYYY-MM-DD')
     const startDate = (req.query.startDate as string) || today
     const endDate = (req.query.endDate as string) || today
-    const sortBy = (req.query.sortBy as string) || 'spend'
+    const sortBy = pickAllowedString(req.query.sortBy, COUNTRY_SORT_FIELDS, 'spend')
     const sortOrder = (req.query.order as string) === 'asc' ? 1 : -1
-    const limit = parseInt(req.query.limit as string) || 50
-    const page = parseInt(req.query.page as string) || 1
-    const skip = (page - 1) * limit
+    const { page, limit, skip } = parseSummaryPagination(req, 50)
 
     if (req.user?.role !== UserRole.SUPER_ADMIN) {
       return res.json({
@@ -435,11 +510,9 @@ router.get('/campaigns', async (req: Request, res: Response) => {
     const accountId = req.query.accountId as string
     const status = req.query.status as string
     const name = req.query.name as string
-    const sortBy = (req.query.sortBy as string) || 'spend'
+    const sortBy = pickAllowedString(req.query.sortBy, CAMPAIGN_SORT_FIELDS, 'spend')
     const sortOrder = (req.query.sortOrder as string) === 'asc' ? 1 : -1
-    const limit = parseInt(req.query.limit as string) || 50
-    const page = parseInt(req.query.page as string) || 1
-    const skip = (page - 1) * limit
+    const { page, limit, skip } = parseSummaryPagination(req, 50)
 
     // 用户数据隔离
     const userAccountIds = await getUserAccountIds(req)
@@ -554,11 +627,9 @@ router.get('/materials', async (req: Request, res: Response) => {
     const startDate = (req.query.startDate as string) || dayjs().subtract(6, 'day').format('YYYY-MM-DD')
     const endDate = (req.query.endDate as string) || today
     const materialType = req.query.type as string
-    const sortBy = (req.query.sortBy as string) || 'spend'
+    const sortBy = pickAllowedString(req.query.sortBy, MATERIAL_SORT_FIELDS, 'spend')
     const order = req.query.order === 'asc' ? 1 : -1
-    const limit = parseInt(req.query.limit as string) || 50
-    const page = parseInt(req.query.page as string) || 1
-    const skip = (page - 1) * limit
+    const { page, limit, skip } = parseSummaryPagination(req, 50)
 
     if (req.user?.role !== UserRole.SUPER_ADMIN) {
       return res.json({

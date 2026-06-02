@@ -16,6 +16,76 @@ import Campaign from '../models/Campaign'
 import Account from '../models/Account'
 import FbToken from '../models/FbToken'
 import { normalizeForApi, normalizeForStorage } from '../utils/accountId'
+import { parsePagination, pickAllowedString } from '../utils/pagination'
+
+const FACEBOOK_LIST_MAX_LIMIT = 100
+const FACEBOOK_CAMPAIGN_SORT_FIELDS = [
+  'accountId',
+  'accountName',
+  'campaignId',
+  'campaignName',
+  'clicks',
+  'cpc',
+  'cpi',
+  'cpm',
+  'ctr',
+  'createdAt',
+  'impressions',
+  'installs',
+  'name',
+  'objective',
+  'purchase_roas',
+  'purchase_value',
+  'revenue',
+  'roas',
+  'spend',
+  'status',
+  'updatedAt',
+]
+const FACEBOOK_ACCOUNT_SORT_FIELDS = [
+  'accountId',
+  'clicks',
+  'ctr',
+  'impressions',
+  'installs',
+  'name',
+  'periodSpend',
+  'purchase_value',
+  'roas',
+  'spend',
+  'status',
+  'updatedAt',
+]
+const FACEBOOK_COUNTRY_SORT_FIELDS = [
+  'campaigns',
+  'clicks',
+  'country',
+  'countryName',
+  'ctr',
+  'impressions',
+  'installs',
+  'purchase_roas',
+  'purchase_value',
+  'roas',
+  'spend',
+]
+
+const getListPagination = (
+  req: Request,
+  allowedSortFields: readonly string[],
+  defaultSortBy: string,
+) => {
+  const { page, pageSize } = parsePagination(
+    { page: req.query.page, limit: req.query.limit },
+    { defaultPageSize: 20, maxPageSize: FACEBOOK_LIST_MAX_LIMIT },
+  )
+  return {
+    page,
+    limit: pageSize,
+    sortBy: pickAllowedString(req.query.sortBy, allowedSortFields, defaultSortBy),
+    sortOrder: (req.query.sortOrder as 'asc' | 'desc') === 'asc' ? 'asc' as const : 'desc' as const,
+  }
+}
 
 const requireSuperAdmin = (req: Request, res: Response): boolean => {
   if (req.user?.role === UserRole.SUPER_ADMIN) return true
@@ -214,10 +284,7 @@ export const getCampaignsList = async (
     // 确保设置正确的 Content-Type
     res.setHeader('Content-Type', 'application/json; charset=utf-8')
     
-    const page = parseInt(req.query.page as string) || 1
-    const limit = parseInt(req.query.limit as string) || 20
-    const sortBy = (req.query.sortBy as string) || 'spend' // 默认按消耗排序
-    const sortOrder = (req.query.sortOrder as 'asc' | 'desc') || 'desc'
+    const pagination = getListPagination(req, FACEBOOK_CAMPAIGN_SORT_FIELDS, 'spend')
     const filters: any = {
         name: req.query.name,
         accountId: req.query.accountId,
@@ -233,7 +300,7 @@ export const getCampaignsList = async (
       filters.accountIds = userAccountIds
     }
 
-    const result = await facebookCampaignsService.getCampaigns(filters, { page, limit, sortBy, sortOrder })
+    const result = await facebookCampaignsService.getCampaigns(filters, pagination)
     res.json({
       success: true,
       ...result
@@ -268,10 +335,7 @@ export const getAccountsList = async (
 ) => {
   try {
     if (!requireSuperAdmin(req, res)) return
-    const page = parseInt(req.query.page as string) || 1
-    const limit = parseInt(req.query.limit as string) || 20
-    const sortBy = (req.query.sortBy as string) || 'periodSpend'
-    const sortOrder = (req.query.sortOrder as 'asc' | 'desc') || 'desc'
+    const pagination = getListPagination(req, FACEBOOK_ACCOUNT_SORT_FIELDS, 'periodSpend')
     const filters: any = {
         optimizer: req.query.optimizer,
         status: req.query.status,
@@ -290,7 +354,7 @@ export const getAccountsList = async (
     
     // 组织隔离（兼容旧逻辑）
     const organizationId = req.user?.role === UserRole.SUPER_ADMIN ? undefined : req.user?.organizationId
-    const result = await facebookAccountsService.getAccounts(filters, { page, limit, sortBy, sortOrder }, organizationId)
+    const result = await facebookAccountsService.getAccounts(filters, pagination, organizationId)
     res.json({
       success: true,
       ...result
@@ -309,10 +373,7 @@ export const getCountriesList = async (
     // 确保设置正确的 Content-Type
     res.setHeader('Content-Type', 'application/json; charset=utf-8')
     
-    const page = parseInt(req.query.page as string) || 1
-    const limit = parseInt(req.query.limit as string) || 20
-    const sortBy = (req.query.sortBy as string) || 'spend'
-    const sortOrder = (req.query.sortOrder as 'asc' | 'desc') || 'desc'
+    const pagination = getListPagination(req, FACEBOOK_COUNTRY_SORT_FIELDS, 'spend')
     const filters = {
         name: req.query.name,
         accountId: req.query.accountId,
@@ -332,7 +393,7 @@ export const getCountriesList = async (
 
     const result = await facebookCountriesService.getCountries(
       filters,
-      { page, limit, sortBy, sortOrder },
+      pagination,
       accountIds === null
         ? {}
         : {

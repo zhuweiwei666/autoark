@@ -12,6 +12,7 @@ import {
   getRecommendedMaterials,
   getDecliningMaterials,
 } from '../services/materialMetrics.service'
+import { parseLimitedNumber } from '../utils/pagination'
 
 const router = Router()
 
@@ -37,10 +38,11 @@ router.get('/rankings', async (req: Request, res: Response) => {
       country,  // 🌍 新增：国家筛选
     } = req.query
     
+    const safeLimit = parseLimitedNumber(limit, 20, 100)
     const rankings = await getMaterialRankings({
       dateRange: { start: startDate as string, end: endDate as string },
       sortBy: sortBy as any,
-      limit: parseInt(limit as string, 10),
+      limit: safeLimit,
       materialType: type as any,
       country: country as string,  // 🌍 传递国家参数
     })
@@ -48,7 +50,7 @@ router.get('/rankings', async (req: Request, res: Response) => {
     res.json({
       success: true,
       data: rankings,
-      query: { startDate, endDate, sortBy, limit, type, country },
+      query: { startDate, endDate, sortBy, limit: safeLimit, type, country },
     })
   } catch (error: any) {
     logger.error('[MaterialController] Get rankings failed:', error)
@@ -76,7 +78,7 @@ router.get('/trend', async (req: Request, res: Response) => {
     
     const trend = await getMaterialTrend(
       { imageHash: imageHash as string, videoId: videoId as string },
-      parseInt(days as string, 10)
+      parseLimitedNumber(days, 7, 90)
     )
     
     res.json({ success: true, data: trend })
@@ -156,12 +158,13 @@ router.get('/recommendations', async (req: Request, res: Response) => {
       limit = '20',
     } = req.query
     
+    const safeLimit = parseLimitedNumber(limit, 20, 100)
     const recommendations = await getRecommendedMaterials({
       type: type as any,
       minSpend: parseFloat(minSpend as string),
       minRoas: parseFloat(minRoas as string),
       minDays: parseInt(minDays as string, 10),
-      limit: parseInt(limit as string, 10),
+      limit: safeLimit,
     })
     
     res.json({ success: true, data: recommendations })
@@ -184,10 +187,11 @@ router.get('/declining', async (req: Request, res: Response) => {
       limit = '20',
     } = req.query
     
+    const safeLimit = parseLimitedNumber(limit, 20, 100)
     const declining = await getDecliningMaterials({
       minSpend: parseFloat(minSpend as string),
       declineThreshold: parseFloat(declineThreshold as string),
-      limit: parseInt(limit as string, 10),
+      limit: safeLimit,
     })
     
     res.json({ success: true, data: declining })

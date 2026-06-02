@@ -33,7 +33,7 @@ import {
   scopedTokenFilter,
 } from '../utils/accessControl'
 import { getAccountIdsForQuery, normalizeForStorage } from '../utils/accountId'
-import { parsePagination } from '../utils/pagination'
+import { parseLimitedNumber, parsePagination } from '../utils/pagination'
 
 /**
  * 获取资产过滤条件（文案包/定向包/创意组等）
@@ -968,7 +968,7 @@ export const searchInterests = async (req: Request, res: Response) => {
       token: fbToken.token,
       query: q as string,
       type: type as string,
-      limit: Number(limit),
+      limit: parseLimitedNumber(limit, 50, 100),
     })
     
     res.json({ success: true, data: result.data })
@@ -995,7 +995,7 @@ export const searchLocations = async (req: Request, res: Response) => {
       token: fbToken.token,
       query: q as string,
       type: type as string,
-      limit: Number(limit),
+      limit: parseLimitedNumber(limit, 50, 100),
     })
     
     res.json({ success: true, data: result.data })

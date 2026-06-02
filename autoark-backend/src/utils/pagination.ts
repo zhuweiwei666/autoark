@@ -35,3 +35,12 @@ export const parseLimitedNumber = (
   fallback: number,
   max: number,
 ): number => Math.min(max, toPositiveInt(value, fallback))
+
+export const pickAllowedString = (
+  value: any,
+  allowedValues: readonly string[],
+  fallback: string,
+): string => {
+  if (typeof value !== 'string') return fallback
+  return allowedValues.includes(value) ? value : fallback
+}

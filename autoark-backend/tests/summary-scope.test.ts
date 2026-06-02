@@ -123,6 +123,32 @@ describe('summary route data scoping', () => {
     })
   })
 
+  it('caps large summary limits and falls back to safe sort fields', async () => {
+    mockAuthState.user = {
+      role: UserRole.SUPER_ADMIN,
+      userId: '665000000000000000000003',
+    }
+    ;(AggAccount.aggregate as jest.Mock).mockResolvedValue([
+      {
+        data: [{ accountId: 'act_999', accountName: 'Large account', spend: 99 }],
+        total: [{ count: 250 }],
+      },
+    ])
+
+    const response = await request(createApp())
+      .get('/api/summary/accounts?limit=10000&page=3&sortBy=unsafeField')
+
+    expect(response.status).toBe(200)
+    expect(response.body.pagination).toMatchObject({ page: 3, limit: 100, total: 250, pages: 3 })
+
+    const pipeline = (AggAccount.aggregate as jest.Mock).mock.calls[0][0]
+    expect(pipeline.find((stage: any) => stage.$sort)).toEqual({ $sort: { spend: -1 } })
+    expect(pipeline.find((stage: any) => stage.$facet).$facet.data).toEqual([
+      { $skip: 200 },
+      { $limit: 100 },
+    ])
+  })
+
   it('returns empty account summary when organization user has no linked accounts', async () => {
     mockAuthState.user = {
       role: UserRole.ORG_ADMIN,

@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express'
 import * as dashboardService from '../services/dashboard.service'
+import { parseLimitedNumber } from '../utils/pagination'
 
 const getFilters = (req: Request) => {
   const { startDate, endDate, channel, country } = req.query
@@ -94,7 +95,7 @@ export async function getCronLogsHandler(
   next: NextFunction,
 ) {
   try {
-    const limit = Number(req.query.limit) || 50
+    const limit = parseLimitedNumber(req.query.limit, 50, 200)
     const data = await dashboardService.getCronLogs(limit)
     res.json({ success: true, data })
   } catch (err) {
@@ -108,7 +109,7 @@ export async function getOpsLogsHandler(
   next: NextFunction,
 ) {
   try {
-    const limit = Number(req.query.limit) || 50
+    const limit = parseLimitedNumber(req.query.limit, 50, 200)
     const data = await dashboardService.getOpsLogs(limit)
     res.json({ success: true, data })
   } catch (err) {
@@ -154,7 +155,7 @@ export async function getCampaignSpendRankingHandler(
   next: NextFunction,
 ) {
   try {
-    const limit = Number(req.query.limit) || 10
+    const limit = parseLimitedNumber(req.query.limit, 10, 100)
     const startDate = req.query.startDate as string | undefined
     const endDate = req.query.endDate as string | undefined
     const data = await dashboardService.getCampaignSpendRanking(limit, startDate, endDate)
@@ -170,7 +171,7 @@ export async function getCountrySpendRankingHandler(
   next: NextFunction,
 ) {
   try {
-    const limit = Number(req.query.limit) || 10
+    const limit = parseLimitedNumber(req.query.limit, 10, 100)
     const startDate = req.query.startDate as string | undefined
     const endDate = req.query.endDate as string | undefined
     const data = await dashboardService.getCountrySpendRanking(limit, startDate, endDate)

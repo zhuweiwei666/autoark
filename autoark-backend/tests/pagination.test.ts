@@ -1,4 +1,5 @@
 import {
+  pickAllowedString,
   parseLimitedNumber,
   parsePagination,
 } from '../src/utils/pagination'
@@ -23,5 +24,11 @@ describe('pagination utilities', () => {
   it('caps standalone numeric limits', () => {
     expect(parseLimitedNumber('5000', 20, 200)).toBe(200)
     expect(parseLimitedNumber('bad', 20, 200)).toBe(20)
+  })
+
+  it('falls back when a string is not in the allowed list', () => {
+    expect(pickAllowedString('spend', ['spend', 'roas'], 'roas')).toBe('spend')
+    expect(pickAllowedString('createdAt', ['spend', 'roas'], 'roas')).toBe('roas')
+    expect(pickAllowedString({ $ne: 'spend' }, ['spend', 'roas'], 'roas')).toBe('roas')
   })
 })

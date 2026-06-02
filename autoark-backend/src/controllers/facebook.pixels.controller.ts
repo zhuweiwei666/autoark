@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express'
 import * as pixelsService from '../services/facebook.pixels.service'
 import { UserRole } from '../models/User'
+import { parseLimitedNumber } from '../utils/pagination'
 
 const requireSuperAdmin = (req: Request, res: Response): boolean => {
   if (req.user?.role === UserRole.SUPER_ADMIN) return true
@@ -71,7 +72,7 @@ export const getPixelEvents = async (req: Request, res: Response, next: NextFunc
     const events = await pixelsService.getPixelEvents(
       id,
       tokenId as string | undefined,
-      limit ? parseInt(limit as string) : 100
+      parseLimitedNumber(limit, 100, 200)
     )
 
     res.json({
