@@ -1,23 +1,18 @@
 import { Request, Response } from 'express'
 import userService from '../services/user.service'
-import { UserRole, UserStatus } from '../models/User'
 import logger from '../utils/logger'
 import { writeAuditLog } from '../services/auditLog.service'
-import { parsePagination } from '../utils/pagination'
+import { parsePagination, pickSafeQueryString } from '../utils/pagination'
+import {
+  pickSafePassword,
+  pickUserRole,
+  pickUserStatus,
+  sanitizeUserCreateInput,
+  sanitizeUserUpdateInput,
+  USER_ORGANIZATION_ID_MAX_LENGTH,
+} from '../utils/userInput'
 
 const USER_LIST_MAX_PAGE_SIZE = 100
-
-const pickUserRole = (value: any): UserRole | undefined => (
-  typeof value === 'string' && Object.values(UserRole).includes(value as UserRole)
-    ? value as UserRole
-    : undefined
-)
-
-const pickUserStatus = (value: any): UserStatus | undefined => (
-  typeof value === 'string' && Object.values(UserStatus).includes(value as UserStatus)
-    ? value as UserStatus
-    : undefined
-)
 
 class UserController {
   /**
@@ -36,7 +31,7 @@ class UserController {
         maxPageSize: USER_LIST_MAX_PAGE_SIZE,
       })
       const filters = {
-        organizationId: typeof req.query.organizationId === 'string' ? req.query.organizationId : undefined,
+        organizationId: pickSafeQueryString(req.query.organizationId, USER_ORGANIZATION_ID_MAX_LENGTH),
         role: pickUserRole(req.query.role),
         status: pickUserStatus(req.query.status),
       }
@@ -100,18 +95,18 @@ class UserController {
         return
       }
 
-      const { username, password, email, role, organizationId } = req.body
+      const input = sanitizeUserCreateInput(req.body)
 
-      if (!username || !password || !email) {
+      if (!input.username || !input.password || !input.email) {
         res.status(400).json({
           success: false,
-          message: '用户名、密码和邮箱不能为空',
+          message: '用户名、邮箱不能为空，密码长度需为6-128位',
         })
         return
       }
 
       const user = await userService.createUser(
-        { username, password, email, role, organizationId },
+        input,
         req.user
       )
 
@@ -152,7 +147,7 @@ class UserController {
 
       const user = await userService.updateUser(
         req.params.id,
-        req.body,
+        sanitizeUserUpdateInput(req.body),
         req.user
       )
 
@@ -226,9 +221,9 @@ class UserController {
         return
       }
 
-      const { status } = req.body
+      const status = pickUserStatus(req.body?.status)
 
-      if (!status || !Object.values(UserStatus).includes(status)) {
+      if (!status) {
         res.status(400).json({
           success: false,
           message: '无效的状态值',
@@ -277,12 +272,12 @@ class UserController {
         return
       }
 
-      const { newPassword } = req.body
+      const newPassword = pickSafePassword(req.body?.newPassword)
 
-      if (!newPassword || newPassword.length < 6) {
+      if (!newPassword) {
         res.status(400).json({
           success: false,
-          message: '新密码长度不能少于6位',
+          message: '新密码长度需为6-128位',
         })
         return
       }

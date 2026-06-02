@@ -149,4 +149,45 @@ describe('user service permission boundaries', () => {
     expect(userDoc.organizationId.toString()).toBe(orgId)
     expect(userDoc.save).toHaveBeenCalled()
   })
+
+  it('whitelists super admin user updates and drops unsafe fields', async () => {
+    const userDoc = createUserDoc({
+      id: '665000000000000000000040',
+      username: 'old-name',
+      email: 'old@example.com',
+      role: UserRole.MEMBER,
+      status: UserStatus.ACTIVE,
+      organizationId: { toString: () => orgId },
+    })
+    mockUserFindById.mockResolvedValue(userDoc)
+
+    await userService.updateUser(
+      '665000000000000000000040',
+      {
+        username: ` ${'u'.repeat(70)} `,
+        email: '  USER@EXAMPLE.COM  ',
+        role: { $ne: UserRole.MEMBER } as any,
+        status: 'disabled' as any,
+        organizationId: ['665000000000000000000099'] as any,
+        password: 'do-not-update',
+        boundAppId: 'evil-app',
+        createdBy: '665000000000000000000099' as any,
+        profile: { unsafe: true } as any,
+      },
+      {
+        userId: '665000000000000000000001',
+        role: UserRole.SUPER_ADMIN,
+      } as any,
+    )
+
+    expect(userDoc.username).toBe('u'.repeat(50))
+    expect(userDoc.email).toBe('user@example.com')
+    expect(userDoc.role).toBe(UserRole.MEMBER)
+    expect(userDoc.status).toBe(UserStatus.ACTIVE)
+    expect(userDoc.organizationId.toString()).toBe(orgId)
+    expect((userDoc as any).password).toBeUndefined()
+    expect((userDoc as any).boundAppId).toBeUndefined()
+    expect((userDoc as any).profile).toBeUndefined()
+    expect(userDoc.save).toHaveBeenCalled()
+  })
 })

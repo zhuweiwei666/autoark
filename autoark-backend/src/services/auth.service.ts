@@ -2,6 +2,10 @@ import User, { IUser, UserRole, UserStatus } from '../models/User'
 import Organization from '../models/Organization'
 import { generateToken } from '../utils/jwt'
 import logger from '../utils/logger'
+import {
+  pickSafePassword,
+  sanitizeUserCreateInput,
+} from '../utils/userInput'
 
 export interface LoginCredentials {
   username: string
@@ -65,7 +69,13 @@ class AuthService {
    * 创建用户
    */
   async createUser(data: RegisterData, createdBy: string): Promise<IUser> {
-    const { username, password, email, role, organizationId, skipOrgValidation } = data
+    const sanitizedData = sanitizeUserCreateInput(data)
+    const { username, password, email, role, organizationId } = sanitizedData
+    const skipOrgValidation = data.skipOrgValidation === true
+
+    if (!username || !password || !email) {
+      throw new Error('用户名、邮箱不能为空，密码长度需为6-128位')
+    }
 
     // 检查用户名是否已存在
     const existingUser = await User.findOne({
@@ -114,6 +124,11 @@ class AuthService {
     oldPassword: string,
     newPassword: string
   ): Promise<void> {
+    const safeNewPassword = pickSafePassword(newPassword)
+    if (!safeNewPassword) {
+      throw new Error('新密码长度需为6-128位')
+    }
+
     const user = await User.findById(userId)
     if (!user) {
       throw new Error('用户不存在')
@@ -126,7 +141,7 @@ class AuthService {
     }
 
     // 更新密码
-    user.password = newPassword
+    user.password = safeNewPassword
     await user.save()
 
     logger.info(`User ${user.username} changed password`)
@@ -136,12 +151,17 @@ class AuthService {
    * 重置密码（管理员操作）
    */
   async resetPassword(userId: string, newPassword: string): Promise<void> {
+    const safeNewPassword = pickSafePassword(newPassword)
+    if (!safeNewPassword) {
+      throw new Error('新密码长度需为6-128位')
+    }
+
     const user = await User.findById(userId)
     if (!user) {
       throw new Error('用户不存在')
     }
 
-    user.password = newPassword
+    user.password = safeNewPassword
     await user.save()
 
     logger.info(`Password reset for user ${user.username}`)

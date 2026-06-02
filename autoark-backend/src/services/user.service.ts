@@ -2,6 +2,10 @@ import User, { IUser, UserRole, UserStatus } from '../models/User'
 import { JwtPayload } from '../utils/jwt'
 import logger from '../utils/logger'
 import authService from './auth.service'
+import {
+  sanitizeUserCreateInput,
+  sanitizeUserUpdateInput,
+} from '../utils/userInput'
 
 type PaginationOptions = {
   page: number
@@ -18,15 +22,7 @@ type PaginatedResult<T> = {
 
 class UserService {
   private sanitizeUserUpdates(updates: Partial<IUser>, currentUser: JwtPayload): Partial<IUser> {
-    const sanitized: any = { ...(updates || {}) }
-
-    delete sanitized._id
-    delete sanitized.id
-    delete sanitized.password
-    delete sanitized.createdBy
-    delete sanitized.createdAt
-    delete sanitized.updatedAt
-    delete sanitized.lastLoginAt
+    const sanitized: any = sanitizeUserUpdateInput(updates)
 
     if (currentUser.role !== UserRole.SUPER_ADMIN) {
       delete sanitized.organizationId
@@ -128,29 +124,34 @@ class UserService {
       username: string
       password: string
       email: string
-      role: UserRole
+      role?: UserRole
       organizationId?: string
     },
     currentUser: JwtPayload
   ): Promise<IUser> {
+    const sanitizedData = sanitizeUserCreateInput(data)
+    if (!sanitizedData.username || !sanitizedData.password || !sanitizedData.email) {
+      throw new Error('用户名、邮箱不能为空，密码长度需为6-128位')
+    }
+
     // 权限检查
     if (currentUser.role === UserRole.SUPER_ADMIN) {
       // 超级管理员可以创建任何角色的用户
-      return authService.createUser(data, currentUser.userId)
+      return authService.createUser(sanitizedData, currentUser.userId)
     } else if (currentUser.role === UserRole.ORG_ADMIN) {
       // 组织管理员只能在自己的组织内创建普通成员
-      const requestedRole = data.role || UserRole.MEMBER
+      const requestedRole = sanitizedData.role || UserRole.MEMBER
       if (requestedRole !== UserRole.MEMBER) {
         throw new Error('组织管理员只能创建普通成员')
       }
       if (!currentUser.organizationId) {
         throw new Error('用户未关联组织，无法创建用户')
       }
-      if (data.organizationId && data.organizationId !== currentUser.organizationId) {
+      if (sanitizedData.organizationId && sanitizedData.organizationId !== currentUser.organizationId) {
         throw new Error('只能在自己的组织内创建用户')
       }
       return authService.createUser(
-        { ...data, role: UserRole.MEMBER, organizationId: currentUser.organizationId },
+        { ...sanitizedData, role: UserRole.MEMBER, organizationId: currentUser.organizationId },
         currentUser.userId,
       )
     } else {
