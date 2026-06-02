@@ -3,11 +3,18 @@ import {
   confirmUploads,
   getPresignedUrl,
   getPresignedUrls,
+  uploadMaterial,
 } from '../src/controllers/material.controller'
 import {
   generatePresignedUploadUrl,
   generatePresignedUploadUrls,
+  uploadToR2,
 } from '../src/services/r2Storage.service'
+import {
+  calculateFingerprint,
+  checkDuplicate,
+} from '../src/services/materialTracking.service'
+import Material from '../src/models/Material'
 
 jest.mock('../src/models/Material', () => ({
   __esModule: true,
@@ -140,5 +147,53 @@ describe('material storage tenant scoping', () => {
         failCount: 1,
       },
     })
+  })
+
+  it('stores tenant-scoped fingerprint keys for traditional uploads', async () => {
+    ;(calculateFingerprint as jest.Mock).mockResolvedValue({
+      pHash: 'phash_1',
+      md5: 'md5_1',
+      sha256: 'sha_1',
+      fingerprintKey: 'img_phash_1',
+    })
+    ;(checkDuplicate as jest.Mock).mockResolvedValue({ isDuplicate: false })
+    ;(uploadToR2 as jest.Mock).mockResolvedValue({
+      success: true,
+      key: 'tenants/org-hash/materials/file.jpg',
+      url: 'https://cdn.autoark.test/file.jpg',
+    })
+    ;(Material as unknown as jest.Mock).mockImplementation(function MaterialMock(this: any, data: any) {
+      Object.assign(this, data)
+      this._id = '665000000000000000000201'
+      this.save = jest.fn().mockResolvedValue(this)
+      return this
+    })
+    const res = createResponse()
+
+    await uploadMaterial({
+      body: {},
+      file: {
+        buffer: Buffer.from('image'),
+        originalname: 'file.jpg',
+        mimetype: 'image/jpeg',
+        size: 5,
+      },
+      user: {
+        userId: '665000000000000000000002',
+        organizationId: '665000000000000000000001',
+      },
+    } as any, res as any)
+
+    const materialData = (Material as unknown as jest.Mock).mock.calls[0][0]
+    expect(checkDuplicate).toHaveBeenCalledWith(
+      expect.objectContaining({ fingerprintKey: 'img_phash_1' }),
+      'image',
+      expect.objectContaining({ organizationId: expect.anything() }),
+    )
+    expect(materialData.fingerprintKey).toMatch(/^tenants:org-[a-f0-9]{16}:img_phash_1$/)
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      success: true,
+      isDuplicate: false,
+    }))
   })
 })

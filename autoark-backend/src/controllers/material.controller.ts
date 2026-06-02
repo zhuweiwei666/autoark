@@ -55,6 +55,11 @@ const getScopedStorageFolder = (req: Request, folder?: string): string => {
   return `${getTenantStorageRoot(req)}/${requestedFolder.replace(/^\/+/, '')}`
 }
 
+const getScopedFingerprintKey = (req: Request, fingerprintKey?: string): string | undefined => {
+  if (!fingerprintKey) return undefined
+  return `${getTenantStorageRoot(req).replace(/\//g, ':')}:${fingerprintKey}`
+}
+
 const normalizeStorageKey = (key: string): string => String(key || '').replace(/^\/+/, '')
 
 const resolveScopedStorageKey = (req: Request, key: string): string | null => {
@@ -455,20 +460,15 @@ export const uploadMaterial = async (req: Request, res: Response) => {
     
     // ========== 2. 去重检测 ==========
     if (!skipDuplicateCheck) {
-      const duplicateCheck = await checkDuplicate(fingerprint, materialType)
+      const duplicateCheck = await checkDuplicate(fingerprint, materialType, getMaterialFilter(req))
       if (duplicateCheck.isDuplicate && duplicateCheck.existingMaterial) {
-        const visibleDuplicate = await Material.findOne(
-          combineFilters({ _id: duplicateCheck.existingMaterial._id }, getMaterialFilter(req)),
-        ).lean()
-        if (visibleDuplicate) {
-          logger.info(`[Material] Duplicate found: ${duplicateCheck.existingMaterial._id}`)
-          return res.json({
-            success: true,
-            data: visibleDuplicate,
-            isDuplicate: true,
-            message: '素材已存在，返回现有素材',
-          })
-        }
+        logger.info(`[Material] Duplicate found: ${duplicateCheck.existingMaterial._id}`)
+        return res.json({
+          success: true,
+          data: duplicateCheck.existingMaterial,
+          isDuplicate: true,
+          message: '素材已存在，返回现有素材',
+        })
       }
     }
     
@@ -503,7 +503,7 @@ export const uploadMaterial = async (req: Request, res: Response) => {
         size: file.size,
       },
       fingerprint,
-      fingerprintKey: fingerprint.fingerprintKey,
+      fingerprintKey: getScopedFingerprintKey(req, fingerprint.fingerprintKey),
       tags: tags ? (Array.isArray(tags) ? tags : tags.split(',').map((t: string) => t.trim())) : [],
       folder: folder || '默认',
       notes,

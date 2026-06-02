@@ -104,19 +104,24 @@ export async function calculateFingerprint(
  */
 export async function checkDuplicate(
   fingerprint: { pHash?: string; md5?: string; videoHash?: string },
-  type: 'image' | 'video'
+  type: 'image' | 'video',
+  scopeFilter: any = {},
 ): Promise<{ isDuplicate: boolean; existingMaterial?: any }> {
-  const query: any = { type }
+  const fingerprintQuery: any = { type }
   
   if (type === 'image' && fingerprint.pHash) {
     // 图片：优先用 pHash 匹配
-    query['fingerprint.pHash'] = fingerprint.pHash
+    fingerprintQuery['fingerprint.pHash'] = fingerprint.pHash
   } else if (fingerprint.md5) {
     // 精确匹配 MD5
-    query['fingerprint.md5'] = fingerprint.md5
+    fingerprintQuery['fingerprint.md5'] = fingerprint.md5
   } else if (type === 'video' && fingerprint.videoHash) {
-    query['fingerprint.videoHash'] = fingerprint.videoHash
+    fingerprintQuery['fingerprint.videoHash'] = fingerprint.videoHash
   }
+
+  const query = scopeFilter && Object.keys(scopeFilter).length > 0
+    ? { $and: [fingerprintQuery, scopeFilter] }
+    : fingerprintQuery
   
   const existingMaterial = await Material.findOne(query).lean()
   
