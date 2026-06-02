@@ -529,6 +529,7 @@ export async function getReusableMaterials(options: {
   minQualityScore?: number
   limit?: number
   sortBy?: 'roas' | 'spend' | 'qualityScore'
+  scopeFilter?: any
 }): Promise<any[]> {
   const {
     type,
@@ -536,17 +537,22 @@ export async function getReusableMaterials(options: {
     minSpend = 50,
     minQualityScore = 60,
     limit = 20,
-    sortBy = 'qualityScore'
+    sortBy = 'qualityScore',
+    scopeFilter = {},
   } = options
   
-  const query: any = {
+  const baseQuery: any = {
     status: 'uploaded',
     'metrics.totalSpend': { $gte: minSpend },
     'metrics.avgRoas': { $gte: minRoas },
     'metrics.qualityScore': { $gte: minQualityScore },
   }
   
-  if (type) query.type = type
+  if (type) baseQuery.type = type
+
+  const query = scopeFilter && Object.keys(scopeFilter).length > 0
+    ? { $and: [baseQuery, scopeFilter] }
+    : baseQuery
   
   const sortField = sortBy === 'roas' 
     ? 'metrics.avgRoas'

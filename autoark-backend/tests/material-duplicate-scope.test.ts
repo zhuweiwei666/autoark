@@ -1,10 +1,14 @@
 import Material from '../src/models/Material'
-import { checkDuplicate } from '../src/services/materialTracking.service'
+import {
+  checkDuplicate,
+  getReusableMaterials,
+} from '../src/services/materialTracking.service'
 
 jest.mock('../src/models/Material', () => ({
   __esModule: true,
   default: {
     findOne: jest.fn(),
+    find: jest.fn(),
   },
 }))
 
@@ -32,5 +36,35 @@ describe('material duplicate tenant scope', () => {
         { organizationId: '665000000000000000000001' },
       ],
     })
+  })
+
+  it('limits reusable material recommendations to the provided tenant scope', async () => {
+    const limit = jest.fn().mockReturnValue({
+      lean: jest.fn().mockResolvedValue([]),
+    })
+    const sort = jest.fn().mockReturnValue({ limit })
+    ;(Material.find as jest.Mock).mockReturnValue({ sort })
+
+    await getReusableMaterials({
+      minRoas: 2,
+      minSpend: 100,
+      minQualityScore: 70,
+      limit: 10,
+      scopeFilter: { organizationId: '665000000000000000000001' },
+    })
+
+    expect(Material.find).toHaveBeenCalledWith({
+      $and: [
+        {
+          status: 'uploaded',
+          'metrics.totalSpend': { $gte: 100 },
+          'metrics.avgRoas': { $gte: 2 },
+          'metrics.qualityScore': { $gte: 70 },
+        },
+        { organizationId: '665000000000000000000001' },
+      ],
+    })
+    expect(sort).toHaveBeenCalledWith({ 'metrics.qualityScore': -1 })
+    expect(limit).toHaveBeenCalledWith(10)
   })
 })

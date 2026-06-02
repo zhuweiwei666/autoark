@@ -1186,6 +1186,7 @@ export const getReusable = async (req: Request, res: Response) => {
       minQualityScore: parseInt(minQualityScore as string),
       limit: parseInt(limit as string),
       sortBy: sortBy as 'roas' | 'spend' | 'qualityScore',
+      scopeFilter: getMaterialFilter(req),
     })
     const visibleMaterials = await Material.find(combineFilters(
       { _id: { $in: materials.map((material: any) => material._id) } },
