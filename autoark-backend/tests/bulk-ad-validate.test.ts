@@ -138,6 +138,44 @@ describe('bulk ad draft validation preflight', () => {
     expect(validation.errors).toHaveLength(0)
   })
 
+  it('blocks publish when attribution windows are outside supported values', async () => {
+    const draft = baseDraft({
+      adset: {
+        targetingPackageId,
+        multiplier: 1,
+        optimizationGoal: 'OFFSITE_CONVERSIONS',
+        attribution: {
+          clickWindow: 365,
+          viewWindow: 2,
+          engagedViewWindow: 3,
+        },
+      },
+    })
+    jest.spyOn(AdDraft, 'findOne').mockResolvedValue(draft as any)
+    jest.spyOn(FbToken, 'find').mockReturnValue(tokenQuery([{
+      _id: tokenId,
+      fbUserId: 'fb_1',
+    }]) as any)
+    jest.spyOn(FacebookUser, 'find').mockReturnValue(queryWithLean([{
+      fbUserId: 'fb_1',
+      syncStatus: 'completed',
+      adAccounts: [{ accountId: 'act_123', status: 1 }],
+      pages: [{ pageId: 'page_1', accounts: [{ accountId: 'act_123' }] }],
+      pixels: [{ pixelId: 'pixel_1', accounts: [{ accountId: 'act_123' }] }],
+    }]) as any)
+    mockValidPackages()
+
+    const validation = await validateDraft(draftId, {})
+
+    expect(validation.isValid).toBe(false)
+    expect(validation.errors.map((error: any) => error.field)).toEqual(expect.arrayContaining([
+      'adset.attribution.clickWindow',
+      'adset.attribution.viewWindow',
+      'adset.attribution.engagedViewWindow',
+    ]))
+    expect(draft.save).toHaveBeenCalled()
+  })
+
   it('blocks publish when selected account is not accessible by the synced Facebook authorization', async () => {
     const draft = baseDraft()
     jest.spyOn(AdDraft, 'findOne').mockResolvedValue(draft as any)

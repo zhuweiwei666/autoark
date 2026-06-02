@@ -43,6 +43,8 @@ import { assertBulkAdPublishAllowed } from './commercial.service'
 const MIN_BUDGET = 1
 const DEFAULT_DIAGNOSTIC_TASK_SCAN_LIMIT = 1000
 const MAX_DIAGNOSTIC_TASK_SCAN_LIMIT = 5000
+const CLICK_ATTRIBUTION_WINDOWS = [1, 7, 28]
+const OPTIONAL_ATTRIBUTION_WINDOWS = [0, 1]
 
 const normalizeObjectIdList = (values: any[] = []) => {
   const unique = Array.from(new Set(values.map(value => value?.toString()).filter(Boolean)))
@@ -61,6 +63,51 @@ const hasUsableMaterial = (material: any) => {
     return Boolean(material.facebookVideoId || material.url)
   }
   return false
+}
+
+const isAllowedAttributionWindow = (value: any, allowedValues: number[]) => {
+  const next = Number(value)
+  return Number.isInteger(next) && allowedValues.includes(next)
+}
+
+const normalizeAttributionWindow = (value: any, fallback: number, allowedValues: number[]) => {
+  const next = Number(value)
+  return Number.isInteger(next) && allowedValues.includes(next) ? next : fallback
+}
+
+const buildAttributionSpec = (attributionCfg: any) => {
+  if (!attributionCfg) return undefined
+
+  const clickWindow = normalizeAttributionWindow(attributionCfg.clickWindow, 1, CLICK_ATTRIBUTION_WINDOWS)
+  const viewWindow = normalizeAttributionWindow(attributionCfg.viewWindow, 0, OPTIONAL_ATTRIBUTION_WINDOWS)
+  const engagedViewWindow = normalizeAttributionWindow(
+    attributionCfg.engagedViewWindow,
+    0,
+    OPTIONAL_ATTRIBUTION_WINDOWS,
+  )
+
+  return [
+    {
+      event_type: 'CLICK_THROUGH',
+      window_days: clickWindow,
+    },
+    ...(viewWindow > 0
+      ? [
+          {
+            event_type: 'VIEW_THROUGH',
+            window_days: viewWindow,
+          },
+        ]
+      : []),
+    ...(engagedViewWindow > 0
+      ? [
+          {
+            event_type: 'ENGAGED_VIDEO_VIEW',
+            window_days: engagedViewWindow,
+          },
+        ]
+      : []),
+  ]
 }
 
 const buildDraftValidationFailureDetails = (validation: any) => {
@@ -457,6 +504,21 @@ export const validateDraft = async (draftId: string, accessFilter: any = {}) => 
   const adsetMultiplier = Number(draft.adset?.multiplier || 1)
   if (!Number.isFinite(adsetMultiplier) || adsetMultiplier < 1 || adsetMultiplier > 10) {
     addError('adset.multiplier', '广告组倍率必须在 1 到 10 之间')
+  }
+  const attributionCfg = draft.adset?.attribution || draft.adset?.attributionSpec
+  if (attributionCfg) {
+    if (!isAllowedAttributionWindow(attributionCfg.clickWindow ?? 1, CLICK_ATTRIBUTION_WINDOWS)) {
+      addError('adset.attribution.clickWindow', '点击归因窗口必须是 1、7 或 28 天')
+    }
+    if (!isAllowedAttributionWindow(attributionCfg.viewWindow ?? 0, OPTIONAL_ATTRIBUTION_WINDOWS)) {
+      addError('adset.attribution.viewWindow', '浏览归因窗口只能为 0 或 1 天')
+    }
+    if (
+      attributionCfg.engagedViewWindow !== undefined &&
+      !isAllowedAttributionWindow(attributionCfg.engagedViewWindow, OPTIONAL_ATTRIBUTION_WINDOWS)
+    ) {
+      addError('adset.attribution.engagedViewWindow', '互动观看归因窗口只能为 0 或 1 天')
+    }
   }
   if (draft.adset?.startTime && draft.adset?.endTime && new Date(draft.adset.endTime) <= new Date(draft.adset.startTime)) {
     addError('adset.endTime', '广告组结束时间必须晚于开始时间')
@@ -976,33 +1038,7 @@ export const executeTaskForAccount = async (
     
     // 构建归因设置（兼容 attribution / attributionSpec）
     const attributionCfg = config.adset.attribution || config.adset.attributionSpec
-    const clickWindow = Number(attributionCfg?.clickWindow ?? 1)
-    const viewWindow = Number(attributionCfg?.viewWindow ?? 0)
-    const engagedViewWindow = Number((attributionCfg as any)?.engagedViewWindow ?? 0)
-    const attributionSpec = attributionCfg
-      ? [
-          {
-      event_type: 'CLICK_THROUGH',
-            window_days: clickWindow,
-          },
-          ...(viewWindow > 0
-            ? [
-                {
-      event_type: 'VIEW_THROUGH',
-                  window_days: viewWindow,
-                },
-              ]
-            : []),
-          ...(engagedViewWindow > 0
-            ? [
-                {
-      event_type: 'ENGAGED_VIDEO_VIEW',
-                  window_days: engagedViewWindow,
-                },
-              ]
-            : []),
-        ]
-      : undefined
+    const attributionSpec = buildAttributionSpec(attributionCfg)
 
     logger.info(`[BulkAd] Creating ${adsetMultiplier} adset(s) for campaign ${campaignId}`)
     
