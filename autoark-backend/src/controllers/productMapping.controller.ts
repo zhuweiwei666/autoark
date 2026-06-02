@@ -12,7 +12,7 @@ import {
   scopedTokenFilter,
 } from '../utils/accessControl'
 import { getAccountIdsForQuery, normalizeForStorage } from '../utils/accountId'
-import { parsePagination } from '../utils/pagination'
+import { parseLimitedNumber, parsePagination } from '../utils/pagination'
 
 /**
  * 产品映射控制器
@@ -429,7 +429,7 @@ export const scanProducts = async (req: Request, res: Response) => {
  */
 export const matchPixels = async (req: Request, res: Response) => {
   try {
-    const minConfidence = parseInt(req.query.minConfidence as string) || 50
+    const minConfidence = parseLimitedNumber(req.query.minConfidence, 50, 100)
     const result = await productMappingService.matchProductsWithPixels(
       minConfidence,
       getProductFilter(req),

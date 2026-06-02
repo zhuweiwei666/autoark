@@ -33,6 +33,7 @@ jest.mock('../src/models/Product', () => ({
 }))
 
 import productMappingRoutes from '../src/routes/productMapping.routes'
+import * as productMappingService from '../src/services/productMapping.service'
 
 const createApp = () => {
   const app = express()
@@ -112,5 +113,36 @@ describe('product mapping route authorization', () => {
     const productQueryText = JSON.stringify(mockProductFind.mock.calls[0][0])
     expect(productQueryText).toContain('a\\\\.b\\\\+\\\\[x\\\\]')
     expect(productQueryText).not.toContain('$ne')
+  })
+
+  it('sanitizes pixel match confidence thresholds', async () => {
+    mockAuthState.user = {
+      role: UserRole.ORG_ADMIN,
+      userId: '665000000000000000000002',
+      organizationId: '665000000000000000000001',
+    }
+    const matchProductsWithPixels = jest
+      .spyOn(productMappingService, 'matchProductsWithPixels')
+      .mockResolvedValue({ matched: 0 } as any)
+
+    const negativeResponse = await request(createApp()).post('/api/product-mapping/match-pixels?minConfidence=-20')
+    const oversizedResponse = await request(createApp()).post('/api/product-mapping/match-pixels?minConfidence=9999')
+
+    expect(negativeResponse.status).toBe(200)
+    expect(oversizedResponse.status).toBe(200)
+    expect(matchProductsWithPixels).toHaveBeenNthCalledWith(
+      1,
+      50,
+      expect.any(Object),
+      expect.any(Object),
+      expect.any(Object),
+    )
+    expect(matchProductsWithPixels).toHaveBeenNthCalledWith(
+      2,
+      100,
+      expect.any(Object),
+      expect.any(Object),
+      expect.any(Object),
+    )
   })
 })
