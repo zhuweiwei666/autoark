@@ -1,10 +1,13 @@
 import {
+  aggregateMetrics,
   createFolder,
   moveToFolder,
   updateMaterial,
 } from '../src/controllers/material.controller'
 import Material from '../src/models/Material'
 import Folder from '../src/models/Folder'
+import { UserRole } from '../src/models/User'
+import { aggregateMetricsToMaterials } from '../src/services/materialTracking.service'
 
 jest.mock('../src/models/Material', () => ({
   __esModule: true,
@@ -121,5 +124,28 @@ describe('material metadata sanitization', () => {
     expect(res.status).toHaveBeenCalledWith(400)
     expect(res.json).toHaveBeenCalledWith({ success: false, error: '请输入文件夹名称' })
     expect(Folder.findOne).not.toHaveBeenCalled()
+  })
+
+  it('sanitizes manual material aggregation dates before running attribution', async () => {
+    ;(aggregateMetricsToMaterials as jest.Mock).mockResolvedValue({
+      processed: 0,
+      matchedByAdMapping: 0,
+      matchedByFbId: 0,
+      unmatched: 0,
+    })
+    const res = createResponse()
+
+    await aggregateMetrics({
+      ...createRequest({ date: '2026-02-31' }),
+      user: {
+        userId: '665000000000000000000002',
+        role: UserRole.SUPER_ADMIN,
+      },
+    } as any, res as any)
+
+    const [targetDate] = (aggregateMetricsToMaterials as jest.Mock).mock.calls[0]
+    expect(targetDate).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+    expect(targetDate).not.toBe('2026-02-31')
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }))
   })
 })

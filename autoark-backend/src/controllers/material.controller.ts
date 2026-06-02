@@ -99,6 +99,14 @@ const parseBoundedMaterialNumber = (
   return options.integer ? Math.floor(bounded) : bounded
 }
 
+const pickMaterialDateOnly = (value: any): string | undefined => {
+  const text = pickSafeQueryString(value, 10)
+  if (!text || !/^\d{4}-\d{2}-\d{2}$/.test(text)) return undefined
+  const date = new Date(`${text}T00:00:00.000Z`)
+  if (Number.isNaN(date.getTime())) return undefined
+  return date.toISOString().slice(0, 10) === text ? text : undefined
+}
+
 const pickOptionalMaterialType = (value: any) => (
   pickAllowedString(value, MATERIAL_TYPE_FILTERS, '') || undefined
 )
@@ -1494,11 +1502,10 @@ export const getFullData = async (req: Request, res: Response) => {
  */
 export const aggregateMetrics = async (req: Request, res: Response) => {
   try {
-    const { date } = req.body
     if (!isSuperAdmin(req)) {
       return res.status(403).json({ success: false, error: '只有超级管理员可以触发全局素材归因' })
     }
-    const targetDate = date || new Date().toISOString().split('T')[0]
+    const targetDate = pickMaterialDateOnly(req.body?.date) || new Date().toISOString().split('T')[0]
     
     logger.info(`[Material] Manual metrics aggregation for ${targetDate}`)
     const result = await aggregateMetricsToMaterials(targetDate)
