@@ -172,10 +172,25 @@ export const getConfigStatus = async (req: Request, res: Response) => {
 export const streamPublicMaterial = async (req: Request, res: Response) => {
   try {
     const rawKey = req.params[0] || ''
-    const key = decodeURIComponent(rawKey).replace(/^\/+/, '')
+    let key = ''
+
+    try {
+      key = decodeURIComponent(rawKey).replace(/^\/+/, '')
+    } catch {
+      return res.status(400).json({ success: false, error: '无效的素材路径' })
+    }
 
     if (!key || key.includes('..')) {
       return res.status(400).json({ success: false, error: '无效的素材路径' })
+    }
+
+    const material = await Material.findOne({
+      'storage.key': key,
+      status: { $ne: 'deleted' },
+    }).select('_id storage.key').lean()
+
+    if (!material) {
+      return res.status(404).json({ success: false, error: '素材不存在' })
     }
 
     const object = await getObjectFromR2(key)
