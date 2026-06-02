@@ -1,6 +1,8 @@
 const mockGetUserAccountIds = jest.fn()
 const mockCampaignFindOne = jest.fn()
+const mockCampaignFindOneAndUpdate = jest.fn()
 const mockGetPurchaseValueInfo = jest.fn()
+const mockTokenPoolGetNextToken = jest.fn()
 
 jest.mock('../src/middlewares/auth', () => ({
   getUserAccountIds: mockGetUserAccountIds,
@@ -11,6 +13,7 @@ jest.mock('../src/models/Campaign', () => ({
   __esModule: true,
   default: {
     findOne: mockCampaignFindOne,
+    findOneAndUpdate: mockCampaignFindOneAndUpdate,
   },
 }))
 
@@ -48,7 +51,7 @@ jest.mock('../src/services/facebook.permissions.service', () => ({
 jest.mock('../src/services/facebook.token.pool', () => ({
   tokenPool: {
     getTokenStatus: jest.fn(),
-    getNextToken: jest.fn(),
+    getNextToken: mockTokenPoolGetNextToken,
   },
 }))
 
@@ -83,7 +86,10 @@ jest.mock('../src/models/FbToken', () => ({
 }))
 
 import { UserRole } from '../src/models/User'
-import { getPurchaseValueInfo } from '../src/controllers/facebook.controller'
+import Account from '../src/models/Account'
+import Ad from '../src/models/Ad'
+import { tokenPool } from '../src/services/facebook.token.pool'
+import { getPurchaseValueInfo, updateCampaignStatus } from '../src/controllers/facebook.controller'
 
 const campaignQuery = (result: any) => ({
   select: jest.fn().mockReturnValue({
@@ -125,6 +131,19 @@ describe('facebook purchase value info scope', () => {
     expect(mockGetPurchaseValueInfo).not.toHaveBeenCalled()
   })
 
+  it('looks up purchase metrics only from local Facebook campaigns', async () => {
+    mockCampaignFindOne.mockReturnValue(campaignQuery(null))
+    const res = createRes()
+
+    await getPurchaseValueInfo(createReq(), res, jest.fn())
+
+    expect(mockCampaignFindOne).toHaveBeenCalledWith({
+      channel: 'facebook',
+      campaignId: 'camp_1',
+    })
+    expect(mockGetPurchaseValueInfo).not.toHaveBeenCalled()
+  })
+
   it('blocks purchase metrics for campaigns outside the requester account scope', async () => {
     mockCampaignFindOne.mockReturnValue(campaignQuery({ accountId: '123' }))
     mockGetUserAccountIds.mockResolvedValue(['999'])
@@ -148,5 +167,53 @@ describe('facebook purchase value info scope', () => {
 
     expect(mockGetPurchaseValueInfo).toHaveBeenCalledWith('camp_1', '2026-06-02', 'US')
     expect(res.json).toHaveBeenCalledWith({ success: true, data: info })
+  })
+
+  it('updates campaign status with the token attached to the campaign account', async () => {
+    mockCampaignFindOne.mockReturnValue(campaignQuery({ accountId: '123' }))
+    ;(Account.findOne as jest.Mock).mockReturnValue(campaignQuery({ token: 'ACCOUNT_TOKEN' }))
+    ;(Ad.find as jest.Mock).mockReturnValue({
+      select: jest.fn().mockReturnValue({
+        lean: jest.fn().mockResolvedValue([]),
+      }),
+    })
+    mockCampaignFindOneAndUpdate.mockResolvedValue({})
+    const fetchMock = jest.fn().mockResolvedValue({
+      json: jest.fn().mockResolvedValue({ success: true }),
+    })
+    ;(global as any).fetch = fetchMock
+
+    const req: any = {
+      params: { campaignId: 'camp_1' },
+      body: { status: 'PAUSED' },
+      user: {
+        role: UserRole.SUPER_ADMIN,
+        userId: '665000000000000000000000',
+      },
+    }
+    const res = createRes()
+
+    await updateCampaignStatus(req, res, jest.fn())
+
+    expect(tokenPool.getNextToken).not.toHaveBeenCalled()
+    expect(Account.findOne).toHaveBeenCalledWith({
+      channel: 'facebook',
+      accountId: { $in: ['123', 'act_123'] },
+    })
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/camp_1'), expect.objectContaining({
+      body: JSON.stringify({
+        access_token: 'ACCOUNT_TOKEN',
+        status: 'PAUSED',
+      }),
+    }))
+    expect(mockCampaignFindOneAndUpdate).toHaveBeenCalledWith(
+      { channel: 'facebook', campaignId: 'camp_1', accountId: '123' },
+      { status: 'PAUSED', updatedAt: expect.any(Date) },
+    )
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      message: 'Campaign status updated to PAUSED',
+      data: { campaignId: 'camp_1', status: 'PAUSED' },
+    })
   })
 })

@@ -182,7 +182,7 @@ export const getPurchaseValueInfo = async (
       })
     }
 
-    const campaign = await Campaign.findOne({ campaignId: campaignId as string }).select('accountId').lean()
+    const campaign = await Campaign.findOne({ channel: 'facebook', campaignId: campaignId as string }).select('accountId').lean()
     if (!campaign?.accountId) {
       return res.status(404).json({ success: false, error: 'Campaign not found' })
     }
@@ -444,9 +444,9 @@ export const getAccounts = async (
 }
 
 // 刷新指定 Campaign 下所有广告的状态
-async function refreshCampaignAdsStatus(campaignId: string, token: string) {
+async function refreshCampaignAdsStatus(campaignId: string, accountId: string, token: string) {
   // 获取该 Campaign 下的所有广告
-  const ads = await Ad.find({ campaignId }).select('adId').lean()
+  const ads = await Ad.find({ channel: 'facebook', campaignId, accountId }).select('adId').lean()
   if (ads.length === 0) return
   
   const adIds = ads.map((ad: any) => ad.adId)
@@ -467,7 +467,7 @@ async function refreshCampaignAdsStatus(campaignId: string, token: string) {
       for (const adId of batch) {
         if (result[adId] && result[adId].effective_status) {
           await Ad.findOneAndUpdate(
-            { channel: 'facebook', adId },
+            { channel: 'facebook', adId, accountId },
             { effectiveStatus: result[adId].effective_status, updatedAt: new Date() }
           )
         }
@@ -499,11 +499,12 @@ export const updateCampaignStatus = async (
       return res.status(400).json({ success: false, error: 'Status must be ACTIVE or PAUSED' })
     }
     
-    // 获取 token
-    const token = tokenPool.getNextToken()
-    if (!token) {
-      return res.status(500).json({ success: false, error: 'No valid Facebook token available' })
+    const campaign = await Campaign.findOne({ channel: 'facebook', campaignId }).select('accountId').lean()
+    if (!campaign?.accountId) {
+      return res.status(404).json({ success: false, error: 'Campaign not found' })
     }
+
+    const token = await resolveAccountAccessToken(req, campaign.accountId)
     
     // 调用 Facebook API 更新状态
     const response = await fetch(`${FB_VERSIONED_URL}/${campaignId}`, {
@@ -526,12 +527,12 @@ export const updateCampaignStatus = async (
     
     // 更新本地数据库
     await Campaign.findOneAndUpdate(
-      { channel: 'facebook', campaignId },
+      { channel: 'facebook', campaignId, accountId: campaign.accountId },
       { status, updatedAt: new Date() }
     )
     
     // 异步刷新该 Campaign 下所有广告的状态
-    refreshCampaignAdsStatus(campaignId, token).catch(err => {
+    refreshCampaignAdsStatus(campaignId, campaign.accountId, token).catch(err => {
       console.error(`[Campaign Status] Failed to refresh ads status:`, err.message)
     })
     
