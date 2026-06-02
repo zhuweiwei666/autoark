@@ -418,6 +418,27 @@ const sanitizeCopywritingPackageInput = (input: any, options: { requireName?: bo
   return data
 }
 
+const sanitizeDraftWriteInput = (input: any) => {
+  const data: any = {}
+  const name = pickTrimmedString(input?.name, 160)
+  if (name) data.name = name
+
+  if (Array.isArray(input?.accounts)) {
+    data.accounts = input.accounts.slice(0, 100)
+  }
+
+  ;['campaign', 'adset', 'ad', 'publishStrategy'].forEach((field) => {
+    if (input?.[field] && typeof input[field] === 'object' && !Array.isArray(input[field])) {
+      data[field] = input[field]
+    }
+  })
+
+  const notes = pickTrimmedString(input?.notes, 2000)
+  if (notes) data.notes = notes
+
+  return data
+}
+
 const sanitizeCreativeMaterialInput = (input: any) => {
   const type = pickAllowedString(input?.type, CREATIVE_MATERIAL_TYPES, '')
   const url = pickTrimmedString(input?.url, 2048)
@@ -707,7 +728,7 @@ export const createDraft = async (req: Request, res: Response) => {
     
     // 添加创建者信息
     const draftData = {
-      ...req.body,
+      ...sanitizeDraftWriteInput(req.body),
       createdBy: req.user?.userId,
       organizationId: req.user?.organizationId,
     }
@@ -727,7 +748,7 @@ export const updateDraft = async (req: Request, res: Response) => {
   try {
     const draft = await bulkAdService.updateDraft(
       req.params.id,
-      sanitizeScopedUpdate(req.body),
+      sanitizeScopedUpdate(sanitizeDraftWriteInput(req.body)),
       req.user?.userId,
       getControlFilter(req),
     )

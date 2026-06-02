@@ -1,6 +1,8 @@
 jest.mock('../src/services/bulkAd.service', () => ({
   __esModule: true,
   default: {
+    createDraft: jest.fn(),
+    updateDraft: jest.fn(),
     validateDraft: jest.fn(),
     publishDraft: jest.fn(),
     getTaskSupportPackage: jest.fn(),
@@ -55,6 +57,7 @@ import {
   addMaterial,
   createCopywritingPackage,
   createCreativeGroup,
+  createDraft,
   createTargetingPackage,
   deleteCopywritingPackage,
   deleteCreativeGroup,
@@ -68,6 +71,7 @@ import {
   parseAllCopywritingProducts,
   updateCopywritingPackage,
   updateCreativeGroup,
+  updateDraft,
   updateTargetingPackage,
   getTaskSupportPackage,
   removeMaterial,
@@ -247,6 +251,81 @@ describe('bulk ad controller', () => {
         publicOauthGapCodes: expect.arrayContaining(['APP_MODE_NOT_LIVE']),
       }),
     }))
+  })
+
+  it('sanitizes draft creation payloads before saving', async () => {
+    mockBulkAdService.createDraft.mockResolvedValue({ _id: 'draft_1', name: 'Launch draft' } as any)
+    const req = memberReq({
+      body: {
+        name: '  Launch draft  ',
+        status: 'published',
+        taskId: '665000000000000000000999',
+        validation: { isValid: true },
+        estimates: { totalAds: 999 },
+        createdBy: 'attacker',
+        organizationId: '665000000000000000000099',
+        accounts: [{ accountId: 'act_123' }],
+        campaign: { nameTemplate: 'camp', budget: 10 },
+        adset: { nameTemplate: 'adset', multiplier: 2 },
+        ad: { nameTemplate: 'ad' },
+        publishStrategy: { schedule: 'IMMEDIATE' },
+        notes: '  launch notes  ',
+      },
+    })
+    const res = resMock()
+
+    await createDraft(req as any, res as any)
+
+    const payload = mockBulkAdService.createDraft.mock.calls[0][0]
+    expect(payload).toMatchObject({
+      name: 'Launch draft',
+      accounts: [{ accountId: 'act_123' }],
+      campaign: { nameTemplate: 'camp', budget: 10 },
+      adset: { nameTemplate: 'adset', multiplier: 2 },
+      ad: { nameTemplate: 'ad' },
+      publishStrategy: { schedule: 'IMMEDIATE' },
+      notes: 'launch notes',
+      createdBy: '665000000000000000000002',
+      organizationId: '665000000000000000000001',
+    })
+    expect(payload).not.toHaveProperty('status')
+    expect(payload).not.toHaveProperty('taskId')
+    expect(payload).not.toHaveProperty('validation')
+    expect(payload).not.toHaveProperty('estimates')
+    expect(mockBulkAdService.createDraft.mock.calls[0][1]).toBe('665000000000000000000002')
+    expect(res.json).toHaveBeenCalledWith({ success: true, data: { _id: 'draft_1', name: 'Launch draft' } })
+  })
+
+  it('sanitizes draft update payloads before saving', async () => {
+    mockBulkAdService.updateDraft.mockResolvedValue({ _id: 'draft_1', name: 'Updated draft' } as any)
+    const req = memberReq({
+      body: {
+        name: 'Updated draft',
+        status: 'published',
+        taskId: '665000000000000000000999',
+        validation: { isValid: true },
+        estimates: { totalAds: 999 },
+        lastModifiedBy: 'attacker',
+        accounts: [{ accountId: 'act_123' }],
+      },
+    })
+    const res = resMock()
+
+    await updateDraft(req as any, res as any)
+
+    const payload = mockBulkAdService.updateDraft.mock.calls[0][1]
+    expect(payload).toMatchObject({
+      name: 'Updated draft',
+      accounts: [{ accountId: 'act_123' }],
+    })
+    expect(payload).not.toHaveProperty('status')
+    expect(payload).not.toHaveProperty('taskId')
+    expect(payload).not.toHaveProperty('validation')
+    expect(payload).not.toHaveProperty('estimates')
+    expect(payload).not.toHaveProperty('lastModifiedBy')
+    expect(mockBulkAdService.updateDraft.mock.calls[0][0]).toBe(req.params.id)
+    expectMemberControlFilter(mockBulkAdService.updateDraft.mock.calls[0][3])
+    expect(res.json).toHaveBeenCalledWith({ success: true, data: { _id: 'draft_1', name: 'Updated draft' } })
   })
 
   it('sanitizes targeting interest search parameters before calling Meta', async () => {
