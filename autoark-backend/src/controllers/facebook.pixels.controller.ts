@@ -1,12 +1,28 @@
 import { Request, Response, NextFunction } from 'express'
 import * as pixelsService from '../services/facebook.pixels.service'
 import { UserRole } from '../models/User'
-import { parseLimitedNumber } from '../utils/pagination'
+import { parseLimitedNumber, pickSafeQueryString } from '../utils/pagination'
+
+const FACEBOOK_PIXEL_ID_MAX_LENGTH = 128
+const FACEBOOK_TOKEN_ID_MAX_LENGTH = 80
 
 const requireSuperAdmin = (req: Request, res: Response): boolean => {
   if (req.user?.role === UserRole.SUPER_ADMIN) return true
   res.status(403).json({ success: false, error: 'Forbidden' })
   return false
+}
+
+const pickPixelId = (value: any) => pickSafeQueryString(value, FACEBOOK_PIXEL_ID_MAX_LENGTH)
+const pickTokenId = (value: any) => pickSafeQueryString(value, FACEBOOK_TOKEN_ID_MAX_LENGTH)
+
+const rejectInvalidStringParam = (
+  res: Response,
+  name: string,
+) => {
+  res.status(400).json({
+    success: false,
+    error: `${name} must be a string`,
+  })
 }
 
 /**
@@ -15,7 +31,12 @@ const requireSuperAdmin = (req: Request, res: Response): boolean => {
 export const getPixels = async (req: Request, res: Response, next: NextFunction) => {
   try {
     if (!requireSuperAdmin(req, res)) return
-    const { tokenId, allTokens } = req.query
+    const { allTokens } = req.query
+    const tokenId = pickTokenId(req.query.tokenId)
+
+    if (req.query.tokenId !== undefined && !tokenId) {
+      return rejectInvalidStringParam(res, 'tokenId')
+    }
 
     let pixels: any[]
 
@@ -46,10 +67,17 @@ export const getPixels = async (req: Request, res: Response, next: NextFunction)
 export const getPixelDetails = async (req: Request, res: Response, next: NextFunction) => {
   try {
     if (!requireSuperAdmin(req, res)) return
-    const { id } = req.params
-    const { tokenId } = req.query
+    const id = pickPixelId(req.params.id)
+    const tokenId = pickTokenId(req.query.tokenId)
 
-    const pixel = await pixelsService.getPixelDetails(id, tokenId as string | undefined)
+    if (!id) {
+      return rejectInvalidStringParam(res, 'Pixel ID')
+    }
+    if (req.query.tokenId !== undefined && !tokenId) {
+      return rejectInvalidStringParam(res, 'tokenId')
+    }
+
+    const pixel = await pixelsService.getPixelDetails(id, tokenId)
 
     res.json({
       success: true,
@@ -66,13 +94,20 @@ export const getPixelDetails = async (req: Request, res: Response, next: NextFun
 export const getPixelEvents = async (req: Request, res: Response, next: NextFunction) => {
   try {
     if (!requireSuperAdmin(req, res)) return
-    const { id } = req.params
-    const { tokenId, limit } = req.query
+    const id = pickPixelId(req.params.id)
+    const tokenId = pickTokenId(req.query.tokenId)
+
+    if (!id) {
+      return rejectInvalidStringParam(res, 'Pixel ID')
+    }
+    if (req.query.tokenId !== undefined && !tokenId) {
+      return rejectInvalidStringParam(res, 'tokenId')
+    }
 
     const events = await pixelsService.getPixelEvents(
       id,
-      tokenId as string | undefined,
-      parseLimitedNumber(limit, 100, 200)
+      tokenId,
+      parseLimitedNumber(req.query.limit, 100, 200)
     )
 
     res.json({
