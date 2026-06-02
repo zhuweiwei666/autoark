@@ -4,6 +4,8 @@ import { AgentConfig, AgentOperation, DailyReport, AiConversation } from './agen
 import logger from '../../utils/logger'
 import { authenticate, authorize } from '../../middlewares/auth'
 import { UserRole } from '../../models/User'
+import { pickAllowedString, pickSafeQueryString } from '../../utils/pagination'
+import { sanitizeScopedUpdate } from '../../utils/accessControl'
 
 const router = Router()
 
@@ -12,6 +14,285 @@ router.use(authenticate)
 router.use(authorize(UserRole.SUPER_ADMIN))
 
 // ==================== Agent 配置 CRUD ====================
+
+const AGENT_NAME_MAX_LENGTH = 120
+const AGENT_DESCRIPTION_MAX_LENGTH = 1000
+const AGENT_ID_MAX_LENGTH = 80
+const AGENT_ACCOUNT_MAX_COUNT = 500
+const AGENT_ASSET_MAX_COUNT = 500
+const AGENT_STATUS_VALUES = ['active', 'paused', 'disabled'] as const
+const AGENT_MODE_VALUES = ['observe', 'suggest', 'auto'] as const
+const AGENT_FEISHU_RECEIVE_ID_TYPES = ['open_id', 'chat_id', 'user_id', 'email'] as const
+const AGENT_WEIGHT_KEYS = ['cpm', 'ctr', 'hookRate', 'cpc', 'cpa', 'roas', 'atcRate'] as const
+
+const hasOwn = (input: any, key: string) => Object.prototype.hasOwnProperty.call(input || {}, key)
+
+const pickBoundedNumber = (
+  value: any,
+  options: { min?: number; max: number; integer?: boolean },
+): number | undefined => {
+  const next = Number(value)
+  const min = options.min ?? 0
+  if (!Number.isFinite(next)) return undefined
+  const bounded = Math.min(options.max, Math.max(min, next))
+  return options.integer ? Math.floor(bounded) : bounded
+}
+
+const pickBoolean = (value: any): boolean | undefined => (
+  typeof value === 'boolean' ? value : undefined
+)
+
+const pickStringList = (value: any, maxCount: number, maxLength = AGENT_ID_MAX_LENGTH): string[] | undefined => {
+  if (!Array.isArray(value)) return undefined
+  return Array.from(new Set(value
+    .map((item: any) => pickSafeQueryString(item, maxLength))
+    .filter(Boolean) as string[]))
+    .slice(0, maxCount)
+}
+
+const setNumber = (
+  target: any,
+  source: any,
+  key: string,
+  options: { min?: number; max: number; integer?: boolean },
+) => {
+  if (!hasOwn(source, key)) return
+  const value = pickBoundedNumber(source[key], options)
+  if (value !== undefined) target[key] = value
+}
+
+const setBoolean = (target: any, source: any, key: string) => {
+  if (!hasOwn(source, key)) return
+  const value = pickBoolean(source[key])
+  if (value !== undefined) target[key] = value
+}
+
+const sanitizeAgentScope = (scope: any) => {
+  if (!scope || typeof scope !== 'object' || Array.isArray(scope)) return undefined
+  const data: any = {}
+
+  const adAccountIds = pickStringList(scope.adAccountIds, AGENT_ACCOUNT_MAX_COUNT, 64)
+  if (adAccountIds) data.adAccountIds = adAccountIds
+  const fbTokenIds = pickStringList(scope.fbTokenIds, AGENT_ASSET_MAX_COUNT)
+  if (fbTokenIds) data.fbTokenIds = fbTokenIds
+  const tiktokTokenIds = pickStringList(scope.tiktokTokenIds, AGENT_ASSET_MAX_COUNT)
+  if (tiktokTokenIds) data.tiktokTokenIds = tiktokTokenIds
+  const facebookAppIds = pickStringList(scope.facebookAppIds, AGENT_ASSET_MAX_COUNT)
+  if (facebookAppIds) data.facebookAppIds = facebookAppIds
+
+  ;['materials', 'targetingPackages', 'copywritingPackages'].forEach((key) => {
+    const input = scope[key]
+    if (!input || typeof input !== 'object' || Array.isArray(input)) return
+    const next: any = {}
+    setBoolean(next, input, 'allowAll')
+    setBoolean(next, input, 'allowCreate')
+    ;['folderIds', 'materialIds', 'packageIds'].forEach((listKey) => {
+      const values = pickStringList(input[listKey], AGENT_ASSET_MAX_COUNT)
+      if (values) next[listKey] = values
+    })
+    if (Object.keys(next).length > 0) data[key] = next
+  })
+
+  return Object.keys(data).length > 0 ? data : undefined
+}
+
+const sanitizeAgentPermissions = (permissions: any) => {
+  if (!permissions || typeof permissions !== 'object' || Array.isArray(permissions)) return undefined
+  const data: any = {}
+  ;[
+    'canPublishAds',
+    'canToggleStatus',
+    'canAdjustBudget',
+    'canAdjustBid',
+    'canPause',
+    'canResume',
+  ].forEach((key) => setBoolean(data, permissions, key))
+  return Object.keys(data).length > 0 ? data : undefined
+}
+
+const sanitizeAgentObjectives = (objectives: any) => {
+  if (!objectives || typeof objectives !== 'object' || Array.isArray(objectives)) return undefined
+  const data: any = {}
+  setNumber(data, objectives, 'targetRoas', { max: 100 })
+  setNumber(data, objectives, 'maxCpa', { max: 1_000_000 })
+  setNumber(data, objectives, 'dailyBudgetLimit', { max: 10_000_000 })
+  setNumber(data, objectives, 'monthlyBudgetLimit', { max: 300_000_000 })
+  return Object.keys(data).length > 0 ? data : undefined
+}
+
+const sanitizeAgentRules = (rules: any) => {
+  if (!rules || typeof rules !== 'object' || Array.isArray(rules)) return undefined
+  const data: any = {}
+
+  if (rules.autoStop && typeof rules.autoStop === 'object' && !Array.isArray(rules.autoStop)) {
+    const autoStop: any = {}
+    setBoolean(autoStop, rules.autoStop, 'enabled')
+    setNumber(autoStop, rules.autoStop, 'roasThreshold', { max: 100 })
+    setNumber(autoStop, rules.autoStop, 'minDays', { min: 1, max: 365, integer: true })
+    setNumber(autoStop, rules.autoStop, 'minSpend', { max: 1_000_000 })
+    if (Object.keys(autoStop).length > 0) data.autoStop = autoStop
+  }
+
+  if (rules.autoScale && typeof rules.autoScale === 'object' && !Array.isArray(rules.autoScale)) {
+    const autoScale: any = {}
+    setBoolean(autoScale, rules.autoScale, 'enabled')
+    setNumber(autoScale, rules.autoScale, 'roasThreshold', { max: 100 })
+    setNumber(autoScale, rules.autoScale, 'minDays', { min: 1, max: 365, integer: true })
+    setNumber(autoScale, rules.autoScale, 'budgetIncrease', { max: 10 })
+    setNumber(autoScale, rules.autoScale, 'maxBudget', { max: 10_000_000 })
+    if (Object.keys(autoScale).length > 0) data.autoScale = autoScale
+  }
+
+  if (rules.budgetAdjust && typeof rules.budgetAdjust === 'object' && !Array.isArray(rules.budgetAdjust)) {
+    const budgetAdjust: any = {}
+    setBoolean(budgetAdjust, rules.budgetAdjust, 'enabled')
+    setNumber(budgetAdjust, rules.budgetAdjust, 'minAdjustPercent', { max: 10 })
+    setNumber(budgetAdjust, rules.budgetAdjust, 'maxAdjustPercent', { max: 10 })
+    const adjustFrequency = pickAllowedString(rules.budgetAdjust.adjustFrequency, ['daily', 'weekly'], '')
+    if (adjustFrequency) budgetAdjust.adjustFrequency = adjustFrequency
+    if (Object.keys(budgetAdjust).length > 0) data.budgetAdjust = budgetAdjust
+  }
+
+  if (rules.bidAdjust && typeof rules.bidAdjust === 'object' && !Array.isArray(rules.bidAdjust)) {
+    const bidAdjust: any = {}
+    setBoolean(bidAdjust, rules.bidAdjust, 'enabled')
+    const strategy = pickSafeQueryString(rules.bidAdjust.strategy, 60)
+    if (strategy) bidAdjust.strategy = strategy
+    setNumber(bidAdjust, rules.bidAdjust, 'adjustRange', { max: 10 })
+    if (Object.keys(bidAdjust).length > 0) data.bidAdjust = bidAdjust
+  }
+
+  return Object.keys(data).length > 0 ? data : undefined
+}
+
+const sanitizeAgentAiConfig = (aiConfig: any) => {
+  if (!aiConfig || typeof aiConfig !== 'object' || Array.isArray(aiConfig)) return undefined
+  const data: any = {}
+  const model = pickSafeQueryString(aiConfig.model, 80)
+  if (model) data.model = model
+  setBoolean(data, aiConfig, 'useAiDecision')
+  setNumber(data, aiConfig, 'aiDecisionWeight', { max: 1 })
+  setBoolean(data, aiConfig, 'requireApproval')
+  setNumber(data, aiConfig, 'approvalThreshold', { max: 10_000_000 })
+  return Object.keys(data).length > 0 ? data : undefined
+}
+
+const sanitizeAgentScoringConfig = (scoringConfig: any) => {
+  if (!scoringConfig || typeof scoringConfig !== 'object' || Array.isArray(scoringConfig)) return undefined
+  const data: any = {}
+
+  if (Array.isArray(scoringConfig.stages)) {
+    data.stages = scoringConfig.stages.slice(0, 8)
+      .filter((stage: any) => stage && typeof stage === 'object' && !Array.isArray(stage))
+      .map((stage: any) => {
+        const next: any = {}
+        const name = pickSafeQueryString(stage.name, 80)
+        if (name) next.name = name
+        setNumber(next, stage, 'minSpend', { max: 10_000_000 })
+        setNumber(next, stage, 'maxSpend', { max: 10_000_000 })
+        if (stage.weights && typeof stage.weights === 'object' && !Array.isArray(stage.weights)) {
+          const weights: any = {}
+          AGENT_WEIGHT_KEYS.forEach((key) => setNumber(weights, stage.weights, key, { max: 1 }))
+          if (Object.keys(weights).length > 0) next.weights = weights
+        }
+        return next
+      })
+      .filter((stage: any) => Object.keys(stage).length > 0)
+  }
+
+  setNumber(data, scoringConfig, 'momentumSensitivity', { max: 1 })
+  if (scoringConfig.baselines && typeof scoringConfig.baselines === 'object' && !Array.isArray(scoringConfig.baselines)) {
+    const baselines: any = {}
+    setNumber(baselines, scoringConfig.baselines, 'cpm', { max: 10_000 })
+    setNumber(baselines, scoringConfig.baselines, 'ctr', { max: 1 })
+    setNumber(baselines, scoringConfig.baselines, 'cpc', { max: 10_000 })
+    setNumber(baselines, scoringConfig.baselines, 'hookRate', { max: 1 })
+    setNumber(baselines, scoringConfig.baselines, 'atcRate', { max: 1 })
+    if (Object.keys(baselines).length > 0) data.baselines = baselines
+  }
+
+  return Object.keys(data).length > 0 ? data : undefined
+}
+
+const sanitizeAgentActionThresholds = (thresholds: any) => {
+  if (!thresholds || typeof thresholds !== 'object' || Array.isArray(thresholds)) return undefined
+  const data: any = {}
+  ;['aggressiveScale', 'moderateScale'].forEach((key) => {
+    const input = thresholds[key]
+    if (!input || typeof input !== 'object' || Array.isArray(input)) return
+    const next: any = {}
+    setNumber(next, input, 'minScore', { max: 100, integer: true })
+    setNumber(next, input, 'changePercent', { max: 100, integer: true })
+    if (Object.keys(next).length > 0) data[key] = next
+  })
+  ;['stopLoss', 'kill'].forEach((key) => {
+    const input = thresholds[key]
+    if (!input || typeof input !== 'object' || Array.isArray(input)) return
+    const next: any = {}
+    setNumber(next, input, 'maxScore', { max: 100, integer: true })
+    setNumber(next, input, 'changePercent', { min: -100, max: 100, integer: true })
+    if (Object.keys(next).length > 0) data[key] = next
+  })
+  return Object.keys(data).length > 0 ? data : undefined
+}
+
+const sanitizeAgentFeishuConfig = (feishuConfig: any) => {
+  if (!feishuConfig || typeof feishuConfig !== 'object' || Array.isArray(feishuConfig)) return undefined
+  const data: any = {}
+  setBoolean(data, feishuConfig, 'enabled')
+  ;[
+    ['appId', 120],
+    ['appSecret', 240],
+    ['receiveId', 240],
+  ].forEach(([key, maxLength]) => {
+    const value = pickSafeQueryString(feishuConfig[key as string], maxLength as number)
+    if (value) data[key as string] = value
+  })
+  const receiveIdType = pickAllowedString(feishuConfig.receiveIdType, AGENT_FEISHU_RECEIVE_ID_TYPES, '')
+  if (receiveIdType) data.receiveIdType = receiveIdType
+  return Object.keys(data).length > 0 ? data : undefined
+}
+
+const sanitizeAgentConfigInput = (input: any, options: { allowOrganizationId?: boolean } = {}) => {
+  const raw = input || {}
+  const scoped = sanitizeScopedUpdate(raw)
+  delete scoped.runtime
+
+  const data: any = {}
+  const name = pickSafeQueryString(scoped.name, AGENT_NAME_MAX_LENGTH)
+  if (name) data.name = name
+  if (hasOwn(scoped, 'description')) data.description = pickSafeQueryString(scoped.description, AGENT_DESCRIPTION_MAX_LENGTH) || ''
+  if (options.allowOrganizationId && hasOwn(raw, 'organizationId')) {
+    const organizationId = pickSafeQueryString(raw.organizationId, AGENT_ID_MAX_LENGTH)
+    if (organizationId) data.organizationId = organizationId
+  }
+
+  const accountIds = pickStringList(scoped.accountIds, AGENT_ACCOUNT_MAX_COUNT, 64)
+  if (accountIds) data.accountIds = accountIds
+  const status = pickAllowedString(scoped.status, AGENT_STATUS_VALUES, '')
+  if (status) data.status = status
+  const mode = pickAllowedString(scoped.mode, AGENT_MODE_VALUES, '')
+  if (mode) data.mode = mode
+
+  const scope = sanitizeAgentScope(scoped.scope)
+  if (scope) data.scope = scope
+  const permissions = sanitizeAgentPermissions(scoped.permissions)
+  if (permissions) data.permissions = permissions
+  const objectives = sanitizeAgentObjectives(scoped.objectives)
+  if (objectives) data.objectives = objectives
+  const rules = sanitizeAgentRules(scoped.rules)
+  if (rules) data.rules = rules
+  const aiConfig = sanitizeAgentAiConfig(scoped.aiConfig)
+  if (aiConfig) data.aiConfig = aiConfig
+  const scoringConfig = sanitizeAgentScoringConfig(scoped.scoringConfig)
+  if (scoringConfig) data.scoringConfig = scoringConfig
+  const actionThresholds = sanitizeAgentActionThresholds(scoped.actionThresholds)
+  if (actionThresholds) data.actionThresholds = actionThresholds
+  const feishuConfig = sanitizeAgentFeishuConfig(scoped.feishuConfig)
+  if (feishuConfig) data.feishuConfig = feishuConfig
+
+  return data
+}
 
 // 获取所有 Agent
 router.get('/agents', async (req: Request, res: Response) => {
@@ -48,11 +329,15 @@ router.get('/agents/:id', async (req: Request, res: Response) => {
 // 创建 Agent
 router.post('/agents', async (req: Request, res: Response) => {
   try {
+    const sanitized = sanitizeAgentConfigInput(req.body, { allowOrganizationId: true })
+    if (!sanitized.name) {
+      return res.status(400).json({ success: false, error: '请输入 Agent 名称' })
+    }
     const payload = {
-      ...req.body,
+      ...sanitized,
       createdBy: req.user?.userId,
       // 默认继承组织隔离
-      organizationId: req.body?.organizationId || req.user?.organizationId,
+      organizationId: sanitized.organizationId || req.user?.organizationId,
     }
     const agent = await agentService.createAgent(payload)
     res.status(201).json({ success: true, data: agent })
@@ -65,7 +350,7 @@ router.post('/agents', async (req: Request, res: Response) => {
 // 更新 Agent
 router.put('/agents/:id', async (req: Request, res: Response) => {
   try {
-    const agent = await agentService.updateAgent(req.params.id, req.body)
+    const agent = await agentService.updateAgent(req.params.id, sanitizeAgentConfigInput(req.body))
     res.json({ success: true, data: agent })
   } catch (error: any) {
     res.status(500).json({ success: false, error: error.message })
