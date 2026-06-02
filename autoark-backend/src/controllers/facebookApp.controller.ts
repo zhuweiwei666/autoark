@@ -9,7 +9,26 @@ import {
   buildPublicOAuthReadiness,
   computePublicOauthComplianceReady,
 } from '../utils/facebookAppReadiness'
-import { parseLimitedNumber } from '../utils/pagination'
+import { parseLimitedNumber, pickSafeQueryString } from '../utils/pagination'
+
+const APP_ID_MAX_LENGTH = 80
+const APP_SECRET_MAX_LENGTH = 256
+const APP_NAME_MAX_LENGTH = 100
+const APP_NOTES_MAX_LENGTH = 500
+const BUSINESS_LOGIN_CONFIG_ID_MAX_LENGTH = 80
+const PERMISSION_NAME_MAX_LENGTH = 100
+const PERMISSION_NOTES_MAX_LENGTH = 500
+const MAX_APP_CONCURRENT_TASKS = 100
+const MAX_APP_REQUESTS_PER_MINUTE = 100000
+const MAX_APP_PRIORITY = 1000
+const MAX_PERMISSION_ROWS = 100
+
+const FACEBOOK_APP_STATUSES = ['active', 'inactive', 'suspended', 'rate_limited'] as const
+const APP_MODES = ['dev', 'live', 'unknown'] as const
+const BUSINESS_VERIFICATION_STATUSES = ['not_started', 'in_review', 'verified', 'rejected', 'unknown'] as const
+const APP_REVIEW_STATUSES = ['not_started', 'in_review', 'approved', 'rejected', 'unknown'] as const
+const PERMISSION_ACCESS_LEVELS = ['standard', 'advanced', 'unknown'] as const
+const PERMISSION_STATUSES = ['requested', 'approved', 'rejected', 'unknown'] as const
 
 const writeFacebookAppAudit = (req: Request, input: {
   action: string
@@ -53,6 +72,88 @@ const assignableBulkAdAppQuery: Record<string, any> = {
 const AVAILABLE_APP_DEFAULT_LIMIT = 1
 const AVAILABLE_APP_MAX_LIMIT = 50
 
+const isPlainObject = (value: any): value is Record<string, any> => (
+  Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+)
+
+const hasOwn = (target: any, key: string): boolean => (
+  Boolean(target) && Object.prototype.hasOwnProperty.call(target, key)
+)
+
+const boundedInteger = (value: any, max: number): number | undefined => {
+  const next = Number(value)
+  if (!Number.isFinite(next) || next < 0) return undefined
+  return Math.min(max, Math.floor(next))
+}
+
+const pickAllowed = <T extends readonly string[]>(value: any, allowed: T): T[number] | undefined => {
+  if (typeof value !== 'string') return undefined
+  return allowed.includes(value as T[number]) ? value as T[number] : undefined
+}
+
+const sanitizeFacebookAppConfig = (config: any): Record<string, any> | undefined => {
+  if (!isPlainObject(config)) return undefined
+
+  const sanitized: Record<string, any> = {}
+  const maxConcurrentTasks = boundedInteger(config.maxConcurrentTasks, MAX_APP_CONCURRENT_TASKS)
+  const requestsPerMinute = boundedInteger(config.requestsPerMinute, MAX_APP_REQUESTS_PER_MINUTE)
+  const priority = boundedInteger(config.priority, MAX_APP_PRIORITY)
+  const businessLoginConfigId = pickSafeQueryString(config.businessLoginConfigId, BUSINESS_LOGIN_CONFIG_ID_MAX_LENGTH)
+
+  if (maxConcurrentTasks !== undefined) sanitized.maxConcurrentTasks = maxConcurrentTasks
+  if (requestsPerMinute !== undefined) sanitized.requestsPerMinute = requestsPerMinute
+  if (priority !== undefined) sanitized.priority = priority
+  if (typeof config.enabledForBulkAds === 'boolean') sanitized.enabledForBulkAds = config.enabledForBulkAds
+  if (
+    hasOwn(config, 'businessLoginConfigId') &&
+    (typeof config.businessLoginConfigId === 'string' || config.businessLoginConfigId === null)
+  ) {
+    sanitized.businessLoginConfigId = businessLoginConfigId
+  }
+
+  return Object.keys(sanitized).length > 0 ? sanitized : undefined
+}
+
+const sanitizePermissions = (permissions: any): any[] | undefined => {
+  if (!Array.isArray(permissions)) return undefined
+
+  const seen = new Set<string>()
+  return permissions
+    .slice(0, MAX_PERMISSION_ROWS)
+    .map((permission) => {
+      if (!isPlainObject(permission)) return undefined
+      const name = pickSafeQueryString(permission.name, PERMISSION_NAME_MAX_LENGTH)
+      if (!name || seen.has(name)) return undefined
+      seen.add(name)
+
+      return {
+        name,
+        access: pickAllowed(permission.access, PERMISSION_ACCESS_LEVELS) || 'unknown',
+        status: pickAllowed(permission.status, PERMISSION_STATUSES) || 'unknown',
+        notes: pickSafeQueryString(permission.notes, PERMISSION_NOTES_MAX_LENGTH),
+        lastUpdatedAt: new Date(),
+      }
+    })
+    .filter(Boolean) as any[]
+}
+
+const sanitizeFacebookAppCompliance = (compliance: any): Record<string, any> | undefined => {
+  if (!isPlainObject(compliance)) return undefined
+
+  const sanitized: Record<string, any> = {}
+  const appMode = pickAllowed(compliance.appMode, APP_MODES)
+  const businessVerification = pickAllowed(compliance.businessVerification, BUSINESS_VERIFICATION_STATUSES)
+  const appReview = pickAllowed(compliance.appReview, APP_REVIEW_STATUSES)
+  const permissions = sanitizePermissions(compliance.permissions)
+
+  if (appMode) sanitized.appMode = appMode
+  if (businessVerification) sanitized.businessVerification = businessVerification
+  if (appReview) sanitized.appReview = appReview
+  if (permissions) sanitized.permissions = permissions
+
+  return Object.keys(sanitized).length > 0 ? sanitized : undefined
+}
+
 /**
  * 获取所有 Facebook Apps
  */
@@ -88,7 +189,15 @@ export const getApp = async (req: Request, res: Response) => {
  */
 export const createApp = async (req: Request, res: Response) => {
   try {
-    const { appId, appSecret, appName, notes, config } = req.body
+    const appId = pickSafeQueryString(req.body?.appId, APP_ID_MAX_LENGTH)
+    const appSecret = pickSafeQueryString(req.body?.appSecret, APP_SECRET_MAX_LENGTH)
+    const appName = pickSafeQueryString(req.body?.appName, APP_NAME_MAX_LENGTH)
+    const notes = pickSafeQueryString(req.body?.notes, APP_NOTES_MAX_LENGTH)
+    const config = sanitizeFacebookAppConfig(req.body?.config) || {}
+
+    if (!appId || !appSecret) {
+      return res.status(400).json({ success: false, error: 'App ID 和 App Secret 不能为空' })
+    }
 
     // 检查是否已存在
     const existing = await FacebookApp.findOne({ appId })
@@ -104,7 +213,7 @@ export const createApp = async (req: Request, res: Response) => {
       appSecret,
       appName: appName || `App ${appId.substring(0, 6)}`,
       notes,
-      config: config || {},
+      config,
       validation: {
         isValid: validationResult.isValid,
         validatedAt: new Date(),
@@ -135,7 +244,7 @@ export const createApp = async (req: Request, res: Response) => {
       summary: '创建 Facebook App 失败',
       reason: error.message,
       metadata: {
-        appId: req.body?.appId,
+        appId: pickSafeQueryString(req.body?.appId, APP_ID_MAX_LENGTH),
       },
     })
     res.status(500).json({ success: false, error: error.message })
@@ -148,7 +257,12 @@ export const createApp = async (req: Request, res: Response) => {
 export const updateApp = async (req: Request, res: Response) => {
   try {
     const { id } = req.params
-    const { appName, appSecret, notes, config, status, compliance } = req.body
+    const appName = pickSafeQueryString(req.body?.appName, APP_NAME_MAX_LENGTH)
+    const appSecret = pickSafeQueryString(req.body?.appSecret, APP_SECRET_MAX_LENGTH)
+    const notes = pickSafeQueryString(req.body?.notes, APP_NOTES_MAX_LENGTH)
+    const config = sanitizeFacebookAppConfig(req.body?.config)
+    const status = pickAllowed(req.body?.status, FACEBOOK_APP_STATUSES)
+    const compliance = sanitizeFacebookAppCompliance(req.body?.compliance)
 
     const app = await FacebookApp.findById(id)
     if (!app) {
@@ -170,8 +284,15 @@ export const updateApp = async (req: Request, res: Response) => {
     }
 
     if (appName) app.appName = appName
-    if (notes !== undefined) app.notes = notes
-    if (config) app.config = { ...app.config, ...config }
+    if (hasOwn(req.body, 'notes') && (typeof req.body.notes === 'string' || req.body.notes === null)) {
+      app.notes = notes
+    }
+    if (config) {
+      const existingConfig = typeof (app.config as any)?.toObject === 'function'
+        ? (app.config as any).toObject()
+        : (app.config as any || {})
+      app.config = { ...existingConfig, ...config }
+    }
     if (status) app.status = status
 
     // 合规信息允许更新（用于记录 Advanced Access / Business Verification / App Review 状态）
@@ -245,15 +366,20 @@ export const getPublicOAuthRequirements = async (req: Request, res: Response) =>
 export const updateCompliance = async (req: Request, res: Response) => {
   try {
     const { id } = req.params
+    const compliance = sanitizeFacebookAppCompliance(req.body)
     const app: any = await FacebookApp.findById(id)
     if (!app) {
       return res.status(404).json({ success: false, error: 'App 不存在' })
     }
 
+    if (!compliance) {
+      return res.status(400).json({ success: false, error: '未提供有效的合规信息' })
+    }
+
     app.compliance = {
       ...(app.compliance || {}),
-      ...(req.body || {}),
-      ...(req.body?.permissions ? { permissions: req.body.permissions } : {}),
+      ...compliance,
+      ...(compliance.permissions ? { permissions: compliance.permissions } : {}),
     }
     app.compliance.publicOauthReady = computePublicOauthComplianceReady(app)
     app.compliance.lastCheckedAt = new Date()
