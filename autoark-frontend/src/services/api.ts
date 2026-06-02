@@ -14,6 +14,11 @@ const getApiBaseUrl = () => {
 }
 
 const API_BASE_URL = getApiBaseUrl()
+const DEFAULT_AUTH_FETCH_TIMEOUT_MS = 45000
+
+type AuthFetchOptions = RequestInit & {
+  timeoutMs?: number
+}
 
 /**
  * 获取当前认证 Token
@@ -26,18 +31,37 @@ const getAuthToken = (): string | null => {
  * 带认证的 fetch 封装
  * 默认添加 Content-Type: application/json，可通过 options.headers 覆盖
  */
-export const authFetch = async (url: string, options: RequestInit = {}): Promise<Response> => {
+export const authFetch = async (url: string, options: AuthFetchOptions = {}): Promise<Response> => {
   const token = getAuthToken()
-  const headers: HeadersInit = {
-    'Content-Type': 'application/json',
-    ...(options.headers || {}),
+  const { timeoutMs = DEFAULT_AUTH_FETCH_TIMEOUT_MS, signal, ...fetchOptions } = options
+  const headers = new Headers(fetchOptions.headers || {})
+  if (!headers.has('Content-Type') && !(fetchOptions.body instanceof FormData)) {
+    headers.set('Content-Type', 'application/json')
   }
   
   if (token) {
-    ;(headers as Record<string, string>)['Authorization'] = `Bearer ${token}`
+    headers.set('Authorization', `Bearer ${token}`)
   }
-  
-  return fetch(url, { ...options, headers })
+
+  if (!timeoutMs || timeoutMs <= 0) {
+    return fetch(url, { ...fetchOptions, headers, signal })
+  }
+
+  const controller = new AbortController()
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs)
+  const abortFromCaller = () => controller.abort()
+  if (signal?.aborted) {
+    controller.abort()
+  } else {
+    signal?.addEventListener('abort', abortFromCaller, { once: true })
+  }
+
+  try {
+    return await fetch(url, { ...fetchOptions, headers, signal: controller.signal })
+  } finally {
+    window.clearTimeout(timeoutId)
+    signal?.removeEventListener('abort', abortFromCaller)
+  }
 }
 
 // === 商用 SaaS 状态 ===
