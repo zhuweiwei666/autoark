@@ -2,6 +2,8 @@ import { Request, Response } from 'express'
 import { createHash } from 'crypto'
 import Material from '../models/Material'
 import Folder from '../models/Folder'
+import Account from '../models/Account'
+import Ad from '../models/Ad'
 import { uploadToR2, deleteFromR2, getObjectFromR2, checkR2Config, generatePresignedUploadUrl, generatePresignedUploadUrls, getPublicUrlForKey } from '../services/r2Storage.service'
 import { 
   calculateFingerprint, 
@@ -18,9 +20,11 @@ import logger from '../utils/logger'
 import {
   combineFilters,
   isSuperAdmin,
+  objectIdValue,
   sanitizeScopedUpdate,
   scopedOwnerFilter,
 } from '../utils/accessControl'
+import { normalizeForApi, normalizeForStorage } from '../utils/accountId'
 
 /**
  * 素材管理控制器
@@ -77,6 +81,71 @@ const escapeRegexLiteral = (value: string): string => (
 )
 
 const childPathRegex = (path: string): string => `^${escapeRegexLiteral(path)}/`
+
+const idString = (value: any): string | undefined => (
+  value?.toString?.() || (value ? String(value) : undefined)
+)
+
+const accountIdVariants = (accountId?: string): string[] => {
+  if (!accountId) return []
+  return Array.from(new Set([
+    normalizeForStorage(accountId),
+    normalizeForApi(accountId),
+    String(accountId),
+  ].filter(Boolean)))
+}
+
+const mappingOrgFilter = (organizationId?: string): any => (
+  organizationId ? { organizationId: objectIdValue(organizationId) } : {}
+)
+
+const validateMappingAssetScope = async (
+  req: Request,
+  mapping: { adId?: string; accountId?: string; campaignId?: string },
+  materialOrganizationId?: string,
+): Promise<string | null> => {
+  const organizationId = materialOrganizationId || req.user?.organizationId
+
+  if (!organizationId && isSuperAdmin(req)) return null
+  if (!organizationId) return '当前用户缺少组织信息，无法校验广告资产归属'
+
+  if (mapping.adId) {
+    const ad = await Ad.findOne(combineFilters(
+      { adId: mapping.adId },
+      mappingOrgFilter(organizationId),
+    )).select('adId accountId campaignId organizationId').lean()
+
+    if (ad) {
+      if (
+        mapping.accountId &&
+        ad.accountId &&
+        normalizeForStorage(mapping.accountId) !== normalizeForStorage(ad.accountId)
+      ) {
+        return '广告账户与广告记录不匹配'
+      }
+
+      if (mapping.campaignId && ad.campaignId && String(mapping.campaignId) !== String(ad.campaignId)) {
+        return '广告系列与广告记录不匹配'
+      }
+
+      return null
+    }
+  }
+
+  if (mapping.accountId) {
+    const account = await Account.findOne(combineFilters(
+      {
+        channel: 'facebook',
+        accountId: { $in: accountIdVariants(mapping.accountId) },
+      },
+      mappingOrgFilter(organizationId),
+    )).select('_id accountId organizationId').lean()
+
+    return account ? null : '广告账户不存在或无权访问'
+  }
+
+  return '缺少可校验的广告或账户归属信息'
+}
 
 /**
  * 检查 R2 配置状态
@@ -1038,6 +1107,14 @@ export const recordFbMapping = async (req: Request, res: Response) => {
     if (!material) {
       return res.status(404).json({ success: false, error: '素材不存在或无权访问' })
     }
+    const scopeError = await validateMappingAssetScope(
+      req,
+      { accountId },
+      idString((material as any).organizationId),
+    )
+    if (scopeError) {
+      return res.status(403).json({ success: false, error: scopeError })
+    }
     
     const success = await recordFacebookMapping(materialId, accountId, { imageHash, videoId })
     
@@ -1201,7 +1278,15 @@ export const recordAdMapping = async (req: Request, res: Response) => {
     if (!material) {
       return res.status(404).json({ success: false, error: '素材不存在或无权访问' })
     }
-    const materialOrganizationId = (material as any).organizationId?.toString?.() || req.user?.organizationId
+    const materialOrganizationId = idString((material as any).organizationId) || req.user?.organizationId
+    const scopeError = await validateMappingAssetScope(
+      req,
+      { adId, accountId, campaignId },
+      materialOrganizationId,
+    )
+    if (scopeError) {
+      return res.status(403).json({ success: false, error: scopeError })
+    }
     
     const success = await recordAdMaterialMapping({
       adId,
@@ -1252,21 +1337,34 @@ export const recordAdMappingsBatch = async (req: Request, res: Response) => {
     const materialOrgById = new Map(
       visibleMaterials.map((material: any) => [
         material._id.toString(),
-        material.organizationId?.toString?.() || req.user?.organizationId,
+        idString(material.organizationId) || req.user?.organizationId,
       ]),
     )
-    const scopedMappings = mappings
+    const candidateMappings = mappings
       .filter((mapping: any) => visibleMaterialIds.has(String(mapping.materialId)))
-      .map((mapping: any) => ({
-        ...mapping,
-        organizationId: materialOrgById.get(String(mapping.materialId)),
-      }))
+      .map((mapping: any) => {
+        const organizationId = materialOrgById.get(String(mapping.materialId))
+        return {
+          ...mapping,
+          organizationId,
+        }
+      })
+
+    const scopedMappings: any[] = []
+    for (const mapping of candidateMappings) {
+      const scopeError = await validateMappingAssetScope(req, mapping, mapping.organizationId)
+      if (!scopeError) {
+        scopedMappings.push(mapping)
+      }
+    }
+    const filteredCount = mappings.length - scopedMappings.length
 
     const result = await recordAdMaterialMappings(scopedMappings)
     
     res.json({
       success: true,
       data: result,
+      filteredMappingCount: filteredCount,
       message: `批量记录完成：成功 ${result.success} 条，失败 ${result.failed} 条`,
     })
   } catch (error: any) {

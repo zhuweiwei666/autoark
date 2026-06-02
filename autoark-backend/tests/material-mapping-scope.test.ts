@@ -1,4 +1,5 @@
 import {
+  recordFbMapping,
   recordAdMapping,
   recordAdMappingsBatch,
 } from '../src/controllers/material.controller'
@@ -12,6 +13,20 @@ jest.mock('../src/models/Material', () => ({
   default: {
     findOne: jest.fn(),
     find: jest.fn(),
+  },
+}))
+
+jest.mock('../src/models/Account', () => ({
+  __esModule: true,
+  default: {
+    findOne: jest.fn(),
+  },
+}))
+
+jest.mock('../src/models/Ad', () => ({
+  __esModule: true,
+  default: {
+    findOne: jest.fn(),
   },
 }))
 
@@ -43,6 +58,8 @@ jest.mock('../src/services/materialTracking.service', () => ({
 }))
 
 import Material from '../src/models/Material'
+import Account from '../src/models/Account'
+import Ad from '../src/models/Ad'
 
 const createResponse = () => ({
   status: jest.fn().mockReturnThis(),
@@ -67,6 +84,12 @@ const findResult = (result: any) => ({
   }),
 })
 
+const scopedLookupResult = (result: any) => ({
+  select: jest.fn().mockReturnValue({
+    lean: jest.fn().mockResolvedValue(result),
+  }),
+})
+
 describe('material ad mapping tenant scoping', () => {
   afterEach(() => {
     jest.clearAllMocks()
@@ -76,6 +99,11 @@ describe('material ad mapping tenant scoping', () => {
     ;(Material.findOne as jest.Mock).mockReturnValue(findOneResult({
       _id: '665000000000000000000101',
       organizationId: { toString: () => '665000000000000000000001' },
+    }))
+    ;(Ad.findOne as jest.Mock).mockReturnValue(scopedLookupResult(null))
+    ;(Account.findOne as jest.Mock).mockReturnValue(scopedLookupResult({
+      accountId: '123',
+      organizationId: '665000000000000000000001',
     }))
     ;(recordAdMaterialMapping as jest.Mock).mockResolvedValue(true)
     const res = createResponse()
@@ -95,6 +123,30 @@ describe('material ad mapping tenant scoping', () => {
     expect(res.json).toHaveBeenCalledWith({ success: true, message: '映射记录成功' })
   })
 
+  it('rejects single ad mappings to accounts outside the material organization', async () => {
+    ;(Material.findOne as jest.Mock).mockReturnValue(findOneResult({
+      _id: '665000000000000000000101',
+      organizationId: { toString: () => '665000000000000000000001' },
+    }))
+    ;(Ad.findOne as jest.Mock).mockReturnValue(scopedLookupResult(null))
+    ;(Account.findOne as jest.Mock).mockReturnValue(scopedLookupResult(null))
+    ;(recordAdMaterialMapping as jest.Mock).mockResolvedValue(true)
+    const res = createResponse()
+
+    await recordAdMapping(createRequest({
+      adId: 'ad_1',
+      materialId: '665000000000000000000101',
+      accountId: 'act_other_org',
+    }), res as any)
+
+    expect(res.status).toHaveBeenCalledWith(403)
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      error: '广告账户不存在或无权访问',
+    })
+    expect(recordAdMaterialMapping).not.toHaveBeenCalled()
+  })
+
   it('adds material organizationId to every visible batch mapping', async () => {
     ;(Material.find as jest.Mock).mockReturnValue(findResult([
       {
@@ -102,6 +154,11 @@ describe('material ad mapping tenant scoping', () => {
         organizationId: { toString: () => '665000000000000000000001' },
       },
     ]))
+    ;(Ad.findOne as jest.Mock).mockReturnValue(scopedLookupResult({
+      adId: 'ad_1',
+      accountId: '123',
+      organizationId: '665000000000000000000001',
+    }))
     ;(recordAdMaterialMappings as jest.Mock).mockResolvedValue({ success: 1, failed: 0 })
     const res = createResponse()
 
@@ -122,6 +179,70 @@ describe('material ad mapping tenant scoping', () => {
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
       success: true,
       data: { success: 1, failed: 0 },
+      filteredMappingCount: 1,
     }))
+  })
+
+  it('filters batch mappings whose accounts are outside the material organization', async () => {
+    ;(Material.find as jest.Mock).mockReturnValue(findResult([
+      {
+        _id: { toString: () => '665000000000000000000101' },
+        organizationId: { toString: () => '665000000000000000000001' },
+      },
+      {
+        _id: { toString: () => '665000000000000000000102' },
+        organizationId: { toString: () => '665000000000000000000001' },
+      },
+    ]))
+    ;(Ad.findOne as jest.Mock).mockReturnValue(scopedLookupResult(null))
+    ;(Account.findOne as jest.Mock)
+      .mockReturnValueOnce(scopedLookupResult({
+        accountId: 'act_1',
+        organizationId: '665000000000000000000001',
+      }))
+      .mockReturnValueOnce(scopedLookupResult(null))
+    ;(recordAdMaterialMappings as jest.Mock).mockResolvedValue({ success: 1, failed: 0 })
+    const res = createResponse()
+
+    await recordAdMappingsBatch(createRequest({
+      mappings: [
+        { adId: 'ad_1', materialId: '665000000000000000000101', accountId: 'act_1' },
+        { adId: 'ad_2', materialId: '665000000000000000000102', accountId: 'act_other_org' },
+      ],
+    }), res as any)
+
+    expect(recordAdMaterialMappings).toHaveBeenCalledWith([
+      expect.objectContaining({
+        adId: 'ad_1',
+        materialId: '665000000000000000000101',
+        organizationId: '665000000000000000000001',
+        accountId: 'act_1',
+      }),
+    ])
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      success: true,
+      filteredMappingCount: 1,
+    }))
+  })
+
+  it('rejects facebook upload mappings to accounts outside the material organization', async () => {
+    ;(Material.findOne as jest.Mock).mockReturnValue(findOneResult({
+      _id: '665000000000000000000101',
+      organizationId: { toString: () => '665000000000000000000001' },
+    }))
+    ;(Account.findOne as jest.Mock).mockReturnValue(scopedLookupResult(null))
+    const res = createResponse()
+
+    await recordFbMapping(createRequest({
+      materialId: '665000000000000000000101',
+      accountId: 'act_other_org',
+      imageHash: 'image_hash_1',
+    }), res as any)
+
+    expect(res.status).toHaveBeenCalledWith(403)
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      error: '广告账户不存在或无权访问',
+    })
   })
 })
