@@ -52,9 +52,17 @@ export const handleFeishuInteraction = async (req: Request, res: Response) => {
   try {
     // 飞书的 URL 验证 (Challenge)
     if (req.body.type === 'url_verification') {
-      if (FEISHU_VERIFICATION_TOKEN && req.body.token !== FEISHU_VERIFICATION_TOKEN) {
+      if (FEISHU_VERIFICATION_TOKEN) {
+        if (req.body.token !== FEISHU_VERIFICATION_TOKEN) {
+          return res.status(403).json({ error: 'invalid verification token' })
+        }
+        return res.json({ challenge: req.body.challenge })
+      }
+
+      if (process.env.NODE_ENV === 'production') {
         return res.status(403).json({ error: 'invalid verification token' })
       }
+
       return res.json({ challenge: req.body.challenge })
     }
 
