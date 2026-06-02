@@ -3,7 +3,7 @@ import FacebookUser from '../src/models/FacebookUser'
 import FbToken from '../src/models/FbToken'
 import Product from '../src/models/Product'
 import { UserRole } from '../src/models/User'
-import { addAccountToProduct, addPixelToProduct } from '../src/controllers/productMapping.controller'
+import { addAccountToProduct, addPixelToProduct, createProduct, updateProduct } from '../src/controllers/productMapping.controller'
 
 const queryWithLean = (value: any) => ({
   select: jest.fn().mockReturnValue({
@@ -129,6 +129,23 @@ describe('product mapping account scope', () => {
     })
   })
 
+  it('rejects unsafe pixel ids before querying cached Facebook assets', async () => {
+    const tokenFind = jest.spyOn(FbToken, 'find')
+    const productFind = jest.spyOn(Product, 'findOne')
+    const req: any = makeReq({ pixelId: { $ne: 'pixel_1' } })
+    const res: any = makeRes()
+
+    await addPixelToProduct(req, res)
+
+    expect(tokenFind).not.toHaveBeenCalled()
+    expect(productFind).not.toHaveBeenCalled()
+    expect(res.status).toHaveBeenCalledWith(400)
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      error: 'pixelId is required',
+    })
+  })
+
   it('links pixels from the requester cached Facebook assets', async () => {
     jest.spyOn(FbToken, 'find').mockReturnValue(queryWithLean([{
       _id: '665000000000000000000501',
@@ -160,6 +177,64 @@ describe('product mapping account scope', () => {
     }])
     expect(product.primaryPixelId).toBe('pixel_1')
     expect(product.save).toHaveBeenCalled()
+    expect(res.json).toHaveBeenCalledWith({ success: true, data: product })
+  })
+
+  it('sanitizes product creation data and blocks relationship mass assignment', async () => {
+    jest.spyOn(Product, 'findOne').mockResolvedValue(null as any)
+    const createSpy = jest.spyOn(Product, 'create').mockResolvedValue({ name: 'Demo' } as any)
+    const req: any = makeReq({
+      name: '  Demo  ',
+      identifier: '  demo:sku_1  ',
+      tags: [' vip ', { $ne: 'bad' }, 'launch'],
+      pixels: [{ pixelId: 'pixel_1' }],
+      accounts: [{ accountId: 'act_123' }],
+      primaryPixelId: 'pixel_1',
+    })
+    const res: any = makeRes()
+
+    await createProduct(req, res)
+
+    const createPayload = createSpy.mock.calls[0][0]
+    expect(createPayload).toMatchObject({
+      name: 'Demo',
+      identifier: 'demo:sku_1',
+      tags: ['vip', 'launch'],
+      organizationId: '665000000000000000000001',
+      createdBy: '665000000000000000000002',
+    })
+    expect(createPayload).not.toHaveProperty('pixels')
+    expect(createPayload).not.toHaveProperty('accounts')
+    expect(createPayload).not.toHaveProperty('primaryPixelId')
+    expect(res.json).toHaveBeenCalledWith({ success: true, data: { name: 'Demo' } })
+  })
+
+  it('filters product updates through the product field allowlist', async () => {
+    const product = { _id: '665000000000000000000301', name: 'Demo' }
+    const updateSpy = jest.spyOn(Product, 'findOneAndUpdate').mockResolvedValue(product as any)
+    const req: any = makeReq({
+      name: '  Demo updated  ',
+      tags: [' one ', { $ne: 'two' }],
+      status: { $ne: 'archived' },
+      pixels: [{ pixelId: 'pixel_1' }],
+      accounts: [{ accountId: 'act_123' }],
+      primaryPixelId: 'pixel_1',
+      organizationId: '665000000000000000000999',
+    })
+    const res: any = makeRes()
+
+    await updateProduct(req, res)
+
+    expect(updateSpy).toHaveBeenCalledWith(
+      expect.any(Object),
+      {
+        $set: {
+          name: 'Demo updated',
+          tags: ['one'],
+        },
+      },
+      { new: true },
+    )
     expect(res.json).toHaveBeenCalledWith({ success: true, data: product })
   })
 })

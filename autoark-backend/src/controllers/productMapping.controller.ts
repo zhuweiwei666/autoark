@@ -24,6 +24,14 @@ import { parseLimitedNumber, parsePagination, pickSafeQueryString } from '../uti
 const PRODUCT_LIST_MAX_PAGE_SIZE = 100
 const PRODUCT_SEARCH_MAX_LENGTH = 80
 const PRODUCT_URL_MAX_LENGTH = 2048
+const PRODUCT_NAME_MAX_LENGTH = 120
+const PRODUCT_IDENTIFIER_MAX_LENGTH = 240
+const PRODUCT_DOMAIN_MAX_LENGTH = 255
+const PRODUCT_DESCRIPTION_MAX_LENGTH = 1000
+const PRODUCT_CATEGORY_MAX_LENGTH = 80
+const PRODUCT_TAG_MAX_LENGTH = 40
+const PRODUCT_ASSET_ID_MAX_LENGTH = 160
+const PRODUCT_ASSET_NAME_MAX_LENGTH = 160
 const PRODUCT_STATUS_FILTERS = ['active', 'inactive', 'archived'] as const
 
 const getProductFilter = (req: Request): any => scopedOwnerFilter(req)
@@ -40,13 +48,72 @@ const normalizeProductSearch = (value: any): string | undefined => {
   return trimmed ? escapeRegexLiteral(trimmed) : undefined
 }
 
+const pickProductTags = (value: any): string[] | undefined => {
+  if (value === undefined) return undefined
+  const values = Array.isArray(value) ? value : [value]
+  const tags = Array.from(new Set(values
+    .map(tag => pickSafeQueryString(tag, PRODUCT_TAG_MAX_LENGTH))
+    .filter(Boolean) as string[]))
+  return tags
+}
+
+const pickAssetId = (value: any): string | undefined => (
+  pickSafeQueryString(Array.isArray(value) ? value[0] : value, PRODUCT_ASSET_ID_MAX_LENGTH)
+)
+
+const pickAssetName = (value: any): string | undefined => (
+  pickSafeQueryString(value, PRODUCT_ASSET_NAME_MAX_LENGTH)
+)
+
+const sanitizeProductCreateData = (body: any) => ({
+  name: pickSafeQueryString(body?.name, PRODUCT_NAME_MAX_LENGTH),
+  identifier: pickSafeQueryString(body?.identifier, PRODUCT_IDENTIFIER_MAX_LENGTH),
+  primaryDomain: pickSafeQueryString(body?.primaryDomain, PRODUCT_DOMAIN_MAX_LENGTH),
+  description: pickSafeQueryString(body?.description, PRODUCT_DESCRIPTION_MAX_LENGTH),
+  tags: pickProductTags(body?.tags),
+  category: pickSafeQueryString(body?.category, PRODUCT_CATEGORY_MAX_LENGTH),
+})
+
+const sanitizeProductUpdateData = (body: any) => {
+  const scoped = sanitizeScopedUpdate(body)
+  const update: any = {}
+
+  if (Object.prototype.hasOwnProperty.call(scoped, 'name')) {
+    const name = pickSafeQueryString(scoped.name, PRODUCT_NAME_MAX_LENGTH)
+    if (name) update.name = name
+  }
+  if (Object.prototype.hasOwnProperty.call(scoped, 'identifier')) {
+    const identifier = pickSafeQueryString(scoped.identifier, PRODUCT_IDENTIFIER_MAX_LENGTH)
+    if (identifier) update.identifier = identifier
+  }
+  if (Object.prototype.hasOwnProperty.call(scoped, 'primaryDomain')) {
+    const primaryDomain = pickSafeQueryString(scoped.primaryDomain, PRODUCT_DOMAIN_MAX_LENGTH)
+    if (primaryDomain) update.primaryDomain = primaryDomain
+  }
+  if (Object.prototype.hasOwnProperty.call(scoped, 'description')) {
+    update.description = pickSafeQueryString(scoped.description, PRODUCT_DESCRIPTION_MAX_LENGTH) || ''
+  }
+  if (Object.prototype.hasOwnProperty.call(scoped, 'tags')) {
+    update.tags = pickProductTags(scoped.tags) || []
+  }
+  if (Object.prototype.hasOwnProperty.call(scoped, 'category')) {
+    update.category = pickSafeQueryString(scoped.category, PRODUCT_CATEGORY_MAX_LENGTH) || ''
+  }
+  if (Object.prototype.hasOwnProperty.call(scoped, 'status')) {
+    const status = pickProductStatus(scoped.status)
+    if (status) update.status = status
+  }
+
+  return update
+}
+
 const getOwnerData = (req: Request): any => ({
   ...(req.user?.organizationId && { organizationId: req.user.organizationId }),
   ...(req.user?.userId && { createdBy: req.user.userId }),
 })
 
 const getScopedAccountAsset = async (req: Request, rawAccountId: any) => {
-  const accountId = normalizeForStorage(Array.isArray(rawAccountId) ? rawAccountId[0] : rawAccountId)
+  const accountId = normalizeForStorage(pickAssetId(rawAccountId))
   if (!accountId) {
     const error: any = new Error('accountId is required')
     error.statusCode = 400
@@ -76,7 +143,7 @@ const getScopedAccountAsset = async (req: Request, rawAccountId: any) => {
 }
 
 const getScopedPixelAsset = async (req: Request, rawPixelId: any) => {
-  const pixelId = Array.isArray(rawPixelId) ? rawPixelId[0] : rawPixelId
+  const pixelId = pickAssetId(rawPixelId)
   if (!pixelId) {
     const error: any = new Error('pixelId is required')
     error.statusCode = 400
@@ -200,7 +267,7 @@ export const getProductById = async (req: Request, res: Response) => {
  */
 export const createProduct = async (req: Request, res: Response) => {
   try {
-    const { name, identifier, primaryDomain, description, tags, category } = req.body
+    const { name, identifier, primaryDomain, description, tags, category } = sanitizeProductCreateData(req.body)
     
     if (!name || !identifier) {
       return res.status(400).json({ success: false, error: 'name and identifier are required' })
@@ -234,9 +301,14 @@ export const createProduct = async (req: Request, res: Response) => {
  */
 export const updateProduct = async (req: Request, res: Response) => {
   try {
+    const update = sanitizeProductUpdateData(req.body)
+    if (Object.keys(update).length === 0) {
+      return res.status(400).json({ success: false, error: 'No valid product fields to update' })
+    }
+
     const product = await Product.findOneAndUpdate(
       combineFilters({ _id: req.params.id }, getProductFilter(req)),
-      { $set: sanitizeScopedUpdate(req.body) },
+      { $set: update },
       { new: true }
     )
     
@@ -261,6 +333,7 @@ export const addPixelToProduct = async (req: Request, res: Response) => {
   try {
     const { pixelId, pixelName, verified } = req.body
     const scopedPixel = await getScopedPixelAsset(req, pixelId)
+    const safePixelName = pickAssetName(pixelName)
     
     const product = await Product.findOne(combineFilters({ _id: req.params.id }, getProductFilter(req)))
     if (!product) {
@@ -268,14 +341,14 @@ export const addPixelToProduct = async (req: Request, res: Response) => {
     }
     
     // 检查是否已存在
-    const existing = product.pixels.find((p: any) => p.pixelId === pixelId)
+    const existing = product.pixels.find((p: any) => p.pixelId === scopedPixel.pixelId)
     if (existing) {
       return res.status(400).json({ success: false, error: 'Pixel already linked to this product' })
     }
     
     product.pixels.push({
       pixelId: scopedPixel.pixelId,
-      pixelName: pixelName || scopedPixel.pixelName,
+      pixelName: safePixelName || scopedPixel.pixelName,
       confidence: 100,
       matchMethod: 'manual',
       verified: verified !== false,
@@ -284,7 +357,7 @@ export const addPixelToProduct = async (req: Request, res: Response) => {
     
     // 设为主 Pixel（如果是第一个）
     if (!product.primaryPixelId) {
-      product.primaryPixelId = pixelId
+      product.primaryPixelId = scopedPixel.pixelId
     }
     
     await product.save()
@@ -302,17 +375,22 @@ export const addPixelToProduct = async (req: Request, res: Response) => {
  */
 export const removePixelFromProduct = async (req: Request, res: Response) => {
   try {
+    const pixelId = pickAssetId(req.params.pixelId)
+    if (!pixelId) {
+      return res.status(400).json({ success: false, error: 'pixelId is required' })
+    }
+
     const product = await Product.findOne(combineFilters({ _id: req.params.id }, getProductFilter(req)))
     if (!product) {
       return res.status(404).json({ success: false, error: 'Product not found' })
     }
     
     // 使用 $pull 操作或类型转换来避免类型错误
-    const filteredPixels = product.pixels.filter((p: any) => p.pixelId !== req.params.pixelId)
+    const filteredPixels = product.pixels.filter((p: any) => p.pixelId !== pixelId)
     product.set('pixels', filteredPixels)
     
     // 如果删除的是主 Pixel，重新设置
-    if (product.primaryPixelId === req.params.pixelId) {
+    if (product.primaryPixelId === pixelId) {
       product.primaryPixelId = product.pixels[0]?.pixelId || null
     }
     
@@ -331,7 +409,10 @@ export const removePixelFromProduct = async (req: Request, res: Response) => {
  */
 export const setPrimaryPixel = async (req: Request, res: Response) => {
   try {
-    const { pixelId } = req.body
+    const pixelId = pickAssetId(req.body?.pixelId)
+    if (!pixelId) {
+      return res.status(400).json({ success: false, error: 'pixelId is required' })
+    }
     
     const product = await Product.findOne(combineFilters({ _id: req.params.id }, getProductFilter(req)))
     if (!product) {
@@ -377,13 +458,15 @@ export const addAccountToProduct = async (req: Request, res: Response) => {
   try {
     const { accountId, accountName, throughPixelId } = req.body
     const scopedAccount = await getScopedAccountAsset(req, accountId)
+    const safeAccountName = pickAssetName(accountName)
+    const safeThroughPixelId = pickAssetId(throughPixelId)
     
     const product = await Product.findOne(combineFilters({ _id: req.params.id }, getProductFilter(req)))
     if (!product) {
       return res.status(404).json({ success: false, error: 'Product not found' })
     }
 
-    if (throughPixelId && !product.pixels.some((p: any) => p.pixelId === throughPixelId)) {
+    if (safeThroughPixelId && !product.pixels.some((p: any) => p.pixelId === safeThroughPixelId)) {
       return res.status(400).json({ success: false, error: 'Pixel not linked to this product' })
     }
     
@@ -394,8 +477,8 @@ export const addAccountToProduct = async (req: Request, res: Response) => {
     
     product.accounts.push({
       accountId: scopedAccount.accountId,
-      accountName: accountName || scopedAccount.accountName,
-      throughPixelId,
+      accountName: safeAccountName || scopedAccount.accountName,
+      throughPixelId: safeThroughPixelId,
       status: 'active',
     })
     
