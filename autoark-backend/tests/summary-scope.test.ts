@@ -43,7 +43,7 @@ jest.mock('../src/models/Aggregation', () => ({
 
 import summaryRouter from '../src/controllers/summary.controller'
 import { getUserAccountIds } from '../src/middlewares/auth'
-import { AggAccount, AggCampaign, AggCountry } from '../src/models/Aggregation'
+import { AggAccount, AggCampaign, AggCountry, AggDaily } from '../src/models/Aggregation'
 
 const createApp = () => {
   const app = express()
@@ -147,6 +147,26 @@ describe('summary route data scoping', () => {
       { $skip: 200 },
       { $limit: 100 },
     ])
+  })
+
+  it('caps dashboard trend day windows before building the response', async () => {
+    mockAuthState.user = {
+      role: UserRole.SUPER_ADMIN,
+      userId: '665000000000000000000003',
+    }
+    ;(getUserAccountIds as jest.Mock).mockResolvedValue(null)
+    const findQuery = {
+      sort: jest.fn().mockReturnThis(),
+      lean: jest.fn().mockResolvedValue([]),
+    }
+    ;(AggDaily.find as jest.Mock).mockReturnValue(findQuery)
+
+    const response = await request(createApp()).get('/api/summary/dashboard/trend?days=100000')
+
+    expect(response.status).toBe(200)
+    expect(response.body.data).toHaveLength(90)
+    expect(AggDaily.find).toHaveBeenCalledTimes(1)
+    expect(findQuery.sort).toHaveBeenCalledWith({ date: 1 })
   })
 
   it('returns empty account summary when organization user has no linked accounts', async () => {

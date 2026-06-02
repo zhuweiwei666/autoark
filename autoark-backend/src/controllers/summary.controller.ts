@@ -22,7 +22,7 @@ import { refreshRecentDays } from '../services/aggregation.service'
 import { UserRole } from '../models/User'
 import { getUserAccountIds, authenticate } from '../middlewares/auth'
 import { getAccountIdsForQuery, normalizeForStorage } from '../utils/accountId'
-import { parsePagination, pickAllowedString } from '../utils/pagination'
+import { parseLimitedNumber, parsePagination, pickAllowedString } from '../utils/pagination'
 
 const router = Router()
 
@@ -73,6 +73,7 @@ const hasScopedAccountAccess = (accountIds: string[] | null, accountId: string):
 }
 
 const SUMMARY_MAX_LIMIT = 100
+const SUMMARY_MAX_TREND_DAYS = 90
 const ACCOUNT_SORT_FIELDS = [
   'accountId',
   'accountName',
@@ -246,7 +247,7 @@ router.get('/dashboard', async (req: Request, res: Response) => {
 router.get('/dashboard/trend', async (req: Request, res: Response) => {
   try {
     const startTime = Date.now()
-    const days = parseInt(req.query.days as string) || 7
+    const days = parseLimitedNumber(req.query.days, 7, SUMMARY_MAX_TREND_DAYS)
     const endDate = dayjs().format('YYYY-MM-DD')
     const startDate = dayjs().subtract(days - 1, 'day').format('YYYY-MM-DD')
 
