@@ -62,7 +62,7 @@ jest.mock('../src/models/MaterialMetrics', () => ({
 
 import aggregationRouter from '../src/controllers/aggregation.controller'
 import { getUserAccountIds } from '../src/middlewares/auth'
-import { getAccountData, getDailySummary } from '../src/services/aggregation.service'
+import { getAccountData, getCampaignData, getDailySummary } from '../src/services/aggregation.service'
 
 const createApp = () => {
   const app = express()
@@ -190,6 +190,25 @@ describe('aggregation route account scoping', () => {
     expect(getAccountData).not.toHaveBeenCalled()
   })
 
+  it('sanitizes campaign filters before querying global aggregation data', async () => {
+    mockAuthState.user = {
+      role: UserRole.SUPER_ADMIN,
+      userId: '665000000000000000000003',
+    }
+    ;(getUserAccountIds as jest.Mock).mockResolvedValue(null)
+    ;(getCampaignData as jest.Mock).mockResolvedValue([])
+
+    const response = await request(createApp())
+      .get('/api/agg/campaigns?date=2026-06-02&optimizer[$ne]=alice&accountId[$ne]=123&limit=9999')
+
+    expect(response.status).toBe(200)
+    expect(getCampaignData).toHaveBeenCalledWith('2026-06-02', {
+      optimizer: undefined,
+      limit: 500,
+    })
+    expect(response.body.meta.limit).toBe(500)
+  })
+
   it('caps unfiltered campaign trend rows', async () => {
     mockAuthState.user = {
       role: UserRole.SUPER_ADMIN,
@@ -205,6 +224,24 @@ describe('aggregation route account scoping', () => {
       date: { $gte: expect.any(String), $lte: expect.any(String) },
     })
     expect(mockCampaignSort).toHaveBeenCalledWith({ date: 1, spend: -1 })
+    expect(mockCampaignLimit).toHaveBeenCalledWith(500)
+    expect(response.body.meta.limit).toBe(500)
+  })
+
+  it('ignores unsafe campaign trend filters and keeps the row cap', async () => {
+    mockAuthState.user = {
+      role: UserRole.SUPER_ADMIN,
+      userId: '665000000000000000000003',
+    }
+    ;(getUserAccountIds as jest.Mock).mockResolvedValue(null)
+
+    const response = await request(createApp())
+      .get('/api/agg/campaigns/trend?campaignId[$ne]=cmp_1&limit=9999')
+
+    expect(response.status).toBe(200)
+    expect(mockCampaignFind).toHaveBeenCalledWith({
+      date: { $gte: expect.any(String), $lte: expect.any(String) },
+    })
     expect(mockCampaignLimit).toHaveBeenCalledWith(500)
     expect(response.body.meta.limit).toBe(500)
   })

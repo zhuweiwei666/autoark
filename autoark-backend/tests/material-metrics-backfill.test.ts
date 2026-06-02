@@ -107,6 +107,36 @@ describe('material metrics backfill guardrails', () => {
     expect(response.body.query).not.toHaveProperty('type')
   })
 
+  it('sanitizes material trend identifiers before querying history', async () => {
+    materialMetricsService.getMaterialTrend.mockResolvedValue([])
+
+    const response = await request(createApp())
+      .get('/api/material-metrics/trend')
+      .query({
+        imageHash: '  image_hash_1  ',
+        videoId: { $ne: 'video_1' },
+        days: '9999',
+      })
+
+    expect(response.status).toBe(200)
+    expect(materialMetricsService.getMaterialTrend).toHaveBeenCalledWith(
+      { imageHash: 'image_hash_1', videoId: undefined },
+      90,
+    )
+  })
+
+  it('rejects unsafe material usage identifiers before querying usage', async () => {
+    const response = await request(createApp())
+      .get('/api/material-metrics/usage?imageHash[$ne]=hash_1&videoId[$ne]=video_1&creativeId[$ne]=creative_1')
+
+    expect(response.status).toBe(400)
+    expect(response.body).toMatchObject({
+      success: false,
+      error: 'At least one of imageHash, videoId, or creativeId is required',
+    })
+    expect(materialMetricsService.getMaterialUsage).not.toHaveBeenCalled()
+  })
+
   it('sanitizes recommendation filters before querying material recommendations', async () => {
     materialMetricsService.getRecommendedMaterials.mockResolvedValue({ recommendations: [] })
 

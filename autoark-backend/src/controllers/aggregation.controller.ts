@@ -27,7 +27,7 @@ import {
 import { authenticate, getUserAccountIds } from '../middlewares/auth'
 import { UserRole } from '../models/User'
 import { getAccountIdsForQuery, normalizeForStorage } from '../utils/accountId'
-import { parseLimitedNumber } from '../utils/pagination'
+import { parseLimitedNumber, pickSafeQueryString } from '../utils/pagination'
 
 const router = Router()
 
@@ -35,9 +35,12 @@ router.use(authenticate)
 
 const AGG_MAX_RANGE_DAYS = 90
 const AGG_MAX_ROWS = 500
+const AGG_FILTER_MAX_LENGTH = 120
+const AGG_COUNTRY_MAX_LENGTH = 40
 
 const parseAggLimit = (value: any, fallback = 200) => parseLimitedNumber(value, fallback, AGG_MAX_ROWS)
 const parseAggTrendLimit = (value: any) => parseLimitedNumber(value, 500, AGG_MAX_ROWS)
+const pickAggFilter = (value: any, maxLength = AGG_FILTER_MAX_LENGTH) => pickSafeQueryString(value, maxLength)
 
 class AggDateError extends Error {}
 
@@ -215,7 +218,7 @@ router.get('/countries', async (req: Request, res: Response) => {
  */
 router.get('/countries/trend', async (req: Request, res: Response) => {
   try {
-    const { country } = req.query
+    const country = pickAggFilter(req.query.country, AGG_COUNTRY_MAX_LENGTH)
     const endDate = dayjs().format('YYYY-MM-DD')
     const startDate = dayjs().subtract(7, 'day').format('YYYY-MM-DD')
 
@@ -270,11 +273,10 @@ router.get('/campaigns', async (req: Request, res: Response) => {
   try {
     const date = parseAggSingleDate(req.query.date)
     const limit = parseAggLimit(req.query.limit)
-    const { optimizer, accountId } = req.query
-    const optimizerFilter = optimizer as string | undefined
+    const optimizerFilter = pickAggFilter(req.query.optimizer)
 
     const accountIds = await getAccountScope(req)
-    const requestedAccountId = accountId as string | undefined
+    const requestedAccountId = pickAggFilter(req.query.accountId)
     if (requestedAccountId && !hasScopedAccountAccess(accountIds, requestedAccountId)) {
       return res.json({
         success: true,
@@ -318,7 +320,7 @@ router.get('/campaigns', async (req: Request, res: Response) => {
  */
 router.get('/campaigns/trend', async (req: Request, res: Response) => {
   try {
-    const { campaignId } = req.query
+    const campaignId = pickAggFilter(req.query.campaignId)
     const limit = parseAggTrendLimit(req.query.limit)
     const endDate = dayjs().format('YYYY-MM-DD')
     const startDate = dayjs().subtract(7, 'day').format('YYYY-MM-DD')
@@ -380,7 +382,7 @@ router.get('/optimizers', async (req: Request, res: Response) => {
  */
 router.get('/optimizers/trend', async (req: Request, res: Response) => {
   try {
-    const { optimizer } = req.query
+    const optimizer = pickAggFilter(req.query.optimizer)
     const limit = parseAggTrendLimit(req.query.limit)
     const endDate = dayjs().format('YYYY-MM-DD')
     const startDate = dayjs().subtract(7, 'day').format('YYYY-MM-DD')

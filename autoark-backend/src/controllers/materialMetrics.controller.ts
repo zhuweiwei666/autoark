@@ -25,6 +25,7 @@ const MATERIAL_ROAS_MAX = 100
 const MATERIAL_MIN_DAYS_MAX = 30
 const MATERIAL_DECLINE_THRESHOLD_MAX = 100
 const MATERIAL_COUNTRY_MAX_LENGTH = 40
+const MATERIAL_IDENTIFIER_MAX_LENGTH = 160
 
 const parseMaterialMetricsDate = (value: any) => {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null
@@ -168,7 +169,9 @@ router.get('/rankings', async (req: Request, res: Response) => {
  */
 router.get('/trend', async (req: Request, res: Response) => {
   try {
-    const { imageHash, videoId, days = '7' } = req.query
+    const { days = '7' } = req.query
+    const imageHash = pickSafeQueryString(req.query.imageHash, MATERIAL_IDENTIFIER_MAX_LENGTH)
+    const videoId = pickSafeQueryString(req.query.videoId, MATERIAL_IDENTIFIER_MAX_LENGTH)
     
     if (!imageHash && !videoId) {
       return res.status(400).json({
@@ -224,7 +227,9 @@ router.get('/duplicates', async (req: Request, res: Response) => {
  */
 router.get('/usage', async (req: Request, res: Response) => {
   try {
-    const { imageHash, videoId, creativeId } = req.query
+    const imageHash = pickSafeQueryString(req.query.imageHash, MATERIAL_IDENTIFIER_MAX_LENGTH)
+    const videoId = pickSafeQueryString(req.query.videoId, MATERIAL_IDENTIFIER_MAX_LENGTH)
+    const creativeId = pickSafeQueryString(req.query.creativeId, MATERIAL_IDENTIFIER_MAX_LENGTH)
     
     if (!imageHash && !videoId && !creativeId) {
       return res.status(400).json({
