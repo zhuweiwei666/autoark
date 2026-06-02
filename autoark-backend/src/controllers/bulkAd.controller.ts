@@ -33,7 +33,12 @@ import {
   scopedTokenFilter,
 } from '../utils/accessControl'
 import { getAccountIdsForQuery, normalizeForStorage } from '../utils/accountId'
-import { parseLimitedNumber, parsePagination } from '../utils/pagination'
+import {
+  parseLimitedNumber,
+  parsePagination,
+  pickAllowedString,
+  pickSafeQueryString,
+} from '../utils/pagination'
 
 /**
  * 获取资产过滤条件（文案包/定向包/创意组等）
@@ -69,6 +74,9 @@ const createHttpError = (message: string, statusCode: number) => {
 const parseAccountIdParam = (value: any) => normalizeForStorage(Array.isArray(value) ? value[0] : value)
 const AUTH_FACEBOOK_ASSET_PAGE_LIMIT = 10
 const AUTH_FACEBOOK_ASSET_PAGE_SIZE = 100
+const TARGETING_INTEREST_SEARCH_TYPES = ['adinterest', 'adinterestsuggestion'] as const
+const TARGETING_LOCATION_SEARCH_TYPES = ['adgeolocation'] as const
+const TARGETING_SEARCH_QUERY_MAX_LENGTH = 120
 
 const fetchFacebookAssetPages = async (
   endpoint: string,
@@ -1008,6 +1016,10 @@ export const removeMaterial = async (req: Request, res: Response) => {
 export const searchInterests = async (req: Request, res: Response) => {
   try {
     const { q, type = 'adinterest', limit = 50 } = req.query
+    const query = pickSafeQueryString(q, TARGETING_SEARCH_QUERY_MAX_LENGTH)
+    if (!query) {
+      return res.status(400).json({ success: false, error: 'q parameter is required' })
+    }
     
     const fbToken = await getScopedActiveToken(req)
     if (!fbToken) {
@@ -1016,8 +1028,8 @@ export const searchInterests = async (req: Request, res: Response) => {
     
     const result = await searchTargetingInterests({
       token: fbToken.token,
-      query: q as string,
-      type: type as string,
+      query,
+      type: pickAllowedString(type, TARGETING_INTEREST_SEARCH_TYPES, 'adinterest'),
       limit: parseLimitedNumber(limit, 50, 100),
     })
     
@@ -1035,6 +1047,10 @@ export const searchInterests = async (req: Request, res: Response) => {
 export const searchLocations = async (req: Request, res: Response) => {
   try {
     const { q, type = 'adgeolocation', limit = 50 } = req.query
+    const query = pickSafeQueryString(q, TARGETING_SEARCH_QUERY_MAX_LENGTH)
+    if (!query) {
+      return res.status(400).json({ success: false, error: 'q parameter is required' })
+    }
     
     const fbToken = await getScopedActiveToken(req)
     if (!fbToken) {
@@ -1043,8 +1059,8 @@ export const searchLocations = async (req: Request, res: Response) => {
     
     const result = await searchTargetingLocations({
       token: fbToken.token,
-      query: q as string,
-      type: type as string,
+      query,
+      type: pickAllowedString(type, TARGETING_LOCATION_SEARCH_TYPES, 'adgeolocation'),
       limit: parseLimitedNumber(limit, 50, 100),
     })
     

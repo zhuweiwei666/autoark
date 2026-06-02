@@ -69,6 +69,8 @@ import {
   getTaskSupportPackage,
   removeMaterial,
   rerunTask,
+  searchInterests,
+  searchLocations,
   validateDraft as validateDraftController,
 } from '../src/controllers/bulkAd.controller'
 
@@ -242,6 +244,61 @@ describe('bulk ad controller', () => {
         publicOauthGapCodes: expect.arrayContaining(['APP_MODE_NOT_LIVE']),
       }),
     }))
+  })
+
+  it('sanitizes targeting interest search parameters before calling Meta', async () => {
+    const sort = jest.fn().mockResolvedValue({ token: 'facebook-token' })
+    jest.spyOn(FbToken, 'findOne').mockReturnValue({ sort } as any)
+    mockFacebookClient.get.mockResolvedValue({
+      data: [{ id: 'interest_1', name: 'Running shoes' }],
+    } as any)
+
+    const res = resMock()
+
+    await searchInterests(memberReq({
+      query: {
+        q: '  running shoes  ',
+        type: 'unsafe_type',
+        limit: '9999',
+      },
+    }) as any, res as any)
+
+    expect(FbToken.findOne).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'active',
+      userId: '665000000000000000000002',
+    }))
+    expect(sort).toHaveBeenCalledWith({ updatedAt: -1 })
+    expect(mockFacebookClient.get).toHaveBeenCalledWith('/search', {
+      access_token: 'facebook-token',
+      type: 'adinterest',
+      q: 'running shoes',
+      limit: 100,
+    })
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      data: [{ id: 'interest_1', name: 'Running shoes' }],
+    })
+  })
+
+  it('rejects invalid targeting location queries before loading a token', async () => {
+    const findOne = jest.spyOn(FbToken, 'findOne')
+    const res = resMock()
+
+    await searchLocations(memberReq({
+      query: {
+        q: { $ne: 'US' },
+        type: 'unsafe_type',
+        limit: '9999',
+      },
+    }) as any, res as any)
+
+    expect(res.status).toHaveBeenCalledWith(400)
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      error: 'q parameter is required',
+    })
+    expect(findOne).not.toHaveBeenCalled()
+    expect(mockFacebookClient.get).not.toHaveBeenCalled()
   })
 
   it('rejects bulk ad OAuth callbacks that are missing signed state', async () => {
