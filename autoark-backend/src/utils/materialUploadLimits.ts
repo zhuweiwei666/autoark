@@ -1,14 +1,11 @@
-export const parsePositiveLimit = (value: any, fallback: number): number => {
-  const parsed = Number(value)
-  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback
-}
+import { parsePositiveInteger } from './config'
 
-export const MAX_MATERIAL_FILE_SIZE = parsePositiveLimit(
+export const MAX_MATERIAL_FILE_SIZE = parsePositiveInteger(
   process.env.MATERIAL_MAX_UPLOAD_BYTES,
   100 * 1024 * 1024,
 )
 
-export const MAX_DIRECT_UPLOAD_FILES = parsePositiveLimit(
+export const MAX_DIRECT_UPLOAD_FILES = parsePositiveInteger(
   process.env.MATERIAL_MAX_BATCH_FILES,
   10,
 )

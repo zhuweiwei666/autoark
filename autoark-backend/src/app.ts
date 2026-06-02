@@ -27,6 +27,7 @@ import { handleFeishuInteraction } from './controllers/feishu.webhook.controller
 import logger from './utils/logger'
 import { errorHandler } from './middlewares/errorHandler'
 import { getBuildInfo } from './utils/buildInfo'
+import { parsePositiveInteger } from './utils/config'
 
 // NOTE: All infrastructure initialization (DB/Redis/Queues/Crons) is done in `server.ts`.
 // `app.ts` should remain side-effect free so it can be imported safely (tests, scripts, etc.).
@@ -41,6 +42,7 @@ declare global {
 }
 
 const app = express()
+app.set('trust proxy', parsePositiveInteger(process.env.TRUST_PROXY_HOPS, 1))
 
 const configuredOrigins = (process.env.CORS_ALLOWED_ORIGINS || '')
   .split(',')
@@ -70,8 +72,8 @@ app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '2mb' }))
 
 const authAttempts = new Map<string, { count: number; resetAt: number }>()
 const authRateLimit = (req: Request, res: Response, next: NextFunction) => {
-  const windowMs = Number(process.env.AUTH_RATE_LIMIT_WINDOW_MS || 15 * 60 * 1000)
-  const maxAttempts = Number(process.env.AUTH_RATE_LIMIT_MAX || 20)
+  const windowMs = parsePositiveInteger(process.env.AUTH_RATE_LIMIT_WINDOW_MS, 15 * 60 * 1000)
+  const maxAttempts = parsePositiveInteger(process.env.AUTH_RATE_LIMIT_MAX, 20)
   const key = `${req.ip}:${req.path}`
   const now = Date.now()
   const current = authAttempts.get(key)
