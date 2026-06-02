@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { fetchWithTimeout } from '../services/api'
 
 interface User {
   _id: string
@@ -66,10 +67,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setUser(storedUser)
 
           // 验证 token 是否仍然有效
-          const response = await fetch('/api/auth/me', {
+          const response = await fetchWithTimeout('/api/auth/me', {
             headers: {
               'Authorization': `Bearer ${storedToken}`,
             },
+            timeoutMs: 15000,
           })
           
           if (!response.ok) {
@@ -99,12 +101,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const login = async (username: string, password: string) => {
     try {
-      const response = await fetch('/api/auth/login', {
+      const response = await fetchWithTimeout('/api/auth/login', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ username, password }),
+        timeoutMs: 30000,
       })
 
       const data = await response.json()
@@ -120,6 +123,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       navigate('/dashboard')
     } catch (error: any) {
+      if (error?.name === 'AbortError') {
+        throw new Error('登录请求超时，请检查网络后重试')
+      }
       throw new Error(error.message || '登录失败')
     }
   }
@@ -128,11 +134,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const currentToken = token || localStorage.getItem('auth_token')
     try {
       if (currentToken) {
-        await fetch('/api/auth/logout', {
+        await fetchWithTimeout('/api/auth/logout', {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${currentToken}`,
           },
+          timeoutMs: 10000,
         })
       }
     } catch {
