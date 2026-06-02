@@ -145,7 +145,7 @@ describe('organization service', () => {
   it('sanitizes commercial settings when creating an organization', async () => {
     jest.spyOn(Organization, 'findOne').mockResolvedValue(null as any)
     jest.spyOn(User, 'findOne').mockResolvedValue(null as any)
-    jest.spyOn(authService, 'createUser').mockResolvedValue({
+    const createUserSpy = jest.spyOn(authService, 'createUser').mockResolvedValue({
       _id: '665000000000000000000101',
       toJSON: () => ({ _id: '665000000000000000000101', username: 'org_admin' }),
     } as any)
@@ -155,9 +155,9 @@ describe('organization service', () => {
       {
         name: '  Acme Team  ',
         description: '  Demo org  ',
-        adminUsername: 'org_admin',
+        adminUsername: '  org_admin  ',
         adminPassword: 'password',
-        adminEmail: 'admin@example.com',
+        adminEmail: ' ADMIN@EXAMPLE.COM ',
         settings: {
           maxMembers: '5.8',
           monthlyTaskLimit: '999999999',
@@ -171,6 +171,19 @@ describe('organization service', () => {
     )
 
     expect(Organization.findOne).toHaveBeenCalledWith({ name: 'Acme Team' })
+    expect(User.findOne).toHaveBeenCalledWith({
+      $or: [{ username: 'org_admin' }, { email: 'admin@example.com' }],
+    })
+    expect(createUserSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        username: 'org_admin',
+        password: 'password',
+        email: 'admin@example.com',
+        role: UserRole.ORG_ADMIN,
+        skipOrgValidation: true,
+      }),
+      'admin',
+    )
     expect(result.organization.name).toBe('Acme Team')
     expect(result.organization.description).toBe('Demo org')
     expect(result.organization.settings).toMatchObject({
@@ -178,6 +191,29 @@ describe('organization service', () => {
       monthlyTaskLimit: 10000000,
       features: ['bulk_ad_create'],
     })
+  })
+
+  it('rejects unsafe organization admin credentials before user uniqueness checks', async () => {
+    const orgFind = jest.spyOn(Organization, 'findOne')
+    const userFind = jest.spyOn(User, 'findOne')
+    const createUserSpy = jest.spyOn(authService, 'createUser')
+
+    await expect(organizationService.createOrganization(
+      {
+        name: 'Acme Team',
+        adminUsername: { $ne: 'org_admin' } as any,
+        adminPassword: 'password',
+        adminEmail: 'admin@example.com',
+      },
+      {
+        userId: 'admin',
+        role: UserRole.SUPER_ADMIN,
+      } as any,
+    )).rejects.toThrow('管理员用户名、邮箱不能为空，密码长度需为6-128位')
+
+    expect(orgFind).not.toHaveBeenCalled()
+    expect(userFind).not.toHaveBeenCalled()
+    expect(createUserSpy).not.toHaveBeenCalled()
   })
 
   it('rejects organization updates from non super admins', async () => {

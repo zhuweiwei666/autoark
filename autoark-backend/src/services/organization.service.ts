@@ -10,6 +10,7 @@ import { JwtPayload } from '../utils/jwt'
 import logger from '../utils/logger'
 import authService from './auth.service'
 import { COMMERCIAL_FEATURE_SET } from '../config/commercialPlans'
+import { sanitizeUserCreateInput } from '../utils/userInput'
 
 const ORGANIZATION_NAME_MAX_LENGTH = 100
 const ORGANIZATION_DESCRIPTION_MAX_LENGTH = 500
@@ -212,8 +213,17 @@ class OrganizationService {
     const name = pickBoundedString(data.name, ORGANIZATION_NAME_MAX_LENGTH)
     const description = pickBoundedString(data.description, ORGANIZATION_DESCRIPTION_MAX_LENGTH)
     const settings = this.sanitizeSettings(data.settings)
+    const adminInput = sanitizeUserCreateInput({
+      username: data.adminUsername,
+      password: data.adminPassword,
+      email: data.adminEmail,
+      role: UserRole.ORG_ADMIN,
+    })
     if (!name) {
       throw new Error('组织名称不能为空')
+    }
+    if (!adminInput.username || !adminInput.password || !adminInput.email) {
+      throw new Error('管理员用户名、邮箱不能为空，密码长度需为6-128位')
     }
 
     // 检查组织名是否已存在
@@ -224,7 +234,7 @@ class OrganizationService {
 
     // 检查管理员用户名和邮箱是否已存在
     const existingUser = await User.findOne({
-      $or: [{ username: data.adminUsername }, { email: data.adminEmail }],
+      $or: [{ username: adminInput.username }, { email: adminInput.email }],
     })
     if (existingUser) {
       throw new Error('管理员用户名或邮箱已存在')
@@ -236,9 +246,9 @@ class OrganizationService {
     // 创建组织管理员（使用临时 ID，跳过组织验证）
     const admin = await authService.createUser(
       {
-        username: data.adminUsername,
-        password: data.adminPassword,
-        email: data.adminEmail,
+        username: adminInput.username,
+        password: adminInput.password,
+        email: adminInput.email,
         role: UserRole.ORG_ADMIN,
         organizationId: tempOrgId.toString(),
         skipOrgValidation: true, // 跳过组织存在性验证
@@ -260,7 +270,7 @@ class OrganizationService {
 
       await organization.save()
 
-      logger.info(`Organization ${name} created with admin ${data.adminUsername}`)
+      logger.info(`Organization ${name} created with admin ${adminInput.username}`)
 
       return {
         organization,
