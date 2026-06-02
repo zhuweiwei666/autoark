@@ -3,6 +3,60 @@ import FbToken, { IFbToken } from '../models/FbToken'
 import logger from '../utils/logger'
 import { FB_API_VERSION, FB_BASE_URL } from '../config/facebook.config'
 
+const TOKEN_VALIDATION_BATCH_LIMIT = 100
+const TOKEN_VALIDATION_MAX_BATCH_LIMIT = 500
+const TOKEN_VALIDATION_CONCURRENCY = 5
+const TOKEN_VALIDATION_MAX_CONCURRENCY = 10
+
+type SettledResult<T> =
+  | { status: 'fulfilled'; value: T }
+  | { status: 'rejected'; reason: unknown }
+
+export type TokenValidationBatchSummary = {
+  totalFound: number
+  checked: number
+  succeeded: number
+  failed: number
+  limit: number
+  concurrency: number
+}
+
+const parseBoundedPositiveInt = (value: any, fallback: number, max: number): number => {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback
+  return Math.min(max, Math.floor(parsed))
+}
+
+const runWithConcurrency = async <Input, Output>(
+  items: Input[],
+  concurrency: number,
+  worker: (item: Input) => Promise<Output>,
+): Promise<Array<SettledResult<Output>>> => {
+  const results: Array<SettledResult<Output>> = []
+  let nextIndex = 0
+
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex
+      nextIndex += 1
+      try {
+        results[currentIndex] = {
+          status: 'fulfilled',
+          value: await worker(items[currentIndex]),
+        }
+      } catch (error) {
+        results[currentIndex] = {
+          status: 'rejected',
+          reason: error,
+        }
+      }
+    }
+  })
+
+  await Promise.all(workers)
+  return results
+}
+
 /**
  * 验证单个 token 是否有效
  * @param token Facebook access token
@@ -152,25 +206,62 @@ export async function checkAndUpdateTokenStatus(
 /**
  * 检查所有 token 的状态
  */
-export async function checkAllTokensStatus(): Promise<void> {
+export async function checkAllTokensStatus(options: {
+  limit?: number
+  concurrency?: number
+} = {}): Promise<TokenValidationBatchSummary> {
   logger.info('[Token Validation] Starting batch token validation')
 
-  try {
-    const tokens = await FbToken.find({})
-    logger.info(`[Token Validation] Found ${tokens.length} tokens to check`)
+  const limit = parseBoundedPositiveInt(
+    options.limit ?? process.env.FB_TOKEN_VALIDATION_BATCH_LIMIT,
+    TOKEN_VALIDATION_BATCH_LIMIT,
+    TOKEN_VALIDATION_MAX_BATCH_LIMIT,
+  )
+  const concurrency = parseBoundedPositiveInt(
+    options.concurrency ?? process.env.FB_TOKEN_VALIDATION_CONCURRENCY,
+    TOKEN_VALIDATION_CONCURRENCY,
+    TOKEN_VALIDATION_MAX_CONCURRENCY,
+  )
 
-    const results = await Promise.allSettled(
-      tokens.map((token) => checkAndUpdateTokenStatus(token)),
+  try {
+    const [totalFound, tokens] = await Promise.all([
+      FbToken.countDocuments({}),
+      FbToken.find({})
+        .sort({ lastCheckedAt: 1, updatedAt: 1, _id: 1 })
+        .limit(limit),
+    ])
+    logger.info(`[Token Validation] Checking ${tokens.length}/${totalFound} tokens with concurrency=${concurrency}`)
+
+    const results = await runWithConcurrency(
+      tokens,
+      concurrency,
+      (token) => checkAndUpdateTokenStatus(token),
     )
 
     const successCount = results.filter((r) => r.status === 'fulfilled').length
     const failedCount = results.filter((r) => r.status === 'rejected').length
 
     logger.info(
-      `[Token Validation] Batch validation completed: ${successCount} succeeded, ${failedCount} failed`,
+      `[Token Validation] Batch validation completed: checked=${tokens.length}, total=${totalFound}, ${successCount} succeeded, ${failedCount} failed`,
     )
+
+    return {
+      totalFound,
+      checked: tokens.length,
+      succeeded: successCount,
+      failed: failedCount,
+      limit,
+      concurrency,
+    }
   } catch (error: any) {
     logger.error('[Token Validation] Batch validation failed:', error)
+    return {
+      totalFound: 0,
+      checked: 0,
+      succeeded: 0,
+      failed: 1,
+      limit,
+      concurrency,
+    }
   }
 }
-
