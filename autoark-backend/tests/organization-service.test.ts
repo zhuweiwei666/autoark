@@ -1,6 +1,8 @@
 import Organization, { OrganizationBillingStatus, OrganizationPlan, OrganizationStatus } from '../src/models/Organization'
+import User from '../src/models/User'
 import { UserRole } from '../src/models/User'
 import organizationService from '../src/services/organization.service'
+import authService from '../src/services/auth.service'
 
 describe('organization service', () => {
   afterEach(() => {
@@ -89,6 +91,93 @@ describe('organization service', () => {
     expect(organization.set).toHaveBeenCalledWith('settings.features', ['bulk_ad_create', 'audit_ready'])
     expect(organization.settings.features).toEqual(['bulk_ad_create', 'audit_ready'])
     expect(organization.save).toHaveBeenCalled()
+  })
+
+  it('bounds commercial billing and quota updates', async () => {
+    const organization: any = {
+      _id: '665000000000000000000001',
+      name: 'Acme Team',
+      status: OrganizationStatus.ACTIVE,
+      billing: {},
+      settings: {},
+      set: jest.fn(function setPath(path: string, value: unknown) {
+        const [, key] = path.split('.')
+        this.settings[key] = value
+      }),
+      save: jest.fn().mockResolvedValue(undefined),
+    }
+    jest.spyOn(Organization, 'findById').mockResolvedValue(organization)
+
+    await organizationService.updateOrganization(
+      '665000000000000000000001',
+      {
+        billing: {
+          seats: '999999999',
+          trialEndsAt: 'not-a-date',
+          currentPeriodEndsAt: '2026-07-01T00:00:00.000Z',
+          customerId: { $ne: 'cus_1' },
+          subscriptionId: ' sub_1 ',
+        },
+        settings: {
+          maxMembers: '-1',
+          maxConcurrentTasks: '3.8',
+          monthlyTaskLimit: '999999999',
+          features: ['bulk_ad_create', 'unknown_feature', 'bulk_ad_create'],
+        },
+      } as any,
+      {
+        userId: 'admin',
+        role: UserRole.SUPER_ADMIN,
+      } as any,
+    )
+
+    expect(organization.billing.seats).toBe(100000)
+    expect(organization.billing.trialEndsAt).toBeUndefined()
+    expect(organization.billing.currentPeriodEndsAt.toISOString()).toBe('2026-07-01T00:00:00.000Z')
+    expect(organization.billing.customerId).toBeUndefined()
+    expect(organization.billing.subscriptionId).toBe('sub_1')
+    expect(organization.set).not.toHaveBeenCalledWith('settings.maxMembers', expect.anything())
+    expect(organization.set).toHaveBeenCalledWith('settings.maxConcurrentTasks', 3)
+    expect(organization.set).toHaveBeenCalledWith('settings.monthlyTaskLimit', 10000000)
+    expect(organization.set).toHaveBeenCalledWith('settings.features', ['bulk_ad_create'])
+  })
+
+  it('sanitizes commercial settings when creating an organization', async () => {
+    jest.spyOn(Organization, 'findOne').mockResolvedValue(null as any)
+    jest.spyOn(User, 'findOne').mockResolvedValue(null as any)
+    jest.spyOn(authService, 'createUser').mockResolvedValue({
+      _id: '665000000000000000000101',
+      toJSON: () => ({ _id: '665000000000000000000101', username: 'org_admin' }),
+    } as any)
+    jest.spyOn(Organization.prototype, 'save').mockResolvedValue(undefined as any)
+
+    const result = await organizationService.createOrganization(
+      {
+        name: '  Acme Team  ',
+        description: '  Demo org  ',
+        adminUsername: 'org_admin',
+        adminPassword: 'password',
+        adminEmail: 'admin@example.com',
+        settings: {
+          maxMembers: '5.8',
+          monthlyTaskLimit: '999999999',
+          features: ['bulk_ad_create', 'unknown_feature', 'bulk_ad_create'],
+        } as any,
+      },
+      {
+        userId: 'admin',
+        role: UserRole.SUPER_ADMIN,
+      } as any,
+    )
+
+    expect(Organization.findOne).toHaveBeenCalledWith({ name: 'Acme Team' })
+    expect(result.organization.name).toBe('Acme Team')
+    expect(result.organization.description).toBe('Demo org')
+    expect(result.organization.settings).toMatchObject({
+      maxMembers: 5,
+      monthlyTaskLimit: 10000000,
+      features: ['bulk_ad_create'],
+    })
   })
 
   it('rejects organization updates from non super admins', async () => {

@@ -11,6 +11,18 @@ import logger from '../utils/logger'
 import authService from './auth.service'
 import { COMMERCIAL_FEATURE_SET } from '../config/commercialPlans'
 
+const ORGANIZATION_NAME_MAX_LENGTH = 100
+const ORGANIZATION_DESCRIPTION_MAX_LENGTH = 500
+const ORGANIZATION_BILLING_ID_MAX_LENGTH = 160
+const ORGANIZATION_MAX_SEATS = 100_000
+const ORGANIZATION_SETTING_LIMITS: Record<string, number> = {
+  maxMembers: 100_000,
+  maxAdAccounts: 100_000,
+  maxMaterials: 10_000_000,
+  maxConcurrentTasks: 1_000,
+  monthlyTaskLimit: 10_000_000,
+}
+
 type PaginationOptions = {
   page: number
   pageSize: number
@@ -24,46 +36,91 @@ type PaginatedResult<T> = {
   pageSize: number
 }
 
+const pickBoundedString = (value: any, maxLength: number): string | undefined => {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim().slice(0, maxLength)
+  return trimmed || undefined
+}
+
+const pickBoundedNonNegativeInt = (value: any, max: number): number | undefined => {
+  if (value === undefined || value === '') return undefined
+  const next = Number(value)
+  if (!Number.isFinite(next) || next < 0) return undefined
+  return Math.min(max, Math.floor(next))
+}
+
+const pickValidDate = (value: any): Date | undefined => {
+  if (!value) return undefined
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? undefined : date
+}
+
+const pickCommercialFeatures = (value: any): string[] | undefined => {
+  if (!Array.isArray(value)) return undefined
+  return Array.from(new Set(value
+    .filter((feature: unknown) => typeof feature === 'string' && feature.trim())
+    .map((feature: string) => feature.trim())
+    .filter((feature: string) => COMMERCIAL_FEATURE_SET.has(feature))))
+}
+
 class OrganizationService {
+  private sanitizeSettings(settings: any, { allowNullClears = false } = {}) {
+    if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return undefined
+
+    const sanitized: any = {}
+    for (const [key, max] of Object.entries(ORGANIZATION_SETTING_LIMITS)) {
+      const value = settings[key]
+      if (value === null && allowNullClears) {
+        sanitized[key] = undefined
+        continue
+      }
+
+      const parsed = pickBoundedNonNegativeInt(value, max)
+      if (parsed !== undefined) {
+        sanitized[key] = parsed
+      }
+    }
+
+    const features = pickCommercialFeatures(settings.features)
+    if (features) {
+      sanitized.features = features
+    }
+
+    return Object.keys(sanitized).length > 0 ? sanitized : undefined
+  }
+
   private sanitizeUpdates(updates: Partial<IOrganization>) {
     const sanitized: any = {}
 
-    if (typeof updates.name === 'string') sanitized.name = updates.name.trim()
-    if (typeof updates.description === 'string') sanitized.description = updates.description.trim()
+    const name = pickBoundedString(updates.name, ORGANIZATION_NAME_MAX_LENGTH)
+    if (name) sanitized.name = name
+    if (Object.prototype.hasOwnProperty.call(updates, 'description') && typeof updates.description === 'string') {
+      sanitized.description = updates.description.trim().slice(0, ORGANIZATION_DESCRIPTION_MAX_LENGTH)
+    }
     if (updates.status && Object.values(OrganizationStatus).includes(updates.status as OrganizationStatus)) {
       sanitized.status = updates.status
     }
 
     const billing = (updates as any).billing
-    if (billing && typeof billing === 'object') {
+    if (billing && typeof billing === 'object' && !Array.isArray(billing)) {
       sanitized.billing = {}
       if (Object.values(OrganizationPlan).includes(billing.plan)) sanitized.billing.plan = billing.plan
       if (Object.values(OrganizationBillingStatus).includes(billing.status)) sanitized.billing.status = billing.status
-      if (Number.isFinite(Number(billing.seats))) sanitized.billing.seats = Math.max(0, Number(billing.seats))
-      if (billing.trialEndsAt) sanitized.billing.trialEndsAt = new Date(billing.trialEndsAt)
-      if (billing.currentPeriodEndsAt) sanitized.billing.currentPeriodEndsAt = new Date(billing.currentPeriodEndsAt)
-      if (typeof billing.customerId === 'string') sanitized.billing.customerId = billing.customerId.trim()
-      if (typeof billing.subscriptionId === 'string') sanitized.billing.subscriptionId = billing.subscriptionId.trim()
+      const seats = pickBoundedNonNegativeInt(billing.seats, ORGANIZATION_MAX_SEATS)
+      const trialEndsAt = pickValidDate(billing.trialEndsAt)
+      const currentPeriodEndsAt = pickValidDate(billing.currentPeriodEndsAt)
+      const customerId = pickBoundedString(billing.customerId, ORGANIZATION_BILLING_ID_MAX_LENGTH)
+      const subscriptionId = pickBoundedString(billing.subscriptionId, ORGANIZATION_BILLING_ID_MAX_LENGTH)
+      if (seats !== undefined) sanitized.billing.seats = seats
+      if (trialEndsAt) sanitized.billing.trialEndsAt = trialEndsAt
+      if (currentPeriodEndsAt) sanitized.billing.currentPeriodEndsAt = currentPeriodEndsAt
+      if (customerId) sanitized.billing.customerId = customerId
+      if (subscriptionId) sanitized.billing.subscriptionId = subscriptionId
+      if (Object.keys(sanitized.billing).length === 0) delete sanitized.billing
     }
 
-    const settings = (updates as any).settings
-    if (settings && typeof settings === 'object') {
-      sanitized.settings = {}
-      for (const key of ['maxMembers', 'maxAdAccounts', 'maxMaterials', 'maxConcurrentTasks', 'monthlyTaskLimit']) {
-        const value = settings[key]
-        if (value === null) {
-          sanitized.settings[key] = undefined
-        } else if (value !== undefined && value !== '' && Number.isFinite(Number(value))) {
-          sanitized.settings[key] = Math.max(0, Number(value))
-        }
-      }
-      if (Array.isArray(settings.features)) {
-        sanitized.settings.features = settings.features
-          .filter((feature: unknown) => typeof feature === 'string' && feature.trim())
-          .map((feature: string) => feature.trim())
-          .filter((feature: string) => COMMERCIAL_FEATURE_SET.has(feature))
-      }
-    }
+    const settings = this.sanitizeSettings((updates as any).settings, { allowNullClears: true })
+    if (settings) sanitized.settings = settings
 
     return sanitized
   }
@@ -152,8 +209,15 @@ class OrganizationService {
       throw new Error('权限不足')
     }
 
+    const name = pickBoundedString(data.name, ORGANIZATION_NAME_MAX_LENGTH)
+    const description = pickBoundedString(data.description, ORGANIZATION_DESCRIPTION_MAX_LENGTH)
+    const settings = this.sanitizeSettings(data.settings)
+    if (!name) {
+      throw new Error('组织名称不能为空')
+    }
+
     // 检查组织名是否已存在
-    const existingOrg = await Organization.findOne({ name: data.name })
+    const existingOrg = await Organization.findOne({ name })
     if (existingOrg) {
       throw new Error('组织名称已存在')
     }
@@ -186,17 +250,17 @@ class OrganizationService {
       // 创建组织（使用真实的管理员 ID）
       const organization = new Organization({
         _id: tempOrgId,
-        name: data.name,
-        description: data.description,
+        name,
+        description,
         adminId: admin._id,
         status: OrganizationStatus.ACTIVE,
-        settings: data.settings,
+        settings,
         createdBy: currentUser.userId,
       })
 
       await organization.save()
 
-      logger.info(`Organization ${data.name} created with admin ${data.adminUsername}`)
+      logger.info(`Organization ${name} created with admin ${data.adminUsername}`)
 
       return {
         organization,
