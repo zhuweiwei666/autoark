@@ -96,7 +96,9 @@ router.get('/trend', async (req: Request, res: Response) => {
  */
 router.get('/duplicates', async (req: Request, res: Response) => {
   try {
-    const duplicates = await findDuplicateMaterials()
+    const groupLimit = parseLimitedNumber(req.query.groupLimit ?? req.query.limit, 50, 100)
+    const detailLimit = parseLimitedNumber(req.query.detailLimit, 25, 100)
+    const duplicates = await findDuplicateMaterials({ groupLimit, detailLimit })
     
     res.json({
       success: true,
@@ -104,6 +106,8 @@ router.get('/duplicates', async (req: Request, res: Response) => {
       summary: {
         duplicateImages: duplicates.byImageHash.length,
         duplicateVideos: duplicates.byVideoId.length,
+        groupLimit,
+        detailLimit,
       },
     })
   } catch (error: any) {

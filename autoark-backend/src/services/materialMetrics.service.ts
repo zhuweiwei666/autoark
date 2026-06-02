@@ -15,6 +15,8 @@ import { generateFingerprint } from './materialSync.service'
 
 const MATERIAL_USAGE_AD_DETAIL_LIMIT = 20
 const MATERIAL_USAGE_CREATIVE_DETAIL_LIMIT = 20
+const DUPLICATE_MATERIAL_GROUP_LIMIT = 50
+const DUPLICATE_MATERIAL_DETAIL_LIMIT = 25
 
 // 从广告数据中提取素材信息
 // 优先使用 Ad 模型中存储的字段（同步时已提取），其次从 raw 数据中提取
@@ -641,66 +643,142 @@ export const getMaterialTrend = async (
  * 识别重复素材
  * 基于 imageHash 或 thumbnailUrl 识别使用相同素材的创意
  */
-export const findDuplicateMaterials = async () => {
-  const Creative = require('../models/Creative').default
-  
-  // 按 imageHash 分组找重复
-  const duplicatesByHash = await Creative.aggregate([
+type DuplicateMaterialField = 'imageHash' | 'videoId'
+
+type DuplicateMaterialGroup = {
+  _id: string
+  count: number
+  thumbnail?: string
+}
+
+const getDuplicateGroups = async (
+  CreativeModel: any,
+  field: DuplicateMaterialField,
+  groupLimit: number,
+): Promise<DuplicateMaterialGroup[]> => CreativeModel.aggregate([
+  {
+    $match: {
+      [field]: { $exists: true, $ne: null },
+    },
+  },
+  {
+    $group: {
+      _id: `$${field}`,
+      count: { $sum: 1 },
+      thumbnail: { $first: '$thumbnailUrl' },
+    },
+  },
+  { $match: { count: { $gt: 1 } } },
+  { $sort: { count: -1 } },
+  { $limit: groupLimit },
+])
+
+const getDuplicateAccountCounts = async (
+  CreativeModel: any,
+  field: DuplicateMaterialField,
+  keys: string[],
+): Promise<Map<string, number>> => {
+  if (keys.length === 0) return new Map()
+
+  const counts = await CreativeModel.aggregate([
     {
       $match: {
-        imageHash: { $exists: true, $ne: null }
-      }
+        [field]: { $in: keys },
+        accountId: { $exists: true, $ne: null },
+      },
     },
     {
       $group: {
-        _id: '$imageHash',
-        count: { $sum: 1 },
-        creativeIds: { $push: '$creativeId' },
-        accounts: { $addToSet: '$accountId' },
-        thumbnails: { $addToSet: '$thumbnailUrl' },
-      }
+        _id: {
+          key: `$${field}`,
+          accountId: '$accountId',
+        },
+      },
     },
-    { $match: { count: { $gt: 1 } } },
-    { $sort: { count: -1 } },
-    { $limit: 50 }
+    {
+      $group: {
+        _id: '$_id.key',
+        accountsCount: { $sum: 1 },
+      },
+    },
   ])
+
+  return new Map(counts.map((item: any) => [item._id, item.accountsCount || 0]))
+}
+
+const getDuplicateCreativeDetails = async (
+  CreativeModel: any,
+  field: DuplicateMaterialField,
+  key: string,
+  detailLimit: number,
+) => CreativeModel.find({ [field]: key })
+  .sort({ createdAt: 1, creativeId: 1 })
+  .select('creativeId thumbnailUrl')
+  .limit(detailLimit)
+  .lean()
+
+const formatDuplicateGroups = async (
+  CreativeModel: any,
+  field: DuplicateMaterialField,
+  groups: DuplicateMaterialGroup[],
+  detailLimit: number,
+) => {
+  const keys = groups.map((group) => group._id).filter(Boolean)
+  const accountCounts = await getDuplicateAccountCounts(CreativeModel, field, keys)
+  const details = await Promise.all(
+    groups.map((group) => getDuplicateCreativeDetails(CreativeModel, field, group._id, detailLimit)),
+  )
+
+  return groups.map((group, index) => {
+    const groupDetails = details[index] || []
+    const creativeIds = groupDetails.map((detail: any) => detail.creativeId).filter(Boolean)
+    const thumbnail = groupDetails.find((detail: any) => detail.thumbnailUrl)?.thumbnailUrl || group.thumbnail
+
+    return {
+      [field]: group._id,
+      usageCount: group.count,
+      creativeIds,
+      creativeIdsTotal: group.count,
+      creativeIdsReturned: creativeIds.length,
+      creativeIdsTruncated: group.count > creativeIds.length,
+      accountsCount: accountCounts.get(group._id) || 0,
+      thumbnail,
+    }
+  })
+}
+
+export const findDuplicateMaterials = async (options: {
+  groupLimit?: number
+  detailLimit?: number
+} = {}) => {
+  const Creative = require('../models/Creative').default
+  const groupLimit = options.groupLimit || DUPLICATE_MATERIAL_GROUP_LIMIT
+  const detailLimit = options.detailLimit || DUPLICATE_MATERIAL_DETAIL_LIMIT
   
-  // 按 videoId 分组找重复
-  const duplicatesByVideo = await Creative.aggregate([
-    {
-      $match: {
-        videoId: { $exists: true, $ne: null }
-      }
-    },
-    {
-      $group: {
-        _id: '$videoId',
-        count: { $sum: 1 },
-        creativeIds: { $push: '$creativeId' },
-        accounts: { $addToSet: '$accountId' },
-        thumbnails: { $addToSet: '$thumbnailUrl' },
-      }
-    },
-    { $match: { count: { $gt: 1 } } },
-    { $sort: { count: -1 } },
-    { $limit: 50 }
+  const [duplicatesByHash, duplicatesByVideo] = await Promise.all([
+    getDuplicateGroups(Creative, 'imageHash', groupLimit),
+    getDuplicateGroups(Creative, 'videoId', groupLimit),
+  ])
+  const [byImageHash, byVideoId] = await Promise.all([
+    formatDuplicateGroups(Creative, 'imageHash', duplicatesByHash, detailLimit),
+    formatDuplicateGroups(Creative, 'videoId', duplicatesByVideo, detailLimit),
   ])
   
   return {
-    byImageHash: duplicatesByHash.map((d: any) => ({
-      imageHash: d._id,
-      usageCount: d.count,
-      creativeIds: d.creativeIds,
-      accountsCount: d.accounts.length,
-      thumbnail: d.thumbnails[0],
-    })),
-    byVideoId: duplicatesByVideo.map((d: any) => ({
-      videoId: d._id,
-      usageCount: d.count,
-      creativeIds: d.creativeIds,
-      accountsCount: d.accounts.length,
-      thumbnail: d.thumbnails[0],
-    })),
+    byImageHash,
+    byVideoId,
+    limits: {
+      groups: {
+        maxReturned: groupLimit,
+        imageReturned: byImageHash.length,
+        videoReturned: byVideoId.length,
+        imageTruncated: byImageHash.length >= groupLimit,
+        videoTruncated: byVideoId.length >= groupLimit,
+      },
+      creativeIds: {
+        maxReturnedPerGroup: detailLimit,
+      },
+    },
   }
 }
 
