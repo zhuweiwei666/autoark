@@ -25,22 +25,62 @@ const rejectInvalidStringParam = (
   })
 }
 
+const rejectInvalidBooleanParam = (
+  res: Response,
+  name: string,
+) => {
+  res.status(400).json({
+    success: false,
+    error: `${name} must be true or false`,
+  })
+}
+
+const rejectUnexpectedQueryParam = (
+  res: Response,
+  key: string,
+) => {
+  res.status(400).json({
+    success: false,
+    error: `Unexpected query parameter: ${key}`,
+  })
+}
+
+const rejectUnexpectedQueryKeys = (
+  query: Request['query'],
+  allowedKeys: readonly string[],
+  res: Response,
+): boolean => {
+  const allowed = new Set(allowedKeys)
+  const unexpectedKey = Object.keys(query).find(key => !allowed.has(key))
+  if (!unexpectedKey) return false
+  rejectUnexpectedQueryParam(res, unexpectedKey)
+  return true
+}
+
 /**
  * 获取所有 Pixels
  */
 export const getPixels = async (req: Request, res: Response, next: NextFunction) => {
   try {
     if (!requireSuperAdmin(req, res)) return
-    const { allTokens } = req.query
+    if (rejectUnexpectedQueryKeys(req.query, ['tokenId', 'allTokens'], res)) return
+
     const tokenId = pickTokenId(req.query.tokenId)
 
     if (req.query.tokenId !== undefined && !tokenId) {
       return rejectInvalidStringParam(res, 'tokenId')
     }
+    if (
+      req.query.allTokens !== undefined &&
+      req.query.allTokens !== 'true' &&
+      req.query.allTokens !== 'false'
+    ) {
+      return rejectInvalidBooleanParam(res, 'allTokens')
+    }
 
     let pixels: any[]
 
-    if (allTokens === 'true') {
+    if (req.query.allTokens === 'true') {
       // 获取所有 Token 的 Pixels
       pixels = await pixelsService.getAllPixelsFromAllTokens()
     } else if (tokenId) {
@@ -67,6 +107,8 @@ export const getPixels = async (req: Request, res: Response, next: NextFunction)
 export const getPixelDetails = async (req: Request, res: Response, next: NextFunction) => {
   try {
     if (!requireSuperAdmin(req, res)) return
+    if (rejectUnexpectedQueryKeys(req.query, ['tokenId'], res)) return
+
     const id = pickPixelId(req.params.id)
     const tokenId = pickTokenId(req.query.tokenId)
 
@@ -94,6 +136,8 @@ export const getPixelDetails = async (req: Request, res: Response, next: NextFun
 export const getPixelEvents = async (req: Request, res: Response, next: NextFunction) => {
   try {
     if (!requireSuperAdmin(req, res)) return
+    if (rejectUnexpectedQueryKeys(req.query, ['tokenId', 'limit'], res)) return
+
     const id = pickPixelId(req.params.id)
     const tokenId = pickTokenId(req.query.tokenId)
 

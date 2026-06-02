@@ -60,6 +60,46 @@ describe('Facebook pixels controller', () => {
     expect(next).not.toHaveBeenCalled()
   })
 
+  it('rejects bracketed tokenId query keys before fetching pixels', async () => {
+    const res = responseMock()
+    const next = jest.fn()
+
+    await getPixels(
+      superAdminReq({ query: { 'tokenId[$ne]': 'token_1' } }) as any,
+      res as any,
+      next,
+    )
+
+    expect(res.status).toHaveBeenCalledWith(400)
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      error: 'Unexpected query parameter: tokenId[$ne]',
+    })
+    expect(mockPixelsService.getPixelsByToken).not.toHaveBeenCalled()
+    expect(mockPixelsService.getAllPixels).not.toHaveBeenCalled()
+    expect(next).not.toHaveBeenCalled()
+  })
+
+  it('rejects malformed allTokens flags before falling back to token pool', async () => {
+    const res = responseMock()
+    const next = jest.fn()
+
+    await getPixels(
+      superAdminReq({ query: { allTokens: { $ne: 'true' } } }) as any,
+      res as any,
+      next,
+    )
+
+    expect(res.status).toHaveBeenCalledWith(400)
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      error: 'allTokens must be true or false',
+    })
+    expect(mockPixelsService.getAllPixelsFromAllTokens).not.toHaveBeenCalled()
+    expect(mockPixelsService.getAllPixels).not.toHaveBeenCalled()
+    expect(next).not.toHaveBeenCalled()
+  })
+
   it('trims tokenId values before fetching pixels for one token', async () => {
     const res = responseMock()
 
@@ -95,6 +135,28 @@ describe('Facebook pixels controller', () => {
       error: 'Pixel ID must be a string',
     })
     expect(mockPixelsService.getPixelDetails).not.toHaveBeenCalled()
+    expect(next).not.toHaveBeenCalled()
+  })
+
+  it('rejects bracketed tokenId query keys before fetching events', async () => {
+    const res = responseMock()
+    const next = jest.fn()
+
+    await getPixelEvents(
+      superAdminReq({
+        params: { id: 'pixel_1' },
+        query: { 'tokenId[$ne]': 'token_1', limit: '9999' },
+      }) as any,
+      res as any,
+      next,
+    )
+
+    expect(res.status).toHaveBeenCalledWith(400)
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      error: 'Unexpected query parameter: tokenId[$ne]',
+    })
+    expect(mockPixelsService.getPixelEvents).not.toHaveBeenCalled()
     expect(next).not.toHaveBeenCalled()
   })
 
