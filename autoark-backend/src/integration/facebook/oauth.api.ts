@@ -161,8 +161,12 @@ export const getActiveAppConfigWithOptions = async (
       }
 
       if (options.requirePublicOauthReady) {
-        throw new Error(
-          `Facebook App ${appId} is not ready for public OAuth. Please complete App review, advanced permissions, Live mode, validation, and Business Login config_id first.`
+        throw Object.assign(
+          new Error(`Facebook App ${appId} 尚未满足公开授权条件。请先在 App 管理登记 Live、Business verified、App Review approved、所需权限 Advanced + Approved，以及 Business Login config_id。`),
+          {
+            statusCode: 400,
+            code: 'FACEBOOK_APP_PUBLIC_OAUTH_NOT_READY',
+          },
         )
       }
     }

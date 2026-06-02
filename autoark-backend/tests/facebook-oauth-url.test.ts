@@ -116,6 +116,18 @@ describe('Facebook OAuth login URL generation', () => {
     })
   })
 
+  it('returns a client-facing error when an explicit app is not public OAuth ready', async () => {
+    const oauthApi = await loadOauthApi(null)
+
+    await expect(oauthApi.getFacebookLoginUrl('state', '2165550037551429', {
+      businessLogin: true,
+    })).rejects.toMatchObject({
+      statusCode: 400,
+      code: 'FACEBOOK_APP_PUBLIC_OAUTH_NOT_READY',
+      message: expect.stringContaining('尚未满足公开授权条件'),
+    })
+  })
+
   it('rejects tampered signed OAuth state when verification is required', async () => {
     const oauthApi = await loadOauthApi({
       appId: '2165550037551429',
