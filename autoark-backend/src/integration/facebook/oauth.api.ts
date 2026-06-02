@@ -133,11 +133,24 @@ export const getActiveAppConfig = async (appId?: string): Promise<{
   appSecret: string
   businessLoginConfigId?: string
   source: 'database' | 'env'
+}> => getActiveAppConfigWithOptions(appId)
+
+export const getActiveAppConfigWithOptions = async (
+  appId?: string,
+  options: { requirePublicOauthReady?: boolean } = {},
+): Promise<{
+  appId: string
+  appSecret: string
+  businessLoginConfigId?: string
+  source: 'database' | 'env'
 }> => {
   try {
     // 如果指定了 appId，直接查找
     if (appId) {
-      const app = await FacebookApp.findOne({ appId, status: 'active' })
+      const appQuery = options.requirePublicOauthReady
+        ? publicOauthReadyAppQuery({ appId })
+        : { appId, status: 'active' }
+      const app = await FacebookApp.findOne(appQuery)
       if (app) {
         return {
           appId: app.appId,
@@ -145,6 +158,12 @@ export const getActiveAppConfig = async (appId?: string): Promise<{
           businessLoginConfigId: app.config?.businessLoginConfigId,
           source: 'database',
         }
+      }
+
+      if (options.requirePublicOauthReady) {
+        throw new Error(
+          `Facebook App ${appId} is not ready for public OAuth. Please complete App review, advanced permissions, Live mode, validation, and Business Login config_id first.`
+        )
       }
     }
 
@@ -250,7 +269,7 @@ export const getFacebookLoginUrl = async (
   appId?: string,
   options: FacebookLoginUrlOptions = {},
 ): Promise<string> => {
-  const config = await getActiveAppConfig(appId)
+  const config = await getActiveAppConfigWithOptions(appId, { requirePublicOauthReady: true })
   const redirectUri = options.redirectUri || FB_REDIRECT_URI
   const businessLoginConfigId = config.businessLoginConfigId || ENV_FB_BUSINESS_LOGIN_CONFIG_ID
   

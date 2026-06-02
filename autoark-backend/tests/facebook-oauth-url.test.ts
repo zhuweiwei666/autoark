@@ -9,15 +9,16 @@ describe('Facebook OAuth login URL generation', () => {
       env.FACEBOOK_BULK_AD_REDIRECT_URI || 'https://app.autoark.work/api/bulk-ad/auth/callback'
     process.env.FACEBOOK_BUSINESS_LOGIN_CONFIG_ID = env.FACEBOOK_BUSINESS_LOGIN_CONFIG_ID || ''
 
+    const findOne = jest.fn().mockResolvedValue(appConfig)
     jest.doMock('../src/models/FacebookApp', () => ({
       __esModule: true,
       default: {
-        findOne: jest.fn().mockResolvedValue(appConfig),
+        findOne,
         countDocuments: jest.fn().mockResolvedValue(appConfig ? 1 : 0),
       },
     }))
 
-    return import('../src/integration/facebook/oauth.api')
+    return Object.assign(await import('../src/integration/facebook/oauth.api'), { __findOne: findOne })
   }
 
   afterEach(() => {
@@ -74,6 +75,45 @@ describe('Facebook OAuth login URL generation', () => {
       'pages_read_engagement',
       'pages_manage_ads',
     ])
+  })
+
+  it('requires public OAuth readiness when a specific app is used to generate a login URL', async () => {
+    const oauthApi = await loadOauthApi({
+      appId: '2165550037551429',
+      appSecret: 'secret',
+      config: { businessLoginConfigId: '1544502593866149' },
+    })
+
+    await oauthApi.getFacebookLoginUrl('state', '2165550037551429', {
+      businessLogin: true,
+    })
+
+    expect((oauthApi as any).__findOne).toHaveBeenCalledWith(expect.objectContaining({
+      appId: '2165550037551429',
+      status: 'active',
+      'validation.isValid': true,
+      'compliance.publicOauthReady': true,
+      'compliance.appMode': 'live',
+      'compliance.businessVerification': 'verified',
+      'compliance.appReview': 'approved',
+      'config.enabledForBulkAds': { $ne: false },
+      'config.businessLoginConfigId': { $exists: true, $nin: ['', null] },
+    }))
+  })
+
+  it('keeps OAuth callbacks compatible with the original active app from signed state', async () => {
+    const oauthApi = await loadOauthApi({
+      appId: '2165550037551429',
+      appSecret: 'secret',
+      config: { businessLoginConfigId: '1544502593866149' },
+    })
+
+    await oauthApi.getActiveAppConfigWithOptions('2165550037551429')
+
+    expect((oauthApi as any).__findOne).toHaveBeenCalledWith({
+      appId: '2165550037551429',
+      status: 'active',
+    })
   })
 
   it('rejects tampered signed OAuth state when verification is required', async () => {
