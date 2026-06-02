@@ -40,6 +40,67 @@ describe('bulk ad diagnostics', () => {
     expect(diagnosis.nextActions.join(' ')).toContain('Pixel 分配给该广告账户')
   })
 
+  it('classifies Instagram asset access failures separately from creative failures', () => {
+    const diagnosis = diagnoseBulkAdError({
+      code: 100,
+      message: 'Invalid instagram_actor_id: Instagram account is not connected to the selected Facebook Page',
+    })
+
+    expect(diagnosis.errorCode).toBe('INSTAGRAM_ACCESS_REQUIRED')
+    expect(diagnosis.entityType).toBe('instagram')
+    expect(diagnosis.nextActions.join(' ')).toContain('Instagram 账号是否已绑定')
+  })
+
+  it('classifies catalog and product set access failures with catalog next steps', () => {
+    const diagnosis = diagnoseBulkAdError({
+      response: {
+        data: {
+          error: {
+            code: 100,
+            message: 'Product set is unavailable or the ad account has no permission to use this catalog',
+          },
+        },
+      },
+    })
+
+    expect(diagnosis.errorCode).toBe('CATALOG_ACCESS_REQUIRED')
+    expect(diagnosis.entityType).toBe('catalog')
+    expect(diagnosis.nextActions.join(' ')).toContain('Catalog/Product Set 分配')
+  })
+
+  it('classifies destination URL failures before generic Meta validation', () => {
+    const diagnosis = diagnoseBulkAdError({
+      code: 100,
+      message: 'Invalid destination_url: landing page URL is malformed or blocked by domain validation',
+    })
+
+    expect(diagnosis.errorCode).toBe('DESTINATION_URL_INVALID')
+    expect(diagnosis.entityType).toBe('destination')
+    expect(diagnosis.nextActions.join(' ')).toContain('websiteUrl')
+  })
+
+  it('classifies ad policy review failures as non-retryable content actions', () => {
+    const diagnosis = diagnoseBulkAdError({
+      code: 100,
+      message: 'Ad was rejected because it violates Meta Advertising Policies and requires review',
+    })
+
+    expect(diagnosis.errorCode).toBe('AD_POLICY_REVIEW')
+    expect(diagnosis.entityType).toBe('policy')
+    expect(diagnosis.retryable).toBe(false)
+    expect(diagnosis.nextActions.join(' ')).toContain('政策')
+  })
+
+  it('classifies billing and spend-cap blockers as account unavailable', () => {
+    const diagnosis = diagnoseBulkAdError({
+      message: 'Cannot create ad because this ad account has an outstanding balance and account spend limit',
+    })
+
+    expect(diagnosis.errorCode).toBe('AD_ACCOUNT_UNAVAILABLE')
+    expect(diagnosis.entityType).toBe('account')
+    expect(diagnosis.nextActions.join(' ')).toContain('账单')
+  })
+
   it('preserves explicit no-ad-created errors and enriches them', () => {
     const diagnosis = diagnoseBulkAdError({
       entityType: 'ad',

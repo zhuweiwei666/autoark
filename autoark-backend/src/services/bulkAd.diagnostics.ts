@@ -129,6 +129,50 @@ const DIAGNOSIS_TEMPLATES: Record<string, DiagnosisTemplate> = {
       '确认优化事件和转化配置可用后重试。',
     ],
   },
+  INSTAGRAM_ACCESS_REQUIRED: {
+    entityType: 'instagram',
+    customerMessage: 'Instagram 资产不可用，或当前主页/广告账户没有绑定可投放的 Instagram 账号。',
+    retryable: false,
+    source: 'meta',
+    nextActions: [
+      '在 Business Manager 检查 Instagram 账号是否已绑定到对应主页。',
+      '确认广告账户拥有该 Instagram 资产的投放权限。',
+      '重新同步主页和 Instagram 账号后重试失败项。',
+    ],
+  },
+  CATALOG_ACCESS_REQUIRED: {
+    entityType: 'catalog',
+    customerMessage: '商品目录、商品集或商店资产不可用，当前广告账户无法使用所选目录投放。',
+    retryable: false,
+    source: 'meta',
+    nextActions: [
+      '在 Business Manager 将 Catalog/Product Set 分配给该广告账户。',
+      '确认所选商品集存在且包含可投放商品。',
+      '重新同步目录资产后重试失败项。',
+    ],
+  },
+  DESTINATION_URL_INVALID: {
+    entityType: 'destination',
+    customerMessage: '落地页、链接或域名配置不合法，Meta 无法创建该广告。',
+    retryable: false,
+    source: 'validation',
+    nextActions: [
+      '检查文案包中的 websiteUrl 是否完整、可访问且包含 http/https。',
+      '确认落地页域名没有被 Meta 限制，并与广告目标匹配。',
+      '修正链接后重新发布任务。',
+    ],
+  },
+  AD_POLICY_REVIEW: {
+    entityType: 'policy',
+    customerMessage: '广告内容触发 Meta 广告政策或审核限制。',
+    retryable: false,
+    source: 'meta',
+    nextActions: [
+      '查看 Meta 原始错误中的政策或审核原因。',
+      '调整素材、文案、落地页或受众后重新发布。',
+      '如确认误判，先在 Meta 侧申诉或人工复核。',
+    ],
+  },
   BUDGET_OR_BID_INVALID: {
     entityType: 'budget',
     customerMessage: '预算、出价或投放时间配置不符合 Meta 要求。',
@@ -229,6 +273,10 @@ const KNOWN_EXPLICIT_CODES = new Set([
   'AD_ACCOUNT_UNAVAILABLE',
   'PAGE_ACCESS_REQUIRED',
   'PIXEL_ACCESS_REQUIRED',
+  'INSTAGRAM_ACCESS_REQUIRED',
+  'CATALOG_ACCESS_REQUIRED',
+  'DESTINATION_URL_INVALID',
+  'AD_POLICY_REVIEW',
   'BUDGET_OR_BID_INVALID',
   'TARGETING_INVALID',
   'CREATIVE_OR_MATERIAL_FAILED',
@@ -329,11 +377,26 @@ const classifyErrorCode = (
   if (includesAny(text, ['pixel', 'promoted_object', 'custom conversion', '像素', '转化事件'])) {
     return 'PIXEL_ACCESS_REQUIRED'
   }
+  if (includesAny(text, ['instagram', 'ig user', 'ig_user_id', 'instagram_actor_id', 'instagram account', 'instagram账号', 'instagram 账号'])) {
+    return 'INSTAGRAM_ACCESS_REQUIRED'
+  }
+  if (includesAny(text, ['catalog', 'product set', 'product_set', 'product catalog', 'commerce', 'shop', '商品目录', '商品集', '商店'])) {
+    return 'CATALOG_ACCESS_REQUIRED'
+  }
   if (includesAny(text, ['promote_pages', 'page id', 'page_id', 'object_story_spec', 'facebook page', '主页', '公共主页'])) {
     return 'PAGE_ACCESS_REQUIRED'
   }
+  if (includesAny(text, ['destination url', 'destination_url', 'link_url', 'website_url', 'invalid url', 'malformed url', 'landing page', 'domain', 'deeplink', '落地页', '链接', '网址', '域名'])) {
+    return 'DESTINATION_URL_INVALID'
+  }
+  if (includesAny(text, ['policy', 'review', 'rejected', 'disapproved', 'restricted content', 'advertising policies', '审核', '拒登', '拒绝', '政策', '违规'])) {
+    return 'AD_POLICY_REVIEW'
+  }
   if (includesAny(text, ['creative', 'adcreative', 'image', 'video', 'thumbnail', 'hash', 'upload', 'file_url', '素材', '创意', '图片', '视频'])) {
     return 'CREATIVE_OR_MATERIAL_FAILED'
+  }
+  if (includesAny(text, ['payment', 'billing', 'spend cap', 'outstanding balance', 'account spend limit', 'prepay balance', '账单', '支付', '余额', '欠费', '花费上限'])) {
+    return 'AD_ACCOUNT_UNAVAILABLE'
   }
   if (includesAny(text, ['ad account', 'act_', '广告账户', 'account has been disabled', 'disabled ad account', 'no permission to access ad account'])) {
     if (includesAny(text, ['disabled', 'payment', 'billing', 'spend cap', 'risk', '封禁', '停用', '支付', '账单', '风控'])) {
