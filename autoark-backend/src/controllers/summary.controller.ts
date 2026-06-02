@@ -150,6 +150,7 @@ const MATERIAL_SORT_FIELDS = [
   'roas',
   'spend',
 ]
+const MATERIAL_TYPE_FILTERS = ['image', 'video']
 
 const parseSummaryPagination = (req: Request, defaultLimit: number) => {
   const { page, pageSize, skip } = parsePagination(
@@ -696,7 +697,7 @@ router.get('/materials', async (req: Request, res: Response) => {
   try {
     const startTime = Date.now()
     const { startDate, endDate } = parseSummaryDateRange(req, { defaultDays: 7 })
-    const materialType = req.query.type as string
+    const materialType = pickAllowedString(req.query.type, MATERIAL_TYPE_FILTERS, '')
     const sortBy = pickAllowedString(req.query.sortBy, MATERIAL_SORT_FIELDS, 'spend')
     const order = req.query.order === 'asc' ? 1 : -1
     const { page, limit, skip } = parseSummaryPagination(req, 50)

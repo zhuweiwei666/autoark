@@ -44,6 +44,7 @@ jest.mock('../src/models/Aggregation', () => ({
 import summaryRouter from '../src/controllers/summary.controller'
 import { getUserAccountIds } from '../src/middlewares/auth'
 import { AggAccount, AggCampaign, AggCountry, AggDaily } from '../src/models/Aggregation'
+import MaterialMetrics from '../src/models/MaterialMetrics'
 
 const createApp = () => {
   const app = express()
@@ -278,5 +279,28 @@ describe('summary route data scoping', () => {
         accountId: { $in: ['123', 'act_123'] },
       },
     })
+  })
+
+  it('sanitizes material summary type filters before aggregating', async () => {
+    mockAuthState.user = {
+      role: UserRole.SUPER_ADMIN,
+      userId: '665000000000000000000003',
+    }
+    ;(MaterialMetrics.aggregate as jest.Mock).mockResolvedValue([
+      {
+        data: [],
+        total: [{ count: 0 }],
+      },
+    ])
+
+    const objectTypeResponse = await request(createApp()).get('/api/summary/materials?type[$ne]=image&limit=10')
+    const videoTypeResponse = await request(createApp()).get('/api/summary/materials?type=video&limit=10')
+
+    expect(objectTypeResponse.status).toBe(200)
+    expect(videoTypeResponse.status).toBe(200)
+    const objectTypeMatch = (MaterialMetrics.aggregate as jest.Mock).mock.calls[0][0][0].$match
+    const videoTypeMatch = (MaterialMetrics.aggregate as jest.Mock).mock.calls[1][0][0].$match
+    expect(objectTypeMatch.materialType).toBeUndefined()
+    expect(videoTypeMatch.materialType).toBe('video')
   })
 })
