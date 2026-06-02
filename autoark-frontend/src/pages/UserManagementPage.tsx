@@ -171,16 +171,44 @@ const UserManagementPage: React.FC = () => {
     if (!editingUser) return
 
     try {
+      const updatePayload: any = {
+        username: editFormData.username,
+        email: editFormData.email,
+      }
+
+      if (isSuperAdmin) {
+        updatePayload.role = editFormData.role
+        updatePayload.organizationId = editFormData.organizationId
+        updatePayload.status = editFormData.status
+      }
+
       const response = await authFetch(`/api/users/${editingUser._id}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`,
         },
-        body: JSON.stringify(editFormData),
+        body: JSON.stringify(updatePayload),
       })
       const data = await response.json()
       if (data.success) {
+        if (!isSuperAdmin && isOrgAdmin && editFormData.status !== editingUser.status) {
+          const statusResponse = await authFetch(`/api/users/${editingUser._id}/status`, {
+            method: 'PUT',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}`,
+            },
+            body: JSON.stringify({ status: editFormData.status }),
+          })
+          const statusData = await statusResponse.json()
+          if (!statusData.success) {
+            alert(statusData.message || '用户基础信息已更新，但状态更新失败')
+            fetchUsers()
+            return
+          }
+        }
+
         alert('用户更新成功')
         setShowEditModal(false)
         setEditingUser(null)
