@@ -77,6 +77,14 @@ const AUTH_FACEBOOK_ASSET_PAGE_SIZE = 100
 const BULK_AD_OAUTH_CODE_MAX_LENGTH = 2048
 const BULK_AD_OAUTH_ERROR_MAX_LENGTH = 1000
 const BULK_AD_OAUTH_STATE_MAX_LENGTH = 4096
+const DRAFT_ACCOUNT_LIMIT = 100
+const DRAFT_CONFIG_ID_LIMIT = 50
+const DRAFT_TEMPLATE_MAX_LENGTH = 240
+const DRAFT_TRACKING_TAGS_MAX_LENGTH = 1000
+const DRAFT_BUDGET_MAX = 100_000_000
+const DRAFT_INLINE_TARGETING_MAX_DEPTH = 6
+const DRAFT_INLINE_TARGETING_MAX_KEYS = 250
+const DRAFT_INLINE_TARGETING_MAX_ARRAY_ITEMS = 500
 const TARGETING_INTEREST_SEARCH_TYPES = ['adinterest', 'adinterestsuggestion'] as const
 const TARGETING_LOCATION_SEARCH_TYPES = ['adgeolocation'] as const
 const TARGETING_SEARCH_QUERY_MAX_LENGTH = 120
@@ -116,6 +124,15 @@ const COPYWRITING_CTA_VALUES = [
   'GET_DIRECTIONS',
   'NO_BUTTON',
 ] as const
+const DRAFT_STATUS_VALUES = ['ACTIVE', 'PAUSED'] as const
+const DRAFT_BUDGET_TYPES = ['DAILY', 'LIFETIME'] as const
+const DRAFT_BUYING_TYPES = ['AUCTION', 'RESERVED'] as const
+const DRAFT_CAMPAIGN_STATUSES = ['ACTIVE', 'PAUSED'] as const
+const DRAFT_AD_FORMATS = ['SINGLE', 'CAROUSEL', 'COLLECTION'] as const
+const DRAFT_PUBLISH_TARGETING_LEVELS = ['CAMPAIGN', 'ADSET'] as const
+const DRAFT_PUBLISH_CREATIVE_LEVELS = ['ACCOUNT', 'CAMPAIGN', 'ADSET'] as const
+const DRAFT_PUBLISH_COPYWRITING_MODES = ['SHARED', 'SEQUENTIAL'] as const
+const DRAFT_PUBLISH_SCHEDULES = ['IMMEDIATE', 'SCHEDULED'] as const
 
 const pickTrimmedString = (value: any, maxLength: number): string | undefined => {
   if (typeof value !== 'string') return undefined
@@ -167,6 +184,79 @@ const pickObjectArray = <T>(
 const pickBoolean = (value: any): boolean | undefined => (
   typeof value === 'boolean' ? value : undefined
 )
+
+const pickValidDate = (value: any): Date | undefined => {
+  if (value === undefined || value === null || value === '') return undefined
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? undefined : date
+}
+
+const pickObjectIdString = (value: any): string | undefined => {
+  const id = pickTrimmedString(value, 64)
+  return id && mongoose.Types.ObjectId.isValid(id) ? id : undefined
+}
+
+const hasOwnValue = (value: any) => value !== undefined
+
+const assignString = (target: any, input: any, field: string, maxLength: number) => {
+  const value = pickTrimmedString(input?.[field], maxLength)
+  if (value) target[field] = value
+}
+
+const assignNumber = (target: any, input: any, field: string, max: number, integer = true) => {
+  const value = pickNonNegativeNumber(input?.[field], max, integer)
+  if (value !== undefined) target[field] = value
+}
+
+const assignBoolean = (target: any, input: any, field: string) => {
+  const value = pickBoolean(input?.[field])
+  if (value !== undefined) target[field] = value
+}
+
+const assignAllowedString = (
+  target: any,
+  input: any,
+  field: string,
+  allowedValues: readonly string[],
+  fallback = '',
+) => {
+  if (typeof input?.[field] !== 'string') return
+  const value = pickAllowedString(input[field], allowedValues, fallback)
+  if (value) target[field] = value
+}
+
+const isSafeDraftJsonKey = (key: string) => (
+  key !== '__proto__' &&
+  key !== 'prototype' &&
+  key !== 'constructor' &&
+  !key.startsWith('$') &&
+  !key.includes('.')
+)
+
+const sanitizeDraftJsonValue = (value: any, depth = 0): any => {
+  if (value === null) return null
+  if (typeof value === 'string') return value.slice(0, 500)
+  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined
+  if (typeof value === 'boolean') return value
+  if (Array.isArray(value)) {
+    if (depth >= DRAFT_INLINE_TARGETING_MAX_DEPTH) return undefined
+    const items = value
+      .slice(0, DRAFT_INLINE_TARGETING_MAX_ARRAY_ITEMS)
+      .map((item) => sanitizeDraftJsonValue(item, depth + 1))
+      .filter((item) => item !== undefined)
+    return items.length > 0 ? items : undefined
+  }
+  if (typeof value === 'object') {
+    if (depth >= DRAFT_INLINE_TARGETING_MAX_DEPTH) return undefined
+    const entries = Object.entries(value)
+      .filter(([key]) => isSafeDraftJsonKey(key))
+      .slice(0, DRAFT_INLINE_TARGETING_MAX_KEYS)
+      .map(([key, item]) => [key, sanitizeDraftJsonValue(item, depth + 1)] as const)
+      .filter(([, item]) => item !== undefined)
+    return entries.length > 0 ? Object.fromEntries(entries) : undefined
+  }
+  return undefined
+}
 
 const sanitizeTags = (value: any) => pickLimitedStringArray(value, CREATIVE_GROUP_TAG_LIMIT, 40)
 
@@ -432,14 +522,109 @@ const sanitizeDraftWriteInput = (input: any) => {
   if (name) data.name = name
 
   if (Array.isArray(input?.accounts)) {
-    data.accounts = input.accounts.slice(0, 100)
+    const accounts = input.accounts
+      .slice(0, DRAFT_ACCOUNT_LIMIT)
+      .map((account: any) => {
+        const accountId = pickTrimmedString(account?.accountId, 80)
+        if (!accountId) return undefined
+        const item: any = { accountId }
+        ;[
+          ['accountName', 160],
+          ['pageId', 80],
+          ['pageName', 160],
+          ['instagramAccountId', 80],
+          ['pixelId', 80],
+          ['pixelName', 160],
+          ['domain', 255],
+          ['conversionEvent', 80],
+        ].forEach(([field, maxLength]) => assignString(item, account, field as string, maxLength as number))
+        return item
+      })
+      .filter(Boolean)
+    if (accounts.length > 0) data.accounts = accounts
   }
 
-  ;['campaign', 'adset', 'ad', 'publishStrategy'].forEach((field) => {
-    if (input?.[field] && typeof input[field] === 'object' && !Array.isArray(input[field])) {
-      data[field] = input[field]
+  if (input?.campaign && typeof input.campaign === 'object' && !Array.isArray(input.campaign)) {
+    const campaign: any = {}
+    assignString(campaign, input.campaign, 'nameTemplate', DRAFT_TEMPLATE_MAX_LENGTH)
+    assignAllowedString(campaign, input.campaign, 'status', DRAFT_CAMPAIGN_STATUSES)
+    assignString(campaign, input.campaign, 'objective', 80)
+    assignAllowedString(campaign, input.campaign, 'buyingType', DRAFT_BUYING_TYPES)
+    assignNumber(campaign, input.campaign, 'spendCap', DRAFT_BUDGET_MAX)
+    assignBoolean(campaign, input.campaign, 'budgetOptimization')
+    assignAllowedString(campaign, input.campaign, 'budgetType', DRAFT_BUDGET_TYPES)
+    assignNumber(campaign, input.campaign, 'budget', DRAFT_BUDGET_MAX)
+    assignString(campaign, input.campaign, 'bidStrategy', 80)
+    assignNumber(campaign, input.campaign, 'bidAmount', DRAFT_BUDGET_MAX)
+    const specialAdCategories = pickLimitedStringArray(input.campaign.specialAdCategories, 10, 80)
+    if (specialAdCategories) campaign.specialAdCategories = specialAdCategories
+    if (Object.keys(campaign).length > 0) data.campaign = campaign
+  }
+
+  if (input?.adset && typeof input.adset === 'object' && !Array.isArray(input.adset)) {
+    const adset: any = {}
+    assignString(adset, input.adset, 'nameTemplate', DRAFT_TEMPLATE_MAX_LENGTH)
+    assignAllowedString(adset, input.adset, 'status', DRAFT_STATUS_VALUES)
+    assignNumber(adset, input.adset, 'multiplier', 10)
+    assignAllowedString(adset, input.adset, 'budgetType', DRAFT_BUDGET_TYPES)
+    assignNumber(adset, input.adset, 'budget', DRAFT_BUDGET_MAX)
+    const startTime = pickValidDate(input.adset.startTime)
+    const endTime = pickValidDate(input.adset.endTime)
+    if (startTime) adset.startTime = startTime
+    if (endTime) adset.endTime = endTime
+    assignString(adset, input.adset, 'optimizationGoal', 80)
+    assignString(adset, input.adset, 'billingEvent', 80)
+    assignString(adset, input.adset, 'bidStrategy', 80)
+    assignNumber(adset, input.adset, 'bidAmount', DRAFT_BUDGET_MAX)
+    assignNumber(adset, input.adset, 'costCap', DRAFT_BUDGET_MAX)
+    assignAllowedString(adset, input.adset, 'pacingType', ['standard', 'no_pacing'])
+    const targetingPackageId = pickObjectIdString(input.adset.targetingPackageId)
+    if (targetingPackageId) adset.targetingPackageId = targetingPackageId
+    const inlineTargeting = sanitizeDraftJsonValue(input.adset.inlineTargeting)
+    if (inlineTargeting) adset.inlineTargeting = inlineTargeting
+    ;['attribution', 'attributionSpec', 'placement', 'device'].forEach((field) => {
+      const sanitized = sanitizeDraftJsonValue(input.adset[field])
+      if (sanitized) adset[field] = sanitized
+    })
+    if (Object.keys(adset).length > 0) data.adset = adset
+  }
+
+  if (input?.ad && typeof input.ad === 'object' && !Array.isArray(input.ad)) {
+    const ad: any = {}
+    assignString(ad, input.ad, 'nameTemplate', DRAFT_TEMPLATE_MAX_LENGTH)
+    assignAllowedString(ad, input.ad, 'status', DRAFT_STATUS_VALUES)
+    assignAllowedString(ad, input.ad, 'format', DRAFT_AD_FORMATS)
+    assignBoolean(ad, input.ad, 'dynamicCreative')
+    if (input.ad.tracking && typeof input.ad.tracking === 'object' && !Array.isArray(input.ad.tracking)) {
+      const tracking: any = {}
+      assignBoolean(tracking, input.ad.tracking, 'websiteEvent')
+      assignBoolean(tracking, input.ad.tracking, 'appEvent')
+      assignString(tracking, input.ad.tracking, 'urlTags', DRAFT_TRACKING_TAGS_MAX_LENGTH)
+      if (Object.keys(tracking).length > 0) ad.tracking = tracking
     }
-  })
+    const creativeGroupIds = pickLimitedStringArray(input.ad.creativeGroupIds, DRAFT_CONFIG_ID_LIMIT, 64)
+      ?.map((id) => pickObjectIdString(id))
+      .filter(hasOwnValue)
+    if (creativeGroupIds?.length) ad.creativeGroupIds = creativeGroupIds
+    const copywritingPackageIds = pickLimitedStringArray(input.ad.copywritingPackageIds, DRAFT_CONFIG_ID_LIMIT, 64)
+      ?.map((id) => pickObjectIdString(id))
+      .filter(hasOwnValue)
+    if (copywritingPackageIds?.length) ad.copywritingPackageIds = copywritingPackageIds
+    if (Object.keys(ad).length > 0) data.ad = ad
+  }
+
+  if (input?.publishStrategy && typeof input.publishStrategy === 'object' && !Array.isArray(input.publishStrategy)) {
+    const publishStrategy: any = {}
+    assignAllowedString(publishStrategy, input.publishStrategy, 'targetingLevel', DRAFT_PUBLISH_TARGETING_LEVELS)
+    assignAllowedString(publishStrategy, input.publishStrategy, 'creativeLevel', DRAFT_PUBLISH_CREATIVE_LEVELS)
+    assignAllowedString(publishStrategy, input.publishStrategy, 'copywritingMode', DRAFT_PUBLISH_COPYWRITING_MODES)
+    assignAllowedString(publishStrategy, input.publishStrategy, 'schedule', DRAFT_PUBLISH_SCHEDULES)
+    const scheduledTime = pickValidDate(input.publishStrategy.scheduledTime)
+    if (scheduledTime) publishStrategy.scheduledTime = scheduledTime
+    if (Object.keys(publishStrategy).length > 0) {
+      data.publishStrategy = publishStrategy
+    }
+  }
 
   const notes = pickTrimmedString(input?.notes, 2000)
   if (notes) data.notes = notes

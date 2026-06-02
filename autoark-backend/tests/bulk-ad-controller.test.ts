@@ -296,6 +296,98 @@ describe('bulk ad controller', () => {
     expect(res.json).toHaveBeenCalledWith({ success: true, data: { _id: 'draft_1', name: 'Launch draft' } })
   })
 
+  it('sanitizes nested draft configs before saving', async () => {
+    mockBulkAdService.createDraft.mockResolvedValue({ _id: 'draft_1', name: 'Nested draft' } as any)
+    const creativeGroupId = '665000000000000000000701'
+    const copywritingPackageId = '665000000000000000000702'
+    const req = memberReq({
+      body: {
+        name: 'Nested draft',
+        accounts: [
+          {
+            accountId: ' act_123 ',
+            accountName: { $ne: 'Account 123' },
+            pageId: ' page_1 ',
+            pixelId: ['pixel_1'],
+            conversionEvent: ' PURCHASE ',
+            extra: 'drop-me',
+          },
+          { accountId: { $ne: 'act_999' }, pageId: 'page_2' },
+        ],
+        campaign: {
+          nameTemplate: 'camp',
+          status: 'DELETE',
+          budget: 999_999_999_999,
+          budgetOptimization: false,
+          budgetType: 'DAILY',
+          specialAdCategories: ['NONE', { bad: true }],
+          injected: 'drop-me',
+        },
+        adset: {
+          nameTemplate: 'adset',
+          multiplier: 999,
+          targetingPackageId: 'not-an-object-id',
+          inlineTargeting: {
+            geo_locations: { countries: ['US'] },
+            $where: 'sleep(1)',
+            'bad.key': 'drop-me',
+            nested: { safe: 'ok', constructor: { prototype: true } },
+          },
+        },
+        ad: {
+          nameTemplate: 'ad',
+          creativeGroupIds: [creativeGroupId, 'bad-id'],
+          copywritingPackageIds: [copywritingPackageId, { $ne: copywritingPackageId }],
+          tracking: { websiteEvent: true, urlTags: 'utm_source=autoark', extra: 'drop-me' },
+          format: 'SINGLE',
+          injected: 'drop-me',
+        },
+        publishStrategy: {
+          schedule: 'SOON',
+          scheduledTime: 'not-a-date',
+          copywritingMode: 'SEQUENTIAL',
+          extra: 'drop-me',
+        },
+      },
+    })
+    const res = resMock()
+
+    await createDraft(req as any, res as any)
+
+    const payload = mockBulkAdService.createDraft.mock.calls[0][0]
+    expect(payload.accounts).toEqual([{
+      accountId: 'act_123',
+      pageId: 'page_1',
+      conversionEvent: 'PURCHASE',
+    }])
+    expect(payload.campaign).toEqual({
+      nameTemplate: 'camp',
+      budget: 100_000_000,
+      budgetOptimization: false,
+      budgetType: 'DAILY',
+      specialAdCategories: ['NONE'],
+    })
+    expect(payload.adset).toMatchObject({
+      nameTemplate: 'adset',
+      multiplier: 10,
+      inlineTargeting: {
+        geo_locations: { countries: ['US'] },
+        nested: { safe: 'ok' },
+      },
+    })
+    expect(payload.adset).not.toHaveProperty('targetingPackageId')
+    expect(payload.adset.inlineTargeting).not.toHaveProperty('$where')
+    expect(payload.adset.inlineTargeting).not.toHaveProperty('bad.key')
+    expect(payload.ad).toEqual({
+      nameTemplate: 'ad',
+      format: 'SINGLE',
+      tracking: { websiteEvent: true, urlTags: 'utm_source=autoark' },
+      creativeGroupIds: [creativeGroupId],
+      copywritingPackageIds: [copywritingPackageId],
+    })
+    expect(payload.publishStrategy).toEqual({ copywritingMode: 'SEQUENTIAL' })
+  })
+
   it('sanitizes draft update payloads before saving', async () => {
     mockBulkAdService.updateDraft.mockResolvedValue({ _id: 'draft_1', name: 'Updated draft' } as any)
     const req = memberReq({
