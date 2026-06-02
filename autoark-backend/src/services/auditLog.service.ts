@@ -6,9 +6,11 @@ import { JwtPayload } from '../utils/jwt'
 import logger from '../utils/logger'
 import { objectIdValue } from '../utils/accessControl'
 import { redactSensitiveData } from '../utils/sensitiveData'
-import { parseLimitedNumber } from '../utils/pagination'
+import { parseLimitedNumber, pickAllowedString, pickSafeQueryString } from '../utils/pagination'
 
-type AuditStatus = 'success' | 'failed' | 'warning'
+export const AUDIT_LOG_STATUSES = ['success', 'failed', 'warning'] as const
+
+type AuditStatus = typeof AUDIT_LOG_STATUSES[number]
 
 export interface AuditLogInput {
   category: string
@@ -35,6 +37,11 @@ const toObjectId = (value: any) => {
   if (typeof value === 'object' && value._id) return toObjectId(value._id)
   if (mongoose.Types.ObjectId.isValid(String(value))) return new mongoose.Types.ObjectId(String(value))
   return undefined
+}
+
+const pickAuditLogObjectId = (value: any) => {
+  if (typeof value !== 'string') return undefined
+  return mongoose.Types.ObjectId.isValid(value) ? objectIdValue(value) : undefined
 }
 
 export async function writeAuditLog(req: Request, input: AuditLogInput): Promise<void> {
@@ -71,18 +78,19 @@ export async function writeAuditLog(req: Request, input: AuditLogInput): Promise
 export async function listAuditLogs(
   currentUser: JwtPayload,
   filters: {
-    organizationId?: string
-    category?: string
-    action?: string
-    status?: AuditStatus
-    limit?: number
+    organizationId?: any
+    category?: any
+    action?: any
+    status?: any
+    limit?: any
   },
 ) {
   const query: any = {}
 
   if (currentUser.role === UserRole.SUPER_ADMIN) {
-    if (filters.organizationId) {
-      query.organizationId = objectIdValue(filters.organizationId)
+    const organizationId = pickAuditLogObjectId(filters.organizationId)
+    if (organizationId) {
+      query.organizationId = organizationId
     }
   } else if (currentUser.role === UserRole.ORG_ADMIN && currentUser.organizationId) {
     query.organizationId = objectIdValue(currentUser.organizationId)
@@ -90,9 +98,12 @@ export async function listAuditLogs(
     query.userId = objectIdValue(currentUser.userId)
   }
 
-  if (filters.category) query.category = filters.category
-  if (filters.action) query.action = filters.action
-  if (filters.status) query.status = filters.status
+  const category = pickSafeQueryString(filters.category, 80)
+  const action = pickSafeQueryString(filters.action, 120)
+  const status = pickAllowedString(filters.status, AUDIT_LOG_STATUSES, '')
+  if (category) query.category = category
+  if (action) query.action = action
+  if (status) query.status = status
 
   const limit = parseLimitedNumber(filters.limit, 50, 200)
   return OpsLog.find(query).sort({ createdAt: -1 }).limit(limit).lean()

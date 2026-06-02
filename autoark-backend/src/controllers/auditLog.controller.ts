@@ -1,7 +1,7 @@
 import { Request, Response } from 'express'
 import logger from '../utils/logger'
-import { listAuditLogs } from '../services/auditLog.service'
-import { parseLimitedNumber } from '../utils/pagination'
+import { AUDIT_LOG_STATUSES, listAuditLogs } from '../services/auditLog.service'
+import { parseLimitedNumber, pickAllowedString, pickSafeQueryString } from '../utils/pagination'
 
 export const getAuditLogs = async (req: Request, res: Response) => {
   try {
@@ -10,10 +10,10 @@ export const getAuditLogs = async (req: Request, res: Response) => {
     }
 
     const logs = await listAuditLogs(req.user, {
-      organizationId: typeof req.query.organizationId === 'string' ? req.query.organizationId : undefined,
-      category: typeof req.query.category === 'string' ? req.query.category : undefined,
-      action: typeof req.query.action === 'string' ? req.query.action : undefined,
-      status: typeof req.query.status === 'string' ? req.query.status as any : undefined,
+      organizationId: pickSafeQueryString(req.query.organizationId, 40),
+      category: pickSafeQueryString(req.query.category, 80),
+      action: pickSafeQueryString(req.query.action, 120),
+      status: pickAllowedString(req.query.status, AUDIT_LOG_STATUSES, ''),
       limit: parseLimitedNumber(req.query.limit, 50, 200),
     })
 

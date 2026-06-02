@@ -68,4 +68,30 @@ describe('audit log sensitive data redaction', () => {
     expect(limit).toHaveBeenNthCalledWith(1, 50)
     expect(limit).toHaveBeenNthCalledWith(2, 200)
   })
+
+  it('sanitizes audit log list filters before querying', async () => {
+    const limit = jest.fn().mockReturnValue({
+      lean: jest.fn().mockResolvedValue([]),
+    })
+    const sort = jest.fn().mockReturnValue({ limit })
+    const find = jest.spyOn(OpsLog, 'find').mockReturnValue({ sort } as any)
+
+    const currentUser: any = {
+      userId: '665000000000000000000002',
+      role: 'super_admin',
+    }
+
+    await listAuditLogs(currentUser, {
+      organizationId: { $ne: '665000000000000000000001' },
+      category: { $ne: 'auth' },
+      action: ' auth.login ',
+      status: 'unknown',
+      limit: 20,
+    } as any)
+
+    expect(find).toHaveBeenCalledWith({
+      action: 'auth.login',
+    })
+    expect(limit).toHaveBeenCalledWith(20)
+  })
 })
