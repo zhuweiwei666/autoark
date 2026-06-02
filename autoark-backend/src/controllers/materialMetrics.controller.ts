@@ -12,7 +12,7 @@ import {
   getRecommendedMaterials,
   getDecliningMaterials,
 } from '../services/materialMetrics.service'
-import { parseLimitedNumber, pickAllowedString } from '../utils/pagination'
+import { parseLimitedNumber, pickAllowedString, pickSafeQueryString } from '../utils/pagination'
 
 const router = Router()
 const MAX_BACKFILL_DAYS = 31
@@ -20,6 +20,11 @@ const MAX_RANKING_DAYS = 90
 const DEFAULT_RANKING_LOOKBACK_DAYS = 7
 const MATERIAL_RANKING_SORT_FIELDS = ['roas', 'spend', 'qualityScore', 'impressions'] as const
 const MATERIAL_TYPE_FILTERS = ['image', 'video'] as const
+const MATERIAL_MIN_SPEND_MAX = 1_000_000
+const MATERIAL_ROAS_MAX = 100
+const MATERIAL_MIN_DAYS_MAX = 30
+const MATERIAL_DECLINE_THRESHOLD_MAX = 100
+const MATERIAL_COUNTRY_MAX_LENGTH = 40
 
 const parseMaterialMetricsDate = (value: any) => {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null
@@ -30,6 +35,18 @@ const parseMaterialMetricsDate = (value: any) => {
 const pickOptionalAllowedString = (value: any, allowedValues: readonly string[]) => (
   typeof value === 'string' && allowedValues.includes(value) ? value : undefined
 )
+
+const parseBoundedNumber = (
+  value: any,
+  fallback: number,
+  options: { min?: number; max: number; integer?: boolean },
+) => {
+  const min = options.min ?? 0
+  const next = Number(value)
+  if (!Number.isFinite(next) || next < min) return fallback
+  const bounded = Math.min(options.max, next)
+  return options.integer ? Math.floor(bounded) : bounded
+}
 
 const resolveMaterialMetricsDateRange = (
   input: { startDate?: any; endDate?: any },
@@ -115,12 +132,13 @@ router.get('/rankings', async (req: Request, res: Response) => {
     const safeLimit = parseLimitedNumber(limit, 20, 100)
     const safeSortBy = pickAllowedString(sortBy, MATERIAL_RANKING_SORT_FIELDS, 'roas')
     const safeType = pickOptionalAllowedString(type, MATERIAL_TYPE_FILTERS)
+    const safeCountry = pickSafeQueryString(country, MATERIAL_COUNTRY_MAX_LENGTH)
     const rankings = await getMaterialRankings({
       dateRange: { start: dateRange.startDate, end: dateRange.endDate },
       sortBy: safeSortBy as any,
       limit: safeLimit,
       materialType: safeType as any,
-      country: country as string,  // 🌍 传递国家参数
+      country: safeCountry,
     })
     
     res.json({
@@ -132,7 +150,7 @@ router.get('/rankings', async (req: Request, res: Response) => {
         sortBy: safeSortBy,
         limit: safeLimit,
         type: safeType,
-        country,
+        country: safeCountry,
       },
     })
   } catch (error: any) {
@@ -246,11 +264,15 @@ router.get('/recommendations', async (req: Request, res: Response) => {
     } = req.query
     
     const safeLimit = parseLimitedNumber(limit, 20, 100)
+    const safeType = pickOptionalAllowedString(type, MATERIAL_TYPE_FILTERS)
+    const safeMinSpend = parseBoundedNumber(minSpend, 50, { max: MATERIAL_MIN_SPEND_MAX })
+    const safeMinRoas = parseBoundedNumber(minRoas, 1.0, { max: MATERIAL_ROAS_MAX })
+    const safeMinDays = parseBoundedNumber(minDays, 3, { max: MATERIAL_MIN_DAYS_MAX, integer: true })
     const recommendations = await getRecommendedMaterials({
-      type: type as any,
-      minSpend: parseFloat(minSpend as string),
-      minRoas: parseFloat(minRoas as string),
-      minDays: parseInt(minDays as string, 10),
+      type: safeType as any,
+      minSpend: safeMinSpend,
+      minRoas: safeMinRoas,
+      minDays: safeMinDays,
       limit: safeLimit,
     })
     
@@ -275,9 +297,11 @@ router.get('/declining', async (req: Request, res: Response) => {
     } = req.query
     
     const safeLimit = parseLimitedNumber(limit, 20, 100)
+    const safeMinSpend = parseBoundedNumber(minSpend, 30, { max: MATERIAL_MIN_SPEND_MAX })
+    const safeDeclineThreshold = parseBoundedNumber(declineThreshold, 30, { max: MATERIAL_DECLINE_THRESHOLD_MAX })
     const declining = await getDecliningMaterials({
-      minSpend: parseFloat(minSpend as string),
-      declineThreshold: parseFloat(declineThreshold as string),
+      minSpend: safeMinSpend,
+      declineThreshold: safeDeclineThreshold,
       limit: safeLimit,
     })
     

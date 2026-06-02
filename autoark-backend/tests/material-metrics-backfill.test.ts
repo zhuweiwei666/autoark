@@ -92,17 +92,61 @@ describe('material metrics backfill guardrails', () => {
 
     const response = await request(createApp())
       .get('/api/material-metrics/rankings')
-      .query({ endDate: '2026-06-02', sortBy: 'unknownField', type: 'document' })
+      .query({ endDate: '2026-06-02', sortBy: 'unknownField', type: 'document', country: '  US  ' })
 
     expect(response.status).toBe(200)
     expect(materialMetricsService.getMaterialRankings).toHaveBeenCalledWith(expect.objectContaining({
       sortBy: 'roas',
       materialType: undefined,
+      country: 'US',
     }))
     expect(response.body.query).toMatchObject({
       sortBy: 'roas',
+      country: 'US',
     })
     expect(response.body.query).not.toHaveProperty('type')
+  })
+
+  it('sanitizes recommendation filters before querying material recommendations', async () => {
+    materialMetricsService.getRecommendedMaterials.mockResolvedValue({ recommendations: [] })
+
+    const response = await request(createApp())
+      .get('/api/material-metrics/recommendations')
+      .query({
+        type: 'document',
+        minSpend: 'NaN',
+        minRoas: 'Infinity',
+        minDays: 'abc',
+        limit: '9999',
+      })
+
+    expect(response.status).toBe(200)
+    expect(materialMetricsService.getRecommendedMaterials).toHaveBeenCalledWith({
+      type: undefined,
+      minSpend: 50,
+      minRoas: 1,
+      minDays: 3,
+      limit: 100,
+    })
+  })
+
+  it('bounds declining material thresholds before querying warnings', async () => {
+    materialMetricsService.getDecliningMaterials.mockResolvedValue({ decliningMaterials: [] })
+
+    const response = await request(createApp())
+      .get('/api/material-metrics/declining')
+      .query({
+        minSpend: '-10',
+        declineThreshold: '9999',
+        limit: '9999',
+      })
+
+    expect(response.status).toBe(200)
+    expect(materialMetricsService.getDecliningMaterials).toHaveBeenCalledWith({
+      minSpend: 30,
+      declineThreshold: 100,
+      limit: 100,
+    })
   })
 
   it('rejects invalid aggregate dates before running material aggregation', async () => {
