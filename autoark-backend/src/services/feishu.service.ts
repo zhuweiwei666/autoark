@@ -65,9 +65,12 @@ export class FeishuService {
         return null
       }
     } catch (error: any) {
-      console.error('[Feishu] FULL ERROR:', error.response?.data || error)
-      const errorData = error.response?.data || error.message || error
-      logger.error(`[Feishu] Send card error: ${JSON.stringify(errorData, null, 2)}`)
+      const errorData = error.response?.data
+      logger.error('[Feishu] Send card error:', JSON.stringify({
+        status: error.response?.status,
+        code: errorData?.code,
+        message: errorData?.msg || errorData?.message || error.message,
+      }))
       return null
     }
   }

@@ -1,4 +1,5 @@
 import { facebookClient } from './facebookClient'
+import logger from '../../utils/logger'
 
 export interface PixelInfo {
   id: string
@@ -70,7 +71,7 @@ export const getPixels = async (token: string): Promise<PixelInfo[]> => {
     }
   } catch (error: any) {
     // 如果 /me/adspixels 失败，尝试其他方法
-    console.warn('[Pixels API] /me/adspixels failed, trying alternative methods:', error.message)
+    logger.warn('[Pixels API] /me/adspixels failed, trying alternative methods:', error.message)
   }
 
   // 方法2: 尝试通过 Business Manager
@@ -103,7 +104,7 @@ export const getPixels = async (token: string): Promise<PixelInfo[]> => {
         const pixels = Array.isArray(pixelsResponse) ? pixelsResponse : (pixelsResponse.data || [])
         allPixels.push(...pixels)
       } catch (error: any) {
-        console.warn(`[Pixels API] Failed to get pixels for business ${business.id}:`, error.message)
+        logger.warn(`[Pixels API] Failed to get pixels for business ${business.id}:`, error.message)
       }
     }
     
@@ -126,7 +127,7 @@ export const getPixels = async (token: string): Promise<PixelInfo[]> => {
       }))
     }
   } catch (error: any) {
-    console.warn('[Pixels API] Business Manager method failed:', error.message)
+    logger.warn('[Pixels API] Business Manager method failed:', error.message)
   }
 
   // 如果所有方法都失败，返回空数组（而不是抛出错误）
@@ -165,7 +166,6 @@ export const getPixelDetails = async (
     // 单个对象响应，直接返回对象本身
     code = codeResponse.code || codeResponse.data?.code
   } catch (error: any) {
-    // console.warn(`[Pixels] Failed to fetch code for pixel ${pixelId}:`, error)
     // 代码获取失败不影响主要信息
   }
 
@@ -217,4 +217,3 @@ export const getPixelEvents = async (
     raw: event,
   }))
 }
-

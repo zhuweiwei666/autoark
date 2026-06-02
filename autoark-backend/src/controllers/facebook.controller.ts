@@ -24,6 +24,7 @@ import {
   pickSafeQueryString,
   pickSafeRegexLiteral,
 } from '../utils/pagination'
+import logger from '../utils/logger'
 
 const FACEBOOK_LIST_MAX_LIMIT = 100
 const FACEBOOK_DIAGNOSE_DEFAULT_LIMIT = 20
@@ -591,11 +592,11 @@ async function refreshCampaignAdsStatus(campaignId: string, accountId: string, t
         }
       }
     } catch (err: any) {
-      console.error(`[RefreshAdsStatus] Batch failed:`, err.message)
+      logger.error('[RefreshAdsStatus] Batch failed:', err.message)
     }
   }
   
-  console.log(`[RefreshAdsStatus] Refreshed ${adIds.length} ads for campaign ${campaignId}`)
+  logger.info(`[RefreshAdsStatus] Refreshed ${adIds.length} ads for campaign ${campaignId}`)
 }
 
 // 更新 Campaign 状态 (ACTIVE/PAUSED)
@@ -651,7 +652,7 @@ export const updateCampaignStatus = async (
     
     // 异步刷新该 Campaign 下所有广告的状态
     refreshCampaignAdsStatus(campaignId, campaign.accountId, token).catch(err => {
-      console.error(`[Campaign Status] Failed to refresh ads status:`, err.message)
+      logger.error('[Campaign Status] Failed to refresh ads status:', err.message)
     })
     
     res.json({ 

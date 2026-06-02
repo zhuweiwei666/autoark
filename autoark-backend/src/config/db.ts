@@ -1,4 +1,5 @@
 import mongoose, { Connection } from 'mongoose'
+import logger from '../utils/logger'
 
 // 主连接（写操作）
 let writeConnection: typeof mongoose | null = null
@@ -17,7 +18,7 @@ const connectDB = async () => {
     writeConnection = await mongoose.connect(uri, {
       readPreference: 'primary', // 主节点用于写操作
     })
-    console.log(`MongoDB Connected (Write): ${writeConnection.connection.host}`)
+    logger.info(`MongoDB Connected (Write): ${writeConnection.connection.host}`)
 
     // 如果配置了读连接 URI，创建独立的读连接
     const readUri = process.env.MONGO_READ_URI
@@ -26,17 +27,17 @@ const connectDB = async () => {
         readPreference: 'secondary', // 从节点用于读操作
       })
       await readConnection.asPromise()
-      console.log(`MongoDB Connected (Read): ${readConnection.host}`)
+      logger.info(`MongoDB Connected (Read): ${readConnection.host}`)
     } else {
       // 如果没有配置读连接，使用主连接但设置读偏好为 secondaryPreferred
       // 这样会优先使用从节点，如果从节点不可用则使用主节点
       mongoose.connection.on('connected', () => {
         // 在查询时使用 readPreference 选项
       })
-      console.log(`MongoDB Read Preference: secondaryPreferred (using same connection)`)
+      logger.info('MongoDB Read Preference: secondaryPreferred (using same connection)')
     }
   } catch (error) {
-    console.error(`Error: ${(error as Error).message}`)
+    logger.error(`MongoDB connection error: ${(error as Error).message}`)
     process.exit(1)
   }
 }
@@ -56,4 +57,3 @@ export const getWriteConnection = () => {
 }
 
 export default connectDB
-
