@@ -1,19 +1,31 @@
 import mongoose from 'mongoose'
 
-export type AutomationJobType =
-  | 'RUN_AGENT'
-  | 'RUN_AGENT_AS_JOBS'
-  | 'EXECUTE_AGENT_OPERATION'
-  | 'PUBLISH_DRAFT'
-  | 'RUN_FB_FULL_SYNC'
-  | 'SYNC_FB_USER_ASSETS'
+export const AUTOMATION_JOB_TYPES = [
+  'RUN_AGENT',
+  'RUN_AGENT_AS_JOBS',
+  'EXECUTE_AGENT_OPERATION',
+  'PUBLISH_DRAFT',
+  'RUN_FB_FULL_SYNC',
+  'SYNC_FB_USER_ASSETS',
+] as const
+
+export const AUTOMATION_JOB_STATUSES = [
+  'queued',
+  'running',
+  'completed',
+  'failed',
+  'cancelled',
+] as const
+
+export type AutomationJobType = typeof AUTOMATION_JOB_TYPES[number]
+export type AutomationJobStatus = typeof AUTOMATION_JOB_STATUSES[number]
 
 const automationJobSchema = new mongoose.Schema(
   {
     type: { type: String, required: true, index: true },
     status: {
       type: String,
-      enum: ['queued', 'running', 'completed', 'failed', 'cancelled'],
+      enum: AUTOMATION_JOB_STATUSES,
       default: 'queued',
       index: true,
     },
@@ -46,4 +58,3 @@ automationJobSchema.index({ organizationId: 1, createdAt: -1 })
 automationJobSchema.index({ agentId: 1, createdAt: -1 })
 
 export default mongoose.model('AutomationJob', automationJobSchema)
-

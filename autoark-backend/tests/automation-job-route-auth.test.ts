@@ -87,6 +87,42 @@ describe('automation job route authorization', () => {
     }))
   })
 
+  it('passes only validated automation job filters', async () => {
+    mockAuthState.user = {
+      role: UserRole.ORG_ADMIN,
+      userId: '665000000000000000000002',
+      organizationId: '665000000000000000000001',
+    }
+
+    const response = await request(createApp())
+      .get('/api/automation-jobs?status=queued&type=PUBLISH_DRAFT&agentId=665000000000000000000301&pageSize=9999')
+
+    expect(response.status).toBe(200)
+    expect(automationJobService.listAutomationJobs).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'queued',
+      type: 'PUBLISH_DRAFT',
+      agentId: '665000000000000000000301',
+      pageSize: 100,
+    }))
+  })
+
+  it('rejects invalid automation job filters before querying', async () => {
+    mockAuthState.user = {
+      role: UserRole.ORG_ADMIN,
+      userId: '665000000000000000000002',
+      organizationId: '665000000000000000000001',
+    }
+
+    const response = await request(createApp()).get('/api/automation-jobs?status=not-a-real-status')
+
+    expect(response.status).toBe(400)
+    expect(response.body).toMatchObject({
+      success: false,
+      error: 'status filter is invalid',
+    })
+    expect(automationJobService.listAutomationJobs).not.toHaveBeenCalled()
+  })
+
   it('returns sanitized empty pagination for organization admins without an organization', async () => {
     mockAuthState.user = {
       role: UserRole.ORG_ADMIN,

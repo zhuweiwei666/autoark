@@ -1,9 +1,14 @@
 import crypto from 'crypto'
+import mongoose from 'mongoose'
 import logger from '../utils/logger'
-import AutomationJob from '../models/AutomationJob'
+import AutomationJob, {
+  AUTOMATION_JOB_STATUSES,
+  AUTOMATION_JOB_TYPES,
+} from '../models/AutomationJob'
 import { addAutomationJob } from '../queue/automation.queue'
 import FbToken from '../models/FbToken'
 import { combineFilters, objectIdValue, userIdVariants } from '../utils/accessControl'
+import { parsePagination } from '../utils/pagination'
 
 const buildJobAssetAccessFilter = (doc: any): any => {
   const organizationId = doc.organizationId?.toString?.() || doc.organizationId
@@ -62,6 +67,19 @@ const assertAgentJobAccess = async (doc: any, agentId: string) => {
   if (doc.createdBy && String(agent.createdBy || '') !== String(doc.createdBy)) {
     throw new Error('Automation job cannot access agent outside its owner scope')
   }
+}
+
+const pickAllowedAutomationJobValue = (
+  value: unknown,
+  allowedValues: readonly string[],
+): string | undefined => {
+  if (typeof value !== 'string') return undefined
+  return allowedValues.includes(value) ? value : undefined
+}
+
+const pickAutomationJobAgentId = (value: unknown): string | undefined => {
+  if (typeof value !== 'string') return undefined
+  return mongoose.Types.ObjectId.isValid(value) ? value : undefined
 }
 
 export const buildIdempotencyKey = (type: string, payload: any, agentId?: string) => {
@@ -214,23 +232,28 @@ export async function executeAutomationJobInline(automationJobId: string) {
 
 export async function listAutomationJobs(query: {
   organizationId?: any
-  agentId?: string
-  status?: string
-  type?: string
-  page?: number
-  pageSize?: number
+  agentId?: any
+  status?: any
+  type?: any
+  page?: any
+  pageSize?: any
 }) {
-  const page = Math.max(1, Number(query.page || 1))
-  const pageSize = Math.min(200, Math.max(1, Number(query.pageSize || 20)))
+  const { page, pageSize, skip } = parsePagination(query, {
+    defaultPageSize: 20,
+    maxPageSize: 200,
+  })
+  const status = pickAllowedAutomationJobValue(query.status, AUTOMATION_JOB_STATUSES)
+  const type = pickAllowedAutomationJobValue(query.type, AUTOMATION_JOB_TYPES)
+  const agentId = pickAutomationJobAgentId(query.agentId)
 
   const filter: any = {}
   if (query.organizationId) filter.organizationId = query.organizationId
-  if (query.agentId) filter.agentId = query.agentId
-  if (query.status) filter.status = query.status
-  if (query.type) filter.type = query.type
+  if (agentId) filter.agentId = agentId
+  if (status) filter.status = status
+  if (type) filter.type = type
 
   const [list, total] = await Promise.all([
-    AutomationJob.find(filter).sort({ createdAt: -1 }).skip((page - 1) * pageSize).limit(pageSize),
+    AutomationJob.find(filter).sort({ createdAt: -1 }).skip(skip).limit(pageSize),
     AutomationJob.countDocuments(filter),
   ])
 

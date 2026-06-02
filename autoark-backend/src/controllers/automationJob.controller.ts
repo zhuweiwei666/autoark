@@ -1,7 +1,10 @@
 import { Request, Response } from 'express'
 import mongoose from 'mongoose'
 import logger from '../utils/logger'
-import AutomationJob from '../models/AutomationJob'
+import AutomationJob, {
+  AUTOMATION_JOB_STATUSES,
+  AUTOMATION_JOB_TYPES,
+} from '../models/AutomationJob'
 import {
   createAutomationJob,
   listAutomationJobs,
@@ -20,6 +23,24 @@ const API_CREATABLE_JOB_TYPES = new Set([
   'PUBLISH_DRAFT',
   'SYNC_FB_USER_ASSETS',
 ])
+
+const pickOptionalAutomationJobFilter = (
+  value: unknown,
+  allowedValues: readonly string[],
+  fieldName: string,
+): { value?: string; error?: string } => {
+  if (value === undefined || value === '') return {}
+  if (typeof value !== 'string') return { error: `${fieldName} filter is invalid` }
+  if (!allowedValues.includes(value)) return { error: `${fieldName} filter is invalid` }
+  return { value }
+}
+
+const pickOptionalAgentId = (value: unknown): { value?: string; error?: string } => {
+  if (value === undefined || value === '') return {}
+  if (typeof value !== 'string') return { error: 'agentId filter is invalid' }
+  if (!mongoose.Types.ObjectId.isValid(value)) return { error: 'agentId filter is invalid' }
+  return { value }
+}
 
 export const createJob = async (req: Request, res: Response) => {
   try {
@@ -60,7 +81,12 @@ export const getJobs = async (req: Request, res: Response) => {
   try {
     if (!req.user) return res.status(401).json({ success: false, error: '未认证' })
 
-    const { status, type, agentId } = req.query
+    const statusFilter = pickOptionalAutomationJobFilter(req.query.status, AUTOMATION_JOB_STATUSES, 'status')
+    const typeFilter = pickOptionalAutomationJobFilter(req.query.type, AUTOMATION_JOB_TYPES, 'type')
+    const agentIdFilter = pickOptionalAgentId(req.query.agentId)
+    const filterError = statusFilter.error || typeFilter.error || agentIdFilter.error
+    if (filterError) return res.status(400).json({ success: false, error: filterError })
+
     const { page, pageSize } = parsePagination(req.query, {
       defaultPageSize: 20,
       maxPageSize: AUTOMATION_JOB_MAX_PAGE_SIZE,
@@ -79,9 +105,9 @@ export const getJobs = async (req: Request, res: Response) => {
 
     const data = await listAutomationJobs({
       organizationId,
-      status: status as string,
-      type: type as string,
-      agentId: agentId as string,
+      status: statusFilter.value,
+      type: typeFilter.value,
+      agentId: agentIdFilter.value,
       page,
       pageSize,
     })

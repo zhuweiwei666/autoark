@@ -1,4 +1,6 @@
 const mockAutomationJobFindById = jest.fn()
+const mockAutomationJobFind = jest.fn()
+const mockAutomationJobCountDocuments = jest.fn()
 const mockFbTokenFindOne = jest.fn()
 const mockPublishDraft = jest.fn()
 const mockSyncFacebookUserAssets = jest.fn()
@@ -10,8 +12,25 @@ jest.mock('../src/queue/automation.queue', () => ({
 
 jest.mock('../src/models/AutomationJob', () => ({
   __esModule: true,
+  AUTOMATION_JOB_TYPES: [
+    'RUN_AGENT',
+    'RUN_AGENT_AS_JOBS',
+    'EXECUTE_AGENT_OPERATION',
+    'PUBLISH_DRAFT',
+    'RUN_FB_FULL_SYNC',
+    'SYNC_FB_USER_ASSETS',
+  ],
+  AUTOMATION_JOB_STATUSES: [
+    'queued',
+    'running',
+    'completed',
+    'failed',
+    'cancelled',
+  ],
   default: {
     findById: mockAutomationJobFindById,
+    find: mockAutomationJobFind,
+    countDocuments: mockAutomationJobCountDocuments,
   },
 }))
 
@@ -51,7 +70,10 @@ jest.mock('../src/domain/agent/agent.model', () => ({
   },
 }))
 
-import { executeAutomationJobInline } from '../src/services/automationJob.service'
+import {
+  executeAutomationJobInline,
+  listAutomationJobs,
+} from '../src/services/automationJob.service'
 
 const createJobDoc = (overrides: any = {}) => ({
   _id: 'job-1',
@@ -73,11 +95,45 @@ const selectableLeanResult = (value: any) => ({
   select: jest.fn(() => leanResult(value)),
 })
 
+const automationJobFindChain = () => {
+  const chain: any = {
+    sort: jest.fn().mockReturnThis(),
+    skip: jest.fn().mockReturnThis(),
+    limit: jest.fn().mockResolvedValue([]),
+  }
+  return chain
+}
+
 describe('automation job execution scope', () => {
   beforeEach(() => {
     jest.clearAllMocks()
     mockPublishDraft.mockResolvedValue({ ok: true })
     mockSyncFacebookUserAssets.mockResolvedValue({ ok: true })
+    mockAutomationJobCountDocuments.mockResolvedValue(0)
+  })
+
+  it('sanitizes automation job list filters and pagination at service boundary', async () => {
+    const chain = automationJobFindChain()
+    mockAutomationJobFind.mockReturnValue(chain)
+
+    const result = await listAutomationJobs({
+      status: { $ne: 'queued' },
+      type: 'PUBLISH_DRAFT',
+      agentId: { $ne: '665000000000000000000301' },
+      page: 'bad',
+      pageSize: '9999',
+    })
+
+    expect(mockAutomationJobFind).toHaveBeenCalledWith({ type: 'PUBLISH_DRAFT' })
+    expect(mockAutomationJobCountDocuments).toHaveBeenCalledWith({ type: 'PUBLISH_DRAFT' })
+    expect(chain.skip).toHaveBeenCalledWith(0)
+    expect(chain.limit).toHaveBeenCalledWith(200)
+    expect(result).toMatchObject({
+      list: [],
+      total: 0,
+      page: 1,
+      pageSize: 200,
+    })
   })
 
   it('publishes drafts with the job tenant access filter', async () => {
