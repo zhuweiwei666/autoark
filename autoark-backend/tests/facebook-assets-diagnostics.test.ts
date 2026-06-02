@@ -52,6 +52,40 @@ describe('facebook asset diagnostics', () => {
     expect(diagnostics.accounts.find(account => account.accountId === '3')?.issueDetails.map(issue => issue.code)).toContain('ACCOUNT_NOT_ACTIVE')
   })
 
+  it('limits account details while preserving full summary counts', () => {
+    const adAccounts = Array.from({ length: 105 }, (_, index) => ({
+      accountId: `act_${index + 1}`,
+      name: `Account ${index + 1}`,
+      status: 1,
+    }))
+    const pages = adAccounts.map(account => ({
+      pageId: `page_${account.accountId}`,
+      name: `Page ${account.accountId}`,
+      accounts: [{ accountId: account.accountId }],
+    }))
+    const pixels = adAccounts.map(account => ({
+      pixelId: `pixel_${account.accountId}`,
+      name: `Pixel ${account.accountId}`,
+      accounts: [{ accountId: account.accountId }],
+    }))
+
+    const diagnostics = buildFacebookAssetDiagnostics({
+      tokens: [{ _id: 'token_1', fbUserId: 'fb_1' }],
+      users: [{ fbUserId: 'fb_1', syncStatus: 'completed', adAccounts, pages, pixels }],
+      accountLimit: 10,
+    })
+
+    expect(diagnostics.summary.accountCount).toBe(105)
+    expect(diagnostics.summary.readyAccountCount).toBe(105)
+    expect(diagnostics.accounts).toHaveLength(10)
+    expect(diagnostics.limits.accounts).toMatchObject({
+      total: 105,
+      returned: 10,
+      maxReturned: 10,
+      truncated: true,
+    })
+  })
+
   it('surfaces expiring and stale token health risks', () => {
     const now = Date.now()
     const diagnostics = buildFacebookAssetDiagnostics({

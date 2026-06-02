@@ -69,6 +69,14 @@ interface AuthDiagnostics {
       action: string
     }>
   }>
+  limits?: {
+    accounts?: {
+      total: number
+      returned: number
+      maxReturned: number
+      truncated: boolean
+    }
+  }
   risks: Array<{ level: 'critical' | 'warning' | 'info'; message: string }>
 }
 
@@ -1011,6 +1019,9 @@ export default function BulkAdCreatePage() {
   }
   const tokenHealthItems = authDiagnostics ? getTokenHealthItems(authDiagnostics) : []
   const assetIssueSummary = getAssetIssueSummary(authDiagnostics)
+  const authDiagnosticAccountLimit = authDiagnostics?.limits?.accounts
+  const authDiagnosticAccountTotal = authDiagnosticAccountLimit?.total ?? authDiagnostics?.accounts.length ?? 0
+  const authDiagnosticAccountReturned = authDiagnosticAccountLimit?.returned ?? authDiagnostics?.accounts.length ?? 0
   const facebookAssetsBlocked = Boolean(
     authStatus?.authorized &&
     authDiagnostics &&
@@ -1227,7 +1238,12 @@ export default function BulkAdCreatePage() {
                       )}
                       {authDiagnostics.accounts.length > 0 && (
                         <div className="mt-3 space-y-2">
-                          <div className="text-xs font-semibold text-green-800">账户诊断</div>
+                          <div className="flex items-center justify-between gap-2 text-xs font-semibold text-green-800">
+                            <span>账户诊断</span>
+                            <span className="font-normal text-green-700">
+                              展示 {authDiagnosticAccountReturned}/{authDiagnosticAccountTotal}
+                            </span>
+                          </div>
                           {authDiagnostics.accounts.slice(0, 3).map(account => (
                             <div key={account.accountId} className="rounded-lg bg-white/70 px-3 py-2">
                               <div className="flex items-center justify-between gap-3">
@@ -1251,8 +1267,11 @@ export default function BulkAdCreatePage() {
                               )}
                             </div>
                           ))}
-                          {authDiagnostics.accounts.length > 3 && (
-                            <div className="text-[11px] text-green-700">还有 {authDiagnostics.accounts.length - 3} 个账户未展示</div>
+                          {authDiagnosticAccountTotal > 3 && (
+                            <div className="text-[11px] text-green-700">
+                              还有 {Math.max(0, authDiagnosticAccountTotal - 3)} 个账户未展示
+                              {authDiagnosticAccountLimit?.truncated ? `，接口仅返回前 ${authDiagnosticAccountReturned} 个重点账户` : ''}
+                            </div>
                           )}
                         </div>
                       )}

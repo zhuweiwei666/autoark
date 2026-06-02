@@ -1529,9 +1529,11 @@ export const getAuthDiagnostics = async (req: Request, res: Response) => {
       users = await FacebookUser.find({ $or: userFilters }).lean()
     }
 
+    const accountLimit = parseLimitedNumber(req.query.accountLimit, 100, 500)
+
     res.json({
       success: true,
-      data: buildFacebookAssetDiagnostics({ tokens, users }),
+      data: buildFacebookAssetDiagnostics({ tokens, users, accountLimit }),
     })
   } catch (error: any) {
     logger.error('[BulkAd] Get auth diagnostics failed:', error)

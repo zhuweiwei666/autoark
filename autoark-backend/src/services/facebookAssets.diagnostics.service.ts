@@ -12,6 +12,7 @@ type AccountIssue = {
 const TOKEN_EXPIRING_SOON_DAYS = 14
 const TOKEN_STALE_CHECK_DAYS = 7
 const DAY_MS = 24 * 60 * 60 * 1000
+const DEFAULT_ACCOUNT_DETAIL_LIMIT = 100
 
 const accountStatusLabel = (status?: number) => {
   const labels: Record<number, string> = {
@@ -89,9 +90,11 @@ const buildTokenHealth = (tokens: any[], now = new Date()) => {
 export function buildFacebookAssetDiagnostics({
   tokens,
   users,
+  accountLimit = DEFAULT_ACCOUNT_DETAIL_LIMIT,
 }: {
   tokens: any[]
   users: any[]
+  accountLimit?: number
 }) {
   const accountMap = new Map<string, any>()
   const pageMap = new Map<string, any[]>()
@@ -175,6 +178,15 @@ export function buildFacebookAssetDiagnostics({
       issueDetails,
     }
   })
+  const sortedAccounts = [...accounts].sort((a, b) => {
+    if (a.ready !== b.ready) return a.ready ? 1 : -1
+    if (a.issueDetails.length !== b.issueDetails.length) return b.issueDetails.length - a.issueDetails.length
+    return String(a.name || a.accountId).localeCompare(String(b.name || b.accountId))
+  })
+  const visibleAccountLimit = Number.isFinite(accountLimit) && accountLimit > 0
+    ? Math.floor(accountLimit)
+    : DEFAULT_ACCOUNT_DETAIL_LIMIT
+  const visibleAccounts = sortedAccounts.slice(0, visibleAccountLimit)
 
   const activeAccountCount = accounts.filter(account => account.status === 1).length
   const pageLinkedAccountCount = accounts.filter(account => account.pageCount > 0).length
@@ -288,7 +300,15 @@ export function buildFacebookAssetDiagnostics({
       lastSyncedAt: mostRecentDate(users.map(user => user.lastSyncedAt)),
     },
     checklist,
-    accounts,
+    accounts: visibleAccounts,
+    limits: {
+      accounts: {
+        total: accounts.length,
+        returned: visibleAccounts.length,
+        maxReturned: visibleAccountLimit,
+        truncated: accounts.length > visibleAccounts.length,
+      },
+    },
     risks,
   }
 }
