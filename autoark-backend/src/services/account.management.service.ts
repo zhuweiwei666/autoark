@@ -8,6 +8,7 @@ import { pickSafeQueryString } from '../utils/pagination'
 
 const ACCOUNT_CHANNELS = ['facebook', 'tiktok'] as const
 const MAX_TAG_FILTERS = 20
+const MAX_ACCOUNT_ID_LIST_COUNT = 500
 const ACCOUNT_ID_MAX_LENGTH = 80
 const ACCOUNT_TAG_MAX_LENGTH = 30
 const ACCOUNT_NOTE_MAX_LENGTH = 500
@@ -26,6 +27,7 @@ const uniqueAccountIds = (accountIds?: any[]): string[] => {
   return Array.from(new Set((Array.isArray(accountIds) ? accountIds : [])
     .map(accountId => pickSafeQueryString(accountId, ACCOUNT_ID_MAX_LENGTH))
     .filter(Boolean) as string[]))
+    .slice(0, MAX_ACCOUNT_ID_LIST_COUNT)
 }
 
 const pickAccountChannel = (value: any): string | undefined => {

@@ -93,6 +93,27 @@ describe('account management security', () => {
     expect(count).toBe(1)
   })
 
+  it('caps bulk account ids before assigning accounts to an organization', async () => {
+    jest.spyOn(Organization, 'findById').mockResolvedValue({ name: 'Acme' } as any)
+    const updateManySpy = jest.spyOn(Account, 'updateMany').mockResolvedValue({ modifiedCount: 500 } as any)
+
+    const accountIds = Array.from({ length: 700 }, (_, index) => `act_${index + 1}`)
+    const count = await accountManagementService.assignToOrganization(
+      accountIds,
+      '665000000000000000000001',
+      {
+        userId: 'admin',
+        role: UserRole.SUPER_ADMIN,
+      } as any,
+    )
+
+    const [query] = updateManySpy.mock.calls[0]
+    expect(query.accountId.$in).toHaveLength(500)
+    expect(query.accountId.$in[0]).toBe('act_1')
+    expect(query.accountId.$in[499]).toBe('act_500')
+    expect(count).toBe(500)
+  })
+
   it('sanitizes account tags before saving them', async () => {
     const account: any = {
       tags: ['existing'],

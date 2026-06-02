@@ -3,9 +3,10 @@ import organizationService from '../services/organization.service'
 import { OrganizationStatus } from '../models/Organization'
 import logger from '../utils/logger'
 import { writeAuditLog } from '../services/auditLog.service'
-import { parsePagination } from '../utils/pagination'
+import { parsePagination, pickSafeQueryString } from '../utils/pagination'
 
 const MANAGEMENT_LIST_MAX_PAGE_SIZE = 100
+const MANAGEMENT_ID_MAX_LENGTH = 80
 
 const idString = (value: any): string | undefined => {
   if (!value) return undefined
@@ -360,7 +361,7 @@ class OrganizationController {
         return
       }
 
-      const { newAdminId } = req.body
+      const newAdminId = pickSafeQueryString(req.body?.newAdminId, MANAGEMENT_ID_MAX_LENGTH)
 
       if (!newAdminId) {
         res.status(400).json({
@@ -408,7 +409,7 @@ class OrganizationController {
         targetId: req.params.id,
         summary: '转移组织管理员失败',
         reason: error.message || '转移管理员失败',
-        after: { newAdminId: req.body?.newAdminId },
+        after: { newAdminId: pickSafeQueryString(req.body?.newAdminId, MANAGEMENT_ID_MAX_LENGTH) },
       })
       res.status(error.message.includes('权限') ? 403 : 400).json({
         success: false,

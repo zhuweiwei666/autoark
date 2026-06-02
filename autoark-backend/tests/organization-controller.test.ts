@@ -276,4 +276,33 @@ describe('organization controller', () => {
       message: '组织不存在',
     })
   })
+
+  it('rejects unsafe transfer admin ids before calling the service', async () => {
+    const req: any = {
+      user: {
+        userId: 'admin_1',
+        role: UserRole.SUPER_ADMIN,
+      },
+      params: { id: '665000000000000000000001' },
+      body: { newAdminId: { $ne: '665000000000000000000102' } },
+      requestId: 'req_org_transfer_unsafe',
+      ip: '127.0.0.1',
+      get: jest.fn(),
+    }
+    const res: any = {
+      json: jest.fn(),
+      status: jest.fn().mockReturnThis(),
+    }
+
+    await organizationController.transferAdmin(req, res)
+
+    expect(mockOrganizationService.getOrganizationById).not.toHaveBeenCalled()
+    expect(mockOrganizationService.transferAdmin).not.toHaveBeenCalled()
+    expect(mockWriteAuditLog).not.toHaveBeenCalled()
+    expect(res.status).toHaveBeenCalledWith(400)
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      message: '新管理员ID不能为空',
+    })
+  })
 })

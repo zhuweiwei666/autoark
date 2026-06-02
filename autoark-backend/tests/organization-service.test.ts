@@ -226,4 +226,35 @@ describe('organization service', () => {
       } as any,
     )).rejects.toThrow('权限不足')
   })
+
+  it('rejects unsafe organization ids before querying organizations', async () => {
+    const findByIdSpy = jest.spyOn(Organization, 'findById')
+
+    await expect(organizationService.getOrganizationById(
+      { $ne: '665000000000000000000001' } as any,
+      {
+        userId: 'admin',
+        role: UserRole.SUPER_ADMIN,
+      } as any,
+    )).rejects.toThrow('组织ID不能为空')
+
+    expect(findByIdSpy).not.toHaveBeenCalled()
+  })
+
+  it('rejects unsafe transfer admin ids before querying users', async () => {
+    const organizationFindByIdSpy = jest.spyOn(Organization, 'findById')
+    const userFindByIdSpy = jest.spyOn(User, 'findById')
+
+    await expect(organizationService.transferAdmin(
+      '665000000000000000000001',
+      { $ne: '665000000000000000000102' } as any,
+      {
+        userId: 'admin',
+        role: UserRole.SUPER_ADMIN,
+      } as any,
+    )).rejects.toThrow('组织ID和新管理员ID不能为空')
+
+    expect(organizationFindByIdSpy).not.toHaveBeenCalled()
+    expect(userFindByIdSpy).not.toHaveBeenCalled()
+  })
 })

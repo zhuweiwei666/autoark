@@ -14,6 +14,8 @@ import { sanitizeUserCreateInput } from '../utils/userInput'
 
 const ORGANIZATION_NAME_MAX_LENGTH = 100
 const ORGANIZATION_DESCRIPTION_MAX_LENGTH = 500
+const ORGANIZATION_ID_MAX_LENGTH = 80
+const ORGANIZATION_USER_ID_MAX_LENGTH = 80
 const ORGANIZATION_BILLING_ID_MAX_LENGTH = 160
 const ORGANIZATION_MAX_SEATS = 100_000
 const ORGANIZATION_SETTING_LIMITS: Record<string, number> = {
@@ -42,6 +44,14 @@ const pickBoundedString = (value: any, maxLength: number): string | undefined =>
   const trimmed = value.trim().slice(0, maxLength)
   return trimmed || undefined
 }
+
+const pickOrganizationId = (value: any): string | undefined => (
+  pickBoundedString(value, ORGANIZATION_ID_MAX_LENGTH)
+)
+
+const pickUserId = (value: any): string | undefined => (
+  pickBoundedString(value, ORGANIZATION_USER_ID_MAX_LENGTH)
+)
 
 const pickBoundedNonNegativeInt = (value: any, max: number): number | undefined => {
   if (value === undefined || value === '') return undefined
@@ -169,7 +179,12 @@ class OrganizationService {
     organizationId: string,
     currentUser: JwtPayload
   ): Promise<IOrganization | null> {
-    const organization = await Organization.findById(organizationId)
+    const safeOrganizationId = pickOrganizationId(organizationId)
+    if (!safeOrganizationId) {
+      throw new Error('组织ID不能为空')
+    }
+
+    const organization = await Organization.findById(safeOrganizationId)
       .populate('adminId', '-password')
       .populate('createdBy', '-password')
 
@@ -180,7 +195,7 @@ class OrganizationService {
     // 权限检查：超级管理员或该组织的成员可以查看
     if (
       currentUser.role !== UserRole.SUPER_ADMIN &&
-      currentUser.organizationId !== organizationId
+      currentUser.organizationId !== safeOrganizationId
     ) {
       throw new Error('无权访问此组织')
     }
@@ -296,7 +311,12 @@ class OrganizationService {
       throw new Error('权限不足')
     }
 
-    const organization = await Organization.findById(organizationId)
+    const safeOrganizationId = pickOrganizationId(organizationId)
+    if (!safeOrganizationId) {
+      throw new Error('组织ID不能为空')
+    }
+
+    const organization = await Organization.findById(safeOrganizationId)
     if (!organization) {
       throw new Error('组织不存在')
     }
@@ -339,18 +359,23 @@ class OrganizationService {
       throw new Error('权限不足')
     }
 
-    const organization = await Organization.findById(organizationId)
+    const safeOrganizationId = pickOrganizationId(organizationId)
+    if (!safeOrganizationId) {
+      throw new Error('组织ID不能为空')
+    }
+
+    const organization = await Organization.findById(safeOrganizationId)
     if (!organization) {
       throw new Error('组织不存在')
     }
 
     // 检查组织下是否还有用户
-    const userCount = await User.countDocuments({ organizationId })
+    const userCount = await User.countDocuments({ organizationId: safeOrganizationId })
     if (userCount > 0) {
       throw new Error('组织下还有用户，无法删除')
     }
 
-    await Organization.findByIdAndDelete(organizationId)
+    await Organization.findByIdAndDelete(safeOrganizationId)
 
     logger.info(`Organization ${organization.name} deleted`)
   }
@@ -368,8 +393,13 @@ class OrganizationService {
       throw new Error('权限不足')
     }
 
+    const safeOrganizationId = pickOrganizationId(organizationId)
+    if (!safeOrganizationId) {
+      throw new Error('组织ID不能为空')
+    }
+
     const organization = await Organization.findByIdAndUpdate(
-      organizationId,
+      safeOrganizationId,
       { status },
       { new: true }
     )
@@ -391,22 +421,27 @@ class OrganizationService {
     currentUser: JwtPayload,
     pagination: PaginationOptions = { page: 1, pageSize: 100, skip: 0 },
   ): Promise<PaginatedResult<any>> {
+    const safeOrganizationId = pickOrganizationId(organizationId)
+    if (!safeOrganizationId) {
+      throw new Error('组织ID不能为空')
+    }
+
     // 权限检查：超级管理员或该组织的管理员可以查看
     if (
       currentUser.role !== UserRole.SUPER_ADMIN &&
       (currentUser.role !== UserRole.ORG_ADMIN ||
-        currentUser.organizationId !== organizationId)
+        currentUser.organizationId !== safeOrganizationId)
     ) {
       throw new Error('权限不足')
     }
 
     const [members, total] = await Promise.all([
-      User.find({ organizationId })
+      User.find({ organizationId: safeOrganizationId })
         .select('-password')
         .sort({ createdAt: -1 })
         .skip(pagination.skip)
         .limit(pagination.pageSize),
-      User.countDocuments({ organizationId }),
+      User.countDocuments({ organizationId: safeOrganizationId }),
     ])
 
     return {
@@ -430,17 +465,23 @@ class OrganizationService {
       throw new Error('权限不足')
     }
 
-    const organization = await Organization.findById(organizationId)
+    const safeOrganizationId = pickOrganizationId(organizationId)
+    const safeNewAdminId = pickUserId(newAdminId)
+    if (!safeOrganizationId || !safeNewAdminId) {
+      throw new Error('组织ID和新管理员ID不能为空')
+    }
+
+    const organization = await Organization.findById(safeOrganizationId)
     if (!organization) {
       throw new Error('组织不存在')
     }
 
-    const newAdmin = await User.findById(newAdminId)
+    const newAdmin = await User.findById(safeNewAdminId)
     if (!newAdmin) {
       throw new Error('新管理员不存在')
     }
 
-    if (newAdmin.organizationId?.toString() !== organizationId) {
+    if (newAdmin.organizationId?.toString() !== safeOrganizationId) {
       throw new Error('新管理员不属于此组织')
     }
 
