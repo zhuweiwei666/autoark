@@ -108,6 +108,7 @@ describe('bulk ad task list', () => {
     }
     const findQuery = {
       sort: jest.fn().mockReturnThis(),
+      limit: jest.fn().mockReturnThis(),
       lean: jest.fn().mockResolvedValue([blockedTask, retryableTask]),
     }
     jest.spyOn(AdTask, 'find').mockReturnValue(findQuery as any)
@@ -119,6 +120,69 @@ describe('bulk ad task list', () => {
     expect(blockedResult.list[0]._id).toBe(blockedTask._id)
     expect(rateLimitResult.total).toBe(1)
     expect(rateLimitResult.list[0]._id).toBe(retryableTask._id)
+    expect(findQuery.limit).toHaveBeenCalledWith(1001)
+  })
+
+  it('caps diagnostic task scans before in-memory filtering', async () => {
+    const blockedTask = {
+      _id: '665000000000000000000701',
+      status: 'failed',
+      items: [{
+        accountId: 'act_blocked',
+        accountName: 'Blocked Account',
+        status: 'failed',
+        errors: ['Selected pixel_id cannot be loaded due to missing permissions'],
+      }],
+      progress: {
+        totalAccounts: 1,
+        completedAccounts: 1,
+        successAccounts: 0,
+        failedAccounts: 1,
+        totalAds: 0,
+        createdAds: 0,
+        percentage: 100,
+      },
+    }
+    const olderTask = {
+      _id: '665000000000000000000702',
+      status: 'failed',
+      items: [{
+        accountId: 'act_retry',
+        accountName: 'Retry Account',
+        status: 'failed',
+        errors: ['Application request limit reached'],
+      }],
+      progress: {
+        totalAccounts: 1,
+        completedAccounts: 1,
+        successAccounts: 0,
+        failedAccounts: 1,
+        totalAds: 0,
+        createdAds: 0,
+        percentage: 100,
+      },
+    }
+    const findQuery = {
+      sort: jest.fn().mockReturnThis(),
+      limit: jest.fn().mockReturnThis(),
+      lean: jest.fn().mockResolvedValue([blockedTask, olderTask]),
+    }
+    jest.spyOn(AdTask, 'find').mockReturnValue(findQuery as any)
+
+    const result = await getTaskList({ diagnosticHealth: 'blocked', diagnosticScanLimit: '1' }, {})
+
+    expect(findQuery.limit).toHaveBeenCalledWith(2)
+    expect(result.list).toHaveLength(1)
+    expect(result.list[0]._id).toBe(blockedTask._id)
+    expect(result.meta).toMatchObject({
+      diagnosticScan: {
+        enabled: true,
+        scanLimit: 1,
+        scannedCount: 1,
+        matchedCount: 1,
+        truncated: true,
+      },
+    })
   })
 
   it('caps task list page size before querying the database', async () => {

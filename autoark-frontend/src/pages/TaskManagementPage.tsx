@@ -172,6 +172,16 @@ interface TaskNotice {
   text: string
 }
 
+interface TaskListMeta {
+  diagnosticScan?: {
+    enabled: boolean
+    scanLimit: number
+    scannedCount: number
+    matchedCount: number
+    truncated: boolean
+  }
+}
+
 const STATUS_MAP: Record<string, { label: string; color: string }> = {
   pending: { label: '等待中', color: 'bg-slate-100 text-slate-600' },
   queued: { label: '排队中', color: 'bg-yellow-100 text-yellow-600' },
@@ -344,6 +354,7 @@ export default function TaskManagementPage() {
   const [diagnosticsError, setDiagnosticsError] = useState<ScopedMessage | null>(null)
   const [reviewError, setReviewError] = useState<ScopedMessage | null>(null)
   const [taskNotice, setTaskNotice] = useState<TaskNotice | null>(null)
+  const [taskListMeta, setTaskListMeta] = useState<TaskListMeta | null>(null)
   
   // 🆕 倍率执行弹窗状态
   const [showRerunModal, setShowRerunModal] = useState(false)
@@ -378,16 +389,19 @@ export default function TaskManagementPage() {
       const data = await readApiJson(res)
       if (!res.ok || !data.success) {
         setTaskListError(formatApiError(data, '任务列表加载失败', res))
+        setTaskListMeta(null)
         return
       }
       if (data.success) {
         const nextTasks = data.data?.list || []
         setTasks(nextTasks)
         setTaskTotal(data.data?.total ?? nextTasks.length)
+        setTaskListMeta(data.data?.meta || null)
         setTaskListError(null)
       }
     } catch (err) {
       console.error('Failed to load tasks:', err)
+      setTaskListMeta(null)
       setTaskListError(formatUnknownError(err, '任务列表加载失败，请检查网络后重试'))
     } finally {
       setLoading(false)
@@ -649,6 +663,7 @@ export default function TaskManagementPage() {
     && selectedTask
     && ['failed', 'partial_success'].includes(selectedTask.status))
   const hasTaskFilters = Boolean(statusFilter || healthFilter || errorCodeFilter.trim())
+  const diagnosticScan = taskListMeta?.diagnosticScan
   
   if (loading) {
     return <Loading.Page message="加载任务列表..." />
@@ -718,6 +733,11 @@ export default function TaskManagementPage() {
                   </button>
                 )}
               </div>
+              {diagnosticScan?.truncated && (
+                <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] font-medium leading-5 text-amber-700">
+                  诊断筛选仅扫描最近 {diagnosticScan.scanLimit} 个任务，结果可能不含更早任务。
+                </div>
+              )}
               {taskListError && (
                 <div className="mt-3">
                   <InlineNotice type="error">

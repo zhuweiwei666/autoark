@@ -24,7 +24,7 @@ import { facebookClient } from '../integration/facebook/facebookClient'
 import { combineFilters } from '../utils/accessControl'
 import { getAccountIdsForQuery, normalizeForStorage } from '../utils/accountId'
 import { getBuildInfo } from '../utils/buildInfo'
-import { parsePagination } from '../utils/pagination'
+import { parseLimitedNumber, parsePagination } from '../utils/pagination'
 import {
   buildTaskOperationalDiagnostics,
   diagnoseBulkAdError,
@@ -41,6 +41,8 @@ import { assertBulkAdPublishAllowed } from './commercial.service'
 // ==================== 草稿管理 ====================
 
 const MIN_BUDGET = 1
+const DEFAULT_DIAGNOSTIC_TASK_SCAN_LIMIT = 1000
+const MAX_DIAGNOSTIC_TASK_SCAN_LIMIT = 5000
 
 const normalizeObjectIdList = (values: any[] = []) => {
   const unique = Array.from(new Set(values.map(value => value?.toString()).filter(Boolean)))
@@ -1685,10 +1687,18 @@ export const getTaskList = async (query: any = {}, userFilter: any = {}) => {
   if (platform) filter.platform = platform
 
   if (diagnosticHealth || diagnosticErrorCode) {
+    const scanLimit = parseLimitedNumber(
+      query.diagnosticScanLimit ?? query.scanLimit,
+      DEFAULT_DIAGNOSTIC_TASK_SCAN_LIMIT,
+      MAX_DIAGNOSTIC_TASK_SCAN_LIMIT,
+    )
     const tasks = await AdTask.find(filter)
       .sort({ createdAt: -1 })
+      .limit(scanLimit + 1)
       .lean()
-    const filtered = tasks.map(toTaskListItem).filter(task => {
+    const scanTruncated = tasks.length > scanLimit
+    const scannedTasks = scanTruncated ? tasks.slice(0, scanLimit) : tasks
+    const filtered = scannedTasks.map(toTaskListItem).filter(task => {
       const diagnostics = task.operationalDiagnostics
       if (diagnosticHealth && diagnostics.health !== diagnosticHealth) return false
       if (diagnosticErrorCode && !diagnostics.buckets.some((bucket: any) => bucket.errorCode === diagnosticErrorCode)) return false
@@ -1699,6 +1709,15 @@ export const getTaskList = async (query: any = {}, userFilter: any = {}) => {
       total: filtered.length,
       page,
       pageSize,
+      meta: {
+        diagnosticScan: {
+          enabled: true,
+          scanLimit,
+          scannedCount: scannedTasks.length,
+          matchedCount: filtered.length,
+          truncated: scanTruncated,
+        },
+      },
     }
   }
   
