@@ -15,6 +15,13 @@ import {
 import { parseLimitedNumber } from '../utils/pagination'
 
 const router = Router()
+const MAX_BACKFILL_DAYS = 31
+
+const parseMaterialMetricsDate = (value: any) => {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null
+  const parsed = dayjs(value)
+  return parsed.isValid() && parsed.format('YYYY-MM-DD') === value ? parsed : null
+}
 
 // 所有路由都需要认证
 router.use(authenticate)
@@ -214,7 +221,15 @@ router.get('/declining', async (req: Request, res: Response) => {
  */
 router.post('/aggregate', async (req: Request, res: Response) => {
   try {
-    const { date = dayjs().format('YYYY-MM-DD') } = req.body
+    const requestedDate = req.body?.date || dayjs().format('YYYY-MM-DD')
+    const aggregateDate = parseMaterialMetricsDate(requestedDate)
+    if (!aggregateDate) {
+      return res.status(400).json({
+        success: false,
+        error: 'date must be a valid YYYY-MM-DD date',
+      })
+    }
+    const date = aggregateDate.format('YYYY-MM-DD')
     
     logger.info(`[MaterialController] Manual aggregation triggered for ${date}`)
     const result = await aggregateMaterialMetrics(date)
@@ -239,18 +254,38 @@ router.post('/backfill', async (req: Request, res: Response) => {
   try {
     const { startDate, endDate } = req.body
     
-    if (!startDate || !endDate) {
+    const start = parseMaterialMetricsDate(startDate)
+    const end = parseMaterialMetricsDate(endDate)
+
+    if (!start || !end) {
       return res.status(400).json({
         success: false,
-        error: 'startDate and endDate are required',
+        error: 'startDate and endDate must be valid YYYY-MM-DD dates',
+      })
+    }
+
+    const dayCount = end.diff(start, 'day') + 1
+    if (dayCount <= 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'endDate must be on or after startDate',
+      })
+    }
+    if (dayCount > MAX_BACKFILL_DAYS) {
+      return res.status(400).json({
+        success: false,
+        error: `一次最多补 ${MAX_BACKFILL_DAYS} 天素材指标，请缩小日期范围`,
+        meta: {
+          requestedDays: dayCount,
+          maxDays: MAX_BACKFILL_DAYS,
+        },
       })
     }
     
     logger.info(`[MaterialController] Backfill triggered for ${startDate} to ${endDate}`)
     
     const results: Array<{ date: string; result: any }> = []
-    let currentDate = dayjs(startDate)
-    const end = dayjs(endDate)
+    let currentDate = start
     
     while (currentDate.isBefore(end) || currentDate.isSame(end, 'day')) {
       const dateStr = currentDate.format('YYYY-MM-DD')
