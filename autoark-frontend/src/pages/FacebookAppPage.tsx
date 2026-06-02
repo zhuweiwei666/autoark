@@ -83,6 +83,9 @@ interface AppStats {
 interface OAuthConfigStatus {
   configured: boolean
   businessLoginConfigIdConfigured?: boolean
+  businessLoginConfigIdSource?: 'env' | 'database' | 'env_and_database' | 'none'
+  businessLoginEnvConfigured?: boolean
+  activeDbBusinessLoginConfigAppCount?: number
   oauthStateSecretConfigured?: boolean
 }
 
@@ -510,6 +513,9 @@ export default function FacebookAppPage() {
   }
 
   const getPublicOauthPrimaryAction = (app: FacebookApp) => {
+    if (app.publicOauthDiagnostics?.runtimeReady && !app.publicOauthDiagnostics?.complianceReady) {
+      return '运行配置已通过；请登记 App Mode、Business Verification、App Review 和权限审核结果。'
+    }
     const diagnosticGap = app.publicOauthDiagnostics?.gaps?.[0]
     if (diagnosticGap?.detail) return diagnosticGap.detail
     const fallbackGap = getPublicOauthGaps(app)[0]
@@ -525,6 +531,43 @@ export default function FacebookAppPage() {
       return { text: '使用全局 config_id', cls: 'text-emerald-600' }
     }
     return { text: '待配置 config_id', cls: 'text-amber-600' }
+  }
+
+  const getReadinessParts = (app: FacebookApp) => {
+    const diagnostics = app.publicOauthDiagnostics
+    return [
+      {
+        label: '运行配置',
+        ready: Boolean(diagnostics?.runtimeReady ?? (app.status === 'active' && app.validation?.isValid && app.config?.enabledForBulkAds !== false)),
+      },
+      {
+        label: 'Meta 合规',
+        ready: Boolean(diagnostics?.complianceReady),
+      },
+      {
+        label: '权限',
+        ready: Boolean(diagnostics?.permissionsReady),
+      },
+      {
+        label: 'Business Login',
+        ready: Boolean(diagnostics?.businessLoginConfigured ?? app.config?.businessLoginConfigId ?? oauthConfig?.businessLoginConfigIdConfigured),
+      },
+    ]
+  }
+
+  const readinessPartClass = (ready: boolean) => (
+    ready
+      ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
+      : 'bg-amber-50 border-amber-200 text-amber-700'
+  )
+
+  const oauthConfigSourceText = () => {
+    switch (oauthConfig?.businessLoginConfigIdSource) {
+      case 'env_and_database': return '全局 + App'
+      case 'database': return 'App'
+      case 'env': return '全局'
+      default: return oauthConfig?.businessLoginConfigIdConfigured ? '已配置' : '待配置'
+    }
   }
 
   const applyApprovedCompliancePreset = () => {
@@ -723,6 +766,17 @@ export default function FacebookAppPage() {
                     <div className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold border ${getPublicOauthBadge(app).cls}`}>
                       {getPublicOauthBadge(app).text}
                     </div>
+                    <div className="grid grid-cols-2 gap-2 mt-3">
+                      {getReadinessParts(app).map((part) => (
+                        <div
+                          key={part.label}
+                          className={`rounded-lg border px-2.5 py-2 text-[11px] font-semibold flex items-center justify-between gap-2 ${readinessPartClass(part.ready)}`}
+                        >
+                          <span>{part.label}</span>
+                          <span>{part.ready ? '已过' : '待处理'}</span>
+                        </div>
+                      ))}
+                    </div>
                     {publicOAuthRequirements.length > 0 && !(app.publicOauthDiagnostics?.ready ?? app.isPublicOauthReady) && (
                       <div className="text-xs text-slate-500 mt-2 leading-5">
                         待处理：{getPublicOauthGaps(app).slice(0, 4).join(', ') || '无'}
@@ -760,7 +814,7 @@ export default function FacebookAppPage() {
                     <div className="flex justify-between gap-3">
                       <span>Business Login：</span>
                       <span className={`font-medium text-right ${getBusinessLoginLabel(app).cls}`}>
-                        {getBusinessLoginLabel(app).text}
+                        {getBusinessLoginLabel(app).text} · {oauthConfigSourceText()}
                       </span>
                     </div>
                     {app.stats?.lastUsedAt && (
@@ -1046,6 +1100,27 @@ export default function FacebookAppPage() {
             </div>
 
             <div className="mt-6 grid grid-cols-3 gap-4">
+              {complianceApp.publicOauthDiagnostics && (
+                <div className="col-span-3 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                    {getReadinessParts(complianceApp).map((part) => (
+                      <div
+                        key={part.label}
+                        className={`rounded-lg border px-3 py-2 text-xs font-semibold flex items-center justify-between gap-2 ${readinessPartClass(part.ready)}`}
+                      >
+                        <span>{part.label}</span>
+                        <span>{part.ready ? '已过' : '待处理'}</span>
+                      </div>
+                    ))}
+                  </div>
+                  {complianceApp.publicOauthDiagnostics.gaps.length > 0 && (
+                    <div className="mt-3 text-xs text-slate-600 leading-5">
+                      当前缺口：{complianceApp.publicOauthDiagnostics.gaps.slice(0, 5).map((gap) => gap.label).join('、')}
+                      {complianceApp.publicOauthDiagnostics.gaps.length > 5 ? ` 等 ${complianceApp.publicOauthDiagnostics.gaps.length} 项` : ''}
+                    </div>
+                  )}
+                </div>
+              )}
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-2">App Mode</label>
                 <select
