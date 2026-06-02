@@ -183,10 +183,11 @@ describe('product mapping account scope', () => {
   it('sanitizes product creation data and blocks relationship mass assignment', async () => {
     jest.spyOn(Product, 'findOne').mockResolvedValue(null as any)
     const createSpy = jest.spyOn(Product, 'create').mockResolvedValue({ name: 'Demo' } as any)
+    const manyTags = Array.from({ length: 30 }, (_, index) => `tag-${index}`)
     const req: any = makeReq({
       name: '  Demo  ',
       identifier: '  demo:sku_1  ',
-      tags: [' vip ', { $ne: 'bad' }, 'launch'],
+      tags: [' vip ', { $ne: 'bad' }, 'launch', ...manyTags],
       pixels: [{ pixelId: 'pixel_1' }],
       accounts: [{ accountId: 'act_123' }],
       primaryPixelId: 'pixel_1',
@@ -199,10 +200,11 @@ describe('product mapping account scope', () => {
     expect(createPayload).toMatchObject({
       name: 'Demo',
       identifier: 'demo:sku_1',
-      tags: ['vip', 'launch'],
+      tags: ['vip', 'launch', ...manyTags.slice(0, 18)],
       organizationId: '665000000000000000000001',
       createdBy: '665000000000000000000002',
     })
+    expect(createPayload.tags).toHaveLength(20)
     expect(createPayload).not.toHaveProperty('pixels')
     expect(createPayload).not.toHaveProperty('accounts')
     expect(createPayload).not.toHaveProperty('primaryPixelId')
@@ -212,9 +214,10 @@ describe('product mapping account scope', () => {
   it('filters product updates through the product field allowlist', async () => {
     const product = { _id: '665000000000000000000301', name: 'Demo' }
     const updateSpy = jest.spyOn(Product, 'findOneAndUpdate').mockResolvedValue(product as any)
+    const manyTags = Array.from({ length: 30 }, (_, index) => `tag-${index}`)
     const req: any = makeReq({
       name: '  Demo updated  ',
-      tags: [' one ', { $ne: 'two' }],
+      tags: [' one ', { $ne: 'two' }, ...manyTags],
       status: { $ne: 'archived' },
       pixels: [{ pixelId: 'pixel_1' }],
       accounts: [{ accountId: 'act_123' }],
@@ -230,7 +233,7 @@ describe('product mapping account scope', () => {
       {
         $set: {
           name: 'Demo updated',
-          tags: ['one'],
+          tags: ['one', ...manyTags.slice(0, 19)],
         },
       },
       { new: true },

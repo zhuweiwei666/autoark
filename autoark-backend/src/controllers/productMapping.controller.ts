@@ -30,6 +30,7 @@ const PRODUCT_DOMAIN_MAX_LENGTH = 255
 const PRODUCT_DESCRIPTION_MAX_LENGTH = 1000
 const PRODUCT_CATEGORY_MAX_LENGTH = 80
 const PRODUCT_TAG_MAX_LENGTH = 40
+const PRODUCT_TAG_MAX_COUNT = 20
 const PRODUCT_ASSET_ID_MAX_LENGTH = 160
 const PRODUCT_ASSET_NAME_MAX_LENGTH = 160
 const PRODUCT_STATUS_FILTERS = ['active', 'inactive', 'archived'] as const
@@ -54,7 +55,7 @@ const pickProductTags = (value: any): string[] | undefined => {
   const tags = Array.from(new Set(values
     .map(tag => pickSafeQueryString(tag, PRODUCT_TAG_MAX_LENGTH))
     .filter(Boolean) as string[]))
-  return tags
+  return tags.slice(0, PRODUCT_TAG_MAX_COUNT)
 }
 
 const pickAssetId = (value: any): string | undefined => (
