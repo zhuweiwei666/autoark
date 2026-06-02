@@ -26,7 +26,8 @@ const requireSuperAdmin = (req: Request, res: Response): boolean => {
 const ensureAccountAccess = async (req: Request, accountId: string): Promise<boolean> => {
   const accountIds = await getUserAccountIds(req)
   if (accountIds === null) return true
-  return accountIds.includes(accountId) || accountIds.includes(accountId.replace(/^act_/, ''))
+  const requestedAccountId = normalizeForStorage(accountId)
+  return accountIds.some(id => normalizeForStorage(id) === requestedAccountId)
 }
 
 const accountIdVariants = (accountId: string): string[] => {
@@ -182,7 +183,10 @@ export const getPurchaseValueInfo = async (
     }
 
     const campaign = await Campaign.findOne({ campaignId: campaignId as string }).select('accountId').lean()
-    if (campaign?.accountId && !(await ensureAccountAccess(req, campaign.accountId))) {
+    if (!campaign?.accountId) {
+      return res.status(404).json({ success: false, error: 'Campaign not found' })
+    }
+    if (!(await ensureAccountAccess(req, campaign.accountId))) {
       return res.status(403).json({ success: false, error: 'Forbidden' })
     }
 
