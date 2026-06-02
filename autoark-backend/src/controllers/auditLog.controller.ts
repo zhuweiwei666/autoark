@@ -1,6 +1,7 @@
 import { Request, Response } from 'express'
 import logger from '../utils/logger'
 import { listAuditLogs } from '../services/auditLog.service'
+import { parseLimitedNumber } from '../utils/pagination'
 
 export const getAuditLogs = async (req: Request, res: Response) => {
   try {
@@ -13,7 +14,7 @@ export const getAuditLogs = async (req: Request, res: Response) => {
       category: typeof req.query.category === 'string' ? req.query.category : undefined,
       action: typeof req.query.action === 'string' ? req.query.action : undefined,
       status: typeof req.query.status === 'string' ? req.query.status as any : undefined,
-      limit: req.query.limit ? Number(req.query.limit) : undefined,
+      limit: parseLimitedNumber(req.query.limit, 50, 200),
     })
 
     res.json({ success: true, data: logs })

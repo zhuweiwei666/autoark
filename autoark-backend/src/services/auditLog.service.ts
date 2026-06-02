@@ -6,6 +6,7 @@ import { JwtPayload } from '../utils/jwt'
 import logger from '../utils/logger'
 import { objectIdValue } from '../utils/accessControl'
 import { redactSensitiveData } from '../utils/sensitiveData'
+import { parseLimitedNumber } from '../utils/pagination'
 
 type AuditStatus = 'success' | 'failed' | 'warning'
 
@@ -93,6 +94,6 @@ export async function listAuditLogs(
   if (filters.action) query.action = filters.action
   if (filters.status) query.status = filters.status
 
-  const limit = Math.min(Math.max(Number(filters.limit || 50), 1), 200)
+  const limit = parseLimitedNumber(filters.limit, 50, 200)
   return OpsLog.find(query).sort({ createdAt: -1 }).limit(limit).lean()
 }

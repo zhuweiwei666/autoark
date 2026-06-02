@@ -1,5 +1,5 @@
 import OpsLog from '../src/models/OpsLog'
-import { writeAuditLog } from '../src/services/auditLog.service'
+import { listAuditLogs, writeAuditLog } from '../src/services/auditLog.service'
 
 describe('audit log sensitive data redaction', () => {
   afterEach(() => {
@@ -48,5 +48,24 @@ describe('audit log sensitive data redaction', () => {
     expect(payload.metadata.nested.message).toContain('client_secret=[REDACTED]')
     expect(payload.metadata.tokenId).toBe('665000000000000000000014')
     expect(payload.metadata.tokenCount).toBe(1)
+  })
+
+  it('sanitizes audit log list limits before querying', async () => {
+    const limit = jest.fn().mockReturnValue({
+      lean: jest.fn().mockResolvedValue([]),
+    })
+    const sort = jest.fn().mockReturnValue({ limit })
+    jest.spyOn(OpsLog, 'find').mockReturnValue({ sort } as any)
+
+    const currentUser: any = {
+      userId: '665000000000000000000002',
+      role: 'super_admin',
+    }
+
+    await listAuditLogs(currentUser, { limit: Number.NaN })
+    await listAuditLogs(currentUser, { limit: 9999 })
+
+    expect(limit).toHaveBeenNthCalledWith(1, 50)
+    expect(limit).toHaveBeenNthCalledWith(2, 200)
   })
 })
