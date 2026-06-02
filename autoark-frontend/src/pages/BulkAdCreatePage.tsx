@@ -1995,6 +1995,7 @@ export default function BulkAdCreatePage() {
                     >
                       <option value={1}>1天</option>
                       <option value={7}>7天</option>
+                      <option value={28}>28天</option>
                     </select>
                   </div>
                   <div>
