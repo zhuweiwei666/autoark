@@ -56,6 +56,7 @@ import {
   deleteCopywritingPackage,
   deleteCreativeGroup,
   deleteTargetingPackage,
+  getAuthAdAccounts,
   getAuthPixels,
   getAuthLoginUrl,
   handleAuthCallback,
@@ -115,6 +116,7 @@ const expectMemberControlFilter = (filter: any, id?: string) => {
 describe('bulk ad controller', () => {
   beforeEach(() => {
     jest.clearAllMocks()
+    mockFacebookClient.get.mockReset()
   })
 
   afterEach(() => {
@@ -348,6 +350,101 @@ describe('bulk ad controller', () => {
     expect(res.redirect).toHaveBeenCalledWith(expect.stringContaining('/oauth/callback?oauth_success=true'))
     expect(res.redirect).toHaveBeenCalledWith(expect.stringContaining('token_id=665000000000000000000901'))
     expect(res.redirect).toHaveBeenCalledWith(expect.stringContaining('fb_user_id=fb_1'))
+  })
+
+  it('paginates and deduplicates authorized ad accounts across Meta pages', async () => {
+    jest.spyOn(FbToken, 'find').mockReturnValue({
+      sort: jest.fn().mockResolvedValue([
+        { token: 'TOKEN_A', fbUserName: 'Operator A' },
+      ]),
+    } as any)
+    mockFacebookClient.get
+      .mockResolvedValueOnce({
+        data: [
+          { id: 'act_100', account_id: '100', name: 'Account 100', account_status: 1 },
+        ],
+        paging: { next: 'https://graph.facebook.com/next', cursors: { after: 'cursor_1' } },
+      } as any)
+      .mockResolvedValueOnce({
+        data: [
+          { id: 'act_100', account_id: '100', name: 'Account 100 duplicate', account_status: 1 },
+          { id: 'act_101', account_id: '101', name: 'Account 101', account_status: 1 },
+        ],
+      } as any)
+
+    const req: any = {
+      user: {
+        role: UserRole.SUPER_ADMIN,
+        userId: '665000000000000000000002',
+      },
+      query: {},
+    }
+    const res = resMock()
+
+    await getAuthAdAccounts(req, res as any)
+
+    expect(mockFacebookClient.get).toHaveBeenNthCalledWith(1, '/me/adaccounts', {
+      access_token: 'TOKEN_A',
+      fields: 'id,account_id,name,account_status,currency,timezone_name,amount_spent,balance',
+      limit: 100,
+    })
+    expect(mockFacebookClient.get).toHaveBeenNthCalledWith(2, '/me/adaccounts', {
+      access_token: 'TOKEN_A',
+      fields: 'id,account_id,name,account_status,currency,timezone_name,amount_spent,balance',
+      limit: 100,
+      after: 'cursor_1',
+    })
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      data: [
+        expect.objectContaining({ account_id: '100', name: 'Account 100', _tokenOwner: 'Operator A' }),
+        expect.objectContaining({ account_id: '101', name: 'Account 101', _tokenOwner: 'Operator A' }),
+      ],
+      meta: expect.objectContaining({
+        tokenCount: 1,
+        failedTokenCount: 0,
+        accountCount: 2,
+        sourceAccountCount: 2,
+        fetchedPageCount: 2,
+        pageLimitPerToken: 10,
+        paginationTruncated: false,
+      }),
+    })
+  })
+
+  it('marks authorized ad account pagination as truncated at the page cap', async () => {
+    jest.spyOn(FbToken, 'find').mockReturnValue({
+      sort: jest.fn().mockResolvedValue([
+        { token: 'TOKEN_A', fbUserName: 'Operator A' },
+      ]),
+    } as any)
+    mockFacebookClient.get.mockImplementation(async (_path: string, params: any) => ({
+      data: [{ id: `act_${params.after || 'first'}`, account_id: params.after || 'first', name: 'Account' }],
+      paging: { next: 'https://graph.facebook.com/next', cursors: { after: `cursor_${mockFacebookClient.get.mock.calls.length}` } },
+    }))
+
+    const req: any = {
+      user: {
+        role: UserRole.SUPER_ADMIN,
+        userId: '665000000000000000000002',
+      },
+      query: {},
+    }
+    const res = resMock()
+
+    await getAuthAdAccounts(req, res as any)
+
+    expect(mockFacebookClient.get).toHaveBeenCalledTimes(10)
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      data: expect.any(Array),
+      meta: expect.objectContaining({
+        accountCount: 10,
+        fetchedPageCount: 10,
+        pageLimitPerToken: 10,
+        paginationTruncated: true,
+      }),
+    })
   })
 
   it('writes an audit log when a task support package is generated', async () => {

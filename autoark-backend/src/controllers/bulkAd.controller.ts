@@ -67,6 +67,35 @@ const createHttpError = (message: string, statusCode: number) => {
 }
 
 const parseAccountIdParam = (value: any) => normalizeForStorage(Array.isArray(value) ? value[0] : value)
+const AUTH_AD_ACCOUNTS_PAGE_LIMIT = 10
+const AUTH_AD_ACCOUNTS_PAGE_SIZE = 100
+
+const fetchAuthAdAccountsPages = async (accessToken: string) => {
+  const accounts: any[] = []
+  let after: string | undefined
+  let pageCount = 0
+  let truncated = false
+
+  while (pageCount < AUTH_AD_ACCOUNTS_PAGE_LIMIT) {
+    const result = await facebookClient.get('/me/adaccounts', {
+      access_token: accessToken,
+      fields: 'id,account_id,name,account_status,currency,timezone_name,amount_spent,balance',
+      limit: AUTH_AD_ACCOUNTS_PAGE_SIZE,
+      ...(after && { after }),
+    })
+
+    pageCount += 1
+    accounts.push(...(result.data || []))
+
+    after = result.paging?.cursors?.after
+    if (!after || !result.paging?.next) {
+      return { accounts, pageCount, truncated }
+    }
+  }
+
+  truncated = Boolean(after)
+  return { accounts, pageCount, truncated }
+}
 
 const assertScopedFacebookAccountAccess = async (req: Request, rawAccountId: any) => {
   const accountId = parseAccountIdParam(rawAccountId)
@@ -1584,16 +1613,17 @@ export const getAuthAdAccounts = async (req: Request, res: Response) => {
     // 合并所有 token 下的广告账户
     const allAccounts: any[] = []
     const seenAccountIds = new Set<string>()
+    let fetchedPageCount = 0
+    let failedTokenCount = 0
+    let paginationTruncated = false
     
     for (const fbToken of fbTokens) {
       try {
-        const result = await facebookClient.get('/me/adaccounts', {
-          access_token: fbToken.token,
-          fields: 'id,account_id,name,account_status,currency,timezone_name,amount_spent,balance',
-          limit: 100,
-        })
+        const result = await fetchAuthAdAccountsPages(fbToken.token)
+        fetchedPageCount += result.pageCount
+        paginationTruncated = paginationTruncated || result.truncated
         
-        for (const acc of (result.data || [])) {
+        for (const acc of result.accounts) {
           // 避免重复账户
           if (!seenAccountIds.has(acc.account_id)) {
             seenAccountIds.add(acc.account_id)
@@ -1612,6 +1642,7 @@ export const getAuthAdAccounts = async (req: Request, res: Response) => {
           }
         }
       } catch (tokenError: any) {
+        failedTokenCount += 1
         logger.warn(`[BulkAd] Failed to get accounts for token ${fbToken.fbUserName}: ${tokenError.message}`)
         // 继续处理其他 token
       }
@@ -1628,7 +1659,20 @@ export const getAuthAdAccounts = async (req: Request, res: Response) => {
       filteredAccounts = allAccounts.filter((acc: any) => allowedAccountIds.has(acc.account_id))
     }
     
-    res.json({ success: true, data: filteredAccounts })
+    res.json({
+      success: true,
+      data: filteredAccounts,
+      meta: {
+        tokenCount: fbTokens.length,
+        failedTokenCount,
+        accountCount: filteredAccounts.length,
+        sourceAccountCount: allAccounts.length,
+        fetchedPageCount,
+        pageSize: AUTH_AD_ACCOUNTS_PAGE_SIZE,
+        pageLimitPerToken: AUTH_AD_ACCOUNTS_PAGE_LIMIT,
+        paginationTruncated,
+      },
+    })
   } catch (error: any) {
     logger.error('[BulkAd] Get ad accounts failed:', error)
     res.status(500).json({ success: false, error: error.message })
