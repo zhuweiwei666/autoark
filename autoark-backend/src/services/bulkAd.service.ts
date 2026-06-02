@@ -24,6 +24,7 @@ import { facebookClient } from '../integration/facebook/facebookClient'
 import { combineFilters } from '../utils/accessControl'
 import { getAccountIdsForQuery, normalizeForStorage } from '../utils/accountId'
 import { getBuildInfo } from '../utils/buildInfo'
+import { parsePagination } from '../utils/pagination'
 import {
   buildTaskOperationalDiagnostics,
   diagnoseBulkAdError,
@@ -315,7 +316,8 @@ export const getDraft = async (draftId: string, accessFilter: any = {}) => {
  * @param userFilter 用户过滤条件（来自 getAssetFilter）
  */
 export const getDraftList = async (query: any = {}, userFilter: any = {}) => {
-  const { status, page = 1, pageSize = 20 } = query
+  const { status } = query
+  const { page, pageSize, skip } = parsePagination(query)
   
   // 合并用户过滤条件
   const filter: any = { ...userFilter }
@@ -324,7 +326,7 @@ export const getDraftList = async (query: any = {}, userFilter: any = {}) => {
   const [list, total] = await Promise.all([
     AdDraft.find(filter)
       .sort({ createdAt: -1 })
-      .skip((page - 1) * pageSize)
+      .skip(skip)
       .limit(pageSize)
       .lean(),
     AdDraft.countDocuments(filter),
@@ -1631,11 +1633,6 @@ const buildTaskListDiagnostics = (task: any) => {
   }
 }
 
-const toPositiveInt = (value: any, fallback: number) => {
-  const next = Number(value)
-  return Number.isFinite(next) && next > 0 ? Math.floor(next) : fallback
-}
-
 const normalizeDiagnosticFilter = (value: any) => {
   if (typeof value !== 'string') return undefined
   const trimmed = value.trim()
@@ -1657,8 +1654,7 @@ const toTaskListItem = (task: any) => {
  */
 export const getTaskList = async (query: any = {}, userFilter: any = {}) => {
   const { status, taskType, platform } = query
-  const page = toPositiveInt(query.page, 1)
-  const pageSize = toPositiveInt(query.pageSize, 20)
+  const { page, pageSize, skip } = parsePagination(query)
   const diagnosticHealth = normalizeDiagnosticFilter(query.diagnosticHealth || query.health)
   const diagnosticErrorCode = normalizeDiagnosticFilter(query.errorCode)?.toUpperCase()
   
@@ -1678,10 +1674,8 @@ export const getTaskList = async (query: any = {}, userFilter: any = {}) => {
       if (diagnosticErrorCode && !diagnostics.buckets.some((bucket: any) => bucket.errorCode === diagnosticErrorCode)) return false
       return true
     })
-    const start = (page - 1) * pageSize
-
     return {
-      list: filtered.slice(start, start + pageSize),
+      list: filtered.slice(skip, skip + pageSize),
       total: filtered.length,
       page,
       pageSize,
@@ -1691,7 +1685,7 @@ export const getTaskList = async (query: any = {}, userFilter: any = {}) => {
   const [list, total] = await Promise.all([
     AdTask.find(filter)
       .sort({ createdAt: -1 })
-      .skip((page - 1) * pageSize)
+      .skip(skip)
       .limit(pageSize)
       .lean(),
     AdTask.countDocuments(filter),

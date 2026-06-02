@@ -33,6 +33,7 @@ import {
   scopedTokenFilter,
 } from '../utils/accessControl'
 import { getAccountIdsForQuery, normalizeForStorage } from '../utils/accountId'
+import { parsePagination } from '../utils/pagination'
 
 /**
  * 获取资产过滤条件（文案包/定向包/创意组等）
@@ -587,7 +588,8 @@ export const updateTargetingPackage = async (req: Request, res: Response) => {
  */
 export const getTargetingPackageList = async (req: Request, res: Response) => {
   try {
-    const { accountId, platform, page = 1, pageSize = 20 } = req.query
+    const { accountId, platform } = req.query
+    const { page, pageSize, skip } = parsePagination(req.query)
     
     // 使用更严格的用户级别过滤
     const filter: any = { ...getAssetFilter(req) }
@@ -597,13 +599,13 @@ export const getTargetingPackageList = async (req: Request, res: Response) => {
     const [list, total] = await Promise.all([
       TargetingPackage.find(filter)
         .sort({ createdAt: -1 })
-        .skip((Number(page) - 1) * Number(pageSize))
-        .limit(Number(pageSize))
+        .skip(skip)
+        .limit(pageSize)
         .lean(),
       TargetingPackage.countDocuments(filter),
     ])
     
-    res.json({ success: true, data: { list, total, page: Number(page), pageSize: Number(pageSize) } })
+    res.json({ success: true, data: { list, total, page, pageSize } })
   } catch (error: any) {
     logger.error('[BulkAd] Get targeting package list failed:', error)
     res.status(500).json({ success: false, error: error.message })
@@ -715,7 +717,8 @@ export const updateCopywritingPackage = async (req: Request, res: Response) => {
  */
 export const getCopywritingPackageList = async (req: Request, res: Response) => {
   try {
-    const { accountId, platform, page = 1, pageSize = 20 } = req.query
+    const { accountId, platform } = req.query
+    const { page, pageSize, skip } = parsePagination(req.query)
     
     // 使用更严格的用户级别过滤
     const filter: any = { ...getAssetFilter(req) }
@@ -725,13 +728,13 @@ export const getCopywritingPackageList = async (req: Request, res: Response) => 
     const [list, total] = await Promise.all([
       CopywritingPackage.find(filter)
         .sort({ createdAt: -1 })
-        .skip((Number(page) - 1) * Number(pageSize))
-        .limit(Number(pageSize))
+        .skip(skip)
+        .limit(pageSize)
         .lean(),
       CopywritingPackage.countDocuments(filter),
     ])
     
-    res.json({ success: true, data: { list, total, page: Number(page), pageSize: Number(pageSize) } })
+    res.json({ success: true, data: { list, total, page, pageSize } })
   } catch (error: any) {
     logger.error('[BulkAd] Get copywriting package list failed:', error)
     res.status(500).json({ success: false, error: error.message })
@@ -861,7 +864,8 @@ export const updateCreativeGroup = async (req: Request, res: Response) => {
  */
 export const getCreativeGroupList = async (req: Request, res: Response) => {
   try {
-    const { accountId, platform, page = 1, pageSize = 20 } = req.query
+    const { accountId, platform } = req.query
+    const { page, pageSize, skip } = parsePagination(req.query)
     
     // 使用更严格的用户级别过滤
     const filter: any = { ...getAssetFilter(req) }
@@ -871,13 +875,13 @@ export const getCreativeGroupList = async (req: Request, res: Response) => {
     const [list, total] = await Promise.all([
       CreativeGroup.find(filter)
         .sort({ createdAt: -1 })
-        .skip((Number(page) - 1) * Number(pageSize))
-        .limit(Number(pageSize))
+        .skip(skip)
+        .limit(pageSize)
         .lean(),
       CreativeGroup.countDocuments(filter),
     ])
     
-    res.json({ success: true, data: { list, total, page: Number(page), pageSize: Number(pageSize) } })
+    res.json({ success: true, data: { list, total, page, pageSize } })
   } catch (error: any) {
     logger.error('[BulkAd] Get creative group list failed:', error)
     res.status(500).json({ success: false, error: error.message })

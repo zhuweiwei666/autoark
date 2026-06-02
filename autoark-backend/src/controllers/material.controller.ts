@@ -25,6 +25,7 @@ import {
   scopedOwnerFilter,
 } from '../utils/accessControl'
 import { normalizeForApi, normalizeForStorage } from '../utils/accountId'
+import { parsePagination } from '../utils/pagination'
 
 /**
  * 素材管理控制器
@@ -39,6 +40,17 @@ import { normalizeForApi, normalizeForStorage } from '../utils/accountId'
 const getMaterialFilter = (req: Request): any => {
   return scopedOwnerFilter(req)
 }
+
+const MATERIAL_SORT_FIELDS = new Set([
+  'createdAt',
+  'updatedAt',
+  'name',
+  'type',
+  'file.size',
+  'metrics.totalSpend',
+  'metrics.avgRoas',
+  'metrics.qualityScore',
+])
 
 const getTenantStorageRoot = (req: Request): string => {
   if (req.user?.organizationId) return `tenants/org-${hashStorageScope(req.user.organizationId)}`
@@ -633,11 +645,10 @@ export const getMaterialList = async (req: Request, res: Response) => {
       tags, 
       status = 'uploaded',
       search,
-      page = 1, 
-      pageSize = 20,
       sortBy = 'createdAt',
       sortOrder = 'desc',
     } = req.query
+    const { page, pageSize, skip } = parsePagination(req.query)
     
     // 根据用户权限过滤
     let filter: any = combineFilters({ status }, getMaterialFilter(req))
@@ -658,13 +669,14 @@ export const getMaterialList = async (req: Request, res: Response) => {
     }
     
     const sort: any = {}
-    sort[sortBy as string] = sortOrder === 'asc' ? 1 : -1
+    const safeSortBy = MATERIAL_SORT_FIELDS.has(String(sortBy)) ? String(sortBy) : 'createdAt'
+    sort[safeSortBy] = sortOrder === 'asc' ? 1 : -1
     
     const [list, total] = await Promise.all([
       Material.find(filter)
         .sort(sort)
-        .skip((Number(page) - 1) * Number(pageSize))
-        .limit(Number(pageSize))
+        .skip(skip)
+        .limit(pageSize)
         .lean(),
       Material.countDocuments(filter),
     ])
@@ -674,9 +686,9 @@ export const getMaterialList = async (req: Request, res: Response) => {
       data: {
         list,
         total,
-        page: Number(page),
-        pageSize: Number(pageSize),
-        totalPages: Math.ceil(total / Number(pageSize)),
+        page,
+        pageSize,
+        totalPages: Math.ceil(total / pageSize),
       },
     })
   } catch (error: any) {

@@ -1,5 +1,9 @@
 import AdTask from '../src/models/AdTask'
-import { getTaskList } from '../src/services/bulkAd.service'
+import AdDraft from '../src/models/AdDraft'
+import {
+  getDraftList,
+  getTaskList,
+} from '../src/services/bulkAd.service'
 
 describe('bulk ad task list', () => {
   afterEach(() => {
@@ -115,5 +119,39 @@ describe('bulk ad task list', () => {
     expect(blockedResult.list[0]._id).toBe(blockedTask._id)
     expect(rateLimitResult.total).toBe(1)
     expect(rateLimitResult.list[0]._id).toBe(retryableTask._id)
+  })
+
+  it('caps task list page size before querying the database', async () => {
+    const findQuery = {
+      sort: jest.fn().mockReturnThis(),
+      skip: jest.fn().mockReturnThis(),
+      limit: jest.fn().mockReturnThis(),
+      lean: jest.fn().mockResolvedValue([]),
+    }
+    jest.spyOn(AdTask, 'find').mockReturnValue(findQuery as any)
+    jest.spyOn(AdTask, 'countDocuments').mockResolvedValue(0 as any)
+
+    const result = await getTaskList({ page: '3', pageSize: '10000' }, {})
+
+    expect(findQuery.skip).toHaveBeenCalledWith(200)
+    expect(findQuery.limit).toHaveBeenCalledWith(100)
+    expect(result).toMatchObject({ page: 3, pageSize: 100 })
+  })
+
+  it('caps draft list page size before querying the database', async () => {
+    const findQuery = {
+      sort: jest.fn().mockReturnThis(),
+      skip: jest.fn().mockReturnThis(),
+      limit: jest.fn().mockReturnThis(),
+      lean: jest.fn().mockResolvedValue([]),
+    }
+    jest.spyOn(AdDraft, 'find').mockReturnValue(findQuery as any)
+    jest.spyOn(AdDraft, 'countDocuments').mockResolvedValue(0 as any)
+
+    const result = await getDraftList({ page: '2', pageSize: '10000' }, {})
+
+    expect(findQuery.skip).toHaveBeenCalledWith(100)
+    expect(findQuery.limit).toHaveBeenCalledWith(100)
+    expect(result).toMatchObject({ page: 2, pageSize: 100 })
   })
 })
