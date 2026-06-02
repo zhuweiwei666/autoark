@@ -299,7 +299,7 @@ export default function BulkAdCreatePage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const { user, token } = useAuth()  // 获取当前用户信息和认证状态
-  const facebookLoginCleanupRef = useRef<(() => void) | null>(null)
+  const facebookLoginCleanupRef = useRef<((options?: { closePopup?: boolean }) => void) | null>(null)
   const [currentStep, setCurrentStep] = useState(1)
   
   const [loading, setLoading] = useState(false)
@@ -317,8 +317,8 @@ export default function BulkAdCreatePage() {
   const [resyncMessage, setResyncMessage] = useState<string | null>(null)
   const [assetWarningMap, setAssetWarningMap] = useState<Record<string, string>>({})
 
-  const clearFacebookLoginWait = () => {
-    facebookLoginCleanupRef.current?.()
+  const clearFacebookLoginWait = (options: { closePopup?: boolean } = {}) => {
+    facebookLoginCleanupRef.current?.(options)
     facebookLoginCleanupRef.current = null
   }
 
@@ -616,10 +616,11 @@ export default function BulkAdCreatePage() {
       // 超时处理
       timeoutId = setTimeout(() => {
         if (!popup.closed) {
-          cleanup()
+          cleanup({ closePopup: true })
           setLoginLoading(false)
           setLoginAttempt(null)
-          setError('Facebook 授权窗口等待超时。请关闭弹窗后重试；若弹窗显示“功能不可用”，请检查 Facebook App 的 Public OAuth 与 Login for Business 配置。')
+          setError('Facebook 授权窗口等待超时，已自动关闭授权窗口。请重新点击登录；若弹窗显示“功能不可用”，请检查 Facebook App 的 Public OAuth 与 Login for Business 配置。')
+          checkAuthStatus()
         }
       }, FACEBOOK_LOGIN_POPUP_TIMEOUT_MS)
       
@@ -634,11 +635,12 @@ export default function BulkAdCreatePage() {
   }
 
   const stopFacebookLoginWait = () => {
-    clearFacebookLoginWait()
+    clearFacebookLoginWait({ closePopup: true })
     setLoginLoading(false)
     setLoginAttempt(null)
     setPublishBlocker(null)
-    setError('已停止等待 Facebook 授权窗口。若弹窗显示“功能不可用”，请先关闭弹窗，再到 App 管理检查 Public OAuth 与 Login for Business 配置。')
+    setError('已停止等待 Facebook 授权窗口，并回查当前授权状态。若弹窗显示“功能不可用”，请到 App 管理检查 Public OAuth 与 Login for Business 配置。')
+    checkAuthStatus()
   }
   
   // 加载广告账户
@@ -1232,7 +1234,7 @@ export default function BulkAdCreatePage() {
                         <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
                       </svg>
                     )}
-                    使用 Facebook 登录
+                    {loginLoading ? (loginAttempt ? '等待 Facebook 授权结果...' : '获取 Facebook 授权链接...') : '使用 Facebook 登录'}
                   </button>
                   {loginAttempt && loginLoading && (
                     <FacebookLoginAttemptPanel attempt={loginAttempt} onStop={stopFacebookLoginWait} />
@@ -1544,7 +1546,7 @@ export default function BulkAdCreatePage() {
                   <h3 className="text-xl font-semibold text-slate-800 mb-2">请先登录 Facebook</h3>
                   <p className="text-slate-500 mb-6">登录后才能获取您的 Pixel 列表</p>
                   <button onClick={handleFacebookLogin} disabled={loginLoading} className="px-6 py-3 bg-[#1877F2] text-white rounded-xl hover:bg-[#166FE5]">
-                    {loginLoading ? '登录中...' : '使用 Facebook 登录'}
+                    {loginLoading ? (loginAttempt ? '等待 Facebook 授权结果...' : '获取 Facebook 授权链接...') : '使用 Facebook 登录'}
                     </button>
                   {loginAttempt && loginLoading && (
                     <FacebookLoginAttemptPanel attempt={loginAttempt} onStop={stopFacebookLoginWait} />
