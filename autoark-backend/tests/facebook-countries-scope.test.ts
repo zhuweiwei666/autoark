@@ -113,4 +113,26 @@ describe('facebook countries tenant scope', () => {
       pagination: { total: 0, page: 1, limit: 20, pages: 0 },
     })
   })
+
+  it('caps endDate-only country insight ranges before calling Facebook Insights', async () => {
+    await getCountries(
+      { endDate: '2026-06-02' },
+      pagination,
+      {
+        accountIds: ['123'],
+        tokenFilter: { organizationId: 'org-a' },
+        allowCacheFallback: false,
+        allowCacheWrite: false,
+      },
+    )
+
+    expect(mockFetchInsights).toHaveBeenCalledWith(
+      'act_123',
+      'campaign',
+      undefined,
+      'token-a',
+      ['country'],
+      { since: '2026-03-05', until: '2026-06-02' },
+    )
+  })
 })

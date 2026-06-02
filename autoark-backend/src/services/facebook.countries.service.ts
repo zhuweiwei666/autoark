@@ -6,6 +6,7 @@ import logger from '../utils/logger'
 import dayjs from 'dayjs'
 import { fetchInsights } from '../integration/facebook/insights.api'
 import { getAccountIdsForQuery, normalizeForApi } from '../utils/accountId'
+import { buildInsightsDateRequest } from '../utils/insightsDateRange'
 
 // 国家代码到名称的映射
 const COUNTRY_NAMES: Record<string, string> = {
@@ -39,15 +40,25 @@ const emptyCountryResult = (pagination: { page: number, limit: number }) => ({
     pagination: { page: pagination.page, limit: pagination.limit, total: 0, pages: 0 },
 })
 
+const resolveCountryDateRange = (filters: any = {}) => {
+    const today = dayjs().format('YYYY-MM-DD')
+    const dateRequest = buildInsightsDateRequest(filters)
+    const startDate = dateRequest.startDate || today
+    const endDate = dateRequest.endDate || startDate
+    return {
+        startDate,
+        endDate,
+        timeRange: { since: startDate, until: endDate },
+    }
+}
+
 export const getCountries = async (
     filters: any = {},
     pagination: { page: number, limit: number, sortBy: string, sortOrder: 'asc' | 'desc' },
     accessScope: CountryAccessScope = {},
 ) => {
     const startTime = Date.now()
-    const today = dayjs().format('YYYY-MM-DD')
-    const startDate = filters.startDate || today
-    const endDate = filters.endDate || startDate
+    const { startDate, endDate } = resolveCountryDateRange(filters)
     const allowCacheFallback = accessScope.allowCacheFallback !== false
     
     try {
@@ -222,10 +233,7 @@ async function getCountriesFromFacebookAPI(
         }
     }
 
-    // 构建日期参数
-    const today = dayjs().format('YYYY-MM-DD')
-    const startDate = filters.startDate || today
-    const endDate = filters.endDate || today
+    const { startDate, endDate, timeRange } = resolveCountryDateRange(filters)
 
     // 按国家聚合数据
     const countryDataMap: Record<string, {
@@ -254,7 +262,7 @@ async function getCountriesFromFacebookAPI(
                 undefined,
                 accountToken,
                 ['country'],
-                { since: startDate, until: endDate }
+                timeRange
             )
 
             for (const insight of insights) {
