@@ -131,6 +131,26 @@ export interface CommercialReadiness {
     facebookBusinessLoginConfigConfigured: boolean
     feishuWebhookConfigured: boolean
   }
+  facebookAuthorization?: {
+    level: 'ready' | 'warning' | 'blocked'
+    label: string
+    authorizationMode: 'business_login' | 'scope_oauth'
+    businessLoginConfigured: boolean
+    businessLoginConfigSource: 'global' | 'app' | 'missing'
+    publicOauthAppCount: number
+    healthyAppCount: number
+    appBusinessLoginConfigCount: number
+    oauthStateSecretConfigured: boolean
+    gapCount: number
+    summary: string
+    gaps: Array<{
+      code: string
+      label: string
+      severity: 'critical' | 'warning' | 'info'
+      detail: string
+      actionPath?: string
+    }>
+  }
 }
 
 export async function getCommercialReadiness(organizationId?: string): Promise<{
@@ -220,6 +240,7 @@ export interface CommercialSupportPackage {
     nextActions: CommercialReadiness['nextActions']
     metrics: Record<string, number>
     deployment: CommercialReadiness['deployment']
+    facebookAuthorization?: CommercialReadiness['facebookAuthorization']
   }
   facebookAssets: {
     summary: Record<string, number | string | undefined>

@@ -105,6 +105,35 @@ const deploymentLabels: Record<string, string> = {
   feishuWebhookConfigured: "飞书告警",
 };
 
+const authorizationModeLabels: Record<string, string> = {
+  business_login: "Business Login",
+  scope_oauth: "Scope OAuth 兜底",
+};
+
+const businessLoginSourceLabels: Record<string, string> = {
+  global: "全局 config_id",
+  app: "App 专属 config_id",
+  missing: "未配置",
+};
+
+const authorizationTone: Record<string, { border: string; badge: string; text: string }> = {
+  ready: {
+    border: "border-[#b7e3d5] bg-[#f4fbf8]",
+    badge: "border-[#b7e3d5] bg-[#e7f3ef] text-[#0f766e]",
+    text: "text-[#0f766e]",
+  },
+  warning: {
+    border: "border-[#fed7aa] bg-[#fffaf3]",
+    badge: "border-[#fed7aa] bg-[#fff7ed] text-[#9a3412]",
+    text: "text-[#9a3412]",
+  },
+  blocked: {
+    border: "border-[#fecdd3] bg-[#fff8f8]",
+    badge: "border-[#fecdd3] bg-[#fff1f2] text-[#9f1239]",
+    text: "text-[#9f1239]",
+  },
+};
+
 const metricLabels: Record<string, string> = {
   members: "成员",
   adAccounts: "广告账户",
@@ -198,10 +227,19 @@ const supportPackageInsights = (supportPackage: CommercialSupportPackage) => {
   const earliestTokenExpiresAt = summaryText(summary, "earliestTokenExpiresAt");
   const businessLoginConfigured = supportPackage.readiness.deployment.facebookBusinessLoginConfigConfigured;
   const oauthStateSecretConfigured = supportPackage.readiness.deployment.oauthStateSecretConfigured;
+  const authorization = supportPackage.readiness.facebookAuthorization;
+  const authorizationModeLabel = authorization
+    ? authorizationModeLabels[authorization.authorizationMode] || authorization.authorizationMode
+    : businessLoginConfigured ? "Business Login" : "Scope OAuth 兜底";
+  const businessLoginSourceLabel = authorization
+    ? businessLoginSourceLabels[authorization.businessLoginConfigSource] || authorization.businessLoginConfigSource
+    : businessLoginConfigured ? "已配置" : "未配置";
   const appSummary = supportPackage.facebookApps?.summary;
   const firstBlockedApp = supportPackage.facebookApps?.apps?.find((app) => !app.publicOauthReady);
   const firstAppGap = firstBlockedApp?.gaps?.[0];
+  const firstAuthorizationGap = authorization?.gaps?.[0];
   const primaryRisk =
+    firstAuthorizationGap ? `Facebook 授权通道：${firstAuthorizationGap.label}，${firstAuthorizationGap.detail}` :
     firstAppGap ? `${firstBlockedApp?.appName || "Facebook App"}：${firstAppGap.label}，${firstAppGap.detail}` :
     supportPackage.facebookAssets.risks[0]?.message ||
     supportPackage.readiness.risks[0]?.message ||
@@ -229,6 +267,10 @@ const supportPackageInsights = (supportPackage: CommercialSupportPackage) => {
     earliestTokenExpiresAt,
     businessLoginConfigured,
     oauthStateSecretConfigured,
+    authorizationModeLabel,
+    businessLoginSourceLabel,
+    authorizationLabel: authorization?.label || "",
+    authorizationGapCount: authorization?.gapCount || 0,
     appTotal: appSummary?.total || 0,
     appReady: appSummary?.ready || 0,
     appBlocked: appSummary?.blocked || 0,
@@ -290,6 +332,79 @@ function MetricCard({
       </div>
       <div className="mt-4 text-sm font-bold text-zinc-600">{detail}</div>
     </article>
+  );
+}
+
+function FacebookAuthorizationPanel({
+  authorization,
+}: {
+  authorization?: NonNullable<CommercialReadiness["facebookAuthorization"]>;
+}) {
+  if (!authorization) return null;
+  const tone = authorizationTone[authorization.level] || authorizationTone.warning;
+  const primaryGap = authorization.gaps[0];
+
+  return (
+    <section className={`mt-6 rounded-lg border p-5 shadow-[0_18px_38px_-34px_rgba(24,24,27,0.72)] ${tone.border}`}>
+      <div className="grid gap-5 lg:grid-cols-[1fr_1.2fr]">
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={`rounded-md border px-2.5 py-1 text-xs font-black ${tone.badge}`}>
+              {authorization.label}
+            </span>
+            <span className="text-xs font-black uppercase text-zinc-500">Facebook 授权通道</span>
+          </div>
+          <h2 className="mt-3 text-xl font-black text-zinc-950">
+            {authorizationModeLabels[authorization.authorizationMode] || authorization.authorizationMode}
+          </h2>
+          <p className="mt-2 text-sm font-bold leading-6 text-zinc-600">{authorization.summary}</p>
+          {primaryGap && (
+            <div className="mt-4 rounded-lg border border-white/70 bg-white/70 px-3 py-2">
+              <div className={`text-sm font-black ${tone.text}`}>{primaryGap.label}</div>
+              <div className="mt-1 text-xs font-bold leading-5 text-zinc-600">{primaryGap.detail}</div>
+              {primaryGap.actionPath && (
+                <Link to={primaryGap.actionPath} className="mt-2 inline-flex text-xs font-black text-zinc-950 underline underline-offset-4">
+                  去处理
+                </Link>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="rounded-lg border border-white/70 bg-white/80 p-4">
+            <div className="text-xs font-black uppercase text-zinc-500">config 来源</div>
+            <div className="mt-2 text-lg font-black text-zinc-950">
+              {businessLoginSourceLabels[authorization.businessLoginConfigSource] || authorization.businessLoginConfigSource}
+            </div>
+            <div className="mt-1 text-xs font-bold text-zinc-500">
+              {authorization.appBusinessLoginConfigCount} 个 App 专属配置
+            </div>
+          </div>
+          <div className="rounded-lg border border-white/70 bg-white/80 p-4">
+            <div className="text-xs font-black uppercase text-zinc-500">公开授权 App</div>
+            <div className="mt-2 text-lg font-black text-zinc-950">
+              {authorization.publicOauthAppCount} / {authorization.healthyAppCount}
+            </div>
+            <div className="mt-1 text-xs font-bold text-zinc-500">可公开授权 / 验证通过</div>
+          </div>
+          <div className="rounded-lg border border-white/70 bg-white/80 p-4">
+            <div className="text-xs font-black uppercase text-zinc-500">OAuth state</div>
+            <div className={`mt-2 text-lg font-black ${authorization.oauthStateSecretConfigured ? "text-[#0f766e]" : "text-[#9a3412]"}`}>
+              {authorization.oauthStateSecretConfigured ? "已配置" : "待配置"}
+            </div>
+            <div className="mt-1 text-xs font-bold text-zinc-500">回调签名保护</div>
+          </div>
+          <div className="rounded-lg border border-white/70 bg-white/80 p-4">
+            <div className="text-xs font-black uppercase text-zinc-500">缺口</div>
+            <div className={`mt-2 text-lg font-black ${tone.text}`}>{authorization.gapCount}</div>
+            <div className="mt-1 text-xs font-bold text-zinc-500">
+              {authorization.gaps.slice(0, 2).map((gap) => gap.label).join(" · ") || "无关键缺口"}
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -662,7 +777,8 @@ export default function CommercialCenterPage() {
       `版本：${supportPackage.system?.build?.shortCommit || "unknown"} (${supportPackage.system?.build?.ref || "unknown"})`,
       `状态：${supportPackage.readiness.state.label} / ${supportPackage.readiness.score} 分`,
       `首要动作：${insights.topAction}`,
-      `Business Login：${insights.businessLoginConfigured ? "已配置 config_id" : "待配置 config_id"}，OAuth state：${insights.oauthStateSecretConfigured ? "已配置" : "待配置"}`,
+      `授权通道：${insights.authorizationModeLabel}${insights.authorizationLabel ? `（${insights.authorizationLabel}）` : ""}`,
+      `Business Login：${insights.businessLoginConfigured ? insights.businessLoginSourceLabel : "待配置 config_id"}，OAuth state：${insights.oauthStateSecretConfigured ? "已配置" : "待配置"}`,
       `Facebook App：${insights.appReady}/${insights.appTotal} 个 Public OAuth 就绪，${insights.appTotalGaps} 个缺口`,
       `授权健康：${insights.tokenCount} 个 Token，${insights.expiredTokenCount} 过期，${insights.expiringSoonTokenCount} 临期，${insights.staleTokenCheckCount} 待复检`,
       `资产：${insights.readyAccountCount} 个可投放账户 / ${insights.accountCount} 个广告账户`,
@@ -866,6 +982,8 @@ export default function CommercialCenterPage() {
         ))}
       </section>
 
+      <FacebookAuthorizationPanel authorization={readiness.facebookAuthorization} />
+
       <UsageLedgerPanel
         ledger={usageLedger}
         isLoading={usageLedgerLoading}
@@ -979,10 +1097,10 @@ export default function CommercialCenterPage() {
                   <div className="rounded-lg border border-zinc-100 bg-white p-3 text-sm">
                     <div className="font-black text-zinc-950">登录链路</div>
                     <div className="mt-1 font-semibold leading-6 text-zinc-600">
-                      Business Login {supportInsights.businessLoginConfigured ? "已配置" : "待配置"} · OAuth state {supportInsights.oauthStateSecretConfigured ? "已配置" : "待配置"}
+                      {supportInsights.authorizationModeLabel} · {supportInsights.businessLoginConfigured ? supportInsights.businessLoginSourceLabel : "待配置 config_id"}
                     </div>
                     <div className="mt-1 font-semibold leading-6 text-zinc-600">
-                      Public OAuth App {supportInsights.appReady}/{supportInsights.appTotal} 就绪 · {supportInsights.appTotalGaps} 个缺口
+                      Public OAuth App {supportInsights.appReady}/{supportInsights.appTotal} 就绪 · {supportInsights.authorizationGapCount || supportInsights.appTotalGaps} 个授权缺口
                     </div>
                     {supportInsights.firstAppGapLabel && (
                       <div className="mt-1 text-xs font-bold text-[#b45309]">

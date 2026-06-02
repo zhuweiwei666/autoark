@@ -26,6 +26,8 @@ type ChecklistStatus = 'done' | 'warning' | 'pending' | 'blocked'
 type ScopeMode = 'organization' | 'platform'
 type RiskLevel = 'critical' | 'warning' | 'info'
 type ReadinessLevel = 'blocked' | 'attention' | 'ready'
+type FacebookAuthorizationLevel = 'ready' | 'warning' | 'blocked'
+type FacebookAuthorizationMode = 'business_login' | 'scope_oauth'
 
 type CommercialNextAction = {
   id: string
@@ -141,6 +143,93 @@ const buildReadinessState = ({
     level: 'ready',
     label: '可商用',
     summary: '授权、资产、额度和任务闭环均已达到商用验收要求，可以进入客户交付。',
+  }
+}
+
+const buildFacebookAuthorizationStatus = ({
+  publicOauthAppCount,
+  healthyAppCount,
+  hasGlobalBusinessLoginConfig,
+  appBusinessLoginConfigCount,
+  oauthStateSecretConfigured,
+}: {
+  publicOauthAppCount: number
+  healthyAppCount: number
+  hasGlobalBusinessLoginConfig: boolean
+  appBusinessLoginConfigCount: number
+  oauthStateSecretConfigured: boolean
+}) => {
+  const businessLoginConfigured = hasGlobalBusinessLoginConfig || appBusinessLoginConfigCount > 0
+  const businessLoginConfigSource = hasGlobalBusinessLoginConfig
+    ? 'global'
+    : appBusinessLoginConfigCount > 0
+      ? 'app'
+      : 'missing'
+  const authorizationMode: FacebookAuthorizationMode = businessLoginConfigured ? 'business_login' : 'scope_oauth'
+  const gaps: Array<{
+    code: string
+    label: string
+    severity: RiskLevel
+    detail: string
+    actionPath?: string
+  }> = []
+
+  if (publicOauthAppCount === 0) {
+    gaps.push({
+      code: 'NO_PUBLIC_OAUTH_APP',
+      label: '没有可公开授权的 Facebook App',
+      severity: 'critical',
+      detail: healthyAppCount > 0
+        ? '已有验证通过的 App，但还没有同时满足 Live、Business verified、App Review approved、Advanced + Approved 权限和 Business Login config_id 的 App。'
+        : '当前没有验证通过且启用的 Facebook App，客户授权会失败或只对管理员可用。',
+      actionPath: '/fb-apps',
+    })
+  }
+
+  if (!businessLoginConfigured) {
+    gaps.push({
+      code: 'MISSING_BUSINESS_LOGIN_CONFIG_ID',
+      label: '缺少 Business Login config_id',
+      severity: 'critical',
+      detail: '客户授权将退回 scope OAuth 兜底，Meta 页面容易出现功能不可用或权限不完整。',
+      actionPath: '/fb-apps',
+    })
+  }
+
+  if (!oauthStateSecretConfigured) {
+    gaps.push({
+      code: 'MISSING_OAUTH_STATE_SECRET',
+      label: 'OAuth state 密钥未配置',
+      severity: 'warning',
+      detail: '生产环境建议配置固定 OAUTH_STATE_SECRET，避免授权回调校验依赖默认密钥。',
+      actionPath: '/fb-apps',
+    })
+  }
+
+  const blockingGaps = gaps.filter((gap) => gap.severity === 'critical')
+  const level: FacebookAuthorizationLevel = blockingGaps.length > 0
+    ? 'blocked'
+    : gaps.length > 0
+      ? 'warning'
+      : 'ready'
+
+  return {
+    level,
+    label: level === 'ready' ? '授权通道就绪' : level === 'warning' ? '授权通道需关注' : '授权通道阻塞',
+    authorizationMode,
+    businessLoginConfigured,
+    businessLoginConfigSource,
+    publicOauthAppCount,
+    healthyAppCount,
+    appBusinessLoginConfigCount,
+    oauthStateSecretConfigured,
+    gapCount: gaps.length,
+    gaps,
+    summary: level === 'ready'
+      ? '客户点击 Facebook 登录时将使用 Facebook Login for Business，公开授权 App 和回调安全配置都已具备。'
+      : level === 'warning'
+        ? '客户授权主链路可继续推进，但建议先处理安全配置缺口。'
+        : '客户授权链路仍有关键阻塞，权限通过后也可能无法稳定对外商用。',
   }
 }
 
@@ -573,6 +662,7 @@ export async function getCommercialReadiness(
     monthlyTaskCount,
     publicOauthAppCount,
     healthyAppCount,
+    appBusinessLoginConfigCount,
     activeTokenDocs,
     recentFailedTasks,
   ] = await Promise.all([
@@ -602,6 +692,11 @@ export async function getCommercialReadiness(
     FacebookApp.countDocuments({
       status: 'active',
       'validation.isValid': true,
+    }),
+    FacebookApp.countDocuments({
+      status: 'active',
+      'validation.isValid': true,
+      'config.businessLoginConfigId': { $exists: true, $nin: ['', null] },
     }),
     FbToken.find({ ...orgFilter, status: 'active' })
       .select('_id fbUserId fbUserName expiresAt lastCheckedAt updatedAt')
@@ -649,10 +744,18 @@ export async function getCommercialReadiness(
     monthlyTasks: limitState(monthlyTaskCount, limits.monthlyTaskLimit),
     concurrentTasks: limitState(runningTaskCount, limits.maxConcurrentTasks),
   }
+  const facebookAuthorization = buildFacebookAuthorizationStatus({
+    publicOauthAppCount,
+    healthyAppCount,
+    hasGlobalBusinessLoginConfig,
+    appBusinessLoginConfigCount,
+    oauthStateSecretConfigured: Boolean(process.env.OAUTH_STATE_SECRET),
+  })
+
   const deployment = {
     corsConfigured: Boolean(process.env.CORS_ALLOWED_ORIGINS),
     oauthStateSecretConfigured: Boolean(process.env.OAUTH_STATE_SECRET),
-    facebookBusinessLoginConfigConfigured: Boolean(process.env.FACEBOOK_BUSINESS_LOGIN_CONFIG_ID),
+    facebookBusinessLoginConfigConfigured: facebookAuthorization.businessLoginConfigured,
     feishuWebhookConfigured: Boolean(
       process.env.FEISHU_WEBHOOK_VERIFICATION_TOKEN ||
       process.env.FEISHU_WEBHOOK_SIGNING_SECRET ||
@@ -690,11 +793,13 @@ export async function getCommercialReadiness(
       'facebook_business_login_config',
       'Facebook Login for Business 配置',
       '客户授权应使用已发布的 Login for Business Configuration，避免退回普通 scope OAuth 或出现功能不可用。',
-      deployment.facebookBusinessLoginConfigConfigured
+      facebookAuthorization.businessLoginConfigured
         ? deployment.oauthStateSecretConfigured ? 'done' : 'warning'
         : 'blocked',
       '/fb-apps',
-      deployment.facebookBusinessLoginConfigConfigured ? 'config_id 已配置' : '缺少 config_id',
+      facebookAuthorization.businessLoginConfigured
+        ? facebookAuthorization.businessLoginConfigSource === 'global' ? '全局 config_id' : 'App 专属 config_id'
+        : '缺少 config_id',
     ),
     step(
       'facebook_authorization',
@@ -792,7 +897,7 @@ export async function getCommercialReadiness(
       actionPath: '/fb-apps',
     })
   }
-  if (!deployment.facebookBusinessLoginConfigConfigured) {
+  if (!facebookAuthorization.businessLoginConfigured) {
     risks.push({
       level: 'critical',
       message: '未配置 Facebook Login for Business config_id，客户授权会退回普通 scope OAuth，容易出现功能不可用或权限不足。',
@@ -911,7 +1016,7 @@ export async function getCommercialReadiness(
       'setup',
     ))
   }
-  if (!deployment.facebookBusinessLoginConfigConfigured) {
+  if (!facebookAuthorization.businessLoginConfigured) {
     nextActions.push(action(
       'configure_business_login_config',
       'critical',
@@ -1149,6 +1254,7 @@ export async function getCommercialReadiness(
       monthlyTasks: monthlyTaskCount,
       publicOauthApps: publicOauthAppCount,
       healthyApps: healthyAppCount,
+      appBusinessLoginConfigs: appBusinessLoginConfigCount,
       facebookPageAccounts: facebookAssets.summary.pageLinkedAccountCount,
       facebookPixelAccounts: facebookAssets.summary.pixelLinkedAccountCount,
       facebookReadyAccounts: facebookAssets.summary.readyAccountCount,
@@ -1167,6 +1273,7 @@ export async function getCommercialReadiness(
     nextActions,
     risks,
     deployment,
+    facebookAuthorization,
   }
 }
 
@@ -1552,6 +1659,7 @@ export async function getCommercialSupportPackage(
       nextActions: readiness.nextActions.slice(0, 5),
       metrics: readiness.metrics,
       deployment: readiness.deployment,
+      facebookAuthorization: readiness.facebookAuthorization,
     },
     facebookAssets: {
       summary: facebookAssets.summary,

@@ -266,6 +266,7 @@ describe('commercial publish limits', () => {
     jest.spyOn(FacebookApp, 'countDocuments')
       .mockResolvedValueOnce(1 as any)
       .mockResolvedValueOnce(1 as any)
+      .mockResolvedValueOnce(1 as any)
     jest.spyOn(FbToken, 'find').mockReturnValue(tokenFindResult([{
       _id: '665000000000000000000099',
       fbUserId: 'fb_1',
@@ -320,6 +321,7 @@ describe('commercial publish limits', () => {
     jest.spyOn(FacebookApp, 'countDocuments')
       .mockResolvedValueOnce(1 as any)
       .mockResolvedValueOnce(1 as any)
+      .mockResolvedValueOnce(0 as any)
     jest.spyOn(FbToken, 'find').mockReturnValue(tokenFindResult([{
       _id: '665000000000000000000198',
       fbUserId: 'fb_missing_config',
@@ -341,9 +343,69 @@ describe('commercial publish limits', () => {
     } as any)
 
     expect(readiness.checklist.find(item => item.id === 'facebook_business_login_config')?.status).toBe('blocked')
+    expect(readiness.facebookAuthorization).toMatchObject({
+      authorizationMode: 'scope_oauth',
+      businessLoginConfigured: false,
+      businessLoginConfigSource: 'missing',
+      level: 'blocked',
+    })
     expect(readiness.state.level).toBe('blocked')
     expect(readiness.risks.some(risk => risk.message.includes('config_id'))).toBe(true)
     expect(readiness.nextActions.some(action => action.id === 'configure_business_login_config')).toBe(true)
+  })
+
+  it('accepts app-level business login config in commercial readiness', async () => {
+    delete process.env.FACEBOOK_BUSINESS_LOGIN_CONFIG_ID
+    jest.spyOn(User, 'countDocuments')
+      .mockResolvedValueOnce(2 as any)
+      .mockResolvedValueOnce(2 as any)
+    jest.spyOn(Account, 'countDocuments').mockResolvedValue(1 as any)
+    jest.spyOn(FbToken, 'countDocuments').mockResolvedValue(1 as any)
+    jest.spyOn(Material, 'countDocuments').mockResolvedValue(1 as any)
+    jest.spyOn(AdDraft, 'countDocuments').mockResolvedValue(1 as any)
+    jest.spyOn(AdTask, 'countDocuments')
+      .mockResolvedValueOnce(1 as any)
+      .mockResolvedValueOnce(1 as any)
+      .mockResolvedValueOnce(0 as any)
+      .mockResolvedValueOnce(0 as any)
+      .mockResolvedValueOnce(1 as any)
+    jest.spyOn(AdTask, 'find').mockReturnValue(sortedLeanFindResult([]) as any)
+    jest.spyOn(FacebookApp, 'countDocuments')
+      .mockResolvedValueOnce(1 as any)
+      .mockResolvedValueOnce(1 as any)
+      .mockResolvedValueOnce(1 as any)
+    jest.spyOn(FbToken, 'find').mockReturnValue(tokenFindResult([{
+      _id: '665000000000000000000198',
+      fbUserId: 'fb_app_config',
+      fbUserName: 'Facebook User',
+      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      lastCheckedAt: new Date(),
+    }]) as any)
+    jest.spyOn(FacebookUser, 'find').mockReturnValue(leanFindResult([{
+      fbUserId: 'fb_app_config',
+      syncStatus: 'completed',
+      adAccounts: [{ accountId: 'act_1', name: 'Ready account', status: 1 }],
+      pages: [{ pageId: 'page_1', name: 'Page 1', accounts: [{ accountId: 'act_1' }] }],
+      pixels: [{ pixelId: 'pixel_1', name: 'Pixel 1', accounts: [{ accountId: 'act_1' }] }],
+    }]) as any)
+
+    const readiness = await getCommercialReadiness({
+      userId: 'admin',
+      role: UserRole.SUPER_ADMIN,
+    } as any)
+
+    expect(readiness.checklist.find(item => item.id === 'facebook_business_login_config')).toMatchObject({
+      status: 'done',
+      metric: 'App 专属 config_id',
+    })
+    expect(readiness.facebookAuthorization).toMatchObject({
+      authorizationMode: 'business_login',
+      businessLoginConfigured: true,
+      businessLoginConfigSource: 'app',
+      appBusinessLoginConfigCount: 1,
+    })
+    expect(readiness.risks.some(risk => risk.message.includes('config_id'))).toBe(false)
+    expect(readiness.nextActions.some(action => action.id === 'configure_business_login_config')).toBe(false)
   })
 
   it('warns when active facebook tokens are expiring soon or stale', async () => {
@@ -362,6 +424,7 @@ describe('commercial publish limits', () => {
       .mockResolvedValueOnce(1 as any)
     jest.spyOn(AdTask, 'find').mockReturnValue(sortedLeanFindResult([]) as any)
     jest.spyOn(FacebookApp, 'countDocuments')
+      .mockResolvedValueOnce(1 as any)
       .mockResolvedValueOnce(1 as any)
       .mockResolvedValueOnce(1 as any)
     jest.spyOn(FbToken, 'find').mockReturnValue(tokenFindResult([{
@@ -409,6 +472,7 @@ describe('commercial publish limits', () => {
       .mockResolvedValueOnce(0 as any)
       .mockResolvedValueOnce(1 as any)
     jest.spyOn(FacebookApp, 'countDocuments')
+      .mockResolvedValueOnce(1 as any)
       .mockResolvedValueOnce(1 as any)
       .mockResolvedValueOnce(1 as any)
 
@@ -498,6 +562,7 @@ describe('commercial publish limits', () => {
     jest.spyOn(FacebookApp, 'countDocuments')
       .mockResolvedValueOnce(0 as any)
       .mockResolvedValueOnce(0 as any)
+      .mockResolvedValueOnce(0 as any)
     jest.spyOn(FbToken, 'find').mockReturnValue(tokenFindResult([{
       _id: '665000000000000000000199',
       fbUserId: 'fb_critical',
@@ -549,6 +614,7 @@ describe('commercial publish limits', () => {
       .mockResolvedValueOnce(1 as any)
     jest.spyOn(AdTask, 'find').mockReturnValue(sortedLeanFindResult([]) as any)
     jest.spyOn(FacebookApp, 'countDocuments')
+      .mockResolvedValueOnce(1 as any)
       .mockResolvedValueOnce(1 as any)
       .mockResolvedValueOnce(1 as any)
     jest.spyOn(FbToken, 'find').mockReturnValue(tokenFindResult([{
