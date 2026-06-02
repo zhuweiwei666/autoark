@@ -37,6 +37,7 @@ const AGG_MAX_RANGE_DAYS = 90
 const AGG_MAX_ROWS = 500
 
 const parseAggLimit = (value: any, fallback = 200) => parseLimitedNumber(value, fallback, AGG_MAX_ROWS)
+const parseAggTrendLimit = (value: any) => parseLimitedNumber(value, 500, AGG_MAX_ROWS)
 
 const getDate = (value: any, fallback: dayjs.Dayjs) => {
   if (typeof value !== 'string') return fallback
@@ -300,6 +301,7 @@ router.get('/campaigns', async (req: Request, res: Response) => {
 router.get('/campaigns/trend', async (req: Request, res: Response) => {
   try {
     const { campaignId } = req.query
+    const limit = parseAggTrendLimit(req.query.limit)
     const endDate = dayjs().format('YYYY-MM-DD')
     const startDate = dayjs().subtract(7, 'day').format('YYYY-MM-DD')
 
@@ -308,12 +310,15 @@ router.get('/campaigns/trend', async (req: Request, res: Response) => {
     const accountIds = await getAccountScope(req)
     if (accountIds !== null) query.accountId = { $in: accountIds }
 
-    const data = await AggCampaign.find(query).sort({ date: 1 }).lean()
+    const queryBuilder = AggCampaign.find(query).sort({ date: 1, spend: -1 })
+    const data = campaignId
+      ? await queryBuilder.lean()
+      : await queryBuilder.limit(limit).lean()
 
     res.json({
       success: true,
       data,
-      meta: { startDate, endDate, count: data.length },
+      meta: { startDate, endDate, count: data.length, limit: campaignId ? null : limit },
     })
   } catch (error: any) {
     logger.error('[AggController] Get campaign trend failed:', error.message)
@@ -360,6 +365,7 @@ router.get('/optimizers', async (req: Request, res: Response) => {
 router.get('/optimizers/trend', async (req: Request, res: Response) => {
   try {
     const { optimizer } = req.query
+    const limit = parseAggTrendLimit(req.query.limit)
     const endDate = dayjs().format('YYYY-MM-DD')
     const startDate = dayjs().subtract(7, 'day').format('YYYY-MM-DD')
 
@@ -367,18 +373,21 @@ router.get('/optimizers/trend', async (req: Request, res: Response) => {
     if (optimizer) query.optimizer = optimizer
     const accountIds = await getAccountScope(req)
     const data = accountIds === null
-      ? await AggOptimizer.find(query).sort({ date: 1 }).lean()
+      ? optimizer
+        ? await AggOptimizer.find(query).sort({ date: 1 }).lean()
+        : await AggOptimizer.find(query).sort({ date: 1, spend: -1 }).limit(limit).lean()
       : await AggCampaign.aggregate([
           { $match: { ...query, accountId: { $in: accountIds } } },
           { $group: { _id: { date: '$date', optimizer: '$optimizer' }, spend: { $sum: '$spend' }, revenue: { $sum: '$revenue' }, campaigns: { $sum: 1 } } },
           { $project: { date: '$_id.date', optimizer: '$_id.optimizer', spend: 1, revenue: 1, roas: { $cond: [{ $gt: ['$spend', 0] }, { $divide: ['$revenue', '$spend'] }, 0] }, campaigns: 1 } },
-          { $sort: { date: 1 } },
+          { $sort: { date: 1, spend: -1 } },
+          ...(!optimizer ? [{ $limit: limit }] : []),
         ])
 
     res.json({
       success: true,
       data,
-      meta: { startDate, endDate, count: data.length },
+      meta: { startDate, endDate, count: data.length, limit: optimizer ? null : limit },
     })
   } catch (error: any) {
     logger.error('[AggController] Get optimizer trend failed:', error.message)

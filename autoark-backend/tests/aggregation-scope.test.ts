@@ -7,6 +7,11 @@ const mockCampaignLean = jest.fn()
 const mockCampaignLimit = jest.fn(() => ({ lean: mockCampaignLean }))
 const mockCampaignSort = jest.fn(() => ({ limit: mockCampaignLimit, lean: mockCampaignLean }))
 const mockCampaignFind = jest.fn(() => ({ sort: mockCampaignSort }))
+const mockCampaignAggregate = jest.fn()
+const mockOptimizerLean = jest.fn()
+const mockOptimizerLimit = jest.fn(() => ({ lean: mockOptimizerLean }))
+const mockOptimizerSort = jest.fn(() => ({ limit: mockOptimizerLimit, lean: mockOptimizerLean }))
+const mockOptimizerFind = jest.fn(() => ({ sort: mockOptimizerSort }))
 
 jest.mock('../src/middlewares/auth', () => ({
   authenticate: (req: any, _res: any, next: any) => {
@@ -40,9 +45,10 @@ jest.mock('../src/models/Aggregation', () => ({
   },
   AggCampaign: {
     find: (...args: any[]) => mockCampaignFind(...args),
+    aggregate: (...args: any[]) => mockCampaignAggregate(...args),
   },
   AggOptimizer: {
-    find: jest.fn(),
+    find: (...args: any[]) => mockOptimizerFind(...args),
     aggregate: jest.fn(),
   },
 }))
@@ -73,6 +79,8 @@ describe('aggregation route account scoping', () => {
       userId: '665000000000000000000002',
     }
     mockCampaignLean.mockResolvedValue([{ campaignId: 'cmp_1', accountId: '123', spend: 42 }])
+    mockOptimizerLean.mockResolvedValue([{ optimizer: 'alice', spend: 42 }])
+    mockCampaignAggregate.mockResolvedValue([{ optimizer: 'alice', spend: 42 }])
   })
 
   afterEach(() => {
@@ -126,5 +134,62 @@ describe('aggregation route account scoping', () => {
       endDate: '2026-06-02',
       count: 0,
     })
+  })
+
+  it('caps unfiltered campaign trend rows', async () => {
+    mockAuthState.user = {
+      role: UserRole.SUPER_ADMIN,
+      userId: '665000000000000000000003',
+    }
+    ;(getUserAccountIds as jest.Mock).mockResolvedValue(null)
+
+    const response = await request(createApp())
+      .get('/api/agg/campaigns/trend?limit=9999')
+
+    expect(response.status).toBe(200)
+    expect(mockCampaignFind).toHaveBeenCalledWith({
+      date: { $gte: expect.any(String), $lte: expect.any(String) },
+    })
+    expect(mockCampaignSort).toHaveBeenCalledWith({ date: 1, spend: -1 })
+    expect(mockCampaignLimit).toHaveBeenCalledWith(500)
+    expect(response.body.meta.limit).toBe(500)
+  })
+
+  it('does not cap a specific campaign trend', async () => {
+    mockAuthState.user = {
+      role: UserRole.SUPER_ADMIN,
+      userId: '665000000000000000000003',
+    }
+    ;(getUserAccountIds as jest.Mock).mockResolvedValue(null)
+
+    const response = await request(createApp())
+      .get('/api/agg/campaigns/trend?campaignId=cmp_1&limit=1')
+
+    expect(response.status).toBe(200)
+    expect(mockCampaignFind).toHaveBeenCalledWith({
+      date: { $gte: expect.any(String), $lte: expect.any(String) },
+      campaignId: 'cmp_1',
+    })
+    expect(mockCampaignLimit).not.toHaveBeenCalled()
+    expect(response.body.meta.limit).toBeNull()
+  })
+
+  it('caps unfiltered optimizer trend rows', async () => {
+    mockAuthState.user = {
+      role: UserRole.SUPER_ADMIN,
+      userId: '665000000000000000000003',
+    }
+    ;(getUserAccountIds as jest.Mock).mockResolvedValue(null)
+
+    const response = await request(createApp())
+      .get('/api/agg/optimizers/trend?limit=9999')
+
+    expect(response.status).toBe(200)
+    expect(mockOptimizerFind).toHaveBeenCalledWith({
+      date: { $gte: expect.any(String), $lte: expect.any(String) },
+    })
+    expect(mockOptimizerSort).toHaveBeenCalledWith({ date: 1, spend: -1 })
+    expect(mockOptimizerLimit).toHaveBeenCalledWith(500)
+    expect(response.body.meta.limit).toBe(500)
   })
 })
