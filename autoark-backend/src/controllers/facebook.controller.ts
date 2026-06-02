@@ -467,7 +467,7 @@ async function refreshCampaignAdsStatus(campaignId: string, token: string) {
       for (const adId of batch) {
         if (result[adId] && result[adId].effective_status) {
           await Ad.findOneAndUpdate(
-            { adId },
+            { channel: 'facebook', adId },
             { effectiveStatus: result[adId].effective_status, updatedAt: new Date() }
           )
         }
@@ -526,7 +526,7 @@ export const updateCampaignStatus = async (
     
     // 更新本地数据库
     await Campaign.findOneAndUpdate(
-      { campaignId },
+      { channel: 'facebook', campaignId },
       { status, updatedAt: new Date() }
     )
     

@@ -52,7 +52,7 @@ export const syncCampaignsFromAdAccounts = async () => {
           }
 
           await Campaign.findOneAndUpdate(
-            { campaignId: campaignData.campaignId },
+            { channel: 'facebook', campaignId: campaignData.campaignId },
             campaignData,
             { upsert: true, new: true }
           )

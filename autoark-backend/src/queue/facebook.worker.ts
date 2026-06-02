@@ -92,10 +92,12 @@ export const initWorkers = () => {
         const jobs = []
         for (const camp of campaigns) {
           await Campaign.findOneAndUpdate(
-            { campaignId: camp.id },
+            { channel: 'facebook', campaignId: camp.id },
             {
               campaignId: camp.id,
               accountId: normalizeForStorage(accountId),
+              channel: 'facebook',
+              platform: 'facebook',
               name: camp.name,
               status: camp.status,
               objective: camp.objective,
@@ -150,12 +152,13 @@ export const initWorkers = () => {
           
           for (const adset of adsets) {
             await AdSet.findOneAndUpdate(
-              { adsetId: adset.id },
+              { channel: 'facebook', adsetId: adset.id },
               {
                 adsetId: adset.id,
                 accountId: normalizeForStorage(accountId),
                 campaignId: campaignId,
                 channel: 'facebook',
+                platform: 'facebook',
                 name: adset.name,
                 status: adset.status,
                 optimizationGoal: adset.optimization_goal,
@@ -187,12 +190,14 @@ export const initWorkers = () => {
           const creativeId = creative.id
           
           await Ad.findOneAndUpdate(
-            { adId: ad.id },
+            { channel: 'facebook', adId: ad.id },
             {
               adId: ad.id,
               adsetId: ad.adset_id,
               campaignId: ad.campaign_id,
               accountId: normalizeForStorage(accountId),
+              channel: 'facebook',
+              platform: 'facebook',
               name: ad.name,
               status: ad.status,
               creativeId: creativeId,
@@ -214,7 +219,7 @@ export const initWorkers = () => {
               else if (creative.object_story_spec?.link_data?.child_attachments) creativeType = 'carousel'
               
               await Creative.findOneAndUpdate(
-                { creativeId: creativeId },
+                { channel: 'facebook', creativeId: creativeId },
                 {
                   creativeId: creativeId,
                   channel: 'facebook',
