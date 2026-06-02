@@ -55,7 +55,7 @@ export const syncTiktokAdvertiser = async (advertiserId: string, token: string) 
     for (const c of campaigns) {
       await writeToMongo(
         Campaign,
-        { campaignId: c.campaign_id },
+        { channel: 'tiktok', campaignId: c.campaign_id },
         {
           campaignId: c.campaign_id,
           accountId: advertiserId,
@@ -83,7 +83,7 @@ export const syncTiktokAdvertiser = async (advertiserId: string, token: string) 
     for (const ag of adgroups) {
       await writeToMongo(
         AdSet,
-        { adsetId: ag.adgroup_id },
+        { channel: 'tiktok', adsetId: ag.adgroup_id },
         {
           adsetId: ag.adgroup_id,
           accountId: advertiserId,
@@ -112,7 +112,7 @@ export const syncTiktokAdvertiser = async (advertiserId: string, token: string) 
     for (const a of ads) {
       await writeToMongo(
         Ad,
-        { adId: a.ad_id },
+        { channel: 'tiktok', adId: a.ad_id },
         {
           adId: a.ad_id,
           adsetId: a.adgroup_id,
