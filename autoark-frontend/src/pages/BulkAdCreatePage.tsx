@@ -115,6 +115,17 @@ interface PublishBlocker {
   actionPath?: string
 }
 
+interface FacebookAssetResponseMeta {
+  failedTokenCount?: number
+  fetchedPageCount?: number
+  pageLimit?: number
+  pageLimitPerToken?: number
+  pageSize?: number
+  paginationTruncated?: boolean
+  promotePagesFailed?: boolean
+  source?: 'promote_pages' | 'user_pages' | 'none' | string
+}
+
 const commercialBlockerActions: Record<string, { actions: string[]; actionPath?: string }> = {
   ORGANIZATION_NOT_ACTIVE: {
     actions: ['联系平台运营启用客户组织。', '启用后刷新页面并重新发布任务。'],
@@ -197,6 +208,41 @@ const getTokenHealthItems = (diagnostics: AuthDiagnostics) => {
   return items
 }
 
+const getFacebookAssetReadLimit = (meta?: FacebookAssetResponseMeta) => {
+  const pageSize = Number(meta?.pageSize || 100)
+  const pageLimit = Number(meta?.pageLimitPerToken || meta?.pageLimit || 10)
+  return pageSize * pageLimit
+}
+
+const buildAdAccountAssetWarning = (meta?: FacebookAssetResponseMeta) => {
+  const parts: string[] = []
+  if ((meta?.failedTokenCount || 0) > 0) {
+    parts.push(`${meta?.failedTokenCount} 个 Facebook 授权账号暂时无法读取广告账户。`)
+  }
+  if (meta?.paginationTruncated) {
+    parts.push(`广告账户数量超过本次读取上限，最多读取前 ${getFacebookAssetReadLimit(meta)} 个/授权账号。`)
+  }
+  return parts.join(' ')
+}
+
+const buildPixelAssetWarning = (meta: FacebookAssetResponseMeta | undefined, accountName: string) => {
+  if (!meta?.paginationTruncated) return ''
+  return `账户 ${accountName} 的 Pixel 数量超过本次读取上限，最多读取前 ${getFacebookAssetReadLimit(meta)} 个。`
+}
+
+const buildPageAssetWarning = (meta: FacebookAssetResponseMeta | undefined, accountName: string) => {
+  const parts: string[] = []
+  if (meta?.promotePagesFailed) {
+    parts.push('读取广告账户分配主页失败，已尝试回退。')
+  } else if (meta?.source === 'user_pages') {
+    parts.push('未从广告账户读取到 BM 分配主页，已回退到授权用户管理的主页。')
+  }
+  if (meta?.paginationTruncated) {
+    parts.push(`主页数量超过本次读取上限，最多读取前 ${getFacebookAssetReadLimit(meta)} 个。`)
+  }
+  return parts.length > 0 ? `账户 ${accountName}：${parts.join(' ')}` : ''
+}
+
 function FacebookLoginAttemptPanel({
   attempt,
   onStop,
@@ -267,10 +313,36 @@ export default function BulkAdCreatePage() {
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
   const [resyncing, setResyncing] = useState(false)
   const [resyncMessage, setResyncMessage] = useState<string | null>(null)
+  const [assetWarningMap, setAssetWarningMap] = useState<Record<string, string>>({})
 
   const clearFacebookLoginWait = () => {
     facebookLoginCleanupRef.current?.()
     facebookLoginCleanupRef.current = null
+  }
+
+  const setAssetWarning = (key: string, message?: string) => {
+    setAssetWarningMap(prev => {
+      if (message) {
+        if (prev[key] === message) return prev
+        return { ...prev, [key]: message }
+      }
+      if (!(key in prev)) return prev
+      const next = { ...prev }
+      delete next[key]
+      return next
+    })
+  }
+
+  const clearAssetWarningsByPrefix = (prefix: string) => {
+    setAssetWarningMap(prev => {
+      const next = Object.fromEntries(Object.entries(prev).filter(([key]) => !key.startsWith(prefix)))
+      return Object.keys(next).length === Object.keys(prev).length ? prev : next
+    })
+  }
+
+  const getAccountDisplayName = (accountId: string) => {
+    const matchedAccount = accounts.find(acc => (acc.account_id || acc.id?.replace('act_', '')) === accountId)
+    return matchedAccount?.name || selectedAccounts.find(acc => acc.accountId === accountId)?.accountName || accountId
   }
 
   useEffect(() => {
@@ -561,9 +633,11 @@ export default function BulkAdCreatePage() {
       const data = await res.json()
       if (data.success) {
         setAccounts(data.data || [])
+        setAssetWarning('ad-accounts', buildAdAccountAssetWarning(data.meta))
       }
     } catch (err) {
       console.error('Failed to load ad accounts:', err)
+      setAssetWarning('ad-accounts', '广告账户读取失败，请检查 Facebook 授权后重新同步。')
     } finally {
       setAccountsLoading(false)
     }
@@ -679,6 +753,7 @@ export default function BulkAdCreatePage() {
   
   // 传统方式加载 Pixels（作为后备）
   const loadAllPixels = async () => {
+    clearAssetWarningsByPrefix('pixels:')
     // 先尝试从缓存加载
     const cached = await loadCachedPixels()
     if (cached) return
@@ -695,6 +770,7 @@ export default function BulkAdCreatePage() {
           const res = await authFetch(`${API_BASE}/bulk-ad/auth/pixels?accountId=${accountId}`)
           const data = await res.json()
           if (data.success && data.data) {
+            setAssetWarning(`pixels:${accountId}`, buildPixelAssetWarning(data.meta, account.name || accountId))
             for (const pixel of data.data) {
               if (!pixelMap.has(pixel.id)) {
                 pixelMap.set(pixel.id, {
@@ -709,6 +785,7 @@ export default function BulkAdCreatePage() {
           }
         } catch (err) {
           console.error(`Failed to load pixels for account ${accountId}:`, err)
+          setAssetWarning(`pixels:${accountId}`, `账户 ${account.name || accountId} 的 Pixel 读取失败，请检查 Facebook 授权或重新同步。`)
         }
       }
       
@@ -764,10 +841,12 @@ export default function BulkAdCreatePage() {
           if (data.success && data.data) {
             pagesForAccount = data.data
             newAccountPages[accountId] = pagesForAccount
+            setAssetWarning(`pages:${accountId}`, buildPageAssetWarning(data.meta, account.name || accountId))
           }
         } catch (err) {
           console.error(`Failed to load pages for account ${accountId}:`, err)
           pagesForAccount = []
+          setAssetWarning(`pages:${accountId}`, `账户 ${account.name || accountId} 的主页读取失败，请检查主页授权或重新同步。`)
         }
       }
       
@@ -881,10 +960,12 @@ export default function BulkAdCreatePage() {
       const data = await res.json()
       if (data.success && data.data) {
         setAccountPages(prev => ({ ...prev, [accountId]: data.data }))
+        setAssetWarning(`pages:${accountId}`, buildPageAssetWarning(data.meta, getAccountDisplayName(accountId)))
         return data.data
       }
     } catch (err) {
       console.error(`Failed to load pages for account ${accountId}:`, err)
+      setAssetWarning(`pages:${accountId}`, `账户 ${getAccountDisplayName(accountId)} 的主页读取失败，请检查主页授权或重新同步。`)
     }
     return []
   }
@@ -1022,6 +1103,8 @@ export default function BulkAdCreatePage() {
   const authDiagnosticAccountLimit = authDiagnostics?.limits?.accounts
   const authDiagnosticAccountTotal = authDiagnosticAccountLimit?.total ?? authDiagnostics?.accounts.length ?? 0
   const authDiagnosticAccountReturned = authDiagnosticAccountLimit?.returned ?? authDiagnostics?.accounts.length ?? 0
+  const assetWarningEntries = Object.entries(assetWarningMap)
+  const visibleAssetWarningEntries = assetWarningEntries.slice(0, 4)
   const facebookAssetsBlocked = Boolean(
     authStatus?.authorized &&
     authDiagnostics &&
@@ -1172,6 +1255,26 @@ export default function BulkAdCreatePage() {
                   {resyncMessage && (
                     <div className="mt-3 rounded-lg border border-green-200 bg-white/80 px-3 py-2 text-xs font-semibold text-green-800">
                       {resyncMessage}
+                    </div>
+                  )}
+                  {visibleAssetWarningEntries.length > 0 && (
+                    <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold leading-5 text-amber-800">
+                      <div className="flex items-center gap-2 text-amber-900">
+                        <svg className="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v4m0 4h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                        </svg>
+                        <span>资产读取提示</span>
+                      </div>
+                      <div className="mt-1 space-y-1">
+                        {visibleAssetWarningEntries.map(([key, message]) => (
+                          <div key={key}>{message}</div>
+                        ))}
+                        {assetWarningEntries.length > visibleAssetWarningEntries.length && (
+                          <div className="text-amber-700">
+                            还有 {assetWarningEntries.length - visibleAssetWarningEntries.length} 条提示未展示，可重新同步后刷新。
+                          </div>
+                        )}
+                      </div>
                     </div>
                   )}
                   {diagnosticsLoading && (
