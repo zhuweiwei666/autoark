@@ -2,6 +2,7 @@ import express from 'express'
 import request from 'supertest'
 
 jest.mock('../src/services/dashboard.service', () => ({
+  DASHBOARD_CHANNEL_FILTERS: ['facebook', 'tiktok'],
   getDaily: jest.fn(),
   getByCountry: jest.fn(),
   getByAdSet: jest.fn(),
@@ -45,6 +46,21 @@ describe('dashboard controller date range guardrails', () => {
       startDate: '2026-03-05',
       endDate: '2026-06-02',
       channel: 'facebook',
+      country: 'US',
+    })
+  })
+
+  it('sanitizes legacy dashboard channel and country filters before calling the service', async () => {
+    ;(dashboardService.getDaily as jest.Mock).mockResolvedValue([{ date: '2026-06-02', spendUsd: 10 }])
+
+    const response = await request(createApp())
+      .get('/daily?startDate=2026-06-01&endDate=2026-06-02&channel=instagram&country=%20US%20')
+
+    expect(response.status).toBe(200)
+    expect(dashboardService.getDaily).toHaveBeenCalledWith({
+      startDate: '2026-06-01',
+      endDate: '2026-06-02',
+      channel: undefined,
       country: 'US',
     })
   })

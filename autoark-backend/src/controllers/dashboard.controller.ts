@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express'
 import dayjs from 'dayjs'
 import * as dashboardService from '../services/dashboard.service'
-import { parseLimitedNumber } from '../utils/pagination'
+import { parseLimitedNumber, pickAllowedString, pickSafeQueryString } from '../utils/pagination'
 
 const DASHBOARD_MAX_RANGE_DAYS = 90
 const DASHBOARD_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/
@@ -66,14 +66,15 @@ const sendDashboardDateRangeError = (res: Response, error: any) => {
 }
 
 const getFilters = (req: Request) => {
-  const { channel, country } = req.query
   const { startDate, endDate } = parseDashboardDateRange(req)
+  const channel = pickAllowedString(req.query.channel, dashboardService.DASHBOARD_CHANNEL_FILTERS, '')
+  const country = pickSafeQueryString(req.query.country, 32)
 
   return {
     startDate,
     endDate,
-    channel: channel as string,
-    country: country as string,
+    channel: channel || undefined,
+    country,
   }
 }
 
