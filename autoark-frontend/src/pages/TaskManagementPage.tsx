@@ -432,6 +432,15 @@ const formatUnknownError = (err: unknown, fallback: string) => {
   return err instanceof Error && err.message ? err.message : fallback
 }
 
+const safeFileName = (value?: string) => {
+  const normalized = String(value || '')
+    .trim()
+    .replace(/[^\w.-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+  return normalized.slice(0, 80) || 'autoark-task-support-package'
+}
+
 function InlineNotice({
   type,
   children,
@@ -788,6 +797,43 @@ export default function TaskManagementPage() {
     ]
     await navigator.clipboard.writeText(lines.join('\n'))
     setTaskNotice({ type: 'success', text: '排障摘要已复制' })
+  }
+
+  const downloadTaskSupportPackage = () => {
+    if (!selectedTaskSupportPackage) return
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      supportId: selectedTaskSupportPackage.supportId,
+      buildRef: selectedTaskSupportPackage.system?.build?.ref,
+      buildCommit: selectedTaskSupportPackage.system?.build?.commit,
+      buildShortCommit: selectedTaskSupportPackage.system?.build?.shortCommit,
+      taskId: selectedTaskSupportPackage.task.id,
+      taskName: selectedTaskSupportPackage.task.name,
+      health: selectedTaskSupportPackage.diagnostics.health,
+      summary: selectedTaskSupportPackage.diagnostics.summary,
+      topIssue: selectedTaskSupportTopBucket
+        ? {
+            errorCode: selectedTaskSupportTopBucket.errorCode,
+            label: selectedTaskSupportTopInfo?.label,
+            owner: selectedTaskSupportTopInfo?.owner,
+            customerMessage: selectedTaskSupportTopBucket.customerMessage,
+            retryable: selectedTaskSupportTopBucket.retryable,
+            count: selectedTaskSupportTopBucket.count,
+            nextActions: selectedTaskSupportTopBucket.nextActions,
+          }
+        : undefined,
+      supportPackage: selectedTaskSupportPackage,
+    }
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `${safeFileName(selectedTaskSupportPackage.supportId)}-${safeFileName(selectedTaskSupportPackage.task.name || selectedTaskSupportPackage.task.id)}.json`
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
+    URL.revokeObjectURL(url)
+    setTaskNotice({ type: 'success', text: '排障包 JSON 已下载' })
   }
 
   const selectedTaskDiagnostics = taskDiagnostics?.taskId === selectedTask?._id ? taskDiagnostics : null
@@ -1163,6 +1209,12 @@ export default function TaskManagementPage() {
                           className="rounded border border-teal-300 bg-white px-3 py-1 text-xs font-medium text-teal-700 hover:bg-teal-50"
                         >
                           复制摘要
+                        </button>
+                        <button
+                          onClick={downloadTaskSupportPackage}
+                          className="rounded border border-slate-300 bg-white px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                        >
+                          下载 JSON
                         </button>
                       </div>
                     </div>
