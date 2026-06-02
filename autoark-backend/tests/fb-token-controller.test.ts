@@ -65,4 +65,63 @@ describe('fb token controller', () => {
       },
     })
   })
+
+  it('rejects invalid token list dates before querying', async () => {
+    const req: any = {
+      user: {
+        role: UserRole.ORG_ADMIN,
+        userId: '665000000000000000000002',
+        organizationId: '665000000000000000000001',
+      },
+      query: {
+        startDate: '2026-02-31',
+      },
+    }
+    const res: any = {
+      status: jest.fn().mockReturnThis(),
+      json: jest.fn(),
+    }
+    const next = jest.fn()
+
+    await getTokens(req, res, next)
+
+    expect(res.status).toHaveBeenCalledWith(400)
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      message: 'startDate must be a valid YYYY-MM-DD date',
+    })
+    expect(mockFbTokenFind).not.toHaveBeenCalled()
+    expect(next).not.toHaveBeenCalled()
+  })
+
+  it('uses inclusive day boundaries for token list date filters', async () => {
+    const lean = jest.fn().mockResolvedValue([])
+    const limit = jest.fn(() => ({ lean }))
+    const skip = jest.fn(() => ({ limit }))
+    const sort = jest.fn(() => ({ skip }))
+    mockFbTokenFind.mockReturnValue({ sort })
+
+    const req: any = {
+      user: {
+        role: UserRole.ORG_ADMIN,
+        userId: '665000000000000000000002',
+        organizationId: '665000000000000000000001',
+      },
+      query: {
+        startDate: '2026-06-02',
+        endDate: '2026-06-02',
+      },
+    }
+    const res: any = {
+      json: jest.fn(),
+    }
+    const next = jest.fn()
+
+    await getTokens(req, res, next)
+
+    const query = mockFbTokenFind.mock.calls[0][0]
+    expect(query.createdAt.$gte).toBeInstanceOf(Date)
+    expect(query.createdAt.$lte).toBeInstanceOf(Date)
+    expect(query.createdAt.$gte.getTime()).toBeLessThan(query.createdAt.$lte.getTime())
+  })
 })

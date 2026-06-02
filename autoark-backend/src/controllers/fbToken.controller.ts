@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express'
+import dayjs from 'dayjs'
 import FbToken, { IFbToken } from '../models/FbToken'
 import {
   validateToken,
@@ -16,6 +17,21 @@ import { parsePagination } from '../utils/pagination'
  */
 const getTokenFilter = (req: Request): any => {
   return scopedTokenFilter(req)
+}
+
+const parseTokenListDate = (value: any, fieldName: string, boundary: 'start' | 'end') => {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return { error: `${fieldName} must be a valid YYYY-MM-DD date` }
+  }
+
+  const parsed = dayjs(value)
+  if (!parsed.isValid() || parsed.format('YYYY-MM-DD') !== value) {
+    return { error: `${fieldName} must be a valid YYYY-MM-DD date` }
+  }
+
+  return {
+    date: (boundary === 'start' ? parsed.startOf('day') : parsed.endOf('day')).toDate(),
+  }
 }
 
 /**
@@ -143,10 +159,21 @@ export const getTokens = async (
     if (startDate || endDate) {
       query.createdAt = {}
       if (startDate) {
-        query.createdAt.$gte = new Date(startDate as string)
+        const parsedStartDate = parseTokenListDate(startDate, 'startDate', 'start')
+        if (parsedStartDate.error) {
+          return res.status(400).json({ success: false, message: parsedStartDate.error })
+        }
+        query.createdAt.$gte = parsedStartDate.date
       }
       if (endDate) {
-        query.createdAt.$lte = new Date(endDate as string)
+        const parsedEndDate = parseTokenListDate(endDate, 'endDate', 'end')
+        if (parsedEndDate.error) {
+          return res.status(400).json({ success: false, message: parsedEndDate.error })
+        }
+        query.createdAt.$lte = parsedEndDate.date
+      }
+      if (query.createdAt.$gte && query.createdAt.$lte && query.createdAt.$gte > query.createdAt.$lte) {
+        return res.status(400).json({ success: false, message: 'endDate must be on or after startDate' })
       }
     }
 

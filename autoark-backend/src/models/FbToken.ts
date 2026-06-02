@@ -42,6 +42,9 @@ const FbTokenSchema = new mongoose.Schema(
 
 // 索引：优化师 + 创建日期，用于筛选
 FbTokenSchema.index({ optimizer: 1, createdAt: -1 })
+// 索引：租户 Token 列表按创建时间分页
+FbTokenSchema.index({ organizationId: 1, createdAt: -1 })
+FbTokenSchema.index({ userId: 1, createdAt: -1 })
 // 索引：状态 + 最后检查时间
 FbTokenSchema.index({ status: 1, lastCheckedAt: -1 })
 // 同一组织内同一个 Facebook 用户只保留一个活跃授权，避免并发 OAuth 产生重复记录
