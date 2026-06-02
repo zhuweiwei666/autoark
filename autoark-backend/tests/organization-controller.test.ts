@@ -3,6 +3,7 @@ jest.mock('../src/services/organization.service', () => ({
   default: {
     getOrganizationById: jest.fn(),
     updateOrganization: jest.fn(),
+    transferAdmin: jest.fn(),
   },
 }))
 
@@ -92,5 +93,97 @@ describe('organization controller', () => {
       }),
     }))
     expect(res.json).toHaveBeenCalledWith({ success: true, data: afterOrganization })
+  })
+
+  it('audits before and after snapshots when transferring organization admin', async () => {
+    const beforeOrganization = {
+      _id: '665000000000000000000001',
+      name: 'Acme Team',
+      adminId: '665000000000000000000101',
+    }
+    const afterOrganization = {
+      ...beforeOrganization,
+      adminId: '665000000000000000000102',
+    }
+
+    mockOrganizationService.getOrganizationById.mockResolvedValue(beforeOrganization as any)
+    mockOrganizationService.transferAdmin.mockResolvedValue(afterOrganization as any)
+    mockWriteAuditLog.mockResolvedValue(undefined)
+
+    const req: any = {
+      user: {
+        userId: 'admin_1',
+        role: UserRole.SUPER_ADMIN,
+      },
+      params: { id: '665000000000000000000001' },
+      body: { newAdminId: '665000000000000000000102' },
+      requestId: 'req_org_transfer',
+      ip: '127.0.0.1',
+      get: jest.fn(),
+    }
+    const res: any = {
+      json: jest.fn(),
+      status: jest.fn().mockReturnThis(),
+    }
+
+    await organizationController.transferAdmin(req, res)
+
+    expect(mockOrganizationService.getOrganizationById).toHaveBeenCalledWith(req.params.id, req.user)
+    expect(mockOrganizationService.transferAdmin).toHaveBeenCalledWith(
+      req.params.id,
+      req.body.newAdminId,
+      req.user,
+    )
+    expect(mockWriteAuditLog).toHaveBeenCalledWith(req, expect.objectContaining({
+      category: 'organization',
+      action: 'organization.transfer_admin',
+      status: 'success',
+      targetType: 'organization',
+      targetId: req.params.id,
+      before: { adminId: beforeOrganization.adminId },
+      after: {
+        adminId: afterOrganization.adminId,
+        newAdminId: req.body.newAdminId,
+      },
+    }))
+    expect(res.json).toHaveBeenCalledWith({ success: true, data: afterOrganization })
+  })
+
+  it('audits failed organization admin transfers', async () => {
+    mockOrganizationService.getOrganizationById.mockRejectedValue(new Error('组织不存在'))
+    mockWriteAuditLog.mockResolvedValue(undefined)
+
+    const req: any = {
+      user: {
+        userId: 'admin_1',
+        role: UserRole.SUPER_ADMIN,
+      },
+      params: { id: '665000000000000000000404' },
+      body: { newAdminId: '665000000000000000000102' },
+      requestId: 'req_org_transfer_failed',
+      ip: '127.0.0.1',
+      get: jest.fn(),
+    }
+    const res: any = {
+      json: jest.fn(),
+      status: jest.fn().mockReturnThis(),
+    }
+
+    await organizationController.transferAdmin(req, res)
+
+    expect(mockWriteAuditLog).toHaveBeenCalledWith(req, expect.objectContaining({
+      category: 'organization',
+      action: 'organization.transfer_admin',
+      status: 'failed',
+      targetType: 'organization',
+      targetId: req.params.id,
+      reason: '组织不存在',
+      after: { newAdminId: req.body.newAdminId },
+    }))
+    expect(res.status).toHaveBeenCalledWith(400)
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      message: '组织不存在',
+    })
   })
 })

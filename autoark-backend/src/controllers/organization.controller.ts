@@ -4,6 +4,12 @@ import { OrganizationStatus } from '../models/Organization'
 import logger from '../utils/logger'
 import { writeAuditLog } from '../services/auditLog.service'
 
+const idString = (value: any): string | undefined => {
+  if (!value) return undefined
+  if (value._id) return String(value._id)
+  return String(value)
+}
+
 class OrganizationController {
   /**
    * GET /api/organizations
@@ -330,11 +336,28 @@ class OrganizationController {
         return
       }
 
+      const beforeOrganization = await organizationService.getOrganizationById(
+        req.params.id,
+        req.user
+      )
+
       const organization = await organizationService.transferAdmin(
         req.params.id,
         newAdminId,
         req.user
       )
+
+      await writeAuditLog(req, {
+        category: 'organization',
+        action: 'organization.transfer_admin',
+        status: 'success',
+        organizationId: (organization as any)._id,
+        targetType: 'organization',
+        targetId: req.params.id,
+        summary: '转移组织管理员',
+        before: { adminId: idString((beforeOrganization as any)?.adminId) },
+        after: { adminId: idString((organization as any).adminId), newAdminId },
+      })
 
       res.json({
         success: true,
@@ -342,6 +365,17 @@ class OrganizationController {
       })
     } catch (error: any) {
       logger.error('Transfer admin error:', error)
+      await writeAuditLog(req, {
+        category: 'organization',
+        action: 'organization.transfer_admin',
+        status: 'failed',
+        organizationId: req.params.id,
+        targetType: 'organization',
+        targetId: req.params.id,
+        summary: '转移组织管理员失败',
+        reason: error.message || '转移管理员失败',
+        after: { newAdminId: req.body?.newAdminId },
+      })
       res.status(error.message.includes('权限') ? 403 : 400).json({
         success: false,
         message: error.message || '转移管理员失败',
