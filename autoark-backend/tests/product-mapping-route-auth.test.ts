@@ -145,4 +145,22 @@ describe('product mapping route authorization', () => {
       expect.any(Object),
     )
   })
+
+  it('rejects unsafe product URL query values', async () => {
+    const app = createApp()
+
+    const objectUrlResponse = await request(app).get('/api/product-mapping/parse-url?url[$ne]=https://example.com')
+    const invalidUrlResponse = await request(app).get('/api/product-mapping/find-by-url?url=not-a-url')
+
+    expect(objectUrlResponse.status).toBe(400)
+    expect(objectUrlResponse.body).toMatchObject({
+      success: false,
+      error: 'url parameter is required',
+    })
+    expect(invalidUrlResponse.status).toBe(400)
+    expect(invalidUrlResponse.body).toMatchObject({
+      success: false,
+      error: 'url parameter must be a valid URL',
+    })
+  })
 })

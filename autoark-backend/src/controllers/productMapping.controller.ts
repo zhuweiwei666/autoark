@@ -12,7 +12,7 @@ import {
   scopedTokenFilter,
 } from '../utils/accessControl'
 import { getAccountIdsForQuery, normalizeForStorage } from '../utils/accountId'
-import { parseLimitedNumber, parsePagination } from '../utils/pagination'
+import { parseLimitedNumber, parsePagination, pickSafeQueryString } from '../utils/pagination'
 
 /**
  * 产品映射控制器
@@ -23,6 +23,7 @@ import { parseLimitedNumber, parsePagination } from '../utils/pagination'
 
 const PRODUCT_LIST_MAX_PAGE_SIZE = 100
 const PRODUCT_SEARCH_MAX_LENGTH = 80
+const PRODUCT_URL_MAX_LENGTH = 2048
 const PRODUCT_STATUS_FILTERS = ['active', 'inactive', 'archived'] as const
 
 const getProductFilter = (req: Request): any => scopedOwnerFilter(req)
@@ -488,9 +489,12 @@ export const syncAll = async (req: Request, res: Response) => {
  */
 export const findByUrl = async (req: Request, res: Response) => {
   try {
-    const url = req.query.url as string
+    const url = pickSafeQueryString(req.query.url, PRODUCT_URL_MAX_LENGTH)
     if (!url) {
       return res.status(400).json({ success: false, error: 'url parameter is required' })
+    }
+    if (!productMappingService.parseProductUrl(url)) {
+      return res.status(400).json({ success: false, error: 'url parameter must be a valid URL' })
     }
     
     const product = await productMappingService.findProductByUrl(url, getProductFilter(req))
@@ -534,12 +538,15 @@ export const getBestAccount = async (req: Request, res: Response) => {
  */
 export const parseUrl = async (req: Request, res: Response) => {
   try {
-    const url = req.query.url as string
+    const url = pickSafeQueryString(req.query.url, PRODUCT_URL_MAX_LENGTH)
     if (!url) {
       return res.status(400).json({ success: false, error: 'url parameter is required' })
     }
     
     const parsed = productMappingService.parseProductUrl(url)
+    if (!parsed) {
+      return res.status(400).json({ success: false, error: 'url parameter must be a valid URL' })
+    }
     
     res.json({
       success: true,
