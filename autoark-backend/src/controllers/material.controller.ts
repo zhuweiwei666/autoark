@@ -72,6 +72,12 @@ const validateScopedStorageKey = (req: Request, res: Response, key: string): str
   return scopedKey
 }
 
+const escapeRegexLiteral = (value: string): string => (
+  String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+)
+
+const childPathRegex = (path: string): string => `^${escapeRegexLiteral(path)}/`
+
 /**
  * 检查 R2 配置状态
  * GET /api/materials/config-status
@@ -937,7 +943,7 @@ export const renameFolder = async (req: Request, res: Response) => {
     
     // 更新所有子文件夹的路径
     await Folder.updateMany(
-      combineFilters({ path: { $regex: `^${oldPath}/` } }, getMaterialFilter(req)),
+      combineFilters({ path: { $regex: childPathRegex(oldPath) } }, getMaterialFilter(req)),
       [{ $set: { path: { $replaceOne: { input: '$path', find: oldPath, replacement: newPath } } } }]
     )
     
@@ -949,7 +955,7 @@ export const renameFolder = async (req: Request, res: Response) => {
     
     // 更新子文件夹下素材的路径
     await Material.updateMany(
-      combineFilters({ folder: { $regex: `^${oldPath}/` }, status: 'uploaded' }, getMaterialFilter(req)),
+      combineFilters({ folder: { $regex: childPathRegex(oldPath) }, status: 'uploaded' }, getMaterialFilter(req)),
       [{ $set: { folder: { $replaceOne: { input: '$folder', find: oldPath, replacement: newPath } } } }]
     )
     
@@ -986,7 +992,7 @@ export const deleteFolder = async (req: Request, res: Response) => {
       combineFilters({
         $or: [
           { folder: folderPath },
-          { folder: { $regex: `^${folderPath}/` } }
+          { folder: { $regex: childPathRegex(folderPath) } }
         ],
         status: 'uploaded' 
       }, getMaterialFilter(req)),
@@ -994,7 +1000,7 @@ export const deleteFolder = async (req: Request, res: Response) => {
     )
 
     // 删除所有子文件夹
-    await Folder.deleteMany(combineFilters({ path: { $regex: `^${folderPath}/` } }, getMaterialFilter(req)))
+    await Folder.deleteMany(combineFilters({ path: { $regex: childPathRegex(folderPath) } }, getMaterialFilter(req)))
     
     // 删除当前文件夹
     await Folder.deleteOne(combineFilters({ _id: folderId }, getMaterialFilter(req)))
