@@ -12,18 +12,24 @@ import {
   getRecommendedMaterials,
   getDecliningMaterials,
 } from '../services/materialMetrics.service'
-import { parseLimitedNumber } from '../utils/pagination'
+import { parseLimitedNumber, pickAllowedString } from '../utils/pagination'
 
 const router = Router()
 const MAX_BACKFILL_DAYS = 31
 const MAX_RANKING_DAYS = 90
 const DEFAULT_RANKING_LOOKBACK_DAYS = 7
+const MATERIAL_RANKING_SORT_FIELDS = ['roas', 'spend', 'qualityScore', 'impressions'] as const
+const MATERIAL_TYPE_FILTERS = ['image', 'video'] as const
 
 const parseMaterialMetricsDate = (value: any) => {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null
   const parsed = dayjs(value)
   return parsed.isValid() && parsed.format('YYYY-MM-DD') === value ? parsed : null
 }
+
+const pickOptionalAllowedString = (value: any, allowedValues: readonly string[]) => (
+  typeof value === 'string' && allowedValues.includes(value) ? value : undefined
+)
 
 const resolveMaterialMetricsDateRange = (
   input: { startDate?: any; endDate?: any },
@@ -107,11 +113,13 @@ router.get('/rankings', async (req: Request, res: Response) => {
     }
     
     const safeLimit = parseLimitedNumber(limit, 20, 100)
+    const safeSortBy = pickAllowedString(sortBy, MATERIAL_RANKING_SORT_FIELDS, 'roas')
+    const safeType = pickOptionalAllowedString(type, MATERIAL_TYPE_FILTERS)
     const rankings = await getMaterialRankings({
       dateRange: { start: dateRange.startDate, end: dateRange.endDate },
-      sortBy: sortBy as any,
+      sortBy: safeSortBy as any,
       limit: safeLimit,
-      materialType: type as any,
+      materialType: safeType as any,
       country: country as string,  // 🌍 传递国家参数
     })
     
@@ -121,9 +129,9 @@ router.get('/rankings', async (req: Request, res: Response) => {
       query: {
         startDate: dateRange.startDate,
         endDate: dateRange.endDate,
-        sortBy,
+        sortBy: safeSortBy,
         limit: safeLimit,
-        type,
+        type: safeType,
         country,
       },
     })

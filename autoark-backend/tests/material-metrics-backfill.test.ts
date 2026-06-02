@@ -87,6 +87,24 @@ describe('material metrics backfill guardrails', () => {
     })
   })
 
+  it('sanitizes ranking sort and material type filters', async () => {
+    materialMetricsService.getMaterialRankings.mockResolvedValue([])
+
+    const response = await request(createApp())
+      .get('/api/material-metrics/rankings')
+      .query({ endDate: '2026-06-02', sortBy: 'unknownField', type: 'document' })
+
+    expect(response.status).toBe(200)
+    expect(materialMetricsService.getMaterialRankings).toHaveBeenCalledWith(expect.objectContaining({
+      sortBy: 'roas',
+      materialType: undefined,
+    }))
+    expect(response.body.query).toMatchObject({
+      sortBy: 'roas',
+    })
+    expect(response.body.query).not.toHaveProperty('type')
+  })
+
   it('rejects invalid aggregate dates before running material aggregation', async () => {
     const response = await request(createApp())
       .post('/api/material-metrics/aggregate')
