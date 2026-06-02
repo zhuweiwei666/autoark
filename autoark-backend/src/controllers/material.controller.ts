@@ -25,7 +25,7 @@ import {
   scopedOwnerFilter,
 } from '../utils/accessControl'
 import { normalizeForApi, normalizeForStorage } from '../utils/accountId'
-import { parsePagination } from '../utils/pagination'
+import { parseLimitedNumber, parsePagination } from '../utils/pagination'
 import {
   MAX_DIRECT_UPLOAD_FILES,
   validateMaterialFileMeta,
@@ -1220,7 +1220,7 @@ export const getReusable = async (req: Request, res: Response) => {
       minRoas: parseFloat(minRoas as string),
       minSpend: parseFloat(minSpend as string),
       minQualityScore: parseInt(minQualityScore as string),
-      limit: parseInt(limit as string),
+      limit: parseLimitedNumber(limit, 20, 100),
       sortBy: sortBy as 'roas' | 'spend' | 'qualityScore',
       scopeFilter: getMaterialFilter(req),
     })
