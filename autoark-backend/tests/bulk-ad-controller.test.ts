@@ -68,6 +68,7 @@ import {
   getAuthLoginUrl,
   getCopywritingPackageList,
   getCreativeGroupList,
+  getFacebookInstagramAccounts,
   getTargetingPackageList,
   handleAuthCallback,
   publishDraft as publishDraftController,
@@ -476,6 +477,73 @@ describe('bulk ad controller', () => {
     })
     expect(findOne).not.toHaveBeenCalled()
     expect(mockFacebookClient.get).not.toHaveBeenCalled()
+  })
+
+  it('rejects malformed instagram page IDs before loading a token', async () => {
+    const findOne = jest.spyOn(FbToken, 'findOne')
+    const res = resMock()
+
+    await getFacebookInstagramAccounts(memberReq({
+      query: {
+        pageId: { $ne: 'page_1' },
+      },
+    }) as any, res as any)
+
+    expect(res.status).toHaveBeenCalledWith(400)
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      error: 'pageId is required',
+    })
+    expect(findOne).not.toHaveBeenCalled()
+    expect(mockFacebookClient.get).not.toHaveBeenCalled()
+  })
+
+  it('rejects unsafe instagram page ID paths before loading a token', async () => {
+    const findOne = jest.spyOn(FbToken, 'findOne')
+    const res = resMock()
+
+    await getFacebookInstagramAccounts(memberReq({
+      query: {
+        pageId: 'page_1/instagram_accounts',
+      },
+    }) as any, res as any)
+
+    expect(res.status).toHaveBeenCalledWith(400)
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      error: 'pageId is required',
+    })
+    expect(findOne).not.toHaveBeenCalled()
+    expect(mockFacebookClient.get).not.toHaveBeenCalled()
+  })
+
+  it('sanitizes instagram page IDs before calling Meta', async () => {
+    const sort = jest.fn().mockResolvedValue({ token: 'facebook-token' })
+    jest.spyOn(FbToken, 'findOne').mockReturnValue({ sort } as any)
+    mockFacebookClient.get.mockResolvedValue({
+      data: [{ id: 'ig_1', username: 'autoark' }],
+    } as any)
+    const res = resMock()
+
+    await getFacebookInstagramAccounts(memberReq({
+      query: {
+        pageId: '  page_1  ',
+      },
+    }) as any, res as any)
+
+    expect(FbToken.findOne).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'active',
+      userId: '665000000000000000000002',
+    }))
+    expect(sort).toHaveBeenCalledWith({ updatedAt: -1 })
+    expect(mockFacebookClient.get).toHaveBeenCalledWith('/page_1/instagram_accounts', {
+      access_token: 'facebook-token',
+      fields: 'id,username,profile_pic',
+    })
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      data: [{ id: 'ig_1', username: 'autoark' }],
+    })
   })
 
   it('rejects bulk ad OAuth callbacks that are missing signed state', async () => {
@@ -1487,6 +1555,27 @@ describe('bulk ad controller', () => {
       success: false,
       error: '无权访问广告账户 123，请先同步并分配账户资产',
     })
+  })
+
+  it('rejects unsafe auth pixel account ID paths before loading tokens', async () => {
+    const tokenFind = jest.spyOn(FbToken, 'find').mockResolvedValue([] as any)
+    const res = resMock()
+
+    await getAuthPixels({
+      query: { accountId: 'act_123/adspixels' },
+      user: {
+        role: UserRole.SUPER_ADMIN,
+        userId: '665000000000000000000002',
+      },
+    } as any, res as any)
+
+    expect(res.status).toHaveBeenCalledWith(400)
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      error: 'accountId is required',
+    })
+    expect(tokenFind).not.toHaveBeenCalled()
+    expect(mockFacebookClient.get).not.toHaveBeenCalled()
   })
 
   it('uses the scoped token that can access the requested account when reading pixels', async () => {

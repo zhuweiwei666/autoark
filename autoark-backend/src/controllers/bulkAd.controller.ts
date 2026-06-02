@@ -71,11 +71,23 @@ const createHttpError = (message: string, statusCode: number) => {
   return error
 }
 
+const FACEBOOK_GRAPH_ID_PATTERN = /^[A-Za-z0-9_.-]+$/
+
+const isSafeFacebookGraphId = (value: string) => FACEBOOK_GRAPH_ID_PATTERN.test(value)
+
 const parseAccountIdParam = (value: any) => {
   const raw = Array.isArray(value) ? value[0] : value
   const safe = pickTrimmedString(raw, 80)
-  return safe ? normalizeForStorage(safe) : ''
+  const normalized = safe ? normalizeForStorage(safe) : ''
+  return normalized && isSafeFacebookGraphId(normalized) ? normalized : ''
 }
+
+const parseFacebookPageIdParam = (value: any) => {
+  const raw = Array.isArray(value) ? value[0] : value
+  const safe = pickTrimmedString(raw, 80)
+  return safe && isSafeFacebookGraphId(safe) ? safe : ''
+}
+
 const AUTH_FACEBOOK_ASSET_PAGE_LIMIT = 10
 const AUTH_FACEBOOK_ASSET_PAGE_SIZE = 100
 const BULK_AD_OAUTH_CODE_MAX_LENGTH = 2048
@@ -1782,7 +1794,7 @@ export const getFacebookPages = async (req: Request, res: Response) => {
  */
 export const getFacebookInstagramAccounts = async (req: Request, res: Response) => {
   try {
-    const { pageId } = req.query
+    const pageId = parseFacebookPageIdParam(req.query.pageId)
     if (!pageId) {
       return res.status(400).json({ success: false, error: 'pageId is required' })
     }
@@ -1792,7 +1804,7 @@ export const getFacebookInstagramAccounts = async (req: Request, res: Response) 
       return res.status(400).json({ success: false, error: 'No active Facebook token' })
     }
     
-    const result = await getInstagramAccounts(pageId as string, fbToken.token)
+    const result = await getInstagramAccounts(pageId, fbToken.token)
     res.json({ success: true, data: result.data })
   } catch (error: any) {
     logger.error('[BulkAd] Get Instagram accounts failed:', error)
