@@ -9,6 +9,7 @@ import {
   buildPublicOAuthReadiness,
   computePublicOauthComplianceReady,
 } from '../utils/facebookAppReadiness'
+import { parseLimitedNumber } from '../utils/pagination'
 
 const writeFacebookAppAudit = (req: Request, input: {
   action: string
@@ -48,6 +49,9 @@ const assignableBulkAdAppQuery: Record<string, any> = {
   'validation.isValid': true,
   'config.enabledForBulkAds': { $ne: false },
 }
+
+const AVAILABLE_APP_DEFAULT_LIMIT = 1
+const AVAILABLE_APP_MAX_LIMIT = 50
 
 /**
  * 获取所有 Facebook Apps
@@ -364,11 +368,11 @@ export const validateApp = async (req: Request, res: Response) => {
  */
 export const getAvailableApps = async (req: Request, res: Response) => {
   try {
-    const { count = 1 } = req.query
+    const count = parseLimitedNumber(req.query.count, AVAILABLE_APP_DEFAULT_LIMIT, AVAILABLE_APP_MAX_LIMIT)
     const apps = await FacebookApp.find(assignableBulkAdAppQuery).sort({
       'currentLoad.activeTasks': 1,
       'config.priority': -1,
-    }).limit(Number(count))
+    }).limit(count)
 
     res.json({ success: true, data: apps })
   } catch (error: any) {
