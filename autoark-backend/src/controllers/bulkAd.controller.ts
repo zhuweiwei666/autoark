@@ -1307,34 +1307,36 @@ export const handleAuthCallback = async (req: Request, res: Response) => {
     }
     
     // 解析 state 参数获取 AutoArk 用户信息。
-    // state 必须由服务端 HMAC 签名，防止外部伪造 userId/orgId 绑定 token。
+    // 批量广告授权必须携带服务端 HMAC 签名 state，防止 token 被写成未绑定用户/组织的全局授权。
     let autoarkUserId: string | undefined
     let organizationId: string | undefined
-    if (state) {
-      try {
-        const stateObj = oauthService.parseStateParamWithOptions(state as string, { requireSignature: true })
-        const originalState = stateObj.originalState || ''
-        const parts = originalState.split('|')
-        if (parts[0] === 'bulk-ad' && parts[1]) {
-          autoarkUserId = parts[1]
-          organizationId = parts[2] || undefined
-          logger.info(`[BulkAd OAuth] Binding token to AutoArk user: ${autoarkUserId}`)
-        }
-      } catch (e) {
-        logger.warn('[BulkAd OAuth] Invalid signed state:', e)
-        await writeAuditLog(req, {
-          category: 'bulk_ad',
-          action: 'bulk_ad.facebook_oauth_callback',
-          status: 'failed',
-          targetType: 'facebook_oauth',
-          summary: 'Facebook 授权回调 state 无效',
-          reason: 'Invalid OAuth state',
-          metadata: {
-            stateParseError: stateAudit.error || 'Invalid OAuth state',
-          },
-        })
-        return res.redirect('/oauth/callback?oauth_error=Invalid OAuth state')
+    try {
+      if (!state) {
+        throw new Error('Missing OAuth state')
       }
+      const stateObj = oauthService.parseStateParamWithOptions(state as string, { requireSignature: true })
+      const originalState = stateObj.originalState || ''
+      const parts = originalState.split('|')
+      if (parts[0] !== 'bulk-ad' || !parts[1]) {
+        throw new Error('Invalid OAuth state')
+      }
+      autoarkUserId = parts[1]
+      organizationId = parts[2] || undefined
+      logger.info(`[BulkAd OAuth] Binding token to AutoArk user: ${autoarkUserId}`)
+    } catch (e: any) {
+      logger.warn('[BulkAd OAuth] Invalid signed state:', e)
+      await writeAuditLog(req, {
+        category: 'bulk_ad',
+        action: 'bulk_ad.facebook_oauth_callback',
+        status: 'failed',
+        targetType: 'facebook_oauth',
+        summary: 'Facebook 授权回调 state 无效',
+        reason: 'Invalid OAuth state',
+        metadata: {
+          stateParseError: stateAudit.error || e.message || 'Invalid OAuth state',
+        },
+      })
+      return res.redirect('/oauth/callback?oauth_error=Invalid OAuth state')
     }
     
     // 处理 OAuth 回调（传递 state 以解析使用的 App）

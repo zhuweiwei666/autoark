@@ -15,6 +15,7 @@ jest.mock('../src/services/auditLog.service', () => ({
 jest.mock('../src/services/facebook.oauth.service', () => ({
   getFacebookBulkAdRedirectUri: jest.fn(),
   getFacebookLoginUrl: jest.fn(),
+  handleOAuthCallback: jest.fn(),
   parseStateParamWithOptions: jest.fn(),
 }))
 
@@ -49,6 +50,7 @@ import {
   deleteTargetingPackage,
   getAuthPixels,
   getAuthLoginUrl,
+  handleAuthCallback,
   publishDraft as publishDraftController,
   parseAllCopywritingProducts,
   updateCopywritingPackage,
@@ -228,6 +230,55 @@ describe('bulk ad controller', () => {
         publicOauthGapCodes: expect.arrayContaining(['APP_MODE_NOT_LIVE']),
       }),
     }))
+  })
+
+  it('rejects bulk ad OAuth callbacks that are missing signed state', async () => {
+    mockWriteAuditLog.mockResolvedValue(undefined)
+
+    const req: any = {
+      query: { code: 'oauth-code' },
+    }
+    const res: any = {
+      redirect: jest.fn(),
+    }
+
+    await handleAuthCallback(req, res)
+
+    expect(mockOauthService.handleOAuthCallback).not.toHaveBeenCalled()
+    expect(mockWriteAuditLog).toHaveBeenCalledWith(req, expect.objectContaining({
+      action: 'bulk_ad.facebook_oauth_callback',
+      status: 'failed',
+      reason: 'Invalid OAuth state',
+      metadata: expect.objectContaining({
+        stateParseError: 'Missing OAuth state',
+      }),
+    }))
+    expect(res.redirect).toHaveBeenCalledWith('/oauth/callback?oauth_error=Invalid OAuth state')
+  })
+
+  it('rejects signed bulk ad OAuth callbacks without a bulk-ad state payload', async () => {
+    mockWriteAuditLog.mockResolvedValue(undefined)
+    mockOauthService.parseStateParamWithOptions.mockReturnValue({
+      originalState: 'fb-token|665000000000000000000002',
+    } as any)
+
+    const req: any = {
+      query: { code: 'oauth-code', state: 'signed-state' },
+    }
+    const res: any = {
+      redirect: jest.fn(),
+    }
+
+    await handleAuthCallback(req, res)
+
+    expect(mockOauthService.parseStateParamWithOptions).toHaveBeenCalledWith('signed-state', { requireSignature: true })
+    expect(mockOauthService.handleOAuthCallback).not.toHaveBeenCalled()
+    expect(mockWriteAuditLog).toHaveBeenCalledWith(req, expect.objectContaining({
+      action: 'bulk_ad.facebook_oauth_callback',
+      status: 'failed',
+      reason: 'Invalid OAuth state',
+    }))
+    expect(res.redirect).toHaveBeenCalledWith('/oauth/callback?oauth_error=Invalid OAuth state')
   })
 
   it('writes an audit log when a task support package is generated', async () => {
