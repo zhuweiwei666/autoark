@@ -4,6 +4,7 @@ import MetricsDaily from '../models/MetricsDaily'
 import { fetchUserAdAccounts, fetchInsights } from './facebook.api'
 import logger from '../utils/logger'
 import { normalizeForStorage, getAccountIdsForQuery, normalizeFromQuery, normalizeForApi } from '../utils/accountId'
+import { buildInsightsDateRequest } from '../utils/insightsDateRange'
 
 export const syncAccountsFromTokens = async () => {
   const startTime = Date.now()
@@ -160,20 +161,7 @@ export const getAccounts = async (filters: any = {}, pagination: { page: number,
     // 直接从 Facebook Insights API 获取消耗数据（更准确）
     let periodSpendMap: Record<string, number> = {}
     
-    // 构建日期参数
-    let datePreset = 'today'
-    let timeRange: { since: string; until: string } | undefined
-    
-    if (filters.startDate && filters.endDate) {
-        timeRange = { since: filters.startDate, until: filters.endDate }
-        datePreset = ''
-    } else if (filters.startDate) {
-        timeRange = { since: filters.startDate, until: new Date().toISOString().split('T')[0] }
-        datePreset = ''
-    } else if (filters.endDate) {
-        timeRange = { since: '2020-01-01', until: filters.endDate }
-        datePreset = ''
-    }
+    const { datePreset, timeRange } = buildInsightsDateRequest(filters)
     
     // 为每个账户使用其关联的 token（更准确，避免用“任意一个 active token”导致无权限/数据不更新）
     const accountTokenMap: Record<string, string> = {}

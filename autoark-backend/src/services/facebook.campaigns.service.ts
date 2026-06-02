@@ -9,6 +9,7 @@ import { getReadConnection } from '../config/db'
 import { getFromCache, setToCache, getCacheKey, CACHE_TTL } from '../utils/cache'
 import { extractPurchaseValue } from '../utils/facebookPurchase'
 import mongoose from 'mongoose'
+import { buildInsightsDateRequest } from '../utils/insightsDateRange'
 
 export const syncCampaignsFromAdAccounts = async () => {
   const startTime = Date.now()
@@ -263,20 +264,7 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
         // 直接从 Facebook Insights API 获取 metrics 数据（更准确）
         logger.info(`[getCampaigns-MetricsSort] Fetching metrics from Facebook API for ${allCampaignIds.length} campaigns`)
         
-        // 构建日期参数
-        let datePreset = 'today'
-        let timeRange: { since: string; until: string } | undefined
-        
-        if (filters.startDate && filters.endDate) {
-            timeRange = { since: filters.startDate, until: filters.endDate }
-            datePreset = ''
-        } else if (filters.startDate) {
-            timeRange = { since: filters.startDate, until: dayjs().format('YYYY-MM-DD') }
-            datePreset = ''
-        } else if (filters.endDate) {
-            timeRange = { since: '2020-01-01', until: filters.endDate }
-            datePreset = ''
-        }
+        const { datePreset, timeRange } = buildInsightsDateRequest(filters)
         
         logger.info(`[getCampaigns-MetricsSort] Date range: ${timeRange ? `${timeRange.since} - ${timeRange.until}` : datePreset}`)
         
@@ -563,12 +551,13 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
     // 构建日期查询条件：如果有日期范围，使用日期范围；否则使用今天
     const startTime = Date.now()
     let metricsData: any[] = []
+    const insightsDateRequest = buildInsightsDateRequest(filters)
     
     // 尝试从缓存获取数据
     const cacheKey = getCacheKey('campaigns:metrics', {
         campaignIds: campaignIds.sort().join(','),
-        startDate: filters.startDate || '',
-        endDate: filters.endDate || '',
+        startDate: insightsDateRequest.startDate || '',
+        endDate: insightsDateRequest.endDate || '',
         page: pagination.page,
         limit: pagination.limit,
     })
@@ -600,20 +589,7 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
             
             // 直接从 Facebook Insights API 获取数据（更准确）
             {
-                // 构建日期参数
-                let datePreset = 'today'
-                let timeRange: { since: string; until: string } | undefined
-                
-                if (filters.startDate && filters.endDate) {
-                    timeRange = { since: filters.startDate, until: filters.endDate }
-                    datePreset = ''
-                } else if (filters.startDate) {
-                    timeRange = { since: filters.startDate, until: dayjs().format('YYYY-MM-DD') }
-                    datePreset = ''
-                } else if (filters.endDate) {
-                    timeRange = { since: '2020-01-01', until: filters.endDate }
-                    datePreset = ''
-                }
+                const { datePreset, timeRange } = insightsDateRequest
                 
                 logger.info(`[getCampaigns] Fetching metrics from Facebook Insights API for ${campaignIds.length} campaigns, dateRange: ${timeRange ? `${timeRange.since} - ${timeRange.until}` : datePreset}`)
                 

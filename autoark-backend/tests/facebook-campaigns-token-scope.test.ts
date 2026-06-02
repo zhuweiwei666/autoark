@@ -131,4 +131,52 @@ describe('facebook campaign insights token scope', () => {
     expect(mockSetToCache).toHaveBeenCalledWith('campaign-metrics-cache-key', expect.any(Array), 60)
     expect(result.data).toHaveLength(2)
   })
+
+  it('caps endDate-only live metrics sort ranges before calling Facebook Insights', async () => {
+    await getCampaigns(
+      { endDate: '2026-06-02' },
+      { page: 1, limit: 20, sortBy: 'spend', sortOrder: 'desc' },
+    )
+
+    expect(mockFetchInsights).toHaveBeenCalledWith(
+      'act_123',
+      'campaign',
+      undefined,
+      'token-account-123',
+      undefined,
+      { since: '2026-03-05', until: '2026-06-02' },
+    )
+    expect(mockFetchInsights).toHaveBeenCalledWith(
+      'act_456',
+      'campaign',
+      undefined,
+      'token-account-456',
+      undefined,
+      { since: '2026-03-05', until: '2026-06-02' },
+    )
+  })
+
+  it('caps endDate-only page enrichment ranges before calling Facebook Insights', async () => {
+    await getCampaigns(
+      { endDate: '2026-06-02' },
+      { page: 1, limit: 20, sortBy: 'createdAt', sortOrder: 'desc' },
+    )
+
+    expect(mockFetchInsights).toHaveBeenCalledWith(
+      'act_123',
+      'campaign',
+      undefined,
+      'token-account-123',
+      undefined,
+      { since: '2026-03-05', until: '2026-06-02' },
+    )
+    expect(mockFetchInsights).toHaveBeenCalledWith(
+      'act_456',
+      'campaign',
+      undefined,
+      'token-account-456',
+      undefined,
+      { since: '2026-03-05', until: '2026-06-02' },
+    )
+  })
 })
