@@ -84,6 +84,35 @@ const CREATIVE_MATERIAL_STATUSES = ['pending', 'uploaded', 'failed'] as const
 const CREATIVE_MATERIAL_SOURCES = ['manual', 'facebook_sync', 'url_import'] as const
 const CREATIVE_GROUP_PLATFORMS = ['facebook', 'tiktok', 'google'] as const
 const CREATIVE_GROUP_FORMATS = ['single', 'carousel', 'collection'] as const
+const PLATFORMS = ['facebook', 'tiktok', 'google'] as const
+const TARGETING_OPTIMIZATION_VALUES = ['none', 'expansion_all'] as const
+const TARGETING_OPTIMIZATION_GOALS = ['OFFSITE_CONVERSIONS', 'LINK_CLICKS', 'IMPRESSIONS', 'REACH', 'LANDING_PAGE_VIEWS', 'APP_INSTALLS'] as const
+const TARGETING_PLACEMENT_TYPES = ['automatic', 'manual'] as const
+const TARGETING_PLATFORMS = ['facebook', 'instagram', 'messenger', 'audience_network'] as const
+const TARGETING_DEVICE_PLATFORMS = ['mobile', 'desktop'] as const
+const TARGETING_MOBILE_OS = ['iOS', 'Android', 'all'] as const
+const TARGETING_MOBILE_DEVICES = ['iphone_all', 'ipad_all', 'ipod_all', 'android_smartphone', 'android_tablet', 'feature_phone'] as const
+const COPYWRITING_CTA_VALUES = [
+  'SHOP_NOW',
+  'LEARN_MORE',
+  'SIGN_UP',
+  'DOWNLOAD',
+  'GET_OFFER',
+  'GET_QUOTE',
+  'BOOK_NOW',
+  'CONTACT_US',
+  'SUBSCRIBE',
+  'WATCH_MORE',
+  'APPLY_NOW',
+  'BUY_NOW',
+  'ORDER_NOW',
+  'SEE_MORE',
+  'MESSAGE_PAGE',
+  'WHATSAPP_MESSAGE',
+  'CALL_NOW',
+  'GET_DIRECTIONS',
+  'NO_BUTTON',
+] as const
 
 const pickTrimmedString = (value: any, maxLength: number): string | undefined => {
   if (typeof value !== 'string') return undefined
@@ -96,6 +125,297 @@ const pickNonNegativeNumber = (value: any, max: number, integer = true): number 
   if (!Number.isFinite(next) || next < 0) return undefined
   const normalized = integer ? Math.floor(next) : next
   return Math.min(max, normalized)
+}
+
+const pickLimitedStringArray = (value: any, maxItems: number, maxLength: number): string[] | undefined => {
+  if (!Array.isArray(value)) return undefined
+  const values = Array.from(new Set(value
+    .map((item) => pickTrimmedString(item, maxLength))
+    .filter(Boolean))) as string[]
+  return values.length > 0 ? values.slice(0, maxItems) : undefined
+}
+
+const pickAllowedStringArray = (
+  value: any,
+  allowedValues: readonly string[],
+  maxItems: number,
+): string[] | undefined => {
+  if (!Array.isArray(value)) return undefined
+  const values = Array.from(new Set(value
+    .filter((item) => typeof item === 'string' && allowedValues.includes(item)))) as string[]
+  return values.length > 0 ? values.slice(0, maxItems) : undefined
+}
+
+const pickObjectArray = <T>(
+  value: any,
+  maxItems: number,
+  mapper: (item: any) => T | undefined,
+): T[] | undefined => {
+  if (!Array.isArray(value)) return undefined
+  const values = value.slice(0, maxItems).map(mapper).filter(Boolean) as T[]
+  return values.length > 0 ? values : undefined
+}
+
+const pickBoolean = (value: any): boolean | undefined => (
+  typeof value === 'boolean' ? value : undefined
+)
+
+const sanitizeTags = (value: any) => pickLimitedStringArray(value, CREATIVE_GROUP_TAG_LIMIT, 40)
+
+const sanitizePlatformFields = (input: any, data: any) => {
+  const accountId = parseAccountIdParam(input?.accountId)
+  if (accountId) data.accountId = accountId
+  if (typeof input?.platform === 'string') {
+    data.platform = pickAllowedString(input.platform, PLATFORMS, 'facebook')
+  }
+}
+
+const sanitizeTargetingEntity = (item: any, includePath = false) => {
+  const id = pickTrimmedString(item?.id, 80)
+  const name = pickTrimmedString(item?.name, 160)
+  if (!id && !name) return undefined
+
+  const entity: any = {}
+  if (id) entity.id = id
+  if (name) entity.name = name
+  const audienceSize = pickNonNegativeNumber(item?.audienceSize, 10_000_000_000)
+  if (audienceSize !== undefined) entity.audienceSize = audienceSize
+  if (includePath) {
+    const path = pickLimitedStringArray(item?.path, 8, 120)
+    if (path) entity.path = path
+  }
+  return entity
+}
+
+const sanitizeTargetingGeoLocations = (input: any) => {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return undefined
+  const geo: any = {}
+
+  const countries = pickLimitedStringArray(input.countries, 250, 8)
+  if (countries) geo.countries = countries
+
+  const regions = pickObjectArray(input.regions, 250, (item) => {
+    const key = pickTrimmedString(item?.key, 80)
+    if (!key) return undefined
+    return {
+      key,
+      ...(pickTrimmedString(item?.name, 160) && { name: pickTrimmedString(item.name, 160) }),
+      ...(pickTrimmedString(item?.country, 8) && { country: pickTrimmedString(item.country, 8) }),
+    }
+  })
+  if (regions) geo.regions = regions
+
+  const cities = pickObjectArray(input.cities, 250, (item) => {
+    const key = pickTrimmedString(item?.key, 80)
+    if (!key) return undefined
+    const city: any = { key }
+    const radius = pickNonNegativeNumber(item?.radius, 80)
+    if (radius !== undefined) city.radius = radius
+    const name = pickTrimmedString(item?.name, 160)
+    const region = pickTrimmedString(item?.region, 80)
+    const country = pickTrimmedString(item?.country, 8)
+    if (name) city.name = name
+    if (region) city.region = region
+    if (country) city.country = country
+    return city
+  })
+  if (cities) geo.cities = cities
+
+  const locationTypes = pickLimitedStringArray(input.locationTypes, 8, 40)
+  if (locationTypes) geo.locationTypes = locationTypes
+
+  return Object.keys(geo).length > 0 ? geo : undefined
+}
+
+const sanitizeTargetingPackageInput = (input: any, options: { requireName?: boolean } = {}) => {
+  const data: any = {}
+  const name = pickTrimmedString(input?.name, 120)
+  if (name) {
+    data.name = name
+  } else if (options.requireName) {
+    throw createHttpError('定向包名称必填', 400)
+  }
+
+  sanitizePlatformFields(input, data)
+
+  const geoLocations = sanitizeTargetingGeoLocations(input?.geoLocations)
+  if (geoLocations) data.geoLocations = geoLocations
+
+  if (input?.demographics && typeof input.demographics === 'object' && !Array.isArray(input.demographics)) {
+    const demographics: any = {}
+    const ageMin = pickNonNegativeNumber(input.demographics.ageMin, 65)
+    const ageMax = pickNonNegativeNumber(input.demographics.ageMax, 65)
+    if (ageMin !== undefined) demographics.ageMin = Math.max(13, Math.min(65, ageMin))
+    if (ageMax !== undefined) demographics.ageMax = Math.max(demographics.ageMin || 13, Math.min(65, ageMax))
+    if (Array.isArray(input.demographics.genders)) {
+      const genders = Array.from(new Set(input.demographics.genders
+        .map((gender: any) => Number(gender))
+        .filter((gender: number) => gender === 1 || gender === 2)))
+      if (genders.length > 0) demographics.genders = genders
+    }
+    if (Object.keys(demographics).length > 0) data.demographics = demographics
+  }
+
+  const interests = pickObjectArray(input?.interests, 100, (item) => sanitizeTargetingEntity(item, true))
+  if (interests) data.interests = interests
+  const behaviors = pickObjectArray(input?.behaviors, 100, sanitizeTargetingEntity)
+  if (behaviors) data.behaviors = behaviors
+  const customAudiences = pickObjectArray(input?.customAudiences, 100, sanitizeTargetingEntity)
+  if (customAudiences) data.customAudiences = customAudiences
+
+  if (input?.exclusions && typeof input.exclusions === 'object' && !Array.isArray(input.exclusions)) {
+    const exclusions: any = {}
+    const excludedInterests = pickObjectArray(input.exclusions.interests, 100, sanitizeTargetingEntity)
+    const excludedBehaviors = pickObjectArray(input.exclusions.behaviors, 100, sanitizeTargetingEntity)
+    const excludedAudiences = pickLimitedStringArray(input.exclusions.customAudiences, 100, 80)
+    const excludedLocations = pickObjectArray(input.exclusions.locations, 100, (item) => {
+      const key = pickTrimmedString(item?.key, 80)
+      if (!key) return undefined
+      return {
+        key,
+        ...(pickTrimmedString(item?.name, 160) && { name: pickTrimmedString(item.name, 160) }),
+        ...(pickTrimmedString(item?.type, 40) && { type: pickTrimmedString(item.type, 40) }),
+      }
+    })
+    if (excludedInterests) exclusions.interests = excludedInterests
+    if (excludedBehaviors) exclusions.behaviors = excludedBehaviors
+    if (excludedAudiences) exclusions.customAudiences = excludedAudiences
+    if (excludedLocations) exclusions.locations = excludedLocations
+    if (Object.keys(exclusions).length > 0) data.exclusions = exclusions
+  }
+
+  if (typeof input?.targetingOptimization === 'string') {
+    data.targetingOptimization = pickAllowedString(input.targetingOptimization, TARGETING_OPTIMIZATION_VALUES, 'none')
+  }
+  const targetingRelaxationTypes = pickLimitedStringArray(input?.targetingRelaxationTypes, 20, 80)
+  if (targetingRelaxationTypes) data.targetingRelaxationTypes = targetingRelaxationTypes
+
+  if (input?.placement && typeof input.placement === 'object' && !Array.isArray(input.placement)) {
+    const placement: any = {}
+    if (typeof input.placement.type === 'string') {
+      placement.type = pickAllowedString(input.placement.type, TARGETING_PLACEMENT_TYPES, 'automatic')
+    }
+    const platforms = pickAllowedStringArray(input.placement.platforms, TARGETING_PLATFORMS, 8)
+    const positions = pickLimitedStringArray(input.placement.positions, 80, 80)
+    const devicePlatforms = pickAllowedStringArray(input.placement.devicePlatforms, TARGETING_DEVICE_PLATFORMS, 2)
+    if (platforms) placement.platforms = platforms
+    if (positions) placement.positions = positions
+    if (devicePlatforms) placement.devicePlatforms = devicePlatforms
+    if (Object.keys(placement).length > 0) data.placement = placement
+  }
+
+  if (input?.deviceSettings && typeof input.deviceSettings === 'object' && !Array.isArray(input.deviceSettings)) {
+    const deviceSettings: any = {}
+    const mobileOS = pickAllowedStringArray(input.deviceSettings.mobileOS, TARGETING_MOBILE_OS, 3)
+    const mobileDevices = pickAllowedStringArray(input.deviceSettings.mobileDevices, TARGETING_MOBILE_DEVICES, 20)
+    if (mobileOS) deviceSettings.mobileOS = mobileOS
+    if (mobileDevices) deviceSettings.mobileDevices = mobileDevices
+    ;['iosVersionMin', 'iosVersionMax', 'androidVersionMin', 'androidVersionMax'].forEach((field) => {
+      const value = pickTrimmedString(input.deviceSettings[field], 24)
+      if (value) deviceSettings[field] = value
+    })
+    const wifiOnly = pickBoolean(input.deviceSettings.wifiOnly)
+    if (wifiOnly !== undefined) deviceSettings.wifiOnly = wifiOnly
+    const excludedDevices = pickLimitedStringArray(input.deviceSettings.excludedDevices, 100, 120)
+    if (excludedDevices) deviceSettings.excludedDevices = excludedDevices
+    if (Object.keys(deviceSettings).length > 0) data.deviceSettings = deviceSettings
+  }
+
+  if (typeof input?.optimizationGoal === 'string') {
+    data.optimizationGoal = pickAllowedString(input.optimizationGoal, TARGETING_OPTIMIZATION_GOALS, 'OFFSITE_CONVERSIONS')
+  }
+
+  if (input?.estimatedAudienceSize && typeof input.estimatedAudienceSize === 'object' && !Array.isArray(input.estimatedAudienceSize)) {
+    const estimatedAudienceSize: any = {}
+    const lower = pickNonNegativeNumber(input.estimatedAudienceSize.lower, 10_000_000_000)
+    const upper = pickNonNegativeNumber(input.estimatedAudienceSize.upper, 10_000_000_000)
+    if (lower !== undefined) estimatedAudienceSize.lower = lower
+    if (upper !== undefined) estimatedAudienceSize.upper = upper
+    if (Object.keys(estimatedAudienceSize).length > 0) data.estimatedAudienceSize = estimatedAudienceSize
+  }
+
+  const description = pickTrimmedString(input?.description, 1000)
+  if (description) data.description = description
+  const tags = sanitizeTags(input?.tags)
+  if (tags) data.tags = tags
+
+  return data
+}
+
+const sanitizeCopywritingPackageInput = (input: any, options: { requireName?: boolean } = {}) => {
+  const data: any = {}
+  const name = pickTrimmedString(input?.name, 120)
+  if (name) {
+    data.name = name
+  } else if (options.requireName) {
+    throw createHttpError('文案包名称必填', 400)
+  }
+
+  sanitizePlatformFields(input, data)
+
+  if (input?.content && typeof input.content === 'object' && !Array.isArray(input.content)) {
+    const content: any = {}
+    const primaryTexts = pickLimitedStringArray(input.content.primaryTexts, 5, 500)
+    const headlines = pickLimitedStringArray(input.content.headlines, 5, 255)
+    const descriptions = pickLimitedStringArray(input.content.descriptions, 5, 255)
+    if (primaryTexts) content.primaryTexts = primaryTexts
+    if (headlines) content.headlines = headlines
+    if (descriptions) content.descriptions = descriptions
+    if (Object.keys(content).length > 0) data.content = content
+  }
+
+  if (typeof input?.callToAction === 'string') {
+    data.callToAction = pickAllowedString(input.callToAction, COPYWRITING_CTA_VALUES, 'SHOP_NOW')
+  }
+
+  if (input?.links && typeof input.links === 'object' && !Array.isArray(input.links)) {
+    const links: any = {}
+    ;['websiteUrl', 'displayLink', 'deepLink'].forEach((field) => {
+      const value = pickTrimmedString(input.links[field], 2048)
+      if (value) links[field] = value
+    })
+    if (Object.keys(links).length > 0) data.links = links
+  }
+
+  if (input?.product && typeof input.product === 'object' && !Array.isArray(input.product)) {
+    const product: any = {}
+    ;['name', 'identifier', 'domain'].forEach((field) => {
+      const value = pickTrimmedString(input.product[field], field === 'domain' ? 255 : 160)
+      if (value) product[field] = value
+    })
+    const autoExtracted = pickBoolean(input.product.autoExtracted)
+    if (autoExtracted !== undefined) product.autoExtracted = autoExtracted
+    if (Object.keys(product).length > 0) data.product = product
+  }
+
+  if (input?.urlParameters && typeof input.urlParameters === 'object' && !Array.isArray(input.urlParameters)) {
+    const urlParameters: any = {}
+    ;['utmSource', 'utmMedium', 'utmCampaign', 'utmContent'].forEach((field) => {
+      const value = pickTrimmedString(input.urlParameters[field], 160)
+      if (value) urlParameters[field] = value
+    })
+    if (input.urlParameters.customParams && typeof input.urlParameters.customParams === 'object' && !Array.isArray(input.urlParameters.customParams)) {
+      const customParams = Object.entries(input.urlParameters.customParams)
+        .slice(0, 20)
+        .reduce((acc: Record<string, string>, [key, value]) => {
+          const safeKey = pickTrimmedString(key, 80)
+          const safeValue = pickTrimmedString(value, 200)
+          if (safeKey && safeValue) acc[safeKey] = safeValue
+          return acc
+        }, {})
+      if (Object.keys(customParams).length > 0) urlParameters.customParams = customParams
+    }
+    if (Object.keys(urlParameters).length > 0) data.urlParameters = urlParameters
+  }
+
+  const description = pickTrimmedString(input?.description, 1000)
+  if (description) data.description = description
+  const language = pickTrimmedString(input?.language, 24)
+  if (language) data.language = language
+  const tags = sanitizeTags(input?.tags)
+  if (tags) data.tags = tags
+
+  return data
 }
 
 const sanitizeCreativeMaterialInput = (input: any) => {
@@ -749,7 +1069,7 @@ export const rerunTask = async (req: Request, res: Response) => {
 export const createTargetingPackage = async (req: Request, res: Response) => {
   try {
     const data = { 
-      ...req.body, 
+      ...sanitizeTargetingPackageInput(req.body, { requireName: true }),
       organizationId: req.user?.organizationId,
       createdBy: req.user?.userId, // 记录创建者
     }
@@ -768,9 +1088,10 @@ export const createTargetingPackage = async (req: Request, res: Response) => {
  */
 export const updateTargetingPackage = async (req: Request, res: Response) => {
   try {
+    const data = sanitizeTargetingPackageInput(req.body)
     const pkg = await TargetingPackage.findOneAndUpdate(
       combineFilters({ _id: req.params.id }, getControlFilter(req)),
-      sanitizeScopedUpdate(req.body),
+      sanitizeScopedUpdate(data),
       { new: true }
     )
     if (!pkg) {
@@ -839,7 +1160,7 @@ export const deleteTargetingPackage = async (req: Request, res: Response) => {
 export const createCopywritingPackage = async (req: Request, res: Response) => {
   try {
     const data = { 
-      ...req.body, 
+      ...sanitizeCopywritingPackageInput(req.body, { requireName: true }),
       organizationId: req.user?.organizationId,
       createdBy: req.user?.userId, // 记录创建者
     }
@@ -873,7 +1194,7 @@ export const createCopywritingPackage = async (req: Request, res: Response) => {
  */
 export const updateCopywritingPackage = async (req: Request, res: Response) => {
   try {
-    const data = { ...req.body }
+    const data = sanitizeCopywritingPackageInput(req.body)
     
     // 如果更新了 websiteUrl，自动重新提取产品信息
     if (data.links?.websiteUrl) {

@@ -53,7 +53,9 @@ import { UserRole } from '../src/models/User'
 import { facebookClient } from '../src/integration/facebook/facebookClient'
 import {
   addMaterial,
+  createCopywritingPackage,
   createCreativeGroup,
+  createTargetingPackage,
   deleteCopywritingPackage,
   deleteCreativeGroup,
   deleteTargetingPackage,
@@ -854,6 +856,69 @@ describe('bulk ad controller', () => {
     expectMemberControlFilter((TargetingPackage.deleteOne as jest.Mock).mock.calls[0][0], req.params.id)
   })
 
+  it('sanitizes targeting package creation payloads', async () => {
+    let savedPackage: any
+    jest.spyOn(TargetingPackage.prototype as any, 'save').mockImplementation(function saveMock(this: any) {
+      savedPackage = this
+      return Promise.resolve(this)
+    })
+    const req = memberReq({
+      body: {
+        name: '  SEA broad targeting  ',
+        organizationId: '665000000000000000000099',
+        createdBy: 'attacker',
+        savedToFacebook: true,
+        facebookSavedAudienceId: 'audience_1',
+        platform: 'facebook',
+        geoLocations: {
+          countries: ['US', 'US', { $ne: 'CN' }],
+          cities: [{ key: 'city_1', name: 'Bangkok', radius: 120 }],
+        },
+        demographics: {
+          ageMin: 10,
+          ageMax: 70,
+          genders: [1, 3, 2],
+        },
+        interests: [{ id: '6001', name: 'Games', audienceSize: '12345', extra: 'drop' }],
+        placement: {
+          type: 'manual',
+          platforms: ['facebook', 'bad_platform'],
+          devicePlatforms: ['mobile', 'desktop', 'tv'],
+        },
+        deviceSettings: {
+          mobileOS: ['Android', 'bad'],
+          mobileDevices: ['android_smartphone', 'bad_device'],
+          wifiOnly: true,
+        },
+        optimizationGoal: 'LINK_CLICKS',
+        tags: ['growth', 'growth', { $ne: 'x' }],
+      },
+    })
+    const res = resMock()
+
+    await createTargetingPackage(req as any, res as any)
+
+    expect(savedPackage.name).toBe('SEA broad targeting')
+    expect(String(savedPackage.organizationId)).toBe('665000000000000000000001')
+    expect(savedPackage.createdBy).toBe('665000000000000000000002')
+    expect(savedPackage.savedToFacebook).toBe(false)
+    expect(savedPackage.facebookSavedAudienceId).toBeUndefined()
+    expect(savedPackage.geoLocations.countries).toEqual(['US'])
+    expect(savedPackage.demographics.ageMin).toBe(13)
+    expect(savedPackage.demographics.ageMax).toBe(65)
+    expect(savedPackage.demographics.genders).toEqual([1, 2])
+    expect(savedPackage.interests[0].toObject()).toMatchObject({ id: '6001', name: 'Games', audienceSize: 12345 })
+    expect(savedPackage.interests[0].toObject()).not.toHaveProperty('extra')
+    expect(savedPackage.placement.platforms).toEqual(['facebook'])
+    expect(savedPackage.placement.devicePlatforms).toEqual(['mobile', 'desktop'])
+    expect(savedPackage.deviceSettings.mobileOS).toEqual(['Android'])
+    expect(savedPackage.deviceSettings.mobileDevices).toEqual(['android_smartphone'])
+    expect(savedPackage.deviceSettings.wifiOnly).toBe(true)
+    expect(savedPackage.optimizationGoal).toBe('LINK_CLICKS')
+    expect(savedPackage.tags).toEqual(['growth'])
+    expect(res.json).toHaveBeenCalledWith({ success: true, data: savedPackage })
+  })
+
   it('limits member copywriting package writes and product parsing to their own assets', async () => {
     jest.spyOn(CopywritingPackage, 'findOneAndUpdate').mockResolvedValue({
       _id: '665000000000000000000601',
@@ -877,6 +942,71 @@ describe('bulk ad controller', () => {
     expect(parseFilter.$and[1]).toEqual(expect.objectContaining({
       'links.websiteUrl': { $exists: true, $ne: '' },
     }))
+  })
+
+  it('sanitizes copywriting package creation payloads', async () => {
+    let savedPackage: any
+    jest.spyOn(CopywritingPackage.prototype as any, 'save').mockImplementation(function saveMock(this: any) {
+      savedPackage = this
+      return Promise.resolve(this)
+    })
+    const req = memberReq({
+      body: {
+        name: '  Product ad copy  ',
+        organizationId: '665000000000000000000099',
+        createdBy: 'attacker',
+        usageCount: 999,
+        lastUsedAt: '2026-01-01T00:00:00.000Z',
+        content: {
+          primaryTexts: ['  hello buyers  ', { $ne: 'x' }],
+          headlines: ['  Big launch  '],
+          descriptions: ['  Try today  '],
+        },
+        callToAction: 'DOWNLOAD',
+        links: {
+          websiteUrl: '  https://example.com/app?utm=1  ',
+          displayLink: '  example.com  ',
+          unsafe: 'drop',
+        },
+        product: {
+          name: 'Manual product',
+          autoExtracted: false,
+          extra: 'drop',
+        },
+        urlParameters: {
+          utmSource: 'autoark',
+          customParams: {
+            creative: 'hero',
+            ignored: { $ne: 'x' },
+          },
+        },
+        language: 'zh-CN',
+        tags: ['copy', 'copy', { $ne: 'x' }],
+      },
+    })
+    const res = resMock()
+
+    await createCopywritingPackage(req as any, res as any)
+
+    expect(savedPackage.name).toBe('Product ad copy')
+    expect(String(savedPackage.organizationId)).toBe('665000000000000000000001')
+    expect(savedPackage.createdBy).toBe('665000000000000000000002')
+    expect(savedPackage.usageCount).toBe(0)
+    expect(savedPackage.lastUsedAt).toBeUndefined()
+    expect(savedPackage.content.primaryTexts).toEqual(['hello buyers'])
+    expect(savedPackage.content.headlines).toEqual(['Big launch'])
+    expect(savedPackage.callToAction).toBe('DOWNLOAD')
+    expect(savedPackage.links.websiteUrl).toBe('https://example.com/app?utm=1')
+    expect(savedPackage.links.displayLink).toBe('example.com')
+    expect(savedPackage.product.name).toBe('Manual product')
+    expect(savedPackage.product.autoExtracted).toBe(false)
+    expect(savedPackage.product.toObject()).not.toHaveProperty('extra')
+    expect(savedPackage.urlParameters.utmSource).toBe('autoark')
+    expect(savedPackage.urlParameters.customParams.get('creative')).toBe('hero')
+    expect(savedPackage.urlParameters.customParams.has('ignored')).toBe(false)
+    expect(savedPackage.language).toBe('zh-CN')
+    expect(savedPackage.tags).toEqual(['copy'])
+    expect(res.json).toHaveBeenCalledWith({ success: true, data: savedPackage })
   })
 
   it('limits member creative group writes to their own assets', async () => {
