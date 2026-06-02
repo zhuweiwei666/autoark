@@ -1,11 +1,10 @@
 import Campaign from '../models/Campaign'
 import Account from '../models/Account'
 import MetricsDaily from '../models/MetricsDaily'
-import FbToken from '../models/FbToken'
 import { fetchCampaigns, fetchInsights } from './facebook.api'
 import logger from '../utils/logger'
 import dayjs from 'dayjs'
-import { normalizeForApi, normalizeForStorage } from '../utils/accountId'
+import { getAccountIdsForQuery, normalizeForApi, normalizeForStorage } from '../utils/accountId'
 import { getReadConnection } from '../config/db'
 import { getFromCache, setToCache, getCacheKey, CACHE_TTL } from '../utils/cache'
 import { extractPurchaseValue } from '../utils/facebookPurchase'
@@ -149,6 +148,32 @@ const getActionCount = (actions: any[], actionType: string): number | undefined 
     return action ? parseInt(action.value) : undefined;
 };
 
+const rememberAccountToken = (map: Map<string, string>, accountId: string, token?: string) => {
+    if (!accountId || !token) return
+    map.set(normalizeForStorage(accountId), token)
+    map.set(normalizeForApi(accountId), token)
+}
+
+const buildAccountTokenMap = async (accountIds: string[]): Promise<Map<string, string>> => {
+    const tokenMap = new Map<string, string>()
+    const queryIds = getAccountIdsForQuery(accountIds)
+    if (queryIds.length === 0) return tokenMap
+
+    const accountDocs = await Account.find({ accountId: { $in: queryIds } })
+        .select('accountId token')
+        .lean()
+
+    for (const account of accountDocs as any[]) {
+        rememberAccountToken(tokenMap, account.accountId, account.token)
+    }
+
+    return tokenMap
+}
+
+const getAccountToken = (tokenMap: Map<string, string>, accountId: string): string | undefined => (
+    tokenMap.get(normalizeForStorage(accountId)) || tokenMap.get(normalizeForApi(accountId))
+)
+
 export const getCampaigns = async (filters: any = {}, pagination: { page: number, limit: number, sortBy: string, sortOrder: 'asc' | 'desc' }) => {
     const query: any = {}
     
@@ -255,13 +280,9 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
         
         logger.info(`[getCampaigns-MetricsSort] Date range: ${timeRange ? `${timeRange.since} - ${timeRange.until}` : datePreset}`)
         
-        // 获取有效 token
-        const tokenDoc = await FbToken.findOne({ status: 'active' })
-        const token = tokenDoc?.token
-        
         let allMetricsData: any[] = []
-        
-        if (token && allCampaignIds.length > 0) {
+
+        if (allCampaignIds.length > 0) {
             // 按账户分组 campaigns
             const campaignsByAccount = new Map<string, string[]>()
             for (const campaign of allCampaigns) {
@@ -273,10 +294,16 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
             }
             
             logger.info(`[getCampaigns-MetricsSort] Found ${campaignsByAccount.size} accounts`)
+            const accountTokenMap = await buildAccountTokenMap(Array.from(campaignsByAccount.keys()))
             
             // 对每个账户调用 Insights API
             const accountPromises = Array.from(campaignsByAccount.entries()).map(async ([accountId, _campaignIds]) => {
                 try {
+                    const token = getAccountToken(accountTokenMap, accountId)
+                    if (!token) {
+                        logger.warn(`[getCampaigns-MetricsSort] No stored token for account ${accountId}`)
+                        return []
+                    }
                     const accountIdForApi = normalizeForApi(accountId)
                     const insights = await fetchInsights(
                         accountIdForApi,
@@ -330,8 +357,6 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
                     raw: insight
                 }
             })
-        } else {
-            logger.warn(`[getCampaigns-MetricsSort] No active token found`)
         }
         
         // 创建 metrics Map
@@ -592,11 +617,7 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
                 
                 logger.info(`[getCampaigns] Fetching metrics from Facebook Insights API for ${campaignIds.length} campaigns, dateRange: ${timeRange ? `${timeRange.since} - ${timeRange.until}` : datePreset}`)
                 
-                // 获取有效 token
-                const tokenDoc = await FbToken.findOne({ status: 'active' })
-                const token = tokenDoc?.token
-                
-                if (token && campaignIds.length > 0) {
+                if (campaignIds.length > 0) {
                     // 按账户分组 campaigns，以便批量获取
                     const campaignsByAccount = new Map<string, string[]>()
                     for (const campaign of campaigns) {
@@ -606,10 +627,17 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
                         }
                         campaignsByAccount.get(accountId)?.push(campaign.campaignId)
                     }
+
+                    const accountTokenMap = await buildAccountTokenMap(Array.from(campaignsByAccount.keys()))
                     
                     // 对每个账户调用 Insights API 获取 campaign 级别的数据
                     const accountPromises = Array.from(campaignsByAccount.entries()).map(async ([accountId, _campaignIds]) => {
                         try {
+                            const token = getAccountToken(accountTokenMap, accountId)
+                            if (!token) {
+                                logger.warn(`[getCampaigns] No stored token for account ${accountId}`)
+                                return []
+                            }
                             const accountIdForApi = normalizeForApi(accountId)
                             const insights = await fetchInsights(
                                 accountIdForApi,
@@ -665,9 +693,6 @@ export const getCampaigns = async (filters: any = {}, pagination: { page: number
                     })
                     
                     logger.info(`[getCampaigns] Fetched ${metricsData.length} campaign insights from Facebook API`)
-                } else {
-                    logger.warn(`[getCampaigns] No active token found, using empty metrics`)
-                    metricsData = []
                 }
             }
             
