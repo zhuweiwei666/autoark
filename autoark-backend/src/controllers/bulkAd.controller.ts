@@ -77,6 +77,144 @@ const AUTH_FACEBOOK_ASSET_PAGE_SIZE = 100
 const TARGETING_INTEREST_SEARCH_TYPES = ['adinterest', 'adinterestsuggestion'] as const
 const TARGETING_LOCATION_SEARCH_TYPES = ['adgeolocation'] as const
 const TARGETING_SEARCH_QUERY_MAX_LENGTH = 120
+const CREATIVE_GROUP_MATERIAL_LIMIT = 50
+const CREATIVE_GROUP_TAG_LIMIT = 20
+const CREATIVE_MATERIAL_TYPES = ['image', 'video'] as const
+const CREATIVE_MATERIAL_STATUSES = ['pending', 'uploaded', 'failed'] as const
+const CREATIVE_MATERIAL_SOURCES = ['manual', 'facebook_sync', 'url_import'] as const
+const CREATIVE_GROUP_PLATFORMS = ['facebook', 'tiktok', 'google'] as const
+const CREATIVE_GROUP_FORMATS = ['single', 'carousel', 'collection'] as const
+
+const pickTrimmedString = (value: any, maxLength: number): string | undefined => {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim().slice(0, maxLength)
+  return trimmed || undefined
+}
+
+const pickNonNegativeNumber = (value: any, max: number, integer = true): number | undefined => {
+  const next = Number(value)
+  if (!Number.isFinite(next) || next < 0) return undefined
+  const normalized = integer ? Math.floor(next) : next
+  return Math.min(max, normalized)
+}
+
+const sanitizeCreativeMaterialInput = (input: any) => {
+  const type = pickAllowedString(input?.type, CREATIVE_MATERIAL_TYPES, '')
+  const url = pickTrimmedString(input?.url, 2048)
+
+  if (!type || !url) {
+    throw createHttpError('素材类型和 URL 必填', 400)
+  }
+
+  const material: any = { type, url }
+  const stringFields: Array<[string, number]> = [
+    ['name', 200],
+    ['format', 24],
+    ['thumbnail', 2048],
+    ['facebookImageHash', 128],
+    ['facebookVideoId', 128],
+    ['sourceId', 128],
+  ]
+
+  stringFields.forEach(([field, maxLength]) => {
+    const value = pickTrimmedString(input?.[field], maxLength)
+    if (value) material[field] = value
+  })
+
+  const numberFields: Array<[string, number, boolean]> = [
+    ['width', 100000, true],
+    ['height', 100000, true],
+    ['duration', 86400, false],
+    ['size', 1024 * 1024 * 1024 * 20, true],
+  ]
+  numberFields.forEach(([field, max, integer]) => {
+    const value = pickNonNegativeNumber(input?.[field], max, integer)
+    if (value !== undefined) material[field] = value
+  })
+
+  if (typeof input?.status === 'string') {
+    material.status = pickAllowedString(input.status, CREATIVE_MATERIAL_STATUSES, 'pending')
+  }
+  if (typeof input?.source === 'string') {
+    material.source = pickAllowedString(input.source, CREATIVE_MATERIAL_SOURCES, 'manual')
+  }
+  if (input?.uploadedAt) {
+    const uploadedAt = new Date(input.uploadedAt)
+    if (!Number.isNaN(uploadedAt.getTime())) material.uploadedAt = uploadedAt
+  }
+
+  return material
+}
+
+const sanitizeCreativeGroupConfig = (input: any) => {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return undefined
+
+  const config: any = {}
+  if (typeof input.format === 'string') {
+    config.format = pickAllowedString(input.format, CREATIVE_GROUP_FORMATS, 'single')
+  }
+  if (typeof input.dynamicCreative === 'boolean') {
+    config.dynamicCreative = input.dynamicCreative
+  }
+  if (input.carousel && typeof input.carousel === 'object' && !Array.isArray(input.carousel)) {
+    config.carousel = {}
+    if (typeof input.carousel.autoOptimize === 'boolean') {
+      config.carousel.autoOptimize = input.carousel.autoOptimize
+    }
+    if (typeof input.carousel.linkPerCard === 'boolean') {
+      config.carousel.linkPerCard = input.carousel.linkPerCard
+    }
+    if (Object.keys(config.carousel).length === 0) {
+      delete config.carousel
+    }
+  }
+
+  return Object.keys(config).length > 0 ? config : undefined
+}
+
+const sanitizeCreativeGroupInput = (input: any) => {
+  const name = pickTrimmedString(input?.name, 120)
+  if (!name) {
+    throw createHttpError('创意组名称必填', 400)
+  }
+
+  const data: any = {
+    name,
+    platform: pickAllowedString(input?.platform, CREATIVE_GROUP_PLATFORMS, 'facebook'),
+  }
+
+  const accountId = parseAccountIdParam(input?.accountId)
+  if (accountId) data.accountId = accountId
+
+  if (Array.isArray(input?.materials)) {
+    data.materials = input.materials
+      .slice(0, CREATIVE_GROUP_MATERIAL_LIMIT)
+      .map(sanitizeCreativeMaterialInput)
+  }
+
+  const config = sanitizeCreativeGroupConfig(input?.config)
+  if (config) data.config = config
+
+  const copywritingPackageId = pickTrimmedString(input?.copywritingPackageId, 64)
+  if (copywritingPackageId && mongoose.Types.ObjectId.isValid(copywritingPackageId)) {
+    data.copywritingPackageId = copywritingPackageId
+  }
+
+  const description = pickTrimmedString(input?.description, 1000)
+  if (description) data.description = description
+
+  const folderId = pickTrimmedString(input?.folderId, 120)
+  if (folderId) data.folderId = folderId
+
+  if (Array.isArray(input?.tags)) {
+    const tags = Array.from(new Set(input.tags
+      .map((tag: any) => pickTrimmedString(tag, 40))
+      .filter(Boolean))) as string[]
+    if (tags.length > 0) data.tags = tags.slice(0, CREATIVE_GROUP_TAG_LIMIT)
+  }
+
+  return data
+}
 
 const fetchFacebookAssetPages = async (
   endpoint: string,
@@ -887,7 +1025,7 @@ export const parseAllCopywritingProducts = async (req: Request, res: Response) =
 export const createCreativeGroup = async (req: Request, res: Response) => {
   try {
     const data = { 
-      ...req.body, 
+      ...sanitizeCreativeGroupInput(req.body),
       organizationId: req.user?.organizationId,
       createdBy: req.user?.userId, // 记录创建者
     }
@@ -979,7 +1117,7 @@ export const addMaterial = async (req: Request, res: Response) => {
       return res.status(404).json({ success: false, error: 'Creative group not found' })
     }
     
-    group.materials.push(req.body)
+    group.materials.push(sanitizeCreativeMaterialInput(req.body))
     await group.save()
     
     res.json({ success: true, data: group })

@@ -53,6 +53,7 @@ import { UserRole } from '../src/models/User'
 import { facebookClient } from '../src/integration/facebook/facebookClient'
 import {
   addMaterial,
+  createCreativeGroup,
   deleteCopywritingPackage,
   deleteCreativeGroup,
   deleteTargetingPackage,
@@ -896,14 +897,92 @@ describe('bulk ad controller', () => {
 
     await updateCreativeGroup(req as any, res as any)
     await deleteCreativeGroup(req as any, res as any)
-    await addMaterial(req as any, res as any)
     await removeMaterial(req as any, res as any)
+    await addMaterial(req as any, res as any)
 
     expectMemberControlFilter((CreativeGroup.findOneAndUpdate as jest.Mock).mock.calls[0][0], req.params.id)
     expect((CreativeGroup.findOneAndUpdate as jest.Mock).mock.calls[0][1]).not.toHaveProperty('userId')
     expectMemberControlFilter((CreativeGroup.deleteOne as jest.Mock).mock.calls[0][0], req.params.id)
     expectMemberControlFilter((CreativeGroup.findOne as jest.Mock).mock.calls[0][0], req.params.id)
     expectMemberControlFilter((CreativeGroup.findOne as jest.Mock).mock.calls[1][0], req.params.id)
+    const addedMaterial = group.materials[group.materials.length - 1]
+    expect(addedMaterial).toMatchObject({
+      type: 'image',
+      url: 'https://cdn.test/b.jpg',
+      name: 'updated creative',
+    })
+    expect(addedMaterial).not.toHaveProperty('_id')
+    expect(addedMaterial).not.toHaveProperty('userId')
+  })
+
+  it('sanitizes creative group creation payloads', async () => {
+    let savedGroup: any
+    jest.spyOn(CreativeGroup.prototype as any, 'save').mockImplementation(function saveMock(this: any) {
+      savedGroup = this
+      return Promise.resolve(this)
+    })
+
+    const maliciousMaterialId = '665000000000000000000777'
+    const req = memberReq({
+      body: {
+        name: '  Product launch creative  ',
+        organizationId: '665000000000000000000099',
+        createdBy: 'attacker',
+        usageCount: 999,
+        materialStats: { totalCount: 999 },
+        platform: 'facebook',
+        accountId: 'act_123',
+        description: '  launch assets  ',
+        tags: ['hero', 'hero', '  video  ', { $ne: 'x' }],
+        config: {
+          format: 'carousel',
+          dynamicCreative: true,
+          carousel: {
+            autoOptimize: false,
+            linkPerCard: true,
+            extra: 'drop',
+          },
+          extra: 'drop',
+        },
+        materials: [{
+          _id: maliciousMaterialId,
+          type: 'image',
+          url: '  https://cdn.test/hero.jpg  ',
+          name: '  hero  ',
+          width: '1200.8',
+          height: -1,
+          status: 'uploaded',
+          userId: 'attacker',
+          unexpected: 'drop',
+        }],
+      },
+    })
+    const res = resMock()
+
+    await createCreativeGroup(req as any, res as any)
+
+    expect(savedGroup.name).toBe('Product launch creative')
+    expect(String(savedGroup.organizationId)).toBe('665000000000000000000001')
+    expect(savedGroup.createdBy).toBe('665000000000000000000002')
+    expect(savedGroup.usageCount).toBe(0)
+    expect(savedGroup.materialStats.totalCount).toBe(0)
+    expect(savedGroup.tags).toEqual(['hero', 'video'])
+    expect(savedGroup.config.format).toBe('carousel')
+    expect(savedGroup.config.carousel.autoOptimize).toBe(false)
+    expect(savedGroup.config.carousel.linkPerCard).toBe(true)
+
+    const material = savedGroup.materials[0].toObject()
+    expect(material).toMatchObject({
+      type: 'image',
+      url: 'https://cdn.test/hero.jpg',
+      name: 'hero',
+      width: 1200,
+      status: 'uploaded',
+    })
+    expect(material._id.toString()).not.toBe(maliciousMaterialId)
+    expect(material).not.toHaveProperty('userId')
+    expect(material).not.toHaveProperty('unexpected')
+    expect(res.json).toHaveBeenCalledWith({ success: true, data: savedGroup })
   })
 
   it('rejects auth pixel reads for accounts outside the requester asset scope', async () => {
