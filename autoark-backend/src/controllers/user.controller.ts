@@ -3,6 +3,21 @@ import userService from '../services/user.service'
 import { UserRole, UserStatus } from '../models/User'
 import logger from '../utils/logger'
 import { writeAuditLog } from '../services/auditLog.service'
+import { parsePagination } from '../utils/pagination'
+
+const USER_LIST_MAX_PAGE_SIZE = 100
+
+const pickUserRole = (value: any): UserRole | undefined => (
+  typeof value === 'string' && Object.values(UserRole).includes(value as UserRole)
+    ? value as UserRole
+    : undefined
+)
+
+const pickUserStatus = (value: any): UserStatus | undefined => (
+  typeof value === 'string' && Object.values(UserStatus).includes(value as UserStatus)
+    ? value as UserStatus
+    : undefined
+)
 
 class UserController {
   /**
@@ -16,17 +31,28 @@ class UserController {
         return
       }
 
+      const { page, pageSize, skip } = parsePagination(req.query, {
+        defaultPageSize: 50,
+        maxPageSize: USER_LIST_MAX_PAGE_SIZE,
+      })
       const filters = {
-        organizationId: req.query.organizationId as string,
-        role: req.query.role as UserRole,
-        status: req.query.status as UserStatus,
+        organizationId: typeof req.query.organizationId === 'string' ? req.query.organizationId : undefined,
+        role: pickUserRole(req.query.role),
+        status: pickUserStatus(req.query.status),
       }
 
-      const users = await userService.getUsers(req.user, filters)
+      const result = await userService.getUsers(req.user, filters, { page, pageSize, skip })
 
       res.json({
         success: true,
-        data: users,
+        data: result.data,
+        total: result.total,
+        pagination: {
+          page: result.page,
+          pageSize: result.pageSize,
+          total: result.total,
+          totalPages: Math.ceil(result.total / result.pageSize),
+        },
       })
     } catch (error: any) {
       logger.error('Get users error:', error)

@@ -3,12 +3,21 @@ import organizationService from '../services/organization.service'
 import { OrganizationStatus } from '../models/Organization'
 import logger from '../utils/logger'
 import { writeAuditLog } from '../services/auditLog.service'
+import { parsePagination } from '../utils/pagination'
+
+const MANAGEMENT_LIST_MAX_PAGE_SIZE = 100
 
 const idString = (value: any): string | undefined => {
   if (!value) return undefined
   if (value._id) return String(value._id)
   return String(value)
 }
+
+const pickOrganizationStatus = (value: any): OrganizationStatus | undefined => (
+  typeof value === 'string' && Object.values(OrganizationStatus).includes(value as OrganizationStatus)
+    ? value as OrganizationStatus
+    : undefined
+)
 
 class OrganizationController {
   /**
@@ -22,18 +31,30 @@ class OrganizationController {
         return
       }
 
+      const { page, pageSize, skip } = parsePagination(req.query, {
+        defaultPageSize: 50,
+        maxPageSize: MANAGEMENT_LIST_MAX_PAGE_SIZE,
+      })
       const filters = {
-        status: req.query.status as OrganizationStatus,
+        status: pickOrganizationStatus(req.query.status),
       }
 
-      const organizations = await organizationService.getOrganizations(
+      const result = await organizationService.getOrganizations(
         req.user,
-        filters
+        filters,
+        { page, pageSize, skip },
       )
 
       res.json({
         success: true,
-        data: organizations,
+        data: result.data,
+        total: result.total,
+        pagination: {
+          page: result.page,
+          pageSize: result.pageSize,
+          total: result.total,
+          totalPages: Math.ceil(result.total / result.pageSize),
+        },
       })
     } catch (error: any) {
       logger.error('Get organizations error:', error)
@@ -297,14 +318,27 @@ class OrganizationController {
         return
       }
 
-      const members = await organizationService.getOrganizationMembers(
+      const { page, pageSize, skip } = parsePagination(req.query, {
+        defaultPageSize: 50,
+        maxPageSize: MANAGEMENT_LIST_MAX_PAGE_SIZE,
+      })
+
+      const result = await organizationService.getOrganizationMembers(
         req.params.id,
-        req.user
+        req.user,
+        { page, pageSize, skip },
       )
 
       res.json({
         success: true,
-        data: members,
+        data: result.data,
+        total: result.total,
+        pagination: {
+          page: result.page,
+          pageSize: result.pageSize,
+          total: result.total,
+          totalPages: Math.ceil(result.total / result.pageSize),
+        },
       })
     } catch (error: any) {
       logger.error('Get organization members error:', error)

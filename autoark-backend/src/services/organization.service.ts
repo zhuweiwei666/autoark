@@ -11,6 +11,19 @@ import logger from '../utils/logger'
 import authService from './auth.service'
 import { COMMERCIAL_FEATURE_SET } from '../config/commercialPlans'
 
+type PaginationOptions = {
+  page: number
+  pageSize: number
+  skip: number
+}
+
+type PaginatedResult<T> = {
+  data: T[]
+  total: number
+  page: number
+  pageSize: number
+}
+
 class OrganizationService {
   private sanitizeUpdates(updates: Partial<IOrganization>) {
     const sanitized: any = {}
@@ -58,7 +71,11 @@ class OrganizationService {
   /**
    * 获取组织列表
    */
-  async getOrganizations(currentUser: JwtPayload, filters?: any): Promise<IOrganization[]> {
+  async getOrganizations(
+    currentUser: JwtPayload,
+    filters?: any,
+    pagination: PaginationOptions = { page: 1, pageSize: 100, skip: 0 },
+  ): Promise<PaginatedResult<IOrganization>> {
     // 只有超级管理员可以查看所有组织
     if (currentUser.role !== UserRole.SUPER_ADMIN) {
       throw new Error('权限不足')
@@ -69,12 +86,22 @@ class OrganizationService {
       query.status = filters.status
     }
 
-    const organizations = await Organization.find(query)
-      .populate('adminId', '-password')
-      .populate('createdBy', '-password')
-      .sort({ createdAt: -1 })
+    const [organizations, total] = await Promise.all([
+      Organization.find(query)
+        .sort({ createdAt: -1 })
+        .skip(pagination.skip)
+        .limit(pagination.pageSize)
+        .populate('adminId', '-password')
+        .populate('createdBy', '-password'),
+      Organization.countDocuments(query),
+    ])
 
-    return organizations
+    return {
+      data: organizations,
+      total,
+      page: pagination.page,
+      pageSize: pagination.pageSize,
+    }
   }
 
   /**
@@ -287,8 +314,9 @@ class OrganizationService {
    */
   async getOrganizationMembers(
     organizationId: string,
-    currentUser: JwtPayload
-  ): Promise<any[]> {
+    currentUser: JwtPayload,
+    pagination: PaginationOptions = { page: 1, pageSize: 100, skip: 0 },
+  ): Promise<PaginatedResult<any>> {
     // 权限检查：超级管理员或该组织的管理员可以查看
     if (
       currentUser.role !== UserRole.SUPER_ADMIN &&
@@ -298,11 +326,21 @@ class OrganizationService {
       throw new Error('权限不足')
     }
 
-    const members = await User.find({ organizationId })
-      .select('-password')
-      .sort({ createdAt: -1 })
+    const [members, total] = await Promise.all([
+      User.find({ organizationId })
+        .select('-password')
+        .sort({ createdAt: -1 })
+        .skip(pagination.skip)
+        .limit(pagination.pageSize),
+      User.countDocuments({ organizationId }),
+    ])
 
-    return members
+    return {
+      data: members,
+      total,
+      page: pagination.page,
+      pageSize: pagination.pageSize,
+    }
   }
 
   /**

@@ -3,6 +3,19 @@ import { JwtPayload } from '../utils/jwt'
 import logger from '../utils/logger'
 import authService from './auth.service'
 
+type PaginationOptions = {
+  page: number
+  pageSize: number
+  skip: number
+}
+
+type PaginatedResult<T> = {
+  data: T[]
+  total: number
+  page: number
+  pageSize: number
+}
+
 class UserService {
   private sanitizeUserUpdates(updates: Partial<IUser>, currentUser: JwtPayload): Partial<IUser> {
     const sanitized: any = { ...(updates || {}) }
@@ -26,7 +39,11 @@ class UserService {
   /**
    * 获取用户列表（带权限控制）
    */
-  async getUsers(currentUser: JwtPayload, filters?: any): Promise<IUser[]> {
+  async getUsers(
+    currentUser: JwtPayload,
+    filters?: any,
+    pagination: PaginationOptions = { page: 1, pageSize: 100, skip: 0 },
+  ): Promise<PaginatedResult<IUser>> {
     const query: any = {}
 
     // 超级管理员可以看到所有用户
@@ -51,12 +68,22 @@ class UserService {
       query._id = currentUser.userId
     }
 
-    const users = await User.find(query)
-      .select('-password')
-      .populate('organizationId')
-      .sort({ createdAt: -1 })
+    const [users, total] = await Promise.all([
+      User.find(query)
+        .select('-password')
+        .populate('organizationId')
+        .sort({ createdAt: -1 })
+        .skip(pagination.skip)
+        .limit(pagination.pageSize),
+      User.countDocuments(query),
+    ])
 
-    return users
+    return {
+      data: users,
+      total,
+      page: pagination.page,
+      pageSize: pagination.pageSize,
+    }
   }
 
   /**

@@ -1,7 +1,9 @@
 jest.mock('../src/services/organization.service', () => ({
   __esModule: true,
   default: {
+    getOrganizations: jest.fn(),
     getOrganizationById: jest.fn(),
+    getOrganizationMembers: jest.fn(),
     updateOrganization: jest.fn(),
     transferAdmin: jest.fn(),
   },
@@ -23,6 +25,94 @@ const mockWriteAuditLog = writeAuditLog as jest.Mock
 describe('organization controller', () => {
   beforeEach(() => {
     jest.clearAllMocks()
+  })
+
+  it('caps organization list pagination and returns pagination metadata', async () => {
+    mockOrganizationService.getOrganizations.mockResolvedValue({
+      data: [{ _id: '665000000000000000000001', name: 'Acme Team' }],
+      total: 250,
+      page: 3,
+      pageSize: 100,
+    } as any)
+
+    const req: any = {
+      user: {
+        userId: 'admin_1',
+        role: UserRole.SUPER_ADMIN,
+      },
+      query: {
+        page: '3',
+        limit: '9999',
+        status: { $ne: OrganizationStatus.SUSPENDED },
+      },
+    }
+    const res: any = {
+      json: jest.fn(),
+      status: jest.fn().mockReturnThis(),
+    }
+
+    await organizationController.getOrganizations(req, res)
+
+    expect(mockOrganizationService.getOrganizations).toHaveBeenCalledWith(
+      req.user,
+      { status: undefined },
+      { page: 3, pageSize: 100, skip: 200 },
+    )
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      data: [{ _id: '665000000000000000000001', name: 'Acme Team' }],
+      total: 250,
+      pagination: {
+        page: 3,
+        pageSize: 100,
+        total: 250,
+        totalPages: 3,
+      },
+    })
+  })
+
+  it('caps organization member list pagination', async () => {
+    mockOrganizationService.getOrganizationMembers.mockResolvedValue({
+      data: [{ _id: '665000000000000000000101', username: 'member' }],
+      total: 101,
+      page: 2,
+      pageSize: 100,
+    } as any)
+
+    const req: any = {
+      user: {
+        userId: 'admin_1',
+        role: UserRole.SUPER_ADMIN,
+      },
+      params: { id: '665000000000000000000001' },
+      query: {
+        page: '2',
+        pageSize: '9999',
+      },
+    }
+    const res: any = {
+      json: jest.fn(),
+      status: jest.fn().mockReturnThis(),
+    }
+
+    await organizationController.getOrganizationMembers(req, res)
+
+    expect(mockOrganizationService.getOrganizationMembers).toHaveBeenCalledWith(
+      req.params.id,
+      req.user,
+      { page: 2, pageSize: 100, skip: 100 },
+    )
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      data: [{ _id: '665000000000000000000101', username: 'member' }],
+      total: 101,
+      pagination: {
+        page: 2,
+        pageSize: 100,
+        total: 101,
+        totalPages: 2,
+      },
+    })
   })
 
   it('audits before and after snapshots when updating commercial plan limits', async () => {
