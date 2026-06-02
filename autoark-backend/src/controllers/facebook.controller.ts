@@ -11,6 +11,7 @@ import { getEffectiveAdAccounts } from '../services/facebook.sync.service'
 import { getOrgFilter, getUserAccountIds } from '../middlewares/auth'
 import { UserRole } from '../models/User'
 import { FB_VERSIONED_URL } from '../config/facebook.config'
+import { buildInsightsDateRequest, InsightsDateRangeError } from '../utils/insightsDateRange'
 import Ad from '../models/Ad'
 import Campaign from '../models/Campaign'
 import Account from '../models/Account'
@@ -27,6 +28,8 @@ import {
 const FACEBOOK_LIST_MAX_LIMIT = 100
 const FACEBOOK_DIAGNOSE_DEFAULT_LIMIT = 20
 const FACEBOOK_DIAGNOSE_MAX_LIMIT = 100
+const FACEBOOK_CAMPAIGN_ID_MAX_LENGTH = 160
+const FACEBOOK_COUNTRY_MAX_LENGTH = 40
 const FACEBOOK_CAMPAIGN_SORT_FIELDS = [
   'accountId',
   'accountName',
@@ -115,6 +118,44 @@ const accountIdVariants = (accountId: string): string[] => {
 }
 
 const accountAuthorizationError = (message: string) => Object.assign(new Error(message), { statusCode: 403 })
+
+const sendFacebookDateRangeError = (res: Response, error: any): boolean => {
+  if (error instanceof InsightsDateRangeError) {
+    res.status(error.statusCode).json({
+      success: false,
+      message: error.message,
+    })
+    return true
+  }
+  return false
+}
+
+const parseFacebookDateFilters = (req: Request) => {
+  if (req.query.startDate === undefined && req.query.endDate === undefined) return {}
+
+  const dateRequest = buildInsightsDateRequest({
+    startDate: req.query.startDate,
+    endDate: req.query.endDate,
+  })
+
+  return {
+    startDate: dateRequest.startDate,
+    endDate: dateRequest.endDate,
+  }
+}
+
+const parseRequiredFacebookDate = (value: any, fieldName: string): string | undefined => {
+  if (value === undefined || value === null || value === '') return undefined
+  try {
+    const dateRequest = buildInsightsDateRequest({ startDate: value, endDate: value })
+    return dateRequest.startDate
+  } catch (error) {
+    if (error instanceof InsightsDateRangeError) {
+      throw new InsightsDateRangeError(`${fieldName} must be a valid YYYY-MM-DD date`)
+    }
+    throw error
+  }
+}
 
 const resolveAccountAccessToken = async (req: Request, accountId: string): Promise<string> => {
   const query: any = {
@@ -253,7 +294,9 @@ export const getPurchaseValueInfo = async (
   next: NextFunction,
 ) => {
   try {
-    const { campaignId, date, country } = req.query
+    const campaignId = pickSafeQueryString(req.query.campaignId, FACEBOOK_CAMPAIGN_ID_MAX_LENGTH)
+    const date = parseRequiredFacebookDate(req.query.date, 'date')
+    const country = pickSafeQueryString(req.query.country, FACEBOOK_COUNTRY_MAX_LENGTH)
     
     if (!campaignId || !date) {
       return res.status(400).json({
@@ -262,7 +305,7 @@ export const getPurchaseValueInfo = async (
       })
     }
 
-    const campaign = await Campaign.findOne({ channel: 'facebook', campaignId: campaignId as string }).select('accountId').lean()
+    const campaign = await Campaign.findOne({ channel: 'facebook', campaignId }).select('accountId').lean()
     if (!campaign?.accountId) {
       return res.status(404).json({ success: false, error: 'Campaign not found' })
     }
@@ -271,9 +314,9 @@ export const getPurchaseValueInfo = async (
     }
 
     const info = await facebookPurchaseCorrectionService.getPurchaseValueInfo(
-      campaignId as string,
-      date as string,
-      country as string | undefined
+      campaignId,
+      date,
+      country
     )
 
     res.json({
@@ -281,6 +324,7 @@ export const getPurchaseValueInfo = async (
       data: info,
     })
   } catch (error) {
+    if (sendFacebookDateRangeError(res, error)) return
     next(error)
   }
 }
@@ -295,13 +339,13 @@ export const getCampaignsList = async (
     res.setHeader('Content-Type', 'application/json; charset=utf-8')
     
     const pagination = getListPagination(req, FACEBOOK_CAMPAIGN_SORT_FIELDS, 'spend')
+    const dateFilters = parseFacebookDateFilters(req)
     const filters: any = {
         name: pickSafeRegexLiteral(req.query.name),
         accountId: pickSafeQueryString(req.query.accountId),
         status: pickSafeQueryString(req.query.status),
         objective: pickSafeQueryString(req.query.objective),
-        startDate: req.query.startDate as string | undefined,
-        endDate: req.query.endDate as string | undefined,
+        ...dateFilters,
     }
 
     // 用户隔离：根据用户绑定的 Token 过滤账户
@@ -316,6 +360,7 @@ export const getCampaignsList = async (
       ...result
     })
   } catch (error) {
+    if (sendFacebookDateRangeError(res, error)) return
     next(error)
   }
 }
@@ -346,13 +391,13 @@ export const getAccountsList = async (
   try {
     if (!requireSuperAdmin(req, res)) return
     const pagination = getListPagination(req, FACEBOOK_ACCOUNT_SORT_FIELDS, 'periodSpend')
+    const dateFilters = parseFacebookDateFilters(req)
     const filters: any = {
         optimizer: pickSafeRegexLiteral(req.query.optimizer),
         status: pickSafeQueryString(req.query.status),
         accountId: pickSafeRegexLiteral(req.query.accountId),
         name: pickSafeRegexLiteral(req.query.name),
-        startDate: req.query.startDate as string | undefined,
-        endDate: req.query.endDate as string | undefined,
+        ...dateFilters,
     }
 
     // 用户隔离：根据用户绑定的 Token 过滤账户
@@ -370,6 +415,7 @@ export const getAccountsList = async (
       ...result
     })
   } catch (error) {
+    if (sendFacebookDateRangeError(res, error)) return
     next(error)
   }
 }
@@ -384,13 +430,13 @@ export const getCountriesList = async (
     res.setHeader('Content-Type', 'application/json; charset=utf-8')
     
     const pagination = getListPagination(req, FACEBOOK_COUNTRY_SORT_FIELDS, 'spend')
+    const dateFilters = parseFacebookDateFilters(req)
     const filters = {
         name: pickSafeRegexLiteral(req.query.name),
         accountId: pickSafeQueryString(req.query.accountId),
         status: pickSafeQueryString(req.query.status),
         objective: pickSafeQueryString(req.query.objective),
-        startDate: req.query.startDate as string | undefined,
-        endDate: req.query.endDate as string | undefined,
+        ...dateFilters,
     }
 
     const accountIds = await getUserAccountIds(req)
@@ -418,6 +464,7 @@ export const getCountriesList = async (
       ...result
     })
   } catch (error) {
+    if (sendFacebookDateRangeError(res, error)) return
     next(error)
   }
 }

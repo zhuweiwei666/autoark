@@ -109,6 +109,22 @@ describe('facebook controller pagination caps', () => {
     expect(filters.objective).toBe('APP_INSTALLS')
   })
 
+  it('rejects invalid campaign list dates before querying', async () => {
+    const req: any = superAdminReq({ startDate: '2026-02-31' })
+    const res: any = resMock()
+    const next = jest.fn()
+
+    await getCampaignsList(req, res, next)
+
+    expect(res.status).toHaveBeenCalledWith(400)
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      message: 'startDate must be a valid YYYY-MM-DD date',
+    })
+    expect(facebookCampaignsService.getCampaigns).not.toHaveBeenCalled()
+    expect(next).not.toHaveBeenCalled()
+  })
+
   it('caps account list limit and keeps the default account sort', async () => {
     const req: any = superAdminReq({ page: '3', limit: '9999', sortBy: 'notAllowed' })
     const res: any = resMock()
@@ -140,6 +156,17 @@ describe('facebook controller pagination caps', () => {
     expect(filters.name).toBe('Client\\[x\\]')
   })
 
+  it('normalizes account endDate-only filters into a capped date window', async () => {
+    const req: any = superAdminReq({ endDate: '2026-06-02' })
+    const res: any = resMock()
+
+    await getAccountsList(req, res, jest.fn())
+
+    const filters = (facebookAccountsService.getAccounts as jest.Mock).mock.calls[0][0]
+    expect(filters.startDate).toBe('2026-03-05')
+    expect(filters.endDate).toBe('2026-06-02')
+  })
+
   it('caps country list limit and rejects unsafe sort fields', async () => {
     const req: any = superAdminReq({ page: '4', limit: '1000', sortBy: 'badSort' })
     const res: any = resMock()
@@ -151,6 +178,22 @@ describe('facebook controller pagination caps', () => {
       { page: 4, limit: 100, sortBy: 'spend', sortOrder: 'desc' },
       {},
     )
+  })
+
+  it('rejects reversed country list date ranges before querying', async () => {
+    const req: any = superAdminReq({ startDate: '2026-06-03', endDate: '2026-06-02' })
+    const res: any = resMock()
+    const next = jest.fn()
+
+    await getCountriesList(req, res, next)
+
+    expect(res.status).toHaveBeenCalledWith(400)
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      message: 'startDate must be earlier than or equal to endDate',
+    })
+    expect(facebookCountriesService.getCountries).not.toHaveBeenCalled()
+    expect(next).not.toHaveBeenCalled()
   })
 
   it('caps all-token permission diagnosis batches', async () => {

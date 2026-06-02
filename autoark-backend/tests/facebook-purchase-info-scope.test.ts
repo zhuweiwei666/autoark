@@ -144,6 +144,38 @@ describe('facebook purchase value info scope', () => {
     expect(mockGetPurchaseValueInfo).not.toHaveBeenCalled()
   })
 
+  it('rejects unsafe purchase campaign identifiers before lookup', async () => {
+    const res = createRes()
+    const next = jest.fn()
+
+    await getPurchaseValueInfo(createReq({ campaignId: { $ne: 'camp_1' } }), res, next)
+
+    expect(res.status).toHaveBeenCalledWith(400)
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      message: 'campaignId and date are required',
+    })
+    expect(mockCampaignFindOne).not.toHaveBeenCalled()
+    expect(mockGetPurchaseValueInfo).not.toHaveBeenCalled()
+    expect(next).not.toHaveBeenCalled()
+  })
+
+  it('rejects invalid purchase metric dates before lookup', async () => {
+    const res = createRes()
+    const next = jest.fn()
+
+    await getPurchaseValueInfo(createReq({ date: '2026-02-31' }), res, next)
+
+    expect(res.status).toHaveBeenCalledWith(400)
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      message: 'date must be a valid YYYY-MM-DD date',
+    })
+    expect(mockCampaignFindOne).not.toHaveBeenCalled()
+    expect(mockGetPurchaseValueInfo).not.toHaveBeenCalled()
+    expect(next).not.toHaveBeenCalled()
+  })
+
   it('blocks purchase metrics for campaigns outside the requester account scope', async () => {
     mockCampaignFindOne.mockReturnValue(campaignQuery({ accountId: '123' }))
     mockGetUserAccountIds.mockResolvedValue(['999'])
@@ -166,6 +198,19 @@ describe('facebook purchase value info scope', () => {
     await getPurchaseValueInfo(createReq({ country: 'US' }), res, jest.fn())
 
     expect(mockGetPurchaseValueInfo).toHaveBeenCalledWith('camp_1', '2026-06-02', 'US')
+    expect(res.json).toHaveBeenCalledWith({ success: true, data: info })
+  })
+
+  it('drops unsafe purchase country filters before service lookup', async () => {
+    const info = { today: 1, yesterday: 0, last7d: 3, corrected: 3, lastUpdated: '2026-06-02T00:00:00.000Z' }
+    mockCampaignFindOne.mockReturnValue(campaignQuery({ accountId: '123' }))
+    mockGetUserAccountIds.mockResolvedValue(['act_123'])
+    mockGetPurchaseValueInfo.mockResolvedValue(info)
+    const res = createRes()
+
+    await getPurchaseValueInfo(createReq({ country: { $ne: 'US' } }), res, jest.fn())
+
+    expect(mockGetPurchaseValueInfo).toHaveBeenCalledWith('camp_1', '2026-06-02', undefined)
     expect(res.json).toHaveBeenCalledWith({ success: true, data: info })
   })
 
