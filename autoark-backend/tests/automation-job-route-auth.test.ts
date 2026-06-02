@@ -52,6 +52,11 @@ describe('automation job route authorization', () => {
       page: 1,
       pageSize: 20,
     })
+    ;(automationJobService.createAutomationJob as jest.Mock).mockResolvedValue({
+      _id: '665000000000000000000401',
+      type: 'PUBLISH_DRAFT',
+      status: 'queued',
+    })
   })
 
   it.each([
@@ -139,5 +144,99 @@ describe('automation job route authorization', () => {
       pageSize: 100,
     })
     expect(automationJobService.listAutomationJobs).not.toHaveBeenCalled()
+  })
+
+  it('sanitizes automation job create payloads before enqueueing', async () => {
+    mockAuthState.user = {
+      role: UserRole.SUPER_ADMIN,
+      userId: '665000000000000000000002',
+      organizationId: '665000000000000000000001',
+    }
+
+    const response = await request(createApp())
+      .post('/api/automation-jobs')
+      .send({
+        type: 'PUBLISH_DRAFT',
+        agentId: '665000000000000000000301',
+        idempotencyKey: `  ${'k'.repeat(220)}  `,
+        priority: 999,
+        payload: {
+          draftId: '  draft-1  ',
+          note: `  ${'n'.repeat(1200)}  `,
+          nested: { keep: '  ok  ' },
+          list: Array.from({ length: 150 }, (_, index) => `item-${index}`),
+          $where: 'evil',
+          'bad.key': 'evil',
+        },
+        createdBy: 'attacker',
+        organizationId: '665000000000000000000999',
+      })
+
+    expect(response.status).toBe(200)
+    const input = (automationJobService.createAutomationJob as jest.Mock).mock.calls[0][0]
+    expect(input).toMatchObject({
+      type: 'PUBLISH_DRAFT',
+      agentId: '665000000000000000000301',
+      priority: 10,
+      createdBy: '665000000000000000000002',
+    })
+    expect(input.idempotencyKey).toHaveLength(160)
+    expect(input.payload).toMatchObject({
+      draftId: 'draft-1',
+      nested: { keep: 'ok' },
+    })
+    expect(input.payload.note).toHaveLength(1000)
+    expect(input.payload.list).toHaveLength(100)
+    expect(input.payload).not.toHaveProperty('$where')
+    expect(input.payload).not.toHaveProperty('bad.key')
+  })
+
+  it('rejects automation job payloads containing raw token fields', async () => {
+    mockAuthState.user = {
+      role: UserRole.SUPER_ADMIN,
+      userId: '665000000000000000000002',
+      organizationId: '665000000000000000000001',
+    }
+
+    const response = await request(createApp())
+      .post('/api/automation-jobs')
+      .send({
+        type: 'SYNC_FB_USER_ASSETS',
+        payload: {
+          fbUserId: 'fb_1',
+          nested: { access_token: 'raw-token' },
+        },
+      })
+
+    expect(response.status).toBe(400)
+    expect(response.body).toMatchObject({
+      success: false,
+      error: 'Raw token or secret is not allowed in automation job payload',
+    })
+    expect(automationJobService.createAutomationJob).not.toHaveBeenCalled()
+  })
+
+  it('rejects oversized automation job payloads before enqueueing', async () => {
+    mockAuthState.user = {
+      role: UserRole.SUPER_ADMIN,
+      userId: '665000000000000000000002',
+      organizationId: '665000000000000000000001',
+    }
+
+    const response = await request(createApp())
+      .post('/api/automation-jobs')
+      .send({
+        type: 'PUBLISH_DRAFT',
+        payload: {
+          note: 'n'.repeat(70 * 1024),
+        },
+      })
+
+    expect(response.status).toBe(400)
+    expect(response.body).toMatchObject({
+      success: false,
+      error: 'payload is too large',
+    })
+    expect(automationJobService.createAutomationJob).not.toHaveBeenCalled()
   })
 })
