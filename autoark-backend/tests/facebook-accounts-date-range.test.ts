@@ -82,4 +82,28 @@ describe('facebook account insights date ranges', () => {
       { since: '2026-03-05', until: '2026-06-02' },
     )
   })
+
+  it('rejects invalid account spend dates before calling Facebook Insights', async () => {
+    await expect(getAccounts(
+      { startDate: '2026-02-31', endDate: '2026-06-02' },
+      { page: 1, limit: 20, sortBy: 'periodSpend', sortOrder: 'desc' },
+    )).rejects.toMatchObject({
+      statusCode: 400,
+      message: 'startDate must be a valid YYYY-MM-DD date',
+    })
+
+    expect(mockFetchInsights).not.toHaveBeenCalled()
+  })
+
+  it('rejects reversed account spend date ranges before calling Facebook Insights', async () => {
+    await expect(getAccounts(
+      { startDate: '2026-06-03', endDate: '2026-06-02' },
+      { page: 1, limit: 20, sortBy: 'periodSpend', sortOrder: 'desc' },
+    )).rejects.toMatchObject({
+      statusCode: 400,
+      message: 'startDate must be earlier than or equal to endDate',
+    })
+
+    expect(mockFetchInsights).not.toHaveBeenCalled()
+  })
 })
