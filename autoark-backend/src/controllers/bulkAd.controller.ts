@@ -567,7 +567,7 @@ export const createTargetingPackage = async (req: Request, res: Response) => {
 export const updateTargetingPackage = async (req: Request, res: Response) => {
   try {
     const pkg = await TargetingPackage.findOneAndUpdate(
-      combineFilters({ _id: req.params.id }, getAssetFilter(req)),
+      combineFilters({ _id: req.params.id }, getControlFilter(req)),
       sanitizeScopedUpdate(req.body),
       { new: true }
     )
@@ -616,7 +616,7 @@ export const getTargetingPackageList = async (req: Request, res: Response) => {
  */
 export const deleteTargetingPackage = async (req: Request, res: Response) => {
   try {
-    const result = await TargetingPackage.deleteOne(combineFilters({ _id: req.params.id }, getAssetFilter(req)))
+    const result = await TargetingPackage.deleteOne(combineFilters({ _id: req.params.id }, getControlFilter(req)))
     if (result.deletedCount === 0) {
       return res.status(404).json({ success: false, error: 'Targeting package not found' })
     }
@@ -675,7 +675,7 @@ export const updateCopywritingPackage = async (req: Request, res: Response) => {
     // 如果更新了 websiteUrl，自动重新提取产品信息
     if (data.links?.websiteUrl) {
       const existingPkg = await CopywritingPackage.findOne(
-        combineFilters({ _id: req.params.id }, getAssetFilter(req)),
+        combineFilters({ _id: req.params.id }, getControlFilter(req)),
       )
       const urlChanged = existingPkg?.links?.websiteUrl !== data.links.websiteUrl
       const productNotManual = !existingPkg?.product || existingPkg.product.autoExtracted !== false
@@ -695,7 +695,7 @@ export const updateCopywritingPackage = async (req: Request, res: Response) => {
     }
     
     const pkg = await CopywritingPackage.findOneAndUpdate(
-      combineFilters({ _id: req.params.id }, getAssetFilter(req)),
+      combineFilters({ _id: req.params.id }, getControlFilter(req)),
       sanitizeScopedUpdate(data),
       { new: true }
     )
@@ -744,7 +744,7 @@ export const getCopywritingPackageList = async (req: Request, res: Response) => 
  */
 export const deleteCopywritingPackage = async (req: Request, res: Response) => {
   try {
-    const result = await CopywritingPackage.deleteOne(combineFilters({ _id: req.params.id }, getAssetFilter(req)))
+    const result = await CopywritingPackage.deleteOne(combineFilters({ _id: req.params.id }, getControlFilter(req)))
     if (result.deletedCount === 0) {
       return res.status(404).json({ success: false, error: 'Copywriting package not found' })
     }
@@ -761,7 +761,7 @@ export const deleteCopywritingPackage = async (req: Request, res: Response) => {
  */
 export const parseAllCopywritingProducts = async (req: Request, res: Response) => {
   try {
-    const packages = await CopywritingPackage.find(combineFilters(getAssetFilter(req), {
+    const packages = await CopywritingPackage.find(combineFilters(getControlFilter(req), {
       'links.websiteUrl': { $exists: true, $ne: '' },
       $or: [
         { 'product.name': { $exists: false } },
@@ -841,7 +841,7 @@ export const createCreativeGroup = async (req: Request, res: Response) => {
 export const updateCreativeGroup = async (req: Request, res: Response) => {
   try {
     const group = await CreativeGroup.findOneAndUpdate(
-      combineFilters({ _id: req.params.id }, getAssetFilter(req)),
+      combineFilters({ _id: req.params.id }, getControlFilter(req)),
       sanitizeScopedUpdate(req.body),
       { new: true }
     )
@@ -890,7 +890,7 @@ export const getCreativeGroupList = async (req: Request, res: Response) => {
  */
 export const deleteCreativeGroup = async (req: Request, res: Response) => {
   try {
-    const result = await CreativeGroup.deleteOne(combineFilters({ _id: req.params.id }, getAssetFilter(req)))
+    const result = await CreativeGroup.deleteOne(combineFilters({ _id: req.params.id }, getControlFilter(req)))
     if (result.deletedCount === 0) {
       return res.status(404).json({ success: false, error: 'Creative group not found' })
     }
@@ -907,7 +907,7 @@ export const deleteCreativeGroup = async (req: Request, res: Response) => {
  */
 export const addMaterial = async (req: Request, res: Response) => {
   try {
-    const group = await CreativeGroup.findOne(combineFilters({ _id: req.params.id }, getAssetFilter(req)))
+    const group = await CreativeGroup.findOne(combineFilters({ _id: req.params.id }, getControlFilter(req)))
     if (!group) {
       return res.status(404).json({ success: false, error: 'Creative group not found' })
     }
@@ -928,7 +928,7 @@ export const addMaterial = async (req: Request, res: Response) => {
  */
 export const removeMaterial = async (req: Request, res: Response) => {
   try {
-    const group: any = await CreativeGroup.findOne(combineFilters({ _id: req.params.id }, getAssetFilter(req)))
+    const group: any = await CreativeGroup.findOne(combineFilters({ _id: req.params.id }, getControlFilter(req)))
     if (!group) {
       return res.status(404).json({ success: false, error: 'Creative group not found' })
     }

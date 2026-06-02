@@ -37,13 +37,25 @@ import * as oauthService from '../src/services/facebook.oauth.service'
 import FacebookApp from '../src/models/FacebookApp'
 import Account from '../src/models/Account'
 import FbToken from '../src/models/FbToken'
+import TargetingPackage from '../src/models/TargetingPackage'
+import CopywritingPackage from '../src/models/CopywritingPackage'
+import CreativeGroup from '../src/models/CreativeGroup'
 import { UserRole } from '../src/models/User'
 import { facebookClient } from '../src/integration/facebook/facebookClient'
 import {
+  addMaterial,
+  deleteCopywritingPackage,
+  deleteCreativeGroup,
+  deleteTargetingPackage,
   getAuthPixels,
   getAuthLoginUrl,
   publishDraft as publishDraftController,
+  parseAllCopywritingProducts,
+  updateCopywritingPackage,
+  updateCreativeGroup,
+  updateTargetingPackage,
   getTaskSupportPackage,
+  removeMaterial,
   rerunTask,
   validateDraft as validateDraftController,
 } from '../src/controllers/bulkAd.controller'
@@ -59,6 +71,35 @@ const modelQuery = (value: any) => ({
     lean: jest.fn().mockResolvedValue(value),
   }),
 })
+
+const memberReq = (overrides: any = {}) => ({
+  params: { id: '665000000000000000000601', ...(overrides.params || {}) },
+  body: overrides.body || {},
+  query: overrides.query || {},
+  user: {
+    role: UserRole.MEMBER,
+    userId: '665000000000000000000002',
+    organizationId: '665000000000000000000001',
+    ...(overrides.user || {}),
+  },
+  get: jest.fn(),
+})
+
+const resMock = () => ({
+  json: jest.fn(),
+  status: jest.fn().mockReturnThis(),
+})
+
+const expectMemberControlFilter = (filter: any, id?: string) => {
+  const controlFilter = id ? filter.$and?.[1] : filter
+  if (id) expect(filter.$and?.[0]).toEqual({ _id: id })
+
+  expect(controlFilter.$and).toHaveLength(2)
+  expect(String(controlFilter.$and[0].organizationId)).toBe('665000000000000000000001')
+  expect(controlFilter.$and[1].createdBy.$in.map(String)).toEqual(expect.arrayContaining([
+    '665000000000000000000002',
+  ]))
+}
 
 describe('bulk ad controller', () => {
   beforeEach(() => {
@@ -415,6 +456,76 @@ describe('bulk ad controller', () => {
       success: true,
       data: [expect.objectContaining({ name: 'member_rerun' })],
     })
+  })
+
+  it('limits member targeting package writes to their own assets', async () => {
+    jest.spyOn(TargetingPackage, 'findOneAndUpdate').mockResolvedValue({
+      _id: '665000000000000000000601',
+      name: 'own targeting',
+    } as any)
+    jest.spyOn(TargetingPackage, 'deleteOne').mockResolvedValue({ deletedCount: 1 } as any)
+    const req = memberReq({ body: { name: 'updated targeting', createdBy: 'other' } })
+    const res = resMock()
+
+    await updateTargetingPackage(req as any, res as any)
+    await deleteTargetingPackage(req as any, res as any)
+
+    expectMemberControlFilter((TargetingPackage.findOneAndUpdate as jest.Mock).mock.calls[0][0], req.params.id)
+    expect((TargetingPackage.findOneAndUpdate as jest.Mock).mock.calls[0][1]).not.toHaveProperty('createdBy')
+    expectMemberControlFilter((TargetingPackage.deleteOne as jest.Mock).mock.calls[0][0], req.params.id)
+  })
+
+  it('limits member copywriting package writes and product parsing to their own assets', async () => {
+    jest.spyOn(CopywritingPackage, 'findOneAndUpdate').mockResolvedValue({
+      _id: '665000000000000000000601',
+      name: 'own copy',
+    } as any)
+    jest.spyOn(CopywritingPackage, 'deleteOne').mockResolvedValue({ deletedCount: 1 } as any)
+    jest.spyOn(CopywritingPackage, 'find').mockResolvedValue([] as any)
+    const req = memberReq({ body: { name: 'updated copy', organizationId: 'other' } })
+    const res = resMock()
+
+    await updateCopywritingPackage(req as any, res as any)
+    await deleteCopywritingPackage(req as any, res as any)
+    await parseAllCopywritingProducts(memberReq() as any, res as any)
+
+    expectMemberControlFilter((CopywritingPackage.findOneAndUpdate as jest.Mock).mock.calls[0][0], req.params.id)
+    expect((CopywritingPackage.findOneAndUpdate as jest.Mock).mock.calls[0][1]).not.toHaveProperty('organizationId')
+    expectMemberControlFilter((CopywritingPackage.deleteOne as jest.Mock).mock.calls[0][0], req.params.id)
+
+    const parseFilter = (CopywritingPackage.find as jest.Mock).mock.calls[0][0]
+    expectMemberControlFilter(parseFilter.$and[0])
+    expect(parseFilter.$and[1]).toEqual(expect.objectContaining({
+      'links.websiteUrl': { $exists: true, $ne: '' },
+    }))
+  })
+
+  it('limits member creative group writes to their own assets', async () => {
+    const group: any = {
+      _id: '665000000000000000000601',
+      name: 'own creative',
+      materials: [{ _id: { toString: () => 'mat_1' }, type: 'image', url: 'https://cdn.test/a.jpg' }],
+      save: jest.fn().mockResolvedValue(undefined),
+    }
+    jest.spyOn(CreativeGroup, 'findOneAndUpdate').mockResolvedValue(group)
+    jest.spyOn(CreativeGroup, 'deleteOne').mockResolvedValue({ deletedCount: 1 } as any)
+    jest.spyOn(CreativeGroup, 'findOne').mockResolvedValue(group)
+    const req = memberReq({
+      body: { _id: { toString: () => 'mat_2' }, name: 'updated creative', userId: 'other', type: 'image', url: 'https://cdn.test/b.jpg' },
+      params: { materialId: 'mat_1' },
+    })
+    const res = resMock()
+
+    await updateCreativeGroup(req as any, res as any)
+    await deleteCreativeGroup(req as any, res as any)
+    await addMaterial(req as any, res as any)
+    await removeMaterial(req as any, res as any)
+
+    expectMemberControlFilter((CreativeGroup.findOneAndUpdate as jest.Mock).mock.calls[0][0], req.params.id)
+    expect((CreativeGroup.findOneAndUpdate as jest.Mock).mock.calls[0][1]).not.toHaveProperty('userId')
+    expectMemberControlFilter((CreativeGroup.deleteOne as jest.Mock).mock.calls[0][0], req.params.id)
+    expectMemberControlFilter((CreativeGroup.findOne as jest.Mock).mock.calls[0][0], req.params.id)
+    expectMemberControlFilter((CreativeGroup.findOne as jest.Mock).mock.calls[1][0], req.params.id)
   })
 
   it('rejects auth pixel reads for accounts outside the requester asset scope', async () => {
