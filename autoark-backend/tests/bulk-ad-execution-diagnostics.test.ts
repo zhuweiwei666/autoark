@@ -195,6 +195,18 @@ describe('bulk ad execution diagnostics', () => {
 
     await executeTaskForAccount(taskId, '123')
 
+    expect(CreativeGroup.find).toHaveBeenCalledWith({
+      $and: [
+        { _id: { $in: ['665000000000000000000711'] } },
+        { organizationId: task.organizationId },
+      ],
+    })
+    expect(CopywritingPackage.find).toHaveBeenCalledWith({
+      $and: [
+        { _id: { $in: ['665000000000000000000712'] } },
+        { organizationId: task.organizationId },
+      ],
+    })
     expect(Ad.findOneAndUpdate).toHaveBeenCalledWith(
       { adId: 'ad_1' },
       { $set: expect.objectContaining({

@@ -596,7 +596,9 @@ export const publishDraft = async (draftId: string, userId?: string, accessFilte
   let packageName = ''
   if (draft.ad?.copywritingPackageIds?.length > 0) {
     try {
-      const pkg = await CopywritingPackage.findById(draft.ad.copywritingPackageIds[0])
+      const pkg = await CopywritingPackage.findOne(
+        combineFilters({ _id: draft.ad.copywritingPackageIds[0] }, accessFilter),
+      )
       packageName = pkg?.name?.replace(/[^a-zA-Z0-9\u4e00-\u9fa5-]/g, '') || ''
     } catch (e) {
       logger.warn('[BulkAd] Failed to get copywriting package name')
@@ -1050,13 +1052,13 @@ export const executeTaskForAccount = async (
     })
     
     // ==================== 4. 获取创意组和文案包 ====================
-    const creativeGroups: any[] = await CreativeGroup.find({
-      _id: { $in: config.ad.creativeGroupIds || [] },
-    })
+    const creativeGroups: any[] = await CreativeGroup.find(
+      combineFilters({ _id: { $in: config.ad.creativeGroupIds || [] } }, taskAccessFilter),
+    )
     
-    const copywritingPackages: any[] = await CopywritingPackage.find({
-      _id: { $in: config.ad.copywritingPackageIds || [] },
-    })
+    const copywritingPackages: any[] = await CopywritingPackage.find(
+      combineFilters({ _id: { $in: config.ad.copywritingPackageIds || [] } }, taskAccessFilter),
+    )
     
     if (creativeGroups.length === 0) {
       throw new Error('No creative groups found')
