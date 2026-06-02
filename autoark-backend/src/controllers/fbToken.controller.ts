@@ -7,7 +7,7 @@ import {
 } from '../services/fbToken.validation.service'
 import logger from '../utils/logger'
 import { combineFilters, scopedIdFilter, scopedTokenFilter } from '../utils/accessControl'
-import { parsePagination } from '../utils/pagination'
+import { parsePagination, pickAllowedString, pickSafeQueryString } from '../utils/pagination'
 
 /**
  * 获取 Token 过滤条件
@@ -18,6 +18,22 @@ import { parsePagination } from '../utils/pagination'
 const getTokenFilter = (req: Request): any => {
   return scopedTokenFilter(req)
 }
+
+const FB_TOKEN_MAX_LENGTH = 4096
+const FB_TOKEN_OPTIMIZER_MAX_LENGTH = 80
+const FB_TOKEN_STATUSES = ['active', 'expired', 'invalid'] as const
+
+const sanitizeFbTokenValue = (value: any): string | undefined => (
+  pickSafeQueryString(value, FB_TOKEN_MAX_LENGTH)
+)
+
+const sanitizeTokenOptimizer = (value: any): string | undefined => (
+  pickSafeQueryString(value, FB_TOKEN_OPTIMIZER_MAX_LENGTH)
+)
+
+const hasOwn = (input: any, key: string): boolean => (
+  Object.prototype.hasOwnProperty.call(input || {}, key)
+)
 
 const parseTokenListDate = (value: any, fieldName: string, boundary: 'start' | 'end') => {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
@@ -45,7 +61,8 @@ export const bindToken = async (
   next: NextFunction,
 ) => {
   try {
-    const { token, optimizer } = req.body
+    const token = sanitizeFbTokenValue(req.body?.token)
+    const optimizer = sanitizeTokenOptimizer(req.body?.optimizer)
     // 使用当前登录用户的 ID
     const userId = req.user?.userId || 'default-user'
 
@@ -148,12 +165,15 @@ export const getTokens = async (
     // 构建查询条件 - 根据用户角色过滤
     const query: any = { ...getTokenFilter(req) }
 
-    if (optimizer) {
-      query.optimizer = optimizer as string
+    const safeOptimizer = sanitizeTokenOptimizer(optimizer)
+    const safeStatus = pickAllowedString(status, FB_TOKEN_STATUSES, '')
+
+    if (safeOptimizer) {
+      query.optimizer = safeOptimizer
     }
 
-    if (status) {
-      query.status = status as string
+    if (safeStatus) {
+      query.status = safeStatus
     }
 
     if (startDate || endDate) {
@@ -312,14 +332,18 @@ export const updateToken = async (
 ) => {
   try {
     const { id } = req.params
-    const { optimizer } = req.body
 
     const updateData: any = {
       updatedAt: new Date(),
     }
 
-    if (optimizer !== undefined) {
-      updateData.optimizer = optimizer
+    if (hasOwn(req.body, 'optimizer')) {
+      if (req.body.optimizer === null || req.body.optimizer === '') {
+        updateData.optimizer = ''
+      } else {
+        const optimizer = sanitizeTokenOptimizer(req.body.optimizer)
+        if (optimizer) updateData.optimizer = optimizer
+      }
     }
 
     const updatedToken = await FbToken.findOneAndUpdate(scopedIdFilter(req, id, scopedTokenFilter(req)), updateData, {

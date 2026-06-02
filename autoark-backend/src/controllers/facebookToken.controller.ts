@@ -3,10 +3,17 @@ import FbToken from '../models/FbToken'
 import axios from 'axios'
 import { FB_BASE_URL } from '../config/facebook.config'
 import { combineFilters, scopedTokenFilter } from '../utils/accessControl'
+import { pickSafeQueryString } from '../utils/pagination'
+
+const FB_TOKEN_MAX_LENGTH = 4096
+
+const sanitizeFacebookToken = (value: any): string | undefined => (
+  pickSafeQueryString(value, FB_TOKEN_MAX_LENGTH)
+)
 
 export const saveFacebookToken = async (req: Request, res: Response) => {
   try {
-    const { token } = req.body
+    const token = sanitizeFacebookToken(req.body?.token)
     const userId = req.user?.userId
 
     if (!token) {
@@ -19,7 +26,11 @@ export const saveFacebookToken = async (req: Request, res: Response) => {
     // Validate token via FB API
     try {
       const check = await axios.get(
-        `${FB_BASE_URL}/me?access_token=${token}`,
+        `${FB_BASE_URL}/me`,
+        {
+          params: { access_token: token },
+          timeout: 10000,
+        },
       )
 
       if (!check.data || !check.data.id) {
