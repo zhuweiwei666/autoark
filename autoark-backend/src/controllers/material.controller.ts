@@ -25,7 +25,13 @@ import {
   scopedOwnerFilter,
 } from '../utils/accessControl'
 import { normalizeForApi, normalizeForStorage } from '../utils/accountId'
-import { parseLimitedNumber, parsePagination, pickAllowedString } from '../utils/pagination'
+import {
+  parseLimitedNumber,
+  parsePagination,
+  pickAllowedString,
+  pickSafeQueryString,
+  pickSafeRegexLiteral,
+} from '../utils/pagination'
 import {
   MAX_DIRECT_UPLOAD_FILES,
   validateMaterialFileMeta,
@@ -56,7 +62,11 @@ const MATERIAL_SORT_FIELDS = new Set([
   'metrics.qualityScore',
 ])
 const MATERIAL_TYPE_FILTERS = ['image', 'video'] as const
+const MATERIAL_STATUS_FILTERS = ['uploading', 'uploaded', 'processing', 'ready', 'failed', 'deleted'] as const
 const REUSABLE_MATERIAL_SORT_FIELDS = ['roas', 'spend', 'qualityScore'] as const
+const MATERIAL_TEXT_FILTER_MAX_LENGTH = 80
+const MATERIAL_TAG_FILTER_MAX_LENGTH = 200
+const MATERIAL_TAG_FILTER_MAX_COUNT = 20
 const REUSABLE_MIN_SPEND_MAX = 1_000_000
 const REUSABLE_MIN_ROAS_MAX = 100
 const REUSABLE_MIN_QUALITY_SCORE_MAX = 100
@@ -76,6 +86,16 @@ const parseBoundedMaterialNumber = (
 const pickOptionalMaterialType = (value: any) => (
   pickAllowedString(value, MATERIAL_TYPE_FILTERS, '') || undefined
 )
+
+const pickSafeTagList = (value: any): string[] => {
+  const safeTags = pickSafeQueryString(value, MATERIAL_TAG_FILTER_MAX_LENGTH)
+  if (!safeTags) return []
+  return safeTags
+    .split(',')
+    .map((tag) => tag.trim())
+    .filter(Boolean)
+    .slice(0, MATERIAL_TAG_FILTER_MAX_COUNT)
+}
 
 const getTenantStorageRoot = (req: Request): string => {
   if (req.user?.organizationId) return `tenants/org-${hashStorageScope(req.user.organizationId)}`
@@ -681,19 +701,23 @@ export const getMaterialList = async (req: Request, res: Response) => {
     const { page, pageSize, skip } = parsePagination(req.query)
     
     // 根据用户权限过滤
-    let filter: any = combineFilters({ status }, getMaterialFilter(req))
-    
-    if (type) filter = combineFilters(filter, { type })
-    if (folder) filter = combineFilters(filter, { folder })
-    if (tags) {
-      const tagList = (tags as string).split(',').map(t => t.trim())
-      filter = combineFilters(filter, { tags: { $in: tagList } })
+    const safeStatus = pickAllowedString(status, MATERIAL_STATUS_FILTERS, 'uploaded')
+    const safeType = pickOptionalMaterialType(type)
+    const safeFolder = pickSafeQueryString(folder, MATERIAL_TEXT_FILTER_MAX_LENGTH)
+    const safeTags = pickSafeTagList(tags)
+    const safeSearch = pickSafeRegexLiteral(search, MATERIAL_TEXT_FILTER_MAX_LENGTH)
+    let filter: any = combineFilters({ status: safeStatus }, getMaterialFilter(req))
+
+    if (safeType) filter = combineFilters(filter, { type: safeType })
+    if (safeFolder) filter = combineFilters(filter, { folder: safeFolder })
+    if (safeTags.length > 0) {
+      filter = combineFilters(filter, { tags: { $in: safeTags } })
     }
-    if (search) {
+    if (safeSearch) {
       filter = combineFilters(filter, {
         $or: [
-          { name: { $regex: search, $options: 'i' } },
-          { notes: { $regex: search, $options: 'i' } },
+          { name: { $regex: safeSearch, $options: 'i' } },
+          { notes: { $regex: safeSearch, $options: 'i' } },
         ],
       })
     }

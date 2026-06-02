@@ -1,11 +1,12 @@
 import Material from '../src/models/Material'
-import { getReusable } from '../src/controllers/material.controller'
+import { getMaterialList, getReusable } from '../src/controllers/material.controller'
 import { getReusableMaterials } from '../src/services/materialTracking.service'
 
 jest.mock('../src/models/Material', () => ({
   __esModule: true,
   default: {
     find: jest.fn(),
+    countDocuments: jest.fn(),
   },
 }))
 
@@ -100,6 +101,51 @@ describe('material reusable controller', () => {
     expect(res.json).toHaveBeenCalledWith({
       success: true,
       data: [],
+    })
+  })
+
+  it('sanitizes material list filters before querying materials', async () => {
+    const listChain = {
+      sort: jest.fn().mockReturnThis(),
+      skip: jest.fn().mockReturnThis(),
+      limit: jest.fn().mockReturnThis(),
+      lean: jest.fn().mockResolvedValue([]),
+    }
+    ;(Material.find as jest.Mock).mockReturnValue(listChain)
+    ;(Material.countDocuments as jest.Mock).mockResolvedValue(0)
+
+    const res = createResponse()
+
+    await getMaterialList(createRequest({
+      status: 'not-real-status',
+      type: 'document',
+      folder: { $ne: '默认' },
+      tags: { $ne: 'safe' },
+      search: '.*',
+      limit: '9999',
+      sortBy: 'unsafeField',
+    }), res as any)
+
+    const query = (Material.find as jest.Mock).mock.calls[0][0]
+    const serialized = JSON.stringify(query)
+
+    expect(serialized).toContain('"status":"uploaded"')
+    expect(serialized).toContain('\\\\.\\\\*')
+    expect(serialized).not.toContain('not-real-status')
+    expect(serialized).not.toContain('document')
+    expect(serialized).not.toContain('$ne')
+    expect(listChain.sort).toHaveBeenCalledWith({ createdAt: -1 })
+    expect(listChain.limit).toHaveBeenCalledWith(100)
+    expect(Material.countDocuments).toHaveBeenCalledWith(query)
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      data: {
+        list: [],
+        total: 0,
+        page: 1,
+        pageSize: 100,
+        totalPages: 0,
+      },
     })
   })
 })
