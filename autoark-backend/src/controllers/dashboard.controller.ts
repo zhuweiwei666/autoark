@@ -1,19 +1,77 @@
 import { Request, Response, NextFunction } from 'express'
+import dayjs from 'dayjs'
 import * as dashboardService from '../services/dashboard.service'
 import { parseLimitedNumber } from '../utils/pagination'
 
-const getFilters = (req: Request) => {
-  const { startDate, endDate, channel, country } = req.query
+const DASHBOARD_MAX_RANGE_DAYS = 90
+const DASHBOARD_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/
 
-  // Default to last 7 days if not provided
-  const end = (endDate as string) || new Date().toISOString().split('T')[0]
-  const start =
-    (startDate as string) ||
-    new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+class DashboardDateRangeError extends Error {
+  statusCode = 400
+}
+
+const parseDashboardDate = (value: any, fieldName: string): string | undefined => {
+  if (value === undefined || value === null || value === '') return undefined
+  if (typeof value !== 'string' || !DASHBOARD_DATE_PATTERN.test(value)) {
+    throw new DashboardDateRangeError(`${fieldName} must be a valid YYYY-MM-DD date`)
+  }
+
+  const parsed = dayjs(value)
+  if (!parsed.isValid() || parsed.format('YYYY-MM-DD') !== value) {
+    throw new DashboardDateRangeError(`${fieldName} must be a valid YYYY-MM-DD date`)
+  }
+
+  return value
+}
+
+const parseDashboardDateRange = (
+  req: Request,
+  options: { defaultDays?: number } = {},
+) => {
+  const defaultDays = Math.max(1, options.defaultDays || 8)
+  const today = dayjs().format('YYYY-MM-DD')
+  const requestedStartDate = parseDashboardDate(req.query.startDate, 'startDate')
+  const requestedEndDate = parseDashboardDate(req.query.endDate, 'endDate')
+  const endDate = requestedEndDate || today
+  let startDate = requestedStartDate
+
+  if (!startDate) {
+    startDate = dayjs(endDate).subtract(defaultDays - 1, 'day').format('YYYY-MM-DD')
+  }
+
+  const start = dayjs(startDate)
+  const end = dayjs(endDate)
+  if (start.isAfter(end)) {
+    throw new DashboardDateRangeError('startDate must be earlier than or equal to endDate')
+  }
+
+  const requestedDays = end.diff(start, 'day') + 1
+  if (requestedDays > DASHBOARD_MAX_RANGE_DAYS) {
+    startDate = end.subtract(DASHBOARD_MAX_RANGE_DAYS - 1, 'day').format('YYYY-MM-DD')
+  }
+
+  return { startDate, endDate }
+}
+
+const sendDashboardDateRangeError = (res: Response, error: any) => {
+  if (error instanceof DashboardDateRangeError) {
+    res.status(error.statusCode).json({
+      success: false,
+      error: error.message,
+      meta: { maxDays: DASHBOARD_MAX_RANGE_DAYS },
+    })
+    return true
+  }
+  return false
+}
+
+const getFilters = (req: Request) => {
+  const { channel, country } = req.query
+  const { startDate, endDate } = parseDashboardDateRange(req)
 
   return {
-    startDate: start,
-    endDate: end,
+    startDate,
+    endDate,
     channel: channel as string,
     country: country as string,
   }
@@ -28,7 +86,8 @@ export const getDaily = async (
     const filters = getFilters(req)
     const data = await dashboardService.getDaily(filters)
     res.json(data)
-  } catch (error) {
+  } catch (error: any) {
+    if (sendDashboardDateRangeError(res, error)) return
     next(error)
   }
 }
@@ -42,7 +101,8 @@ export const getByCountry = async (
     const filters = getFilters(req)
     const data = await dashboardService.getByCountry(filters)
     res.json(data)
-  } catch (error) {
+  } catch (error: any) {
+    if (sendDashboardDateRangeError(res, error)) return
     next(error)
   }
 }
@@ -56,7 +116,8 @@ export const getByAdSet = async (
     const filters = getFilters(req)
     const data = await dashboardService.getByAdSet(filters)
     res.json(data)
-  } catch (error) {
+  } catch (error: any) {
+    if (sendDashboardDateRangeError(res, error)) return
     next(error)
   }
 }
@@ -125,11 +186,11 @@ export async function getCoreMetricsHandler(
   next: NextFunction,
 ) {
   try {
-    const startDate = req.query.startDate as string | undefined
-    const endDate = req.query.endDate as string | undefined
+    const { startDate, endDate } = parseDashboardDateRange(req)
     const data = await dashboardService.getCoreMetrics(startDate, endDate)
     res.json({ success: true, data })
-  } catch (err) {
+  } catch (err: any) {
+    if (sendDashboardDateRangeError(res, err)) return
     next(err)
   }
 }
@@ -140,11 +201,11 @@ export async function getTodaySpendTrendHandler(
   next: NextFunction,
 ) {
   try {
-    const startDate = req.query.startDate as string | undefined
-    const endDate = req.query.endDate as string | undefined
+    const { startDate, endDate } = parseDashboardDateRange(req)
     const data = await dashboardService.getTodaySpendTrend(startDate, endDate)
     res.json({ success: true, data })
-  } catch (err) {
+  } catch (err: any) {
+    if (sendDashboardDateRangeError(res, err)) return
     next(err)
   }
 }
@@ -156,11 +217,11 @@ export async function getCampaignSpendRankingHandler(
 ) {
   try {
     const limit = parseLimitedNumber(req.query.limit, 10, 100)
-    const startDate = req.query.startDate as string | undefined
-    const endDate = req.query.endDate as string | undefined
+    const { startDate, endDate } = parseDashboardDateRange(req)
     const data = await dashboardService.getCampaignSpendRanking(limit, startDate, endDate)
     res.json({ success: true, data })
-  } catch (err) {
+  } catch (err: any) {
+    if (sendDashboardDateRangeError(res, err)) return
     next(err)
   }
 }
@@ -172,11 +233,11 @@ export async function getCountrySpendRankingHandler(
 ) {
   try {
     const limit = parseLimitedNumber(req.query.limit, 10, 100)
-    const startDate = req.query.startDate as string | undefined
-    const endDate = req.query.endDate as string | undefined
+    const { startDate, endDate } = parseDashboardDateRange(req)
     const data = await dashboardService.getCountrySpendRanking(limit, startDate, endDate)
     res.json({ success: true, data })
-  } catch (err) {
+  } catch (err: any) {
+    if (sendDashboardDateRangeError(res, err)) return
     next(err)
   }
 }
