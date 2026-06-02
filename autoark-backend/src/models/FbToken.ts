@@ -37,6 +37,20 @@ const FbTokenSchema = new mongoose.Schema(
   },
   {
     timestamps: true, // 自动管理 createdAt 和 updatedAt
+    toJSON: {
+      virtuals: true,
+      transform: (_doc, ret: any) => {
+        delete ret.token
+        return ret
+      },
+    },
+    toObject: {
+      virtuals: true,
+      transform: (_doc, ret: any) => {
+        delete ret.token
+        return ret
+      },
+    },
   },
 )
 
