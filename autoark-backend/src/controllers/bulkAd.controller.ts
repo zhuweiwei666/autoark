@@ -487,7 +487,12 @@ export const getTaskList = async (req: Request, res: Response) => {
     res.json({ success: true, data: result })
   } catch (error: any) {
     logger.error('[BulkAd] Get task list failed:', error)
-    res.status(500).json({ success: false, error: error.message })
+    res.status(error.statusCode || 500).json({
+      success: false,
+      error: error.message,
+      message: error.message,
+      code: error.code,
+    })
   }
 }
 

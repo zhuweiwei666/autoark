@@ -513,11 +513,22 @@ export default function BulkAdCreatePage() {
     try {
       // 获取登录 URL（传递认证信息以绑定到当前用户）
       // 防止浏览器/代理缓存登录链接导致 304/旧 client_id
-      const res = await authFetch(`${API_BASE}/bulk-ad/auth/login-url?ts=${Date.now()}`, { cache: 'no-store' as any })
-      const data = await res.json()
+      const controller = new AbortController()
+      const loginUrlTimeoutId = window.setTimeout(() => controller.abort(), 15000)
+      const res = await (async () => {
+        try {
+          return await authFetch(`${API_BASE}/bulk-ad/auth/login-url?ts=${Date.now()}`, {
+            cache: 'no-store',
+            signal: controller.signal,
+          } as RequestInit)
+        } finally {
+          window.clearTimeout(loginUrlTimeoutId)
+        }
+      })()
+      const data = await res.json().catch(() => ({}))
       
-      if (!data.success || !data.data.loginUrl) {
-        throw new Error(data.error || '获取登录链接失败')
+      if (!res.ok || !data.success || !data.data?.loginUrl) {
+        throw new Error(data.message || data.error || '获取登录链接失败')
       }
       
       const loginData = data.data
@@ -611,7 +622,10 @@ export default function BulkAdCreatePage() {
       }, 300000)
       
     } catch (err: any) {
-      setError(err.message || '登录失败')
+      const message = err.name === 'AbortError'
+        ? '获取 Facebook 登录链接超时，请刷新后重试。'
+        : err.message || '登录失败'
+      setError(message)
       setLoginLoading(false)
       setLoginAttempt(null)
     }
