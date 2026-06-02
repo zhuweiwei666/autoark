@@ -91,6 +91,24 @@ describe('facebook controller pagination caps', () => {
     )
   })
 
+  it('sanitizes campaign list filter strings before querying', async () => {
+    const req: any = superAdminReq({
+      name: 'a.b+[x]',
+      accountId: { $ne: '123' },
+      status: { $ne: 'ACTIVE' },
+      objective: '  APP_INSTALLS  ',
+    })
+    const res: any = resMock()
+
+    await getCampaignsList(req, res, jest.fn())
+
+    const filters = (facebookCampaignsService.getCampaigns as jest.Mock).mock.calls[0][0]
+    expect(filters.name).toBe('a\\.b\\+\\[x\\]')
+    expect(filters.accountId).toBeUndefined()
+    expect(filters.status).toBeUndefined()
+    expect(filters.objective).toBe('APP_INSTALLS')
+  })
+
   it('caps account list limit and keeps the default account sort', async () => {
     const req: any = superAdminReq({ page: '3', limit: '9999', sortBy: 'notAllowed' })
     const res: any = resMock()
@@ -102,6 +120,24 @@ describe('facebook controller pagination caps', () => {
       { page: 3, limit: 100, sortBy: 'periodSpend', sortOrder: 'desc' },
       undefined,
     )
+  })
+
+  it('sanitizes account list filter strings before querying', async () => {
+    const req: any = superAdminReq({
+      optimizer: 'Team.A+',
+      status: { $ne: 'active' },
+      accountId: 'act_123.+',
+      name: 'Client[x]',
+    })
+    const res: any = resMock()
+
+    await getAccountsList(req, res, jest.fn())
+
+    const filters = (facebookAccountsService.getAccounts as jest.Mock).mock.calls[0][0]
+    expect(filters.optimizer).toBe('Team\\.A\\+')
+    expect(filters.status).toBeUndefined()
+    expect(filters.accountId).toBe('act_123\\.\\+')
+    expect(filters.name).toBe('Client\\[x\\]')
   })
 
   it('caps country list limit and rejects unsafe sort fields', async () => {

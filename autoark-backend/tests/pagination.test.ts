@@ -1,4 +1,6 @@
 import {
+  pickSafeQueryString,
+  pickSafeRegexLiteral,
   pickAllowedString,
   parseLimitedNumber,
   parsePagination,
@@ -30,5 +32,12 @@ describe('pagination utilities', () => {
     expect(pickAllowedString('spend', ['spend', 'roas'], 'roas')).toBe('spend')
     expect(pickAllowedString('createdAt', ['spend', 'roas'], 'roas')).toBe('roas')
     expect(pickAllowedString({ $ne: 'spend' }, ['spend', 'roas'], 'roas')).toBe('roas')
+  })
+
+  it('normalizes safe query strings and escapes regex literals', () => {
+    expect(pickSafeQueryString({ $ne: 'active' })).toBeUndefined()
+    expect(pickSafeQueryString('  active  ')).toBe('active')
+    expect(pickSafeQueryString('abcdef', 3)).toBe('abc')
+    expect(pickSafeRegexLiteral('a.b+[x]')).toBe('a\\.b\\+\\[x\\]')
   })
 })

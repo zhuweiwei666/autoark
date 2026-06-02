@@ -149,6 +149,29 @@ describe('summary route data scoping', () => {
     ])
   })
 
+  it('sanitizes account summary filter strings before aggregating', async () => {
+    mockAuthState.user = {
+      role: UserRole.SUPER_ADMIN,
+      userId: '665000000000000000000003',
+    }
+    ;(getUserAccountIds as jest.Mock).mockResolvedValue(null)
+    ;(AggAccount.aggregate as jest.Mock).mockResolvedValue([
+      {
+        data: [],
+        total: [{ count: 0 }],
+      },
+    ])
+
+    const response = await request(createApp())
+      .get('/api/summary/accounts?status[$ne]=active&accountId[$ne]=123&name=a.b%2B[x]&limit=10')
+
+    expect(response.status).toBe(200)
+    const match = (AggAccount.aggregate as jest.Mock).mock.calls[0][0][0].$match
+    expect(match.status).toBeUndefined()
+    expect(match.accountId).toBeUndefined()
+    expect(match.accountName).toEqual({ $regex: 'a\\.b\\+\\[x\\]', $options: 'i' })
+  })
+
   it('caps dashboard trend day windows before building the response', async () => {
     mockAuthState.user = {
       role: UserRole.SUPER_ADMIN,

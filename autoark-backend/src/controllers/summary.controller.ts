@@ -22,7 +22,13 @@ import { refreshRecentDays } from '../services/aggregation.service'
 import { UserRole } from '../models/User'
 import { getUserAccountIds, authenticate } from '../middlewares/auth'
 import { getAccountIdsForQuery, normalizeForStorage } from '../utils/accountId'
-import { parseLimitedNumber, parsePagination, pickAllowedString } from '../utils/pagination'
+import {
+  parseLimitedNumber,
+  parsePagination,
+  pickAllowedString,
+  pickSafeQueryString,
+  pickSafeRegexLiteral,
+} from '../utils/pagination'
 
 const router = Router()
 
@@ -383,10 +389,10 @@ router.get('/accounts', async (req: Request, res: Response) => {
     const { page, limit, skip } = parseSummaryPagination(req, 100)
 
     // 提取筛选条件
-    const optimizer = req.query.optimizer as string
-    const status = req.query.status as string
-    const accountId = req.query.accountId as string
-    const name = req.query.name as string
+    const optimizer = pickSafeRegexLiteral(req.query.optimizer)
+    const status = pickSafeQueryString(req.query.status)
+    const accountId = pickSafeQueryString(req.query.accountId)
+    const name = pickSafeRegexLiteral(req.query.name)
 
     // 用户数据隔离
     const userAccountIds = await getUserAccountIds(req)
@@ -572,9 +578,9 @@ router.get('/campaigns', async (req: Request, res: Response) => {
   try {
     const startTime = Date.now()
     const { startDate, endDate } = parseSummaryDateRange(req)
-    const accountId = req.query.accountId as string
-    const status = req.query.status as string
-    const name = req.query.name as string
+    const accountId = pickSafeQueryString(req.query.accountId)
+    const status = pickSafeQueryString(req.query.status)
+    const name = pickSafeRegexLiteral(req.query.name)
     const sortBy = pickAllowedString(req.query.sortBy, CAMPAIGN_SORT_FIELDS, 'spend')
     const sortOrder = (req.query.sortOrder as string) === 'asc' ? 1 : -1
     const { page, limit, skip } = parseSummaryPagination(req, 50)

@@ -16,7 +16,13 @@ import Campaign from '../models/Campaign'
 import Account from '../models/Account'
 import FbToken from '../models/FbToken'
 import { normalizeForApi, normalizeForStorage } from '../utils/accountId'
-import { parseLimitedNumber, parsePagination, pickAllowedString } from '../utils/pagination'
+import {
+  parseLimitedNumber,
+  parsePagination,
+  pickAllowedString,
+  pickSafeQueryString,
+  pickSafeRegexLiteral,
+} from '../utils/pagination'
 
 const FACEBOOK_LIST_MAX_LIMIT = 100
 const FACEBOOK_DIAGNOSE_DEFAULT_LIMIT = 20
@@ -290,10 +296,10 @@ export const getCampaignsList = async (
     
     const pagination = getListPagination(req, FACEBOOK_CAMPAIGN_SORT_FIELDS, 'spend')
     const filters: any = {
-        name: req.query.name,
-        accountId: req.query.accountId,
-        status: req.query.status,
-        objective: req.query.objective,
+        name: pickSafeRegexLiteral(req.query.name),
+        accountId: pickSafeQueryString(req.query.accountId),
+        status: pickSafeQueryString(req.query.status),
+        objective: pickSafeQueryString(req.query.objective),
         startDate: req.query.startDate as string | undefined,
         endDate: req.query.endDate as string | undefined,
     }
@@ -341,10 +347,10 @@ export const getAccountsList = async (
     if (!requireSuperAdmin(req, res)) return
     const pagination = getListPagination(req, FACEBOOK_ACCOUNT_SORT_FIELDS, 'periodSpend')
     const filters: any = {
-        optimizer: req.query.optimizer,
-        status: req.query.status,
-        accountId: req.query.accountId,
-        name: req.query.name,
+        optimizer: pickSafeRegexLiteral(req.query.optimizer),
+        status: pickSafeQueryString(req.query.status),
+        accountId: pickSafeRegexLiteral(req.query.accountId),
+        name: pickSafeRegexLiteral(req.query.name),
         startDate: req.query.startDate as string | undefined,
         endDate: req.query.endDate as string | undefined,
     }
@@ -379,10 +385,10 @@ export const getCountriesList = async (
     
     const pagination = getListPagination(req, FACEBOOK_COUNTRY_SORT_FIELDS, 'spend')
     const filters = {
-        name: req.query.name,
-        accountId: req.query.accountId,
-        status: req.query.status,
-        objective: req.query.objective,
+        name: pickSafeRegexLiteral(req.query.name),
+        accountId: pickSafeQueryString(req.query.accountId),
+        status: pickSafeQueryString(req.query.status),
+        objective: pickSafeQueryString(req.query.objective),
         startDate: req.query.startDate as string | undefined,
         endDate: req.query.endDate as string | undefined,
     }

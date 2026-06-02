@@ -44,3 +44,24 @@ export const pickAllowedString = (
   if (typeof value !== 'string') return fallback
   return allowedValues.includes(value) ? value : fallback
 }
+
+export const pickSafeQueryString = (
+  value: any,
+  maxLength = 80,
+): string | undefined => {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim().slice(0, maxLength)
+  return trimmed || undefined
+}
+
+export const escapeRegexLiteral = (value: string): string => (
+  value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+)
+
+export const pickSafeRegexLiteral = (
+  value: any,
+  maxLength = 80,
+): string | undefined => {
+  const safe = pickSafeQueryString(value, maxLength)
+  return safe ? escapeRegexLiteral(safe) : undefined
+}
