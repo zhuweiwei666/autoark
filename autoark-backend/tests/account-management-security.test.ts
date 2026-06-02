@@ -46,6 +46,26 @@ describe('account management security', () => {
     expect(chain.select).toHaveBeenCalledWith('-token')
   })
 
+  it('sanitizes account management list filters before querying', async () => {
+    const chain = queryChain()
+    const findSpy = jest.spyOn(Account, 'find').mockReturnValue(chain as any)
+
+    await accountManagementService.getAccounts({
+      userId: 'admin',
+      role: UserRole.SUPER_ADMIN,
+    } as any, {
+      channel: { $ne: 'facebook' },
+      organizationId: { $ne: '665000000000000000000001' },
+      tags: [{ $ne: 'vip' }, ' vip ', 'agency.a+'],
+      groupId: { $ne: '665000000000000000000701' },
+      unassigned: 'false',
+    })
+
+    expect(findSpy).toHaveBeenCalledWith({
+      tags: { $in: ['vip', 'agency.a+'] },
+    })
+  })
+
   it('does not select account tokens for unassigned account pools', async () => {
     const chain = queryChain()
     jest.spyOn(Account, 'find').mockReturnValue(chain as any)

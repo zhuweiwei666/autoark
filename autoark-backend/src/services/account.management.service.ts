@@ -4,6 +4,10 @@ import Organization from '../models/Organization'
 import { JwtPayload } from '../utils/jwt'
 import { UserRole } from '../models/User'
 import logger from '../utils/logger'
+import { pickSafeQueryString } from '../utils/pagination'
+
+const ACCOUNT_CHANNELS = ['facebook', 'tiktok'] as const
+const MAX_TAG_FILTERS = 20
 
 const getUserOrgScope = (currentUser: JwtPayload): any => {
   if (currentUser.role === UserRole.SUPER_ADMIN) return {}
@@ -17,6 +21,19 @@ const uniqueAccountIds = (accountIds?: string[]): string[] => {
     .filter(Boolean)))
 }
 
+const pickAccountChannel = (value: any): string | undefined => {
+  const channel = pickSafeQueryString(value, 20)
+  return channel && (ACCOUNT_CHANNELS as readonly string[]).includes(channel) ? channel : undefined
+}
+
+const pickTagFilters = (value: any): string[] => {
+  const values = Array.isArray(value) ? value : [value]
+  return Array.from(new Set(values
+    .map(tag => pickSafeQueryString(tag, 40))
+    .filter(Boolean) as string[]))
+    .slice(0, MAX_TAG_FILTERS)
+}
+
 class AccountManagementService {
   /**
    * 获取账户列表（带组织和标签信息）
@@ -25,19 +42,25 @@ class AccountManagementService {
     const query: any = { ...getUserOrgScope(currentUser) }
 
     // 应用过滤条件
-    if (filters?.channel) {
-      query.channel = filters.channel
+    const channel = pickAccountChannel(filters?.channel)
+    const organizationId = pickSafeQueryString(filters?.organizationId, 80)
+    const groupId = pickSafeQueryString(filters?.groupId, 80)
+    const tags = filters?.tags ? pickTagFilters(filters.tags) : []
+    const unassigned = pickSafeQueryString(filters?.unassigned, 10)
+
+    if (channel) {
+      query.channel = channel
     }
-    if (filters?.organizationId && currentUser.role === UserRole.SUPER_ADMIN) {
-      query.organizationId = filters.organizationId
+    if (organizationId && currentUser.role === UserRole.SUPER_ADMIN) {
+      query.organizationId = organizationId
     }
-    if (filters?.tags) {
-      query.tags = { $in: Array.isArray(filters.tags) ? filters.tags : [filters.tags] }
+    if (tags.length > 0) {
+      query.tags = { $in: tags }
     }
-    if (filters?.groupId) {
-      query.groupId = filters.groupId
+    if (groupId) {
+      query.groupId = groupId
     }
-    if (filters?.unassigned === 'true' && currentUser.role === UserRole.SUPER_ADMIN) {
+    if (unassigned === 'true' && currentUser.role === UserRole.SUPER_ADMIN) {
       query.organizationId = null
     }
 
@@ -243,8 +266,9 @@ class AccountManagementService {
   async getGroups(currentUser: JwtPayload, filters?: any): Promise<IAccountGroup[]> {
     const query: any = { ...getUserOrgScope(currentUser) }
 
-    if (filters?.organizationId && currentUser.role === UserRole.SUPER_ADMIN) {
-      query.organizationId = filters.organizationId
+    const organizationId = pickSafeQueryString(filters?.organizationId, 80)
+    if (organizationId && currentUser.role === UserRole.SUPER_ADMIN) {
+      query.organizationId = organizationId
     }
 
     const groups = await AccountGroup.find(query)
