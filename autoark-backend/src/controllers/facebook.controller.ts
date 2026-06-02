@@ -16,9 +16,11 @@ import Campaign from '../models/Campaign'
 import Account from '../models/Account'
 import FbToken from '../models/FbToken'
 import { normalizeForApi, normalizeForStorage } from '../utils/accountId'
-import { parsePagination, pickAllowedString } from '../utils/pagination'
+import { parseLimitedNumber, parsePagination, pickAllowedString } from '../utils/pagination'
 
 const FACEBOOK_LIST_MAX_LIMIT = 100
+const FACEBOOK_DIAGNOSE_DEFAULT_LIMIT = 20
+const FACEBOOK_DIAGNOSE_MAX_LIMIT = 100
 const FACEBOOK_CAMPAIGN_SORT_FIELDS = [
   'accountId',
   'accountName',
@@ -207,10 +209,12 @@ export const diagnoseTokens = async (
       })
     } else {
       // 诊断所有 token
-      const results = await facebookPermissionsService.diagnoseAllTokens()
+      const limit = parseLimitedNumber(req.query.limit, FACEBOOK_DIAGNOSE_DEFAULT_LIMIT, FACEBOOK_DIAGNOSE_MAX_LIMIT)
+      const diagnosis = await facebookPermissionsService.diagnoseAllTokens({ limit })
       res.json({
         success: true,
-        data: results,
+        data: diagnosis.results,
+        meta: diagnosis.meta,
       })
     }
   } catch (error) {

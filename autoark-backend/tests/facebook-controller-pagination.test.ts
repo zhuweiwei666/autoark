@@ -42,9 +42,11 @@ jest.mock('../src/services/facebook.token.pool', () => ({
 import * as facebookAccountsService from '../src/services/facebook.accounts.service'
 import * as facebookCampaignsService from '../src/services/facebook.campaigns.service'
 import * as facebookCountriesService from '../src/services/facebook.countries.service'
+import * as facebookPermissionsService from '../src/services/facebook.permissions.service'
 import { getUserAccountIds } from '../src/middlewares/auth'
 import { UserRole } from '../src/models/User'
 import {
+  diagnoseTokens,
   getAccountsList,
   getCampaignsList,
   getCountriesList,
@@ -71,6 +73,10 @@ describe('facebook controller pagination caps', () => {
     ;(facebookCampaignsService.getCampaigns as jest.Mock).mockResolvedValue({ data: [], pagination: {} })
     ;(facebookAccountsService.getAccounts as jest.Mock).mockResolvedValue({ data: [], pagination: {} })
     ;(facebookCountriesService.getCountries as jest.Mock).mockResolvedValue({ data: [], pagination: {} })
+    ;(facebookPermissionsService.diagnoseAllTokens as jest.Mock).mockResolvedValue({
+      results: [],
+      meta: { totalFound: 0, checked: 0, limit: 100, truncated: false },
+    })
   })
 
   it('caps campaign list limit and falls back to spend sorting', async () => {
@@ -109,5 +115,19 @@ describe('facebook controller pagination caps', () => {
       { page: 4, limit: 100, sortBy: 'spend', sortOrder: 'desc' },
       {},
     )
+  })
+
+  it('caps all-token permission diagnosis batches', async () => {
+    const req: any = superAdminReq({ limit: '9999' })
+    const res: any = resMock()
+
+    await diagnoseTokens(req, res, jest.fn())
+
+    expect(facebookPermissionsService.diagnoseAllTokens).toHaveBeenCalledWith({ limit: 100 })
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      data: [],
+      meta: { totalFound: 0, checked: 0, limit: 100, truncated: false },
+    })
   })
 })
