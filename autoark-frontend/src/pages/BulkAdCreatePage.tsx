@@ -5,6 +5,8 @@ import { useAuth } from '../contexts/AuthContext'
 import { authFetch } from '../services/api'
 
 const API_BASE = '/api'
+const FACEBOOK_LOGIN_URL_TIMEOUT_MS = 15000
+const FACEBOOK_LOGIN_POPUP_TIMEOUT_MS = 120000
 
 const STEPS = [
   { id: 1, title: '选择产品', description: '选择文案包(产品)' },
@@ -260,7 +262,7 @@ function FacebookLoginAttemptPanel({
         <div>
           <div className="text-sm font-semibold text-slate-900">授权窗口已打开 · {attempt.openedAt}</div>
           <div className="mt-1 text-xs leading-5 text-slate-500">
-            如果 Facebook 弹窗显示“功能不可用”，先关闭弹窗，再检查当前 App 的高级权限、Public OAuth 和 Login for Business 配置。
+            正在等待 Facebook 授权结果。关闭弹窗会自动恢复；若弹窗显示“功能不可用”，先关闭弹窗，再检查当前 App 的高级权限、Public OAuth 和 Login for Business 配置。
           </div>
         </div>
         <button
@@ -514,7 +516,7 @@ export default function BulkAdCreatePage() {
       // 获取登录 URL（传递认证信息以绑定到当前用户）
       // 防止浏览器/代理缓存登录链接导致 304/旧 client_id
       const controller = new AbortController()
-      const loginUrlTimeoutId = window.setTimeout(() => controller.abort(), 15000)
+      const loginUrlTimeoutId = window.setTimeout(() => controller.abort(), FACEBOOK_LOGIN_URL_TIMEOUT_MS)
       const res = await (async () => {
         try {
           return await authFetch(`${API_BASE}/bulk-ad/auth/login-url?ts=${Date.now()}`, {
@@ -611,15 +613,15 @@ export default function BulkAdCreatePage() {
       window.addEventListener('message', handleMessage)
       facebookLoginCleanupRef.current = cleanup
       
-      // 超时处理（5分钟）
+      // 超时处理
       timeoutId = setTimeout(() => {
         if (!popup.closed) {
           cleanup()
           setLoginLoading(false)
           setLoginAttempt(null)
-          setError('Facebook 授权窗口等待超时。若弹窗显示“功能不可用”，请检查 Facebook App 的 Public OAuth 与 Login for Business 配置。')
+          setError('Facebook 授权窗口等待超时。请关闭弹窗后重试；若弹窗显示“功能不可用”，请检查 Facebook App 的 Public OAuth 与 Login for Business 配置。')
         }
-      }, 300000)
+      }, FACEBOOK_LOGIN_POPUP_TIMEOUT_MS)
       
     } catch (err: any) {
       const message = err.name === 'AbortError'
@@ -1260,7 +1262,13 @@ export default function BulkAdCreatePage() {
                       >
                         {resyncing ? '同步中...' : '重新同步'}
                       </button>
-                      <button onClick={handleFacebookLogin} className="text-xs text-green-600 hover:underline">切换账号</button>
+                      <button
+                        onClick={handleFacebookLogin}
+                        disabled={loginLoading}
+                        className="text-xs text-green-600 hover:underline disabled:cursor-not-allowed disabled:text-green-400 disabled:no-underline"
+                      >
+                        {loginLoading ? '等待授权中...' : '切换账号'}
+                      </button>
                     </div>
                   </div>
                   {loginAttempt && loginLoading && (
