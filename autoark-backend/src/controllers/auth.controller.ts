@@ -2,6 +2,7 @@ import { Request, Response } from 'express'
 import authService from '../services/auth.service'
 import logger from '../utils/logger'
 import { writeAuditLog } from '../services/auditLog.service'
+import { pickSafePassword, pickSafeUsername } from '../utils/userInput'
 
 class AuthController {
   /**
@@ -10,12 +11,13 @@ class AuthController {
    */
   async login(req: Request, res: Response): Promise<void> {
     try {
-      const { username, password } = req.body
+      const username = pickSafeUsername(req.body?.username)
+      const password = pickSafePassword(req.body?.password)
 
       if (!username || !password) {
         res.status(400).json({
           success: false,
-          message: '用户名和密码不能为空',
+          message: '用户名和密码不能为空，密码长度需为6-128位',
         })
         return
       }
@@ -46,7 +48,7 @@ class AuthController {
         category: 'auth',
         action: 'auth.login',
         status: 'failed',
-        username: req.body?.username,
+        username: pickSafeUsername(req.body?.username),
         targetType: 'user',
         summary: '用户登录失败',
         reason: error.message || '登录失败',
@@ -134,20 +136,13 @@ class AuthController {
         return
       }
 
-      const { oldPassword, newPassword } = req.body
+      const oldPassword = pickSafePassword(req.body?.oldPassword)
+      const newPassword = pickSafePassword(req.body?.newPassword)
 
       if (!oldPassword || !newPassword) {
         res.status(400).json({
           success: false,
-          message: '旧密码和新密码不能为空',
-        })
-        return
-      }
-
-      if (newPassword.length < 6) {
-        res.status(400).json({
-          success: false,
-          message: '新密码长度不能少于6位',
+          message: '旧密码和新密码长度需为6-128位',
         })
         return
       }

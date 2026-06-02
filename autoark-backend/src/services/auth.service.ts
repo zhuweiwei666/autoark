@@ -4,6 +4,7 @@ import { generateToken } from '../utils/jwt'
 import logger from '../utils/logger'
 import {
   pickSafePassword,
+  pickSafeUsername,
   sanitizeUserCreateInput,
 } from '../utils/userInput'
 
@@ -31,7 +32,11 @@ class AuthService {
    * 用户登录
    */
   async login(credentials: LoginCredentials): Promise<AuthResponse> {
-    const { username, password } = credentials
+    const username = pickSafeUsername(credentials?.username)
+    const password = pickSafePassword(credentials?.password)
+    if (!username || !password) {
+      throw new Error('用户名或密码错误')
+    }
 
     // 查找用户
     const user = await User.findOne({ username }).populate('organizationId')
