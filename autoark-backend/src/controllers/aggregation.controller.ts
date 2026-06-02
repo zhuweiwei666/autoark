@@ -39,20 +39,38 @@ const AGG_MAX_ROWS = 500
 const parseAggLimit = (value: any, fallback = 200) => parseLimitedNumber(value, fallback, AGG_MAX_ROWS)
 const parseAggTrendLimit = (value: any) => parseLimitedNumber(value, 500, AGG_MAX_ROWS)
 
-const getDate = (value: any, fallback: dayjs.Dayjs) => {
-  if (typeof value !== 'string') return fallback
+class AggDateError extends Error {}
+
+const parseStrictAggDate = (value: any, fieldName: string) => {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    throw new AggDateError(`${fieldName} must be a valid YYYY-MM-DD date`)
+  }
   const parsed = dayjs(value)
-  return parsed.isValid() ? parsed : fallback
+  if (!parsed.isValid() || parsed.format('YYYY-MM-DD') !== value) {
+    throw new AggDateError(`${fieldName} must be a valid YYYY-MM-DD date`)
+  }
+  return parsed
+}
+
+const getDate = (value: any, fallback: dayjs.Dayjs, fieldName: string) => {
+  if (typeof value !== 'string') return fallback
+  return parseStrictAggDate(value, fieldName)
+}
+
+const parseAggSingleDate = (value: any, fieldName = 'date') => {
+  if (value === undefined || value === null || value === '') return dayjs().format('YYYY-MM-DD')
+  return parseStrictAggDate(value, fieldName).format('YYYY-MM-DD')
 }
 
 const parseAggDateRange = (req: Request, fallbackDays = 7) => {
   const fallbackEnd = dayjs()
-  const end = getDate(req.query.endDate, fallbackEnd)
-  const requestedStart = getDate(req.query.startDate, end.subtract(fallbackDays, 'day'))
+  const end = getDate(req.query.endDate, fallbackEnd, 'endDate')
+  const requestedStart = getDate(req.query.startDate, end.subtract(fallbackDays, 'day'), 'startDate')
+  if (requestedStart.isAfter(end)) {
+    throw new AggDateError('startDate must be earlier than or equal to endDate')
+  }
   const maxStart = end.subtract(AGG_MAX_RANGE_DAYS - 1, 'day')
-  const start = requestedStart.isAfter(end)
-    ? end
-    : requestedStart.isBefore(maxStart)
+  const start = requestedStart.isBefore(maxStart)
       ? maxStart
       : requestedStart
 
@@ -60,6 +78,12 @@ const parseAggDateRange = (req: Request, fallbackDays = 7) => {
     start: start.format('YYYY-MM-DD'),
     end: end.format('YYYY-MM-DD'),
   }
+}
+
+const sendAggregationError = (res: Response, error: any, logPrefix: string) => {
+  logger.error(`${logPrefix}: ${error.message}`)
+  const status = error instanceof AggDateError ? 400 : 500
+  res.status(status).json({ success: false, error: error.message })
 }
 
 const getAccountScope = async (req: Request): Promise<string[] | null> => {
@@ -137,8 +161,7 @@ router.get('/daily', async (req: Request, res: Response) => {
       meta: { startDate: start, endDate: end, count: data.length },
     })
   } catch (error: any) {
-    logger.error('[AggController] Get daily failed:', error.message)
-    res.status(500).json({ success: false, error: error.message })
+    sendAggregationError(res, error, '[AggController] Get daily failed')
   }
 })
 
@@ -159,8 +182,7 @@ router.get('/today', async (req: Request, res: Response) => {
       data: data || { date: today, spend: 0, revenue: 0, roas: 0 },
     })
   } catch (error: any) {
-    logger.error('[AggController] Get today failed:', error.message)
-    res.status(500).json({ success: false, error: error.message })
+    sendAggregationError(res, error, '[AggController] Get today failed')
   }
 })
 
@@ -172,7 +194,7 @@ router.get('/today', async (req: Request, res: Response) => {
  */
 router.get('/countries', async (req: Request, res: Response) => {
   try {
-    const date = (req.query.date as string) || dayjs().format('YYYY-MM-DD')
+    const date = parseAggSingleDate(req.query.date)
     const limit = parseAggLimit(req.query.limit)
     const accountIds = await getAccountScope(req)
     const data = accountIds === null ? await getCountryData(date, limit) : []
@@ -183,8 +205,7 @@ router.get('/countries', async (req: Request, res: Response) => {
       meta: { date, count: data.length, limit },
     })
   } catch (error: any) {
-    logger.error('[AggController] Get countries failed:', error.message)
-    res.status(500).json({ success: false, error: error.message })
+    sendAggregationError(res, error, '[AggController] Get countries failed')
   }
 })
 
@@ -210,8 +231,7 @@ router.get('/countries/trend', async (req: Request, res: Response) => {
       meta: { startDate, endDate, count: data.length },
     })
   } catch (error: any) {
-    logger.error('[AggController] Get country trend failed:', error.message)
-    res.status(500).json({ success: false, error: error.message })
+    sendAggregationError(res, error, '[AggController] Get country trend failed')
   }
 })
 
@@ -223,7 +243,7 @@ router.get('/countries/trend', async (req: Request, res: Response) => {
  */
 router.get('/accounts', async (req: Request, res: Response) => {
   try {
-    const date = (req.query.date as string) || dayjs().format('YYYY-MM-DD')
+    const date = parseAggSingleDate(req.query.date)
     const limit = parseAggLimit(req.query.limit)
     const accountIds = await getAccountScope(req)
     const data = accountIds === null
@@ -236,8 +256,7 @@ router.get('/accounts', async (req: Request, res: Response) => {
       meta: { date, count: data.length, limit },
     })
   } catch (error: any) {
-    logger.error('[AggController] Get accounts failed:', error.message)
-    res.status(500).json({ success: false, error: error.message })
+    sendAggregationError(res, error, '[AggController] Get accounts failed')
   }
 })
 
@@ -249,7 +268,7 @@ router.get('/accounts', async (req: Request, res: Response) => {
  */
 router.get('/campaigns', async (req: Request, res: Response) => {
   try {
-    const date = (req.query.date as string) || dayjs().format('YYYY-MM-DD')
+    const date = parseAggSingleDate(req.query.date)
     const limit = parseAggLimit(req.query.limit)
     const { optimizer, accountId } = req.query
     const optimizerFilter = optimizer as string | undefined
@@ -289,8 +308,7 @@ router.get('/campaigns', async (req: Request, res: Response) => {
       meta: { date, count: data.length, limit },
     })
   } catch (error: any) {
-    logger.error('[AggController] Get campaigns failed:', error.message)
-    res.status(500).json({ success: false, error: error.message })
+    sendAggregationError(res, error, '[AggController] Get campaigns failed')
   }
 })
 
@@ -321,8 +339,7 @@ router.get('/campaigns/trend', async (req: Request, res: Response) => {
       meta: { startDate, endDate, count: data.length, limit: campaignId ? null : limit },
     })
   } catch (error: any) {
-    logger.error('[AggController] Get campaign trend failed:', error.message)
-    res.status(500).json({ success: false, error: error.message })
+    sendAggregationError(res, error, '[AggController] Get campaign trend failed')
   }
 })
 
@@ -334,7 +351,7 @@ router.get('/campaigns/trend', async (req: Request, res: Response) => {
  */
 router.get('/optimizers', async (req: Request, res: Response) => {
   try {
-    const date = (req.query.date as string) || dayjs().format('YYYY-MM-DD')
+    const date = parseAggSingleDate(req.query.date)
     const limit = parseAggLimit(req.query.limit)
     const accountIds = await getAccountScope(req)
     const data = accountIds === null
@@ -353,8 +370,7 @@ router.get('/optimizers', async (req: Request, res: Response) => {
       meta: { date, count: data.length, limit },
     })
   } catch (error: any) {
-    logger.error('[AggController] Get optimizers failed:', error.message)
-    res.status(500).json({ success: false, error: error.message })
+    sendAggregationError(res, error, '[AggController] Get optimizers failed')
   }
 })
 
@@ -390,8 +406,7 @@ router.get('/optimizers/trend', async (req: Request, res: Response) => {
       meta: { startDate, endDate, count: data.length, limit: optimizer ? null : limit },
     })
   } catch (error: any) {
-    logger.error('[AggController] Get optimizer trend failed:', error.message)
-    res.status(500).json({ success: false, error: error.message })
+    sendAggregationError(res, error, '[AggController] Get optimizer trend failed')
   }
 })
 
@@ -403,7 +418,7 @@ router.get('/optimizers/trend', async (req: Request, res: Response) => {
  */
 router.get('/materials', async (req: Request, res: Response) => {
   try {
-    const date = (req.query.date as string) || dayjs().format('YYYY-MM-DD')
+    const date = parseAggSingleDate(req.query.date)
     const accountIds = await getAccountScope(req)
     const data = accountIds === null ? await getMaterialData(date) : []
 
@@ -413,8 +428,7 @@ router.get('/materials', async (req: Request, res: Response) => {
       meta: { date, count: data.length },
     })
   } catch (error: any) {
-    logger.error('[AggController] Get materials failed:', error.message)
-    res.status(500).json({ success: false, error: error.message })
+    sendAggregationError(res, error, '[AggController] Get materials failed')
   }
 })
 
@@ -430,15 +444,15 @@ router.post('/refresh', async (req: Request, res: Response) => {
     if (!requireSuperAdmin(req, res)) return
     
     if (date) {
-      await refreshAggregation(date, true)
-      res.json({ success: true, message: `Refreshed ${date}` })
+      const refreshDate = parseAggSingleDate(date)
+      await refreshAggregation(refreshDate, true)
+      res.json({ success: true, message: `Refreshed ${refreshDate}` })
     } else {
       await refreshRecentDays()
       res.json({ success: true, message: 'Refreshed recent 3 days' })
     }
   } catch (error: any) {
-    logger.error('[AggController] Refresh failed:', error.message)
-    res.status(500).json({ success: false, error: error.message })
+    sendAggregationError(res, error, '[AggController] Refresh failed')
   }
 })
 

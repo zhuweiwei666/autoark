@@ -62,7 +62,7 @@ jest.mock('../src/models/MaterialMetrics', () => ({
 
 import aggregationRouter from '../src/controllers/aggregation.controller'
 import { getUserAccountIds } from '../src/middlewares/auth'
-import { getDailySummary } from '../src/services/aggregation.service'
+import { getAccountData, getDailySummary } from '../src/services/aggregation.service'
 
 const createApp = () => {
   const app = express()
@@ -134,6 +134,60 @@ describe('aggregation route account scoping', () => {
       endDate: '2026-06-02',
       count: 0,
     })
+  })
+
+  it('rejects invalid daily date ranges before querying aggregation data', async () => {
+    mockAuthState.user = {
+      role: UserRole.SUPER_ADMIN,
+      userId: '665000000000000000000003',
+    }
+    ;(getUserAccountIds as jest.Mock).mockResolvedValue(null)
+
+    const response = await request(createApp())
+      .get('/api/agg/daily?startDate=2026-02-31&endDate=2026-06-02')
+
+    expect(response.status).toBe(400)
+    expect(response.body).toMatchObject({
+      success: false,
+      error: 'startDate must be a valid YYYY-MM-DD date',
+    })
+    expect(getDailySummary).not.toHaveBeenCalled()
+  })
+
+  it('rejects reversed daily date ranges before querying aggregation data', async () => {
+    mockAuthState.user = {
+      role: UserRole.SUPER_ADMIN,
+      userId: '665000000000000000000003',
+    }
+    ;(getUserAccountIds as jest.Mock).mockResolvedValue(null)
+
+    const response = await request(createApp())
+      .get('/api/agg/daily?startDate=2026-06-03&endDate=2026-06-02')
+
+    expect(response.status).toBe(400)
+    expect(response.body).toMatchObject({
+      success: false,
+      error: 'startDate must be earlier than or equal to endDate',
+    })
+    expect(getDailySummary).not.toHaveBeenCalled()
+  })
+
+  it('rejects invalid single-date aggregation filters before querying rows', async () => {
+    mockAuthState.user = {
+      role: UserRole.SUPER_ADMIN,
+      userId: '665000000000000000000003',
+    }
+    ;(getUserAccountIds as jest.Mock).mockResolvedValue(null)
+
+    const response = await request(createApp())
+      .get('/api/agg/accounts?date=2026-02-31')
+
+    expect(response.status).toBe(400)
+    expect(response.body).toMatchObject({
+      success: false,
+      error: 'date must be a valid YYYY-MM-DD date',
+    })
+    expect(getAccountData).not.toHaveBeenCalled()
   })
 
   it('caps unfiltered campaign trend rows', async () => {
