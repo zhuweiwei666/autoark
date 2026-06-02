@@ -8,6 +8,7 @@ import {
   getCommercialUsageLedger,
 } from '../services/commercial.service'
 import { writeAuditLog } from '../services/auditLog.service'
+import { parsePagination } from '../utils/pagination'
 
 export const getReadiness = async (req: Request, res: Response) => {
   try {
@@ -39,8 +40,16 @@ export const getOrganizationReadiness = async (req: Request, res: Response) => {
       return res.status(401).json({ success: false, message: '未认证' })
     }
 
-    const data = await getCommercialOrganizationReadiness(req.user)
-    res.json({ success: true, data })
+    const { page, pageSize, skip } = parsePagination(
+      {
+        page: req.query.page,
+        pageSize: req.query.pageSize,
+        limit: req.query.limit,
+      },
+      { defaultPageSize: 50, maxPageSize: 200 },
+    )
+    const result = await getCommercialOrganizationReadiness(req.user, { page, pageSize, skip })
+    res.json({ success: true, data: result.items, pagination: result.pagination })
   } catch (error: any) {
     logger.error('[Commercial] Get organization readiness failed:', error)
     const message = error.message || '获取客户商用状态失败'

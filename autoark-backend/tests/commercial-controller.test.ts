@@ -9,17 +9,59 @@ jest.mock('../src/services/auditLog.service', () => ({
   writeAuditLog: jest.fn(),
 }))
 
-import { getCommercialSupportPackage } from '../src/services/commercial.service'
+import {
+  getCommercialOrganizationReadiness,
+  getCommercialSupportPackage,
+} from '../src/services/commercial.service'
 import { writeAuditLog } from '../src/services/auditLog.service'
-import { getSupportPackage } from '../src/controllers/commercial.controller'
+import {
+  getOrganizationReadiness,
+  getSupportPackage,
+} from '../src/controllers/commercial.controller'
 import { UserRole } from '../src/models/User'
 
 const mockGetCommercialSupportPackage = getCommercialSupportPackage as jest.Mock
+const mockGetCommercialOrganizationReadiness = getCommercialOrganizationReadiness as jest.Mock
 const mockWriteAuditLog = writeAuditLog as jest.Mock
 
 describe('commercial controller', () => {
   beforeEach(() => {
     jest.clearAllMocks()
+  })
+
+  it('caps organization readiness pagination', async () => {
+    mockGetCommercialOrganizationReadiness.mockResolvedValue({
+      items: [],
+      pagination: { page: 2, pageSize: 200, total: 450, returned: 0, totalPages: 3 },
+    })
+
+    const req: any = {
+      user: {
+        userId: 'admin_1',
+        role: UserRole.SUPER_ADMIN,
+      },
+      query: {
+        page: '2',
+        limit: '999',
+      },
+    }
+    const res: any = {
+      json: jest.fn(),
+      status: jest.fn().mockReturnThis(),
+    }
+
+    await getOrganizationReadiness(req, res)
+
+    expect(mockGetCommercialOrganizationReadiness).toHaveBeenCalledWith(req.user, {
+      page: 2,
+      pageSize: 200,
+      skip: 200,
+    })
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      data: [],
+      pagination: { page: 2, pageSize: 200, total: 450, returned: 0, totalPages: 3 },
+    })
   })
 
   it('writes an audit log when a commercial support package is generated', async () => {

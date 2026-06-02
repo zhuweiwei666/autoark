@@ -1374,15 +1374,29 @@ export async function getCommercialUsageLedger(
   }
 }
 
-export async function getCommercialOrganizationReadiness(user: JwtPayload) {
+export async function getCommercialOrganizationReadiness(user: JwtPayload, options: {
+  page?: number
+  pageSize?: number
+  skip?: number
+} = {}) {
   if (user.role !== UserRole.SUPER_ADMIN) {
     throw new Error('无权查看全平台客户商用状态')
   }
 
-  const organizations = await Organization.find({})
-    .select('_id name status billing updatedAt createdAt')
-    .sort({ updatedAt: -1, createdAt: -1 })
-    .lean()
+  const page = options.page || 1
+  const pageSize = options.pageSize || 50
+  const skip = options.skip || 0
+  const query = {}
+
+  const [total, organizations] = await Promise.all([
+    Organization.countDocuments(query),
+    Organization.find(query)
+      .select('_id name status billing updatedAt createdAt')
+      .sort({ updatedAt: -1, createdAt: -1 })
+      .skip(skip)
+      .limit(pageSize)
+      .lean(),
+  ])
 
   const stateRank: Record<ReadinessLevel, number> = {
     blocked: 0,
@@ -1426,11 +1440,22 @@ export async function getCommercialOrganizationReadiness(user: JwtPayload) {
     }
   }))
 
-  return items.sort((a, b) => {
+  const sortedItems = items.sort((a, b) => {
     const stateDiff = stateRank[a.state.level] - stateRank[b.state.level]
     if (stateDiff !== 0) return stateDiff
     return a.score - b.score
   })
+
+  return {
+    items: sortedItems,
+    pagination: {
+      page,
+      pageSize,
+      total,
+      returned: sortedItems.length,
+      totalPages: pageSize > 0 ? Math.ceil(total / pageSize) : 0,
+    },
+  }
 }
 
 export async function getCommercialSupportPackage(
