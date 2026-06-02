@@ -1,6 +1,19 @@
 import { Request, Response, NextFunction } from 'express'
 import * as oauthService from '../services/facebook.oauth.service'
 import logger from '../utils/logger'
+import { pickSafeQueryString } from '../utils/pagination'
+
+const OAUTH_STATE_MAX_LENGTH = 4096
+const OAUTH_CODE_MAX_LENGTH = 4096
+const OAUTH_APP_ID_MAX_LENGTH = 80
+const OAUTH_ERROR_MAX_LENGTH = 500
+
+const redirectWithOauthError = (res: Response, redirectBase: string, message: string) => {
+  const params = new URLSearchParams({
+    oauth_error: message.slice(0, OAUTH_ERROR_MAX_LENGTH),
+  })
+  return res.redirect(`${redirectBase}?${params.toString()}`)
+}
 
 const isBulkAdState = (state: unknown): boolean => {
   if (typeof state !== 'string') return false
@@ -33,8 +46,9 @@ export const getLoginUrl = async (req: Request, res: Response, next: NextFunctio
       })
     }
 
-    const { state, appId } = req.query
-    const loginUrl = await oauthService.getFacebookLoginUrl(state as string | undefined, appId as string | undefined)
+    const state = pickSafeQueryString(req.query.state, OAUTH_STATE_MAX_LENGTH)
+    const appId = pickSafeQueryString(req.query.appId, OAUTH_APP_ID_MAX_LENGTH)
+    const loginUrl = await oauthService.getFacebookLoginUrl(state, appId)
 
     res.json({
       success: true,
@@ -52,7 +66,11 @@ export const getLoginUrl = async (req: Request, res: Response, next: NextFunctio
  */
 export const handleCallback = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { code, error, error_reason, error_description, state } = req.query
+    const code = pickSafeQueryString(req.query.code, OAUTH_CODE_MAX_LENGTH)
+    const error = pickSafeQueryString(req.query.error, OAUTH_ERROR_MAX_LENGTH)
+    const errorReason = pickSafeQueryString(req.query.error_reason, OAUTH_ERROR_MAX_LENGTH)
+    const errorDescription = pickSafeQueryString(req.query.error_description, OAUTH_ERROR_MAX_LENGTH)
+    const state = pickSafeQueryString(req.query.state, OAUTH_STATE_MAX_LENGTH)
     
     // 根据 state 参数决定重定向目标
     // bulk-ad 来源使用专门的弹窗回调页面
@@ -61,25 +79,23 @@ export const handleCallback = async (req: Request, res: Response, next: NextFunc
 
     // 检查是否有错误
     if (error) {
-      logger.error('[OAuth] Facebook returned error:', { error, error_reason, error_description })
-      return res.redirect(
-        `${redirectBase}?oauth_error=${encodeURIComponent(error_description as string || error as string)}`
-      )
+      logger.error('[OAuth] Facebook returned error:', { error, error_reason: errorReason, error_description: errorDescription })
+      return redirectWithOauthError(res, redirectBase, errorDescription || error)
     }
 
     if (!code) {
-      return res.redirect(`${redirectBase}?oauth_error=No authorization code received`)
+      return redirectWithOauthError(res, redirectBase, 'No authorization code received')
     }
 
     // 处理 OAuth 回调
-    const result = await oauthService.handleOAuthCallback(code as string, state as string | undefined)
+    const result = await oauthService.handleOAuthCallback(code, state)
 
     // 重定向到目标页面，显示成功消息和用户信息
     const params = new URLSearchParams({
       oauth_success: 'true',
       token_id: result.tokenId,
       fb_user_id: result.fbUserId,
-      fb_user_name: encodeURIComponent(result.fbUserName || ''),
+      fb_user_name: result.fbUserName || '',
     })
 
     // 如果有用户详细信息，也传递过去
@@ -92,9 +108,10 @@ export const handleCallback = async (req: Request, res: Response, next: NextFunc
     res.redirect(`${redirectBase}?${params.toString()}`)
   } catch (error: any) {
     logger.error('[OAuth] Callback handler failed:', error)
-    const isBulkAd = isBulkAdState(req.query.state)
+    const state = pickSafeQueryString(req.query.state, OAUTH_STATE_MAX_LENGTH)
+    const isBulkAd = isBulkAdState(state)
     const redirectBase = isBulkAd ? '/oauth/callback' : '/fb-token'
-    res.redirect(`${redirectBase}?oauth_error=${encodeURIComponent(error.message || 'OAuth callback failed')}`)
+    redirectWithOauthError(res, redirectBase, pickSafeQueryString(error.message, OAUTH_ERROR_MAX_LENGTH) || 'OAuth callback failed')
   }
 }
 
@@ -104,6 +121,7 @@ export const handleCallback = async (req: Request, res: Response, next: NextFunc
 export const getOAuthConfig = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const config = await oauthService.validateOAuthConfig()
+    const businessLoginConfig = await oauthService.getBusinessLoginConfigStatus()
 
     res.json({
       success: true,
@@ -112,9 +130,10 @@ export const getOAuthConfig = async (req: Request, res: Response, next: NextFunc
         missing: config.missing,
         hasDbApps: config.hasDbApps,
         redirectUri: process.env.FACEBOOK_REDIRECT_URI || '',
-        businessLoginConfigIdConfigured: Boolean(
-          process.env.FACEBOOK_BUSINESS_LOGIN_CONFIG_ID || process.env.FACEBOOK_CONFIG_ID,
-        ),
+        businessLoginConfigIdConfigured: businessLoginConfig.configured,
+        businessLoginConfigIdSource: businessLoginConfig.source,
+        businessLoginEnvConfigured: businessLoginConfig.envConfigured,
+        activeDbBusinessLoginConfigAppCount: businessLoginConfig.activeDbConfiguredAppCount,
         oauthStateSecretConfigured: Boolean(process.env.OAUTH_STATE_SECRET),
       },
     })

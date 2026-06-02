@@ -26,6 +26,12 @@ const businessLoginConfigFilter = (): Record<string, any> => (
     : { 'config.businessLoginConfigId': { $exists: true, $nin: ['', null] } }
 )
 
+const activeBusinessLoginConfigQuery = (): Record<string, any> => ({
+  status: 'active',
+  'validation.isValid': true,
+  'config.businessLoginConfigId': { $exists: true, $nin: ['', null] },
+})
+
 const publicOauthReadyAppQuery = (extra: Record<string, any> = {}): Record<string, any> => ({
   status: 'active',
   'validation.isValid': true,
@@ -55,6 +61,15 @@ export const getFacebookBulkAdRedirectUri = (): string => getBulkAdRedirectUri()
 export interface FacebookLoginUrlOptions {
   businessLogin?: boolean
   redirectUri?: string
+}
+
+export type BusinessLoginConfigSource = 'env' | 'database' | 'env_and_database' | 'none'
+
+export interface BusinessLoginConfigStatus {
+  configured: boolean
+  source: BusinessLoginConfigSource
+  envConfigured: boolean
+  activeDbConfiguredAppCount: number
 }
 
 interface OAuthStatePayload {
@@ -202,6 +217,27 @@ export const getAvailableApps = async (): Promise<Array<{
     isAvailable: app.status === 'active' && 
       (!app.currentLoad?.activeTasks || Number(app.currentLoad.activeTasks) < Number(app.config?.maxConcurrentTasks || 5)),
   }))
+}
+
+export const getBusinessLoginConfigStatus = async (): Promise<BusinessLoginConfigStatus> => {
+  const envConfigured = Boolean(ENV_FB_BUSINESS_LOGIN_CONFIG_ID)
+  const activeDbConfiguredAppCount = await FacebookApp.countDocuments(activeBusinessLoginConfigQuery())
+
+  let source: BusinessLoginConfigSource = 'none'
+  if (envConfigured && activeDbConfiguredAppCount > 0) {
+    source = 'env_and_database'
+  } else if (envConfigured) {
+    source = 'env'
+  } else if (activeDbConfiguredAppCount > 0) {
+    source = 'database'
+  }
+
+  return {
+    configured: envConfigured || activeDbConfiguredAppCount > 0,
+    source,
+    envConfigured,
+    activeDbConfiguredAppCount,
+  }
 }
 
 /**

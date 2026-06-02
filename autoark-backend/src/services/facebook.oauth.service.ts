@@ -54,6 +54,10 @@ export const validateOAuthConfig = async (): Promise<{ valid: boolean; missing: 
   return oauthApi.validateOAuthConfig()
 }
 
+export const getBusinessLoginConfigStatus = async (): Promise<oauthApi.BusinessLoginConfigStatus> => {
+  return oauthApi.getBusinessLoginConfigStatus()
+}
+
 /**
  * 验证 OAuth 配置（同步，兼容旧代码）
  */
