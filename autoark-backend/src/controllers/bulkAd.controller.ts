@@ -513,15 +513,20 @@ const sanitizeCreativeGroupConfig = (input: any) => {
   return Object.keys(config).length > 0 ? config : undefined
 }
 
-const sanitizeCreativeGroupInput = (input: any) => {
+const sanitizeCreativeGroupInput = (input: any, options: { requireName?: boolean } = { requireName: true }) => {
   const name = pickTrimmedString(input?.name, 120)
-  if (!name) {
+  if (!name && options.requireName !== false) {
     throw createHttpError('创意组名称必填', 400)
   }
 
-  const data: any = {
-    name,
-    platform: pickAllowedString(input?.platform, CREATIVE_GROUP_PLATFORMS, 'facebook'),
+  const data: any = {}
+  if (name) data.name = name
+
+  const platform = pickAllowedString(input?.platform, CREATIVE_GROUP_PLATFORMS, '')
+  if (platform) {
+    data.platform = platform
+  } else if (options.requireName !== false) {
+    data.platform = 'facebook'
   }
 
   const accountId = parseAccountIdParam(input?.accountId)
@@ -1388,7 +1393,7 @@ export const updateCreativeGroup = async (req: Request, res: Response) => {
   try {
     const group = await CreativeGroup.findOneAndUpdate(
       combineFilters({ _id: req.params.id }, getControlFilter(req)),
-      sanitizeScopedUpdate(req.body),
+      sanitizeScopedUpdate(sanitizeCreativeGroupInput(req.body, { requireName: false })),
       { new: true }
     )
     if (!group) {

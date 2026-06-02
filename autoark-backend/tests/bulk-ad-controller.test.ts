@@ -1194,6 +1194,81 @@ describe('bulk ad controller', () => {
     expect(res.json).toHaveBeenCalledWith({ success: true, data: savedGroup })
   })
 
+  it('sanitizes creative group update payloads', async () => {
+    jest.spyOn(CreativeGroup, 'findOneAndUpdate').mockResolvedValue({
+      _id: '665000000000000000000601',
+      name: 'Product launch creative',
+    } as any)
+    const req = memberReq({
+      body: {
+        name: '  Product launch creative  ',
+        organizationId: '665000000000000000000099',
+        createdBy: 'attacker',
+        usageCount: 999,
+        materialStats: { totalCount: 999 },
+        platform: 'facebook',
+        accountId: 'act_123',
+        description: '  launch assets  ',
+        tags: ['hero', 'hero', '  video  ', { $ne: 'x' }],
+        config: {
+          format: 'carousel',
+          dynamicCreative: true,
+          carousel: {
+            autoOptimize: false,
+            linkPerCard: true,
+            extra: 'drop',
+          },
+          extra: 'drop',
+        },
+        materials: [{
+          _id: '665000000000000000000777',
+          type: 'image',
+          url: '  https://cdn.test/hero.jpg  ',
+          name: '  hero  ',
+          width: '1200.8',
+          height: -1,
+          status: 'uploaded',
+          userId: 'attacker',
+          unexpected: 'drop',
+        }],
+      },
+    })
+    const res = resMock()
+
+    await updateCreativeGroup(req as any, res as any)
+
+    const payload = (CreativeGroup.findOneAndUpdate as jest.Mock).mock.calls[0][1]
+    expect(payload).toMatchObject({
+      name: 'Product launch creative',
+      platform: 'facebook',
+      accountId: '123',
+      description: 'launch assets',
+      tags: ['hero', 'video'],
+      config: {
+        format: 'carousel',
+        dynamicCreative: true,
+        carousel: {
+          autoOptimize: false,
+          linkPerCard: true,
+        },
+      },
+      materials: [{
+        type: 'image',
+        url: 'https://cdn.test/hero.jpg',
+        name: 'hero',
+        width: 1200,
+        status: 'uploaded',
+      }],
+    })
+    expect(payload).not.toHaveProperty('organizationId')
+    expect(payload).not.toHaveProperty('createdBy')
+    expect(payload).not.toHaveProperty('usageCount')
+    expect(payload).not.toHaveProperty('materialStats')
+    expect(payload.materials[0]).not.toHaveProperty('_id')
+    expect(payload.materials[0]).not.toHaveProperty('userId')
+    expect(payload.materials[0]).not.toHaveProperty('unexpected')
+  })
+
   it('rejects auth pixel reads for accounts outside the requester asset scope', async () => {
     jest.spyOn(Account, 'findOne').mockReturnValue(modelQuery(null) as any)
     const tokenFind = jest.spyOn(FbToken, 'find').mockResolvedValue([] as any)
