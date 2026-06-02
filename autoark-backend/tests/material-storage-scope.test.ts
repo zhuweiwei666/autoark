@@ -80,6 +80,7 @@ describe('material storage tenant scoping', () => {
     await getPresignedUrl(createRequest({
       fileName: 'creative.jpg',
       mimeType: 'image/jpeg',
+      size: 123,
       folder: 'ads',
     }), res as any)
 
@@ -117,6 +118,7 @@ describe('material storage tenant scoping', () => {
       key: 'materials/2026-06-01/file.jpg',
       fileName: 'file.jpg',
       mimeType: 'image/jpeg',
+      size: 123,
     }), res as any)
 
     expect(res.status).toHaveBeenCalledWith(400)
@@ -134,6 +136,7 @@ describe('material storage tenant scoping', () => {
         key: 'tenants/org-other/materials/2026-06-01/file.jpg',
         fileName: 'file.jpg',
         mimeType: 'image/jpeg',
+        size: 123,
       }],
     }), res as any)
 
@@ -195,5 +198,67 @@ describe('material storage tenant scoping', () => {
       success: true,
       isDuplicate: false,
     }))
+  })
+
+  it('rejects oversized presigned uploads before generating an upload URL', async () => {
+    const res = createResponse()
+
+    await getPresignedUrl(createRequest({
+      fileName: 'huge.mp4',
+      mimeType: 'video/mp4',
+      size: 101 * 1024 * 1024,
+    }), res as any)
+
+    expect(res.status).toHaveBeenCalledWith(400)
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      error: '文件大小超过限制（最大 100MB）',
+    })
+    expect(generatePresignedUploadUrl).not.toHaveBeenCalled()
+  })
+
+  it('rejects too many batch presigned uploads before generating URLs', async () => {
+    const res = createResponse()
+
+    await getPresignedUrls(createRequest({
+      files: Array.from({ length: 11 }, (_, index) => ({
+        fileName: `creative-${index}.jpg`,
+        mimeType: 'image/jpeg',
+        size: 123,
+      })),
+    }), res as any)
+
+    expect(res.status).toHaveBeenCalledWith(400)
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      error: '一次最多上传 10 个文件',
+    })
+    expect(generatePresignedUploadUrls).not.toHaveBeenCalled()
+  })
+
+  it('rejects oversized traditional uploads before fingerprinting or storage', async () => {
+    const res = createResponse()
+
+    await uploadMaterial({
+      body: {},
+      file: {
+        buffer: Buffer.from('video'),
+        originalname: 'huge.mp4',
+        mimetype: 'video/mp4',
+        size: 101 * 1024 * 1024,
+      },
+      user: {
+        userId: '665000000000000000000002',
+        organizationId: '665000000000000000000001',
+      },
+    } as any, res as any)
+
+    expect(res.status).toHaveBeenCalledWith(400)
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      error: '文件大小超过限制（最大 100MB）',
+    })
+    expect(calculateFingerprint).not.toHaveBeenCalled()
+    expect(uploadToR2).not.toHaveBeenCalled()
   })
 })

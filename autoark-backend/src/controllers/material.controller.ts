@@ -52,6 +52,43 @@ const MATERIAL_SORT_FIELDS = new Set([
   'metrics.qualityScore',
 ])
 
+const parsePositiveLimit = (value: any, fallback: number): number => {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback
+}
+
+const MAX_MATERIAL_FILE_SIZE = parsePositiveLimit(process.env.MATERIAL_MAX_UPLOAD_BYTES, 100 * 1024 * 1024)
+const MAX_DIRECT_UPLOAD_FILES = parsePositiveLimit(process.env.MATERIAL_MAX_BATCH_FILES, 10)
+
+const formatBytes = (value: number): string => {
+  const mb = value / 1024 / 1024
+  return `${Math.round(mb)}MB`
+}
+
+const normalizeFileSize = (size: any): number | null => {
+  const value = Number(size)
+  return Number.isFinite(value) && value > 0 ? value : null
+}
+
+const validateMaterialFileMeta = (
+  input: { fileName?: any; mimeType?: any; size?: any },
+  options: { requireSize?: boolean } = {},
+): string | null => {
+  if (!input.fileName || !input.mimeType) return '请提供文件名和类型'
+
+  const isImage = String(input.mimeType).startsWith('image/')
+  const isVideo = String(input.mimeType).startsWith('video/')
+  if (!isImage && !isVideo) return '只支持图片和视频文件'
+
+  const fileSize = normalizeFileSize(input.size)
+  if (options.requireSize && fileSize === null) return '请提供有效文件大小'
+  if (fileSize !== null && fileSize > MAX_MATERIAL_FILE_SIZE) {
+    return `文件大小超过限制（最大 ${formatBytes(MAX_MATERIAL_FILE_SIZE)}）`
+  }
+
+  return null
+}
+
 const getTenantStorageRoot = (req: Request): string => {
   if (req.user?.organizationId) return `tenants/org-${hashStorageScope(req.user.organizationId)}`
   if (req.user?.userId) return `tenants/user-${hashStorageScope(req.user.userId)}`
@@ -234,18 +271,10 @@ export const streamPublicMaterial = async (req: Request, res: Response) => {
  */
 export const getPresignedUrl = async (req: Request, res: Response) => {
   try {
-    const { fileName, mimeType, folder } = req.body
+    const { fileName, mimeType, size, folder } = req.body
 
-    if (!fileName || !mimeType) {
-      return res.status(400).json({ success: false, error: '请提供文件名和类型' })
-    }
-    
-    // 验证文件类型
-    const isImage = mimeType.startsWith('image/')
-    const isVideo = mimeType.startsWith('video/')
-    if (!isImage && !isVideo) {
-      return res.status(400).json({ success: false, error: '只支持图片和视频文件' })
-    }
+    const validationError = validateMaterialFileMeta({ fileName, mimeType, size }, { requireSize: true })
+    if (validationError) return res.status(400).json({ success: false, error: validationError })
     
     const result = await generatePresignedUploadUrl({
       fileName,
@@ -284,15 +313,16 @@ export const getPresignedUrls = async (req: Request, res: Response) => {
     if (!files || !Array.isArray(files) || files.length === 0) {
       return res.status(400).json({ success: false, error: '请提供文件列表' })
     }
+    if (files.length > MAX_DIRECT_UPLOAD_FILES) {
+      return res.status(400).json({ success: false, error: `一次最多上传 ${MAX_DIRECT_UPLOAD_FILES} 个文件` })
+    }
     
-    // 验证文件类型
     for (const file of files) {
-      const isImage = file.mimeType?.startsWith('image/')
-      const isVideo = file.mimeType?.startsWith('video/')
-      if (!isImage && !isVideo) {
+      const validationError = validateMaterialFileMeta(file, { requireSize: true })
+      if (validationError) {
         return res.status(400).json({ 
           success: false, 
-          error: `不支持的文件类型: ${file.fileName} (${file.mimeType})` 
+          error: `${file.fileName || '未命名文件'}: ${validationError}`
         })
       }
     }
@@ -328,14 +358,14 @@ export const confirmUpload = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, error: '参数不完整' })
     }
 
+    const validationError = validateMaterialFileMeta({ fileName, mimeType, size }, { requireSize: true })
+    if (validationError) return res.status(400).json({ success: false, error: validationError })
+
     const scopedKey = validateScopedStorageKey(req, res, key)
     if (!scopedKey) return
-    
+
     const isImage = mimeType?.startsWith('image/')
     const isVideo = mimeType?.startsWith('video/')
-    if (!isImage && !isVideo) {
-      return res.status(400).json({ success: false, error: '只支持图片和视频文件' })
-    }
     
     const material = new Material({
       name: fileName,
@@ -381,16 +411,18 @@ export const confirmUploads = async (req: Request, res: Response) => {
     if (!files || !Array.isArray(files) || files.length === 0) {
       return res.status(400).json({ success: false, error: '请提供文件列表' })
     }
+    if (files.length > MAX_DIRECT_UPLOAD_FILES) {
+      return res.status(400).json({ success: false, error: `一次最多确认 ${MAX_DIRECT_UPLOAD_FILES} 个文件` })
+    }
     
     const results: any[] = []
     const errors: any[] = []
     
     for (const file of files) {
       try {
-        const isImage = file.mimeType?.startsWith('image/')
-        const isVideo = file.mimeType?.startsWith('video/')
-        if (!isImage && !isVideo) {
-          errors.push({ fileName: file.fileName, error: '只支持图片和视频文件' })
+        const validationError = validateMaterialFileMeta(file, { requireSize: true })
+        if (validationError) {
+          errors.push({ fileName: file.fileName, error: validationError })
           continue
         }
         const scopedKey = resolveScopedStorageKey(req, file.key)
@@ -401,7 +433,7 @@ export const confirmUploads = async (req: Request, res: Response) => {
         
         const material = new Material({
           name: file.fileName,
-          type: isImage ? 'image' : (isVideo ? 'video' : 'other'),
+          type: file.mimeType.startsWith('image/') ? 'image' : 'video',
           status: 'uploaded',
           storage: {
             provider: 'r2',
@@ -473,10 +505,12 @@ export const uploadMaterial = async (req: Request, res: Response) => {
     const isImage = file.mimetype.startsWith('image/')
     const isVideo = file.mimetype.startsWith('video/')
     
-    if (!isImage && !isVideo) {
-      logger.warn(`[Material] Unsupported file type: ${file.mimetype}`)
-      return res.status(400).json({ success: false, error: '只支持图片和视频文件' })
-    }
+    const validationError = validateMaterialFileMeta({
+      fileName: file.originalname,
+      mimeType: file.mimetype,
+      size: file.size,
+    })
+    if (validationError) return res.status(400).json({ success: false, error: validationError })
     
     const materialType = isImage ? 'image' : 'video'
     
@@ -559,6 +593,9 @@ export const uploadMaterialBatch = async (req: Request, res: Response) => {
     if (!files || files.length === 0) {
       return res.status(400).json({ success: false, error: '请选择要上传的文件' })
     }
+    if (files.length > MAX_DIRECT_UPLOAD_FILES) {
+      return res.status(400).json({ success: false, error: `一次最多上传 ${MAX_DIRECT_UPLOAD_FILES} 个文件` })
+    }
     
     const { folder, tags } = req.body
     const results: any[] = []
@@ -568,9 +605,14 @@ export const uploadMaterialBatch = async (req: Request, res: Response) => {
       try {
         const isImage = file.mimetype.startsWith('image/')
         const isVideo = file.mimetype.startsWith('video/')
-        
-        if (!isImage && !isVideo) {
-          errors.push({ name: file.originalname, error: '不支持的文件类型' })
+
+        const validationError = validateMaterialFileMeta({
+          fileName: file.originalname,
+          mimeType: file.mimetype,
+          size: file.size,
+        })
+        if (validationError) {
+          errors.push({ name: file.originalname, error: validationError })
           continue
         }
         
