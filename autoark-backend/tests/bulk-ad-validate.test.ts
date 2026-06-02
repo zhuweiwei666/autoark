@@ -176,6 +176,40 @@ describe('bulk ad draft validation preflight', () => {
     expect(draft.save).toHaveBeenCalled()
   })
 
+  it('blocks publish when adset multiplier is not an integer', async () => {
+    const draft = baseDraft({
+      adset: {
+        targetingPackageId,
+        multiplier: 1.5,
+        optimizationGoal: 'OFFSITE_CONVERSIONS',
+      },
+    })
+    jest.spyOn(AdDraft, 'findOne').mockResolvedValue(draft as any)
+    jest.spyOn(FbToken, 'find').mockReturnValue(tokenQuery([{
+      _id: tokenId,
+      fbUserId: 'fb_1',
+    }]) as any)
+    jest.spyOn(FacebookUser, 'find').mockReturnValue(queryWithLean([{
+      fbUserId: 'fb_1',
+      syncStatus: 'completed',
+      adAccounts: [{ accountId: 'act_123', status: 1 }],
+      pages: [{ pageId: 'page_1', accounts: [{ accountId: 'act_123' }] }],
+      pixels: [{ pixelId: 'pixel_1', accounts: [{ accountId: 'act_123' }] }],
+    }]) as any)
+    mockValidPackages()
+
+    const validation = await validateDraft(draftId, {})
+
+    expect(validation.isValid).toBe(false)
+    expect(validation.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        field: 'adset.multiplier',
+        message: '广告组倍率必须是 1 到 10 之间的整数',
+      }),
+    ]))
+    expect(draft.save).toHaveBeenCalled()
+  })
+
   it('blocks publish when selected account is not accessible by the synced Facebook authorization', async () => {
     const draft = baseDraft()
     jest.spyOn(AdDraft, 'findOne').mockResolvedValue(draft as any)

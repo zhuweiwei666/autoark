@@ -70,6 +70,21 @@ const isAllowedAttributionWindow = (value: any, allowedValues: number[]) => {
   return Number.isInteger(next) && allowedValues.includes(next)
 }
 
+const normalizeAdsetMultiplierInput = (value: any) => (
+  value === undefined || value === null || value === '' ? 1 : value
+)
+
+const isAllowedAdsetMultiplier = (value: any) => {
+  const next = Number(normalizeAdsetMultiplierInput(value))
+  return Number.isInteger(next) && next >= 1 && next <= 10
+}
+
+const normalizeAdsetMultiplier = (value: any) => (
+  parseLimitedNumber(normalizeAdsetMultiplierInput(value), 1, 10)
+)
+
+const normalizeRerunMultiplier = (value: any) => parseLimitedNumber(value, 1, 20)
+
 const normalizeAttributionWindow = (value: any, fallback: number, allowedValues: number[]) => {
   const next = Number(value)
   return Number.isInteger(next) && allowedValues.includes(next) ? next : fallback
@@ -501,9 +516,8 @@ export const validateDraft = async (draftId: string, accessFilter: any = {}) => 
   if (!draft.adset?.targetingPackageId && !draft.adset?.inlineTargeting) {
     addError('adset.targeting', '请选择定向包或配置定向条件')
   }
-  const adsetMultiplier = Number(draft.adset?.multiplier || 1)
-  if (!Number.isFinite(adsetMultiplier) || adsetMultiplier < 1 || adsetMultiplier > 10) {
-    addError('adset.multiplier', '广告组倍率必须在 1 到 10 之间')
+  if (!isAllowedAdsetMultiplier(draft.adset?.multiplier)) {
+    addError('adset.multiplier', '广告组倍率必须是 1 到 10 之间的整数')
   }
   const attributionCfg = draft.adset?.attribution || draft.adset?.attributionSpec
   if (attributionCfg) {
@@ -634,7 +648,7 @@ export const publishDraft = async (draftId: string, userId?: string, accessFilte
   })
   const creativeGroupCount = draft.ad?.creativeGroupIds?.length || 1
   const copywritingCount = draft.ad?.copywritingPackageIds?.length || 1
-  const adsetMultiplier = Math.min(10, Math.max(1, Number(draft.adset?.multiplier || 1)))
+  const adsetMultiplier = normalizeAdsetMultiplier(draft.adset?.multiplier)
   const estimatedTotalAdsets = accountCount * adsetMultiplier
   
   // 估算广告数量（与前端预览一致：按创意组数估算；实际创建会按素材数生成更多广告）
@@ -1012,7 +1026,7 @@ export const executeTaskForAccount = async (
     
     // ==================== 3. 创建 AdSet（支持倍率） ====================
     // 广告组倍率：在一个 campaign 下创建多个 adset
-    const adsetMultiplier = Math.min(10, Math.max(1, Number(config.adset.multiplier || 1)))
+    const adsetMultiplier = normalizeAdsetMultiplier(config.adset.multiplier)
     const allAdsetIds: string[] = []
     const allAdsetNames: string[] = []
     
@@ -1916,7 +1930,7 @@ export const rerunTask = async (
   }
   
   const config = originalTask.configSnapshot
-  const safeMultiplier = Math.min(20, Math.max(1, multiplier))  // 限制 1-20
+  const safeMultiplier = normalizeRerunMultiplier(multiplier)  // 限制 1-20
   await assertBulkAdPublishAllowed({
     organizationId: originalTask.organizationId?.toString(),
     requestedAccounts: config.accounts.length,
