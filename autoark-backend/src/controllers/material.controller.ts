@@ -76,9 +76,16 @@ const MATERIAL_TAG_MAX_COUNT = 20
 const MATERIAL_NOTES_MAX_LENGTH = 2000
 const MATERIAL_ID_MAX_LENGTH = 80
 const MATERIAL_BATCH_ID_MAX_COUNT = 100
+const MATERIAL_OBJECT_ID_MAX_LENGTH = 24
+const MATERIAL_MAPPING_BATCH_MAX_COUNT = 500
+const MATERIAL_MAPPING_ID_MAX_LENGTH = 128
+const MATERIAL_MAPPING_HASH_MAX_LENGTH = 200
+const MATERIAL_MAPPING_URL_MAX_LENGTH = 2048
+const MATERIAL_MAPPING_PUBLISHER_MAX_LENGTH = 120
 const REUSABLE_MIN_SPEND_MAX = 1_000_000
 const REUSABLE_MIN_ROAS_MAX = 100
 const REUSABLE_MIN_QUALITY_SCORE_MAX = 100
+const OBJECT_ID_PATTERN = /^[0-9a-fA-F]{24}$/
 
 const parseBoundedMaterialNumber = (
   value: any,
@@ -147,6 +154,11 @@ const sanitizeMaterialName = (value: any): string | undefined => (
 const sanitizeMaterialId = (value: any): string | undefined => (
   pickSafeQueryString(value, MATERIAL_ID_MAX_LENGTH)
 )
+
+const sanitizeMaterialObjectId = (value: any): string | undefined => {
+  const safeId = pickSafeQueryString(value, MATERIAL_OBJECT_ID_MAX_LENGTH)
+  return safeId && OBJECT_ID_PATTERN.test(safeId) ? safeId : undefined
+}
 
 const sanitizeMaterialIdList = (value: any): string[] => {
   if (!Array.isArray(value)) return []
@@ -227,6 +239,87 @@ const childPathRegex = (path: string): string => `^${escapeRegexLiteral(path)}/`
 const idString = (value: any): string | undefined => (
   value?.toString?.() || (value ? String(value) : undefined)
 )
+
+type SanitizedFacebookMappingInput = {
+  materialId?: string
+  accountId?: string
+  imageHash?: string
+  videoId?: string
+}
+
+type SanitizedAdMaterialMappingInput = {
+  adId?: string
+  materialId?: string
+  accountId?: string
+  campaignId?: string
+  adsetId?: string
+  creativeId?: string
+  materialType?: 'image' | 'video'
+  materialName?: string
+  materialUrl?: string
+  fbImageHash?: string
+  fbVideoId?: string
+  publishedBy?: string
+  taskId?: string
+  organizationId?: string
+}
+
+const sanitizeMappingText = (value: any, maxLength = MATERIAL_MAPPING_ID_MAX_LENGTH): string | undefined => (
+  pickSafeQueryString(value, maxLength)
+)
+
+const sanitizeFacebookMappingInput = (input: any): SanitizedFacebookMappingInput => {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return {}
+
+  const mapping: SanitizedFacebookMappingInput = {}
+  const materialId = sanitizeMaterialObjectId(input.materialId)
+  const accountId = sanitizeMappingText(input.accountId)
+  const imageHash = sanitizeMappingText(input.imageHash, MATERIAL_MAPPING_HASH_MAX_LENGTH)
+  const videoId = sanitizeMappingText(input.videoId, MATERIAL_MAPPING_ID_MAX_LENGTH)
+
+  if (materialId) mapping.materialId = materialId
+  if (accountId) mapping.accountId = accountId
+  if (imageHash) mapping.imageHash = imageHash
+  if (videoId) mapping.videoId = videoId
+
+  return mapping
+}
+
+const sanitizeAdMaterialMappingInput = (input: any): SanitizedAdMaterialMappingInput => {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return {}
+
+  const scoped = sanitizeScopedUpdate(input)
+  const mapping: SanitizedAdMaterialMappingInput = {}
+  const adId = sanitizeMappingText(scoped.adId)
+  const materialId = sanitizeMaterialObjectId(scoped.materialId)
+  const accountId = sanitizeMappingText(scoped.accountId)
+  const campaignId = sanitizeMappingText(scoped.campaignId)
+  const adsetId = sanitizeMappingText(scoped.adsetId)
+  const creativeId = sanitizeMappingText(scoped.creativeId)
+  const materialType = pickOptionalMaterialType(scoped.materialType)
+  const materialName = sanitizeMaterialName(scoped.materialName)
+  const materialUrl = sanitizeMappingText(scoped.materialUrl, MATERIAL_MAPPING_URL_MAX_LENGTH)
+  const fbImageHash = sanitizeMappingText(scoped.fbImageHash, MATERIAL_MAPPING_HASH_MAX_LENGTH)
+  const fbVideoId = sanitizeMappingText(scoped.fbVideoId)
+  const publishedBy = sanitizeMappingText(scoped.publishedBy, MATERIAL_MAPPING_PUBLISHER_MAX_LENGTH)
+  const taskId = sanitizeMaterialObjectId(scoped.taskId)
+
+  if (adId) mapping.adId = adId
+  if (materialId) mapping.materialId = materialId
+  if (accountId) mapping.accountId = accountId
+  if (campaignId) mapping.campaignId = campaignId
+  if (adsetId) mapping.adsetId = adsetId
+  if (creativeId) mapping.creativeId = creativeId
+  if (materialType) mapping.materialType = materialType as 'image' | 'video'
+  if (materialName) mapping.materialName = materialName
+  if (materialUrl) mapping.materialUrl = materialUrl
+  if (fbImageHash) mapping.fbImageHash = fbImageHash
+  if (fbVideoId) mapping.fbVideoId = fbVideoId
+  if (publishedBy) mapping.publishedBy = publishedBy
+  if (taskId) mapping.taskId = taskId
+
+  return mapping
+}
 
 const accountIdVariants = (accountId?: string): string[] => {
   if (!accountId) return []
@@ -1259,7 +1352,8 @@ export const deleteFolder = async (req: Request, res: Response) => {
  */
 export const recordFbMapping = async (req: Request, res: Response) => {
   try {
-    const { materialId, accountId, imageHash, videoId } = req.body
+    const mapping = sanitizeFacebookMappingInput(req.body)
+    const { materialId, accountId, imageHash, videoId } = mapping
     
     if (!materialId || !accountId) {
       return res.status(400).json({ success: false, error: '参数不完整' })
@@ -1282,7 +1376,10 @@ export const recordFbMapping = async (req: Request, res: Response) => {
       return res.status(403).json({ success: false, error: scopeError })
     }
     
-    const success = await recordFacebookMapping(materialId, accountId, { imageHash, videoId })
+    const success = await recordFacebookMapping(materialId, accountId, {
+      ...(imageHash ? { imageHash } : {}),
+      ...(videoId ? { videoId } : {}),
+    })
     
     if (!success) {
       return res.status(500).json({ success: false, error: '记录映射失败' })
@@ -1304,15 +1401,16 @@ export const recordFbMapping = async (req: Request, res: Response) => {
  */
 export const findByFacebookId = async (req: Request, res: Response) => {
   try {
-    const { imageHash, videoId } = req.query
+    const imageHash = sanitizeMappingText(req.query.imageHash, MATERIAL_MAPPING_HASH_MAX_LENGTH)
+    const videoId = sanitizeMappingText(req.query.videoId)
     
     if (!imageHash && !videoId) {
       return res.status(400).json({ success: false, error: '请提供 imageHash 或 videoId' })
     }
     
     const material = await findMaterialByFacebookId({
-      imageHash: imageHash as string,
-      videoId: videoId as string,
+      imageHash,
+      videoId,
     })
     
     if (!material) {
@@ -1427,21 +1525,8 @@ export const aggregateMetrics = async (req: Request, res: Response) => {
  */
 export const recordAdMapping = async (req: Request, res: Response) => {
   try {
-    const {
-      adId,
-      materialId,
-      accountId,
-      campaignId,
-      adsetId,
-      creativeId,
-      materialType,
-      materialName,
-      materialUrl,
-      fbImageHash,
-      fbVideoId,
-      publishedBy,
-      taskId,
-    } = req.body
+    const mapping = sanitizeAdMaterialMappingInput(req.body)
+    const { adId, materialId, accountId, campaignId } = mapping
     
     if (!adId || !materialId) {
       return res.status(400).json({ success: false, error: '缺少 adId 或 materialId' })
@@ -1462,20 +1547,10 @@ export const recordAdMapping = async (req: Request, res: Response) => {
     }
     
     const success = await recordAdMaterialMapping({
+      ...mapping,
       adId,
       materialId,
       organizationId: materialOrganizationId,
-      accountId,
-      campaignId,
-      adsetId,
-      creativeId,
-      materialType,
-      materialName,
-      materialUrl,
-      fbImageHash,
-      fbVideoId,
-      publishedBy,
-      taskId,
     })
     
     if (!success) {
@@ -1501,7 +1576,22 @@ export const recordAdMappingsBatch = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, error: '请提供映射列表' })
     }
 
-    const materialIds = mappings.map((mapping: any) => mapping.materialId).filter(Boolean)
+    if (mappings.length > MATERIAL_MAPPING_BATCH_MAX_COUNT) {
+      return res.status(400).json({
+        success: false,
+        error: `一次最多记录 ${MATERIAL_MAPPING_BATCH_MAX_COUNT} 条映射`,
+      })
+    }
+
+    const sanitizedMappings = mappings
+      .map((mapping: any) => sanitizeAdMaterialMappingInput(mapping))
+      .filter((mapping: SanitizedAdMaterialMappingInput) => mapping.adId && mapping.materialId)
+
+    if (sanitizedMappings.length === 0) {
+      return res.status(400).json({ success: false, error: '没有有效的映射数据' })
+    }
+
+    const materialIds = Array.from(new Set(sanitizedMappings.map((mapping) => mapping.materialId).filter(Boolean)))
     const visibleMaterials = await Material.find(combineFilters(
       { _id: { $in: materialIds } },
       getMaterialFilter(req),
@@ -1513,12 +1603,12 @@ export const recordAdMappingsBatch = async (req: Request, res: Response) => {
         idString(material.organizationId) || req.user?.organizationId,
       ]),
     )
-    const candidateMappings = mappings
+    const candidateMappings = sanitizedMappings
       .filter((mapping: any) => visibleMaterialIds.has(String(mapping.materialId)))
       .map((mapping: any) => {
         const organizationId = materialOrgById.get(String(mapping.materialId))
         return {
-          ...mapping,
+          ...sanitizeAdMaterialMappingInput(mapping),
           organizationId,
         }
       })
