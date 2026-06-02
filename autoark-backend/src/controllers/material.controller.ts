@@ -67,6 +67,15 @@ const REUSABLE_MATERIAL_SORT_FIELDS = ['roas', 'spend', 'qualityScore'] as const
 const MATERIAL_TEXT_FILTER_MAX_LENGTH = 80
 const MATERIAL_TAG_FILTER_MAX_LENGTH = 200
 const MATERIAL_TAG_FILTER_MAX_COUNT = 20
+const MATERIAL_NAME_MAX_LENGTH = 160
+const MATERIAL_FOLDER_MAX_LENGTH = 160
+const MATERIAL_FOLDER_SEGMENT_MAX_LENGTH = 48
+const MATERIAL_FOLDER_MAX_SEGMENTS = 6
+const MATERIAL_TAG_MAX_LENGTH = 40
+const MATERIAL_TAG_MAX_COUNT = 20
+const MATERIAL_NOTES_MAX_LENGTH = 2000
+const MATERIAL_ID_MAX_LENGTH = 80
+const MATERIAL_BATCH_ID_MAX_COUNT = 100
 const REUSABLE_MIN_SPEND_MAX = 1_000_000
 const REUSABLE_MIN_ROAS_MAX = 100
 const REUSABLE_MIN_QUALITY_SCORE_MAX = 100
@@ -97,6 +106,77 @@ const pickSafeTagList = (value: any): string[] => {
     .slice(0, MATERIAL_TAG_FILTER_MAX_COUNT)
 }
 
+const sanitizeMaterialFolder = (value: any, fallback = '默认'): string => {
+  if (typeof value !== 'string') return fallback
+  const segments = value
+    .trim()
+    .slice(0, MATERIAL_FOLDER_MAX_LENGTH)
+    .split(/[\\/]+/)
+    .map((segment) => segment.trim().slice(0, MATERIAL_FOLDER_SEGMENT_MAX_LENGTH))
+    .filter((segment) => segment && segment !== '.' && segment !== '..')
+    .slice(0, MATERIAL_FOLDER_MAX_SEGMENTS)
+
+  return segments.length > 0 ? segments.join('/') : fallback
+}
+
+const sanitizeFolderName = (value: any): string | undefined => {
+  const folder = sanitizeMaterialFolder(value, '')
+  if (!folder || folder.includes('/')) return undefined
+  return folder
+}
+
+const sanitizeMaterialTags = (value: any): string[] => {
+  const values = Array.isArray(value)
+    ? value
+    : (typeof value === 'string' ? value.split(',') : [])
+
+  return Array.from(new Set(values
+    .map((tag: any) => pickSafeQueryString(tag, MATERIAL_TAG_MAX_LENGTH))
+    .filter(Boolean) as string[]))
+    .slice(0, MATERIAL_TAG_MAX_COUNT)
+}
+
+const sanitizeMaterialNotes = (value: any): string | undefined => (
+  typeof value === 'string' ? pickSafeQueryString(value, MATERIAL_NOTES_MAX_LENGTH) : undefined
+)
+
+const sanitizeMaterialName = (value: any): string | undefined => (
+  pickSafeQueryString(value, MATERIAL_NAME_MAX_LENGTH)
+)
+
+const sanitizeMaterialId = (value: any): string | undefined => (
+  pickSafeQueryString(value, MATERIAL_ID_MAX_LENGTH)
+)
+
+const sanitizeMaterialIdList = (value: any): string[] => {
+  if (!Array.isArray(value)) return []
+  return Array.from(new Set(value
+    .map((id: any) => sanitizeMaterialId(id))
+    .filter(Boolean) as string[]))
+    .slice(0, MATERIAL_BATCH_ID_MAX_COUNT)
+}
+
+const sanitizeMaterialMetadataInput = (input: any) => {
+  const update: any = {}
+  const scoped = sanitizeScopedUpdate(input || {})
+  const name = sanitizeMaterialName(scoped.name)
+  if (name) update.name = name
+
+  if (Object.prototype.hasOwnProperty.call(scoped, 'tags')) {
+    update.tags = sanitizeMaterialTags(scoped.tags)
+  }
+
+  if (Object.prototype.hasOwnProperty.call(scoped, 'folder')) {
+    update.folder = sanitizeMaterialFolder(scoped.folder)
+  }
+
+  if (Object.prototype.hasOwnProperty.call(scoped, 'notes')) {
+    update.notes = sanitizeMaterialNotes(scoped.notes) || ''
+  }
+
+  return update
+}
+
 const getTenantStorageRoot = (req: Request): string => {
   if (req.user?.organizationId) return `tenants/org-${hashStorageScope(req.user.organizationId)}`
   if (req.user?.userId) return `tenants/user-${hashStorageScope(req.user.userId)}`
@@ -108,8 +188,8 @@ const hashStorageScope = (value: string): string => (
 )
 
 const getScopedStorageFolder = (req: Request, folder?: string): string => {
-  const requestedFolder = typeof folder === 'string' && folder.trim() ? folder.trim() : 'materials'
-  return `${getTenantStorageRoot(req)}/${requestedFolder.replace(/^\/+/, '')}`
+  const requestedFolder = sanitizeMaterialFolder(folder, 'materials')
+  return `${getTenantStorageRoot(req)}/${requestedFolder}`
 }
 
 const getScopedFingerprintKey = (req: Request, fingerprintKey?: string): string | undefined => {
@@ -390,9 +470,9 @@ export const confirmUpload = async (req: Request, res: Response) => {
         mimeType: mimeType || 'application/octet-stream',
         size: size || 0,
       },
-      tags: tags ? (Array.isArray(tags) ? tags : tags.split(',').map((t: string) => t.trim())) : [],
-      folder: folder || '默认',
-      notes,
+      tags: sanitizeMaterialTags(tags),
+      folder: sanitizeMaterialFolder(folder),
+      notes: sanitizeMaterialNotes(notes),
       // 记录创建者和组织
       createdBy: req.user?.userId,
       organizationId: req.user?.organizationId,
@@ -415,6 +495,8 @@ export const confirmUpload = async (req: Request, res: Response) => {
 export const confirmUploads = async (req: Request, res: Response) => {
   try {
     const { files, folder, tags } = req.body
+    const safeFolder = sanitizeMaterialFolder(folder)
+    const safeTags = sanitizeMaterialTags(tags)
     
     if (!files || !Array.isArray(files) || files.length === 0) {
       return res.status(400).json({ success: false, error: '请提供文件列表' })
@@ -454,8 +536,8 @@ export const confirmUploads = async (req: Request, res: Response) => {
             mimeType: file.mimeType || 'application/octet-stream',
             size: file.size || 0,
           },
-          tags: tags ? (Array.isArray(tags) ? tags : tags.split(',').map((t: string) => t.trim())) : [],
-          folder: folder || '默认',
+          tags: safeTags,
+          folder: safeFolder,
           // 记录创建者和组织
           createdBy: req.user?.userId,
           organizationId: req.user?.organizationId,
@@ -573,9 +655,9 @@ export const uploadMaterial = async (req: Request, res: Response) => {
       },
       fingerprint,
       fingerprintKey: getScopedFingerprintKey(req, fingerprint.fingerprintKey),
-      tags: tags ? (Array.isArray(tags) ? tags : tags.split(',').map((t: string) => t.trim())) : [],
-      folder: folder || '默认',
-      notes,
+      tags: sanitizeMaterialTags(tags),
+      folder: sanitizeMaterialFolder(folder),
+      notes: sanitizeMaterialNotes(notes),
       // 记录创建者和组织
       createdBy: req.user?.userId,
       organizationId: req.user?.organizationId,
@@ -606,6 +688,8 @@ export const uploadMaterialBatch = async (req: Request, res: Response) => {
     }
     
     const { folder, tags } = req.body
+    const safeFolder = sanitizeMaterialFolder(folder)
+    const safeTags = sanitizeMaterialTags(tags)
     const results: any[] = []
     const errors: any[] = []
     
@@ -651,8 +735,8 @@ export const uploadMaterialBatch = async (req: Request, res: Response) => {
             mimeType: file.mimetype,
             size: file.size,
           },
-          tags: tags ? (Array.isArray(tags) ? tags : tags.split(',').map((t: string) => t.trim())) : [],
-          folder: folder || '默认',
+          tags: safeTags,
+          folder: safeFolder,
           // 记录创建者和组织
           createdBy: req.user?.userId,
           organizationId: req.user?.organizationId,
@@ -774,16 +858,11 @@ export const getMaterial = async (req: Request, res: Response) => {
  */
 export const updateMaterial = async (req: Request, res: Response) => {
   try {
-    const { name, tags, folder, notes } = sanitizeScopedUpdate(req.body)
+    const update = sanitizeMaterialMetadataInput(req.body)
     
     const material = await Material.findOneAndUpdate(
       combineFilters({ _id: req.params.id }, getMaterialFilter(req)),
-      { 
-        ...(name && { name }),
-        ...(tags && { tags: Array.isArray(tags) ? tags : tags.split(',').map((t: string) => t.trim()) }),
-        ...(folder && { folder }),
-        ...(notes !== undefined && { notes }),
-      },
+      update,
       { new: true }
     )
     
@@ -832,8 +911,8 @@ export const deleteMaterial = async (req: Request, res: Response) => {
  */
 export const deleteMaterialBatch = async (req: Request, res: Response) => {
   try {
-    const { ids } = req.body
-    if (!ids || !Array.isArray(ids) || ids.length === 0) {
+    const ids = sanitizeMaterialIdList(req.body?.ids)
+    if (ids.length === 0) {
       return res.status(400).json({ success: false, error: '请选择要删除的素材' })
     }
     
@@ -924,9 +1003,10 @@ export const getTags = async (req: Request, res: Response) => {
  */
 export const moveToFolder = async (req: Request, res: Response) => {
   try {
-    const { ids, folder } = req.body
+    const ids = sanitizeMaterialIdList(req.body?.ids)
+    const folder = sanitizeMaterialFolder(req.body?.folder, '')
     
-    if (!ids || !Array.isArray(ids) || ids.length === 0) {
+    if (ids.length === 0) {
       return res.status(400).json({ success: false, error: '请选择要移动的素材' })
     }
     if (!folder) {
@@ -1001,27 +1081,29 @@ export const getFolderTree = async (req: Request, res: Response) => {
 export const createFolder = async (req: Request, res: Response) => {
   try {
     const { name, parentId } = req.body
+    const safeName = sanitizeFolderName(name)
+    const safeParentId = sanitizeMaterialId(parentId)
     
-    if (!name || !name.trim()) {
+    if (!safeName) {
       return res.status(400).json({ success: false, error: '请输入文件夹名称' })
     }
     
-    let path = name.trim()
+    let path = safeName
     let level = 0
     
     // 如果有父文件夹
-    if (parentId) {
-      const parent = await Folder.findOne(combineFilters({ _id: parentId }, getMaterialFilter(req)))
+    if (safeParentId) {
+      const parent = await Folder.findOne(combineFilters({ _id: safeParentId }, getMaterialFilter(req)))
       if (!parent) {
         return res.status(400).json({ success: false, error: '父文件夹不存在' })
       }
-      path = `${parent.path}/${name.trim()}`
+      path = `${parent.path}/${safeName}`
       level = parent.level + 1
     }
     
     // 检查是否已存在
     const existing = await Folder.findOne(combineFilters(
-      { parentId: parentId || null, name: name.trim() },
+      { parentId: safeParentId || null, name: safeName },
       getMaterialFilter(req),
     ))
     if (existing) {
@@ -1029,8 +1111,8 @@ export const createFolder = async (req: Request, res: Response) => {
     }
     
     const folder = new Folder({
-      name: name.trim(),
-      parentId: parentId || null,
+      name: safeName,
+      parentId: safeParentId || null,
       path,
       level,
       createdBy: req.user?.userId,
@@ -1054,12 +1136,14 @@ export const createFolder = async (req: Request, res: Response) => {
 export const renameFolder = async (req: Request, res: Response) => {
   try {
     const { folderId, newName } = req.body
+    const safeNewName = sanitizeFolderName(newName)
+    const safeFolderId = sanitizeMaterialId(folderId)
     
-    if (!folderId || !newName || !newName.trim()) {
+    if (!safeFolderId || !safeNewName) {
       return res.status(400).json({ success: false, error: '参数不完整' })
     }
     
-    const folder: any = await Folder.findOne(combineFilters({ _id: folderId }, getMaterialFilter(req)))
+    const folder: any = await Folder.findOne(combineFilters({ _id: safeFolderId }, getMaterialFilter(req)))
     if (!folder) {
       return res.status(404).json({ success: false, error: '文件夹不存在' })
     }
@@ -1071,23 +1155,23 @@ export const renameFolder = async (req: Request, res: Response) => {
     let newPath: string
     if (folder.parentId) {
       const parent = await Folder.findOne(combineFilters({ _id: folder.parentId }, getMaterialFilter(req)))
-      newPath = parent ? `${parent.path}/${newName.trim()}` : newName.trim()
+      newPath = parent ? `${parent.path}/${safeNewName}` : safeNewName
     } else {
-      newPath = newName.trim()
+      newPath = safeNewName
     }
     
     // 检查同级是否有重名
     const existing = await Folder.findOne(combineFilters({
       parentId: folder.parentId, 
-      name: newName.trim(),
-      _id: { $ne: folderId }
+      name: safeNewName,
+      _id: { $ne: safeFolderId }
     }, getMaterialFilter(req)))
     if (existing) {
       return res.status(400).json({ success: false, error: '同名文件夹已存在' })
     }
     
     // 更新当前文件夹
-    folder.name = newName.trim()
+    folder.name = safeNewName
     folder.path = newPath
     await folder.save()
     
@@ -1124,18 +1208,19 @@ export const renameFolder = async (req: Request, res: Response) => {
 export const deleteFolder = async (req: Request, res: Response) => {
   try {
     const { folderId, moveToPath } = req.body
+    const safeFolderId = sanitizeMaterialId(folderId)
     
-    if (!folderId) {
+    if (!safeFolderId) {
       return res.status(400).json({ success: false, error: '请指定要删除的文件夹' })
     }
     
-    const folder: any = await Folder.findOne(combineFilters({ _id: folderId }, getMaterialFilter(req)))
+    const folder: any = await Folder.findOne(combineFilters({ _id: safeFolderId }, getMaterialFilter(req)))
     if (!folder) {
       return res.status(404).json({ success: false, error: '文件夹不存在' })
     }
     
     const folderPath = folder.path
-    const targetPath = moveToPath || '默认'
+    const targetPath = sanitizeMaterialFolder(moveToPath)
     
     // 移动该文件夹及子文件夹下的素材到目标文件夹
     await Material.updateMany(
@@ -1153,7 +1238,7 @@ export const deleteFolder = async (req: Request, res: Response) => {
     await Folder.deleteMany(combineFilters({ path: { $regex: childPathRegex(folderPath) } }, getMaterialFilter(req)))
     
     // 删除当前文件夹
-    await Folder.deleteOne(combineFilters({ _id: folderId }, getMaterialFilter(req)))
+    await Folder.deleteOne(combineFilters({ _id: safeFolderId }, getMaterialFilter(req)))
     
     logger.info(`[Folder] Deleted: ${folderPath}, materials moved to: ${targetPath}`)
     res.json({ success: true })
