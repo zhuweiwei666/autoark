@@ -66,6 +66,9 @@ import {
   getAuthPages,
   getAuthPixels,
   getAuthLoginUrl,
+  getCopywritingPackageList,
+  getCreativeGroupList,
+  getTargetingPackageList,
   handleAuthCallback,
   publishDraft as publishDraftController,
   parseAllCopywritingProducts,
@@ -1055,6 +1058,70 @@ describe('bulk ad controller', () => {
     expectMemberControlFilter((TargetingPackage.findOneAndUpdate as jest.Mock).mock.calls[0][0], req.params.id)
     expect((TargetingPackage.findOneAndUpdate as jest.Mock).mock.calls[0][1]).not.toHaveProperty('createdBy')
     expectMemberControlFilter((TargetingPackage.deleteOne as jest.Mock).mock.calls[0][0], req.params.id)
+  })
+
+  it('sanitizes targeting package list filters before querying', async () => {
+    const findQuery = {
+      sort: jest.fn().mockReturnThis(),
+      skip: jest.fn().mockReturnThis(),
+      limit: jest.fn().mockReturnThis(),
+      lean: jest.fn().mockResolvedValue([]),
+    }
+    jest.spyOn(TargetingPackage, 'find').mockReturnValue(findQuery as any)
+    jest.spyOn(TargetingPackage, 'countDocuments').mockResolvedValue(0 as any)
+    const req = memberReq({
+      query: {
+        accountId: ' act_123 ',
+        platform: { $ne: 'facebook' },
+        pageSize: '9999',
+      },
+    })
+    const res = resMock()
+
+    await getTargetingPackageList(req as any, res as any)
+
+    const filter = (TargetingPackage.find as jest.Mock).mock.calls[0][0]
+    expect(String(filter.organizationId)).toBe('665000000000000000000001')
+    expect(filter.accountId).toEqual({ $in: ['123', 'act_123'] })
+    expect(filter).not.toHaveProperty('platform')
+    expect(findQuery.limit).toHaveBeenCalledWith(100)
+    expect(TargetingPackage.countDocuments).toHaveBeenCalledWith(filter)
+  })
+
+  it('sanitizes copywriting and creative package list platform filters', async () => {
+    const copyFindQuery = {
+      sort: jest.fn().mockReturnThis(),
+      skip: jest.fn().mockReturnThis(),
+      limit: jest.fn().mockReturnThis(),
+      lean: jest.fn().mockResolvedValue([]),
+    }
+    const creativeFindQuery = {
+      sort: jest.fn().mockReturnThis(),
+      skip: jest.fn().mockReturnThis(),
+      limit: jest.fn().mockReturnThis(),
+      lean: jest.fn().mockResolvedValue([]),
+    }
+    jest.spyOn(CopywritingPackage, 'find').mockReturnValue(copyFindQuery as any)
+    jest.spyOn(CopywritingPackage, 'countDocuments').mockResolvedValue(0 as any)
+    jest.spyOn(CreativeGroup, 'find').mockReturnValue(creativeFindQuery as any)
+    jest.spyOn(CreativeGroup, 'countDocuments').mockResolvedValue(0 as any)
+    const res = resMock()
+
+    await getCopywritingPackageList(memberReq({
+      query: { accountId: { $ne: 'act_123' }, platform: 'tiktok' },
+    }) as any, res as any)
+    await getCreativeGroupList(memberReq({
+      query: { accountId: 'act_456', platform: 'unsafe' },
+    }) as any, res as any)
+
+    expect((CopywritingPackage.find as jest.Mock).mock.calls[0][0]).toEqual(expect.objectContaining({
+      platform: 'tiktok',
+    }))
+    expect((CopywritingPackage.find as jest.Mock).mock.calls[0][0]).not.toHaveProperty('accountId')
+    expect((CreativeGroup.find as jest.Mock).mock.calls[0][0]).toEqual(expect.objectContaining({
+      accountId: { $in: ['456', 'act_456'] },
+    }))
+    expect((CreativeGroup.find as jest.Mock).mock.calls[0][0]).not.toHaveProperty('platform')
   })
 
   it('sanitizes targeting package creation payloads', async () => {

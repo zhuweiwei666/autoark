@@ -202,6 +202,32 @@ describe('bulk ad task list', () => {
     expect(result).toMatchObject({ page: 3, pageSize: 100 })
   })
 
+  it('sanitizes task list filters before querying the database', async () => {
+    const findQuery = {
+      sort: jest.fn().mockReturnThis(),
+      skip: jest.fn().mockReturnThis(),
+      limit: jest.fn().mockReturnThis(),
+      lean: jest.fn().mockResolvedValue([]),
+    }
+    jest.spyOn(AdTask, 'find').mockReturnValue(findQuery as any)
+    jest.spyOn(AdTask, 'countDocuments').mockResolvedValue(0 as any)
+
+    await getTaskList({
+      status: { $ne: 'failed' },
+      taskType: 'DROP',
+      platform: 'facebook',
+    }, { organizationId: '665000000000000000000001' })
+
+    expect(AdTask.find).toHaveBeenCalledWith({
+      organizationId: '665000000000000000000001',
+      platform: 'facebook',
+    })
+    expect(AdTask.countDocuments).toHaveBeenCalledWith({
+      organizationId: '665000000000000000000001',
+      platform: 'facebook',
+    })
+  })
+
   it('caps draft list page size before querying the database', async () => {
     const findQuery = {
       sort: jest.fn().mockReturnThis(),
@@ -217,5 +243,21 @@ describe('bulk ad task list', () => {
     expect(findQuery.skip).toHaveBeenCalledWith(100)
     expect(findQuery.limit).toHaveBeenCalledWith(100)
     expect(result).toMatchObject({ page: 2, pageSize: 100 })
+  })
+
+  it('sanitizes draft list status filters before querying the database', async () => {
+    const findQuery = {
+      sort: jest.fn().mockReturnThis(),
+      skip: jest.fn().mockReturnThis(),
+      limit: jest.fn().mockReturnThis(),
+      lean: jest.fn().mockResolvedValue([]),
+    }
+    jest.spyOn(AdDraft, 'find').mockReturnValue(findQuery as any)
+    jest.spyOn(AdDraft, 'countDocuments').mockResolvedValue(0 as any)
+
+    await getDraftList({ status: { $ne: 'draft' } }, { createdBy: '665000000000000000000002' })
+
+    expect(AdDraft.find).toHaveBeenCalledWith({ createdBy: '665000000000000000000002' })
+    expect(AdDraft.countDocuments).toHaveBeenCalledWith({ createdBy: '665000000000000000000002' })
   })
 })

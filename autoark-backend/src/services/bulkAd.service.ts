@@ -24,7 +24,7 @@ import { facebookClient } from '../integration/facebook/facebookClient'
 import { combineFilters } from '../utils/accessControl'
 import { getAccountIdsForQuery, normalizeForStorage } from '../utils/accountId'
 import { getBuildInfo } from '../utils/buildInfo'
-import { parseLimitedNumber, parsePagination } from '../utils/pagination'
+import { parseLimitedNumber, parsePagination, pickAllowedString } from '../utils/pagination'
 import {
   buildTaskOperationalDiagnostics,
   diagnoseBulkAdError,
@@ -45,6 +45,10 @@ const DEFAULT_DIAGNOSTIC_TASK_SCAN_LIMIT = 1000
 const MAX_DIAGNOSTIC_TASK_SCAN_LIMIT = 5000
 const CLICK_ATTRIBUTION_WINDOWS = [1, 7, 28]
 const OPTIONAL_ATTRIBUTION_WINDOWS = [0, 1]
+const DRAFT_LIST_STATUSES = ['draft', 'ready', 'published', 'failed'] as const
+const TASK_LIST_STATUSES = ['pending', 'queued', 'processing', 'success', 'partial_success', 'failed', 'cancelled'] as const
+const TASK_LIST_TYPES = ['BULK_AD_CREATE', 'BULK_AD_UPDATE', 'BULK_AD_DELETE', 'MATERIAL_UPLOAD'] as const
+const TASK_LIST_PLATFORMS = ['facebook', 'tiktok', 'google'] as const
 
 const normalizeObjectIdList = (values: any[] = []) => {
   const unique = Array.from(new Set(values.map(value => value?.toString()).filter(Boolean)))
@@ -380,7 +384,7 @@ export const getDraft = async (draftId: string, accessFilter: any = {}) => {
  * @param userFilter 用户过滤条件（来自 getAssetFilter）
  */
 export const getDraftList = async (query: any = {}, userFilter: any = {}) => {
-  const { status } = query
+  const status = pickAllowedString(query.status, DRAFT_LIST_STATUSES, '')
   const { page, pageSize, skip } = parsePagination(query)
   
   // 合并用户过滤条件
@@ -1725,7 +1729,9 @@ const toTaskListItem = (task: any) => {
  * @param userFilter 用户过滤条件（来自 getAssetFilter）
  */
 export const getTaskList = async (query: any = {}, userFilter: any = {}) => {
-  const { status, taskType, platform } = query
+  const status = pickAllowedString(query.status, TASK_LIST_STATUSES, '')
+  const taskType = pickAllowedString(query.taskType, TASK_LIST_TYPES, '')
+  const platform = pickAllowedString(query.platform, TASK_LIST_PLATFORMS, '')
   const { page, pageSize, skip } = parsePagination(query)
   const diagnosticHealth = normalizeDiagnosticFilter(query.diagnosticHealth || query.health)
   const diagnosticErrorCode = normalizeDiagnosticFilter(query.errorCode)?.toUpperCase()

@@ -71,7 +71,11 @@ const createHttpError = (message: string, statusCode: number) => {
   return error
 }
 
-const parseAccountIdParam = (value: any) => normalizeForStorage(Array.isArray(value) ? value[0] : value)
+const parseAccountIdParam = (value: any) => {
+  const raw = Array.isArray(value) ? value[0] : value
+  const safe = pickTrimmedString(raw, 80)
+  return safe ? normalizeForStorage(safe) : ''
+}
 const AUTH_FACEBOOK_ASSET_PAGE_LIMIT = 10
 const AUTH_FACEBOOK_ASSET_PAGE_SIZE = 100
 const BULK_AD_OAUTH_CODE_MAX_LENGTH = 2048
@@ -909,6 +913,17 @@ const parseBulkAdOAuthStateForAudit = (state: unknown): {
   }
 }
 
+const buildPackageListFilter = (req: Request) => {
+  const filter: any = { ...getAssetFilter(req) }
+  const accountId = parseAccountIdParam(req.query.accountId)
+  const platform = pickAllowedString(req.query.platform, PLATFORMS, '')
+
+  if (accountId) filter.accountId = { $in: getAccountIdsForQuery([accountId]) }
+  if (platform) filter.platform = platform
+
+  return filter
+}
+
 // ==================== 草稿管理 ====================
 
 /**
@@ -1329,13 +1344,10 @@ export const updateTargetingPackage = async (req: Request, res: Response) => {
  */
 export const getTargetingPackageList = async (req: Request, res: Response) => {
   try {
-    const { accountId, platform } = req.query
     const { page, pageSize, skip } = parsePagination(req.query)
     
     // 使用更严格的用户级别过滤
-    const filter: any = { ...getAssetFilter(req) }
-    if (accountId) filter.accountId = accountId
-    if (platform) filter.platform = platform
+    const filter = buildPackageListFilter(req)
     
     const [list, total] = await Promise.all([
       TargetingPackage.find(filter)
@@ -1458,13 +1470,10 @@ export const updateCopywritingPackage = async (req: Request, res: Response) => {
  */
 export const getCopywritingPackageList = async (req: Request, res: Response) => {
   try {
-    const { accountId, platform } = req.query
     const { page, pageSize, skip } = parsePagination(req.query)
     
     // 使用更严格的用户级别过滤
-    const filter: any = { ...getAssetFilter(req) }
-    if (accountId) filter.accountId = accountId
-    if (platform) filter.platform = platform
+    const filter = buildPackageListFilter(req)
     
     const [list, total] = await Promise.all([
       CopywritingPackage.find(filter)
@@ -1605,13 +1614,10 @@ export const updateCreativeGroup = async (req: Request, res: Response) => {
  */
 export const getCreativeGroupList = async (req: Request, res: Response) => {
   try {
-    const { accountId, platform } = req.query
     const { page, pageSize, skip } = parsePagination(req.query)
     
     // 使用更严格的用户级别过滤
-    const filter: any = { ...getAssetFilter(req) }
-    if (accountId) filter.accountId = accountId
-    if (platform) filter.platform = platform
+    const filter = buildPackageListFilter(req)
     
     const [list, total] = await Promise.all([
       CreativeGroup.find(filter)
