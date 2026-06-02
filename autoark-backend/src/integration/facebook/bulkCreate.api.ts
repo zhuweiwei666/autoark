@@ -1,5 +1,6 @@
 import { facebookClient } from './facebookClient'
 import logger from '../../utils/logger'
+import { createHash } from 'crypto'
 
 /**
  * Facebook 批量创建 API 集成
@@ -28,6 +29,11 @@ const redactSensitive = (value: any): any => {
 }
 
 const safeJson = (value: any): string => JSON.stringify(redactSensitive(value), null, 2)
+
+const hashForLog = (value: unknown): string | undefined => {
+  if (!value) return undefined
+  return createHash('sha256').update(String(value)).digest('hex').slice(0, 12)
+}
 
 export const buildFacebookBulkCreateErrorPayload = (error: any) => {
   const responseData = error?.response?.data || error?.response || {}
@@ -386,7 +392,11 @@ export const uploadImageFromUrl = async (params: UploadImageParams) => {
     const res = await facebookClient.post(`/act_${accountId}/adimages`, requestParams)
     const images = res.images || {}
     const imageHash = Object.values(images)[0] as any
-    logger.info(`[BulkCreate] Image uploaded, hash: ${imageHash?.hash}`)
+    logger.info('[BulkCreate] Image uploaded', {
+      accountId,
+      hasImageHash: Boolean(imageHash?.hash),
+      imageHashRef: hashForLog(imageHash?.hash),
+    })
     return { success: true, hash: imageHash?.hash, data: res }
   } catch (error: any) {
     const errorPayload = buildFacebookBulkCreateErrorPayload(error)
@@ -442,7 +452,11 @@ export const uploadVideoFromUrl = async (params: UploadVideoParams) => {
       } else if (videoDetails.thumbnails?.data?.[0]?.uri) {
         thumbnailUrl = videoDetails.thumbnails.data[0].uri
       }
-      logger.info(`[BulkCreate] Video thumbnail: ${thumbnailUrl}`)
+      logger.info('[BulkCreate] Video thumbnail resolved', {
+        videoId: res.id,
+        hasThumbnailUrl: Boolean(thumbnailUrl),
+        thumbnailRef: hashForLog(thumbnailUrl),
+      })
     } catch (thumbError: any) {
       logger.warn(`[BulkCreate] Failed to get video thumbnail: ${thumbError.message}`)
     }

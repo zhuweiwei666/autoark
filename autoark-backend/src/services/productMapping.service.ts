@@ -5,11 +5,17 @@ import FbToken from '../models/FbToken'
 import Account from '../models/Account'
 import { facebookClient } from '../integration/facebook/facebookClient'
 import { URL } from 'url'
+import { createHash } from 'crypto'
 import { combineFilters } from '../utils/accessControl'
 import { normalizeForStorage } from '../utils/accountId'
 
 const PRODUCT_MAPPING_FACEBOOK_PAGE_LIMIT = 10
 const PRODUCT_MAPPING_FACEBOOK_PAGE_SIZE = 100
+
+const hashForLog = (value: unknown): string | undefined => {
+  if (!value) return undefined
+  return createHash('sha256').update(String(value)).digest('hex').slice(0, 12)
+}
 
 /**
  * 产品映射服务
@@ -85,8 +91,11 @@ export function parseProductUrl(urlString: string): UrlParseResult | null {
       productIdentifier: `${domain}:${productIdentifier}`.toLowerCase(),
       productName: productName || productIdentifier,
     }
-  } catch (error) {
-    logger.warn(`[ProductMapping] Failed to parse URL: ${urlString}`, error)
+  } catch (error: any) {
+    logger.warn('[ProductMapping] Failed to parse URL', {
+      urlHash: hashForLog(urlString),
+      message: error?.message || String(error),
+    })
     return null
   }
 }

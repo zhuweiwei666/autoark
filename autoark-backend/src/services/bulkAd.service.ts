@@ -1456,7 +1456,13 @@ export const executeTaskForAccount = async (
               publishedBy: task.createdBy?.toString(),
               taskId,
             })
-            logger.info(`[BulkAd] Recorded ad-material mapping: ${adDetail.adId} -> ${adDetail.materialId}`)
+            logger.info('[BulkAd] Recorded ad-material mapping', {
+              materialId: adDetail.materialId,
+              hasAdId: Boolean(adDetail.adId),
+              hasAccountId: Boolean(accountId),
+              hasCampaignId: Boolean(campaignId),
+              hasTaskId: Boolean(taskId),
+            })
           } catch (mappingErr: any) {
             logger.warn(`[BulkAd] Failed to record ad-material mapping:`, mappingErr.message)
           }

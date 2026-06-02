@@ -145,7 +145,7 @@ export async function recordFacebookMapping(
   try {
     const material = await Material.findById(materialId)
     if (!material) {
-      logger.error(`[MaterialTracking] Material not found: ${materialId}`)
+      logger.error('[MaterialTracking] Material not found', { materialId })
       return false
     }
     
@@ -183,7 +183,12 @@ export async function recordFacebookMapping(
     
     await material.save()
     
-    logger.info(`[MaterialTracking] Recorded FB mapping: Material ${materialId} -> Account ${accountId} (hash: ${mapping.imageHash || mapping.videoId})`)
+    logger.info('[MaterialTracking] Recorded FB mapping', {
+      materialId,
+      accountId,
+      hasImageHash: Boolean(mapping.imageHash),
+      hasVideoId: Boolean(mapping.videoId),
+    })
     
     return true
   } catch (error: any) {
@@ -248,7 +253,13 @@ export async function recordAdMaterialMapping(data: {
     
     await (AdMaterialMapping as any).recordMapping(data)
     
-    logger.info(`[MaterialTracking] Recorded ad-material mapping: Ad ${data.adId} -> Material ${data.materialId}`)
+    logger.info('[MaterialTracking] Recorded ad-material mapping', {
+      materialId: data.materialId,
+      hasAdId: Boolean(data.adId),
+      hasAccountId: Boolean(data.accountId),
+      hasCampaignId: Boolean(data.campaignId),
+      hasTaskId: Boolean(data.taskId),
+    })
     
     // 同时更新素材的使用统计
     await Material.findByIdAndUpdate(data.materialId, {

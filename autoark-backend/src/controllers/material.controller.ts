@@ -207,6 +207,20 @@ const hashStorageScope = (value: string): string => (
   createHash('sha256').update(String(value)).digest('hex').slice(0, 16)
 )
 
+const getMaterialLogScope = (req: Request) => ({
+  organizationScope: req.user?.organizationId ? hashStorageScope(req.user.organizationId) : undefined,
+  userScope: req.user?.userId ? hashStorageScope(req.user.userId) : undefined,
+})
+
+const getMaterialFileLogMeta = (file: { mimetype?: string; mimeType?: string; size?: number } = {}) => {
+  const mimeType = file.mimetype || file.mimeType || 'application/octet-stream'
+  return {
+    mimeType,
+    type: mimeType.startsWith('image/') ? 'image' : (mimeType.startsWith('video/') ? 'video' : 'other'),
+    size: Number(file.size || 0),
+  }
+}
+
 const getScopedStorageFolder = (req: Request, folder?: string): string => {
   const requestedFolder = sanitizeMaterialFolder(folder, 'materials')
   return `${getTenantStorageRoot(req)}/${requestedFolder}`
@@ -475,7 +489,11 @@ export const getPresignedUrl = async (req: Request, res: Response) => {
       return res.status(500).json({ success: false, error: result.error })
     }
     
-    logger.info(`[Material] Presigned URL generated for: ${fileName}`)
+    logger.info('[Material] Presigned URL generated', {
+      ...getMaterialLogScope(req),
+      file: getMaterialFileLogMeta({ mimeType, size }),
+      hasFolder: Boolean(folder),
+    })
     
     res.json({
       success: true,
@@ -522,7 +540,11 @@ export const getPresignedUrls = async (req: Request, res: Response) => {
       return res.status(500).json({ success: false, error: result.error })
     }
     
-    logger.info(`[Material] Presigned URLs generated for ${files.length} files`)
+    logger.info('[Material] Presigned URLs generated', {
+      ...getMaterialLogScope(req),
+      fileCount: files.length,
+      hasFolder: Boolean(folder),
+    })
     
     res.json({
       success: true,
@@ -580,7 +602,13 @@ export const confirmUpload = async (req: Request, res: Response) => {
     })
     
     await material.save()
-    logger.info(`[Material] Direct upload confirmed: ${material._id} - ${material.name}`)
+    logger.info('[Material] Direct upload confirmed', {
+      ...getMaterialLogScope(req),
+      materialId: idString(material._id),
+      file: getMaterialFileLogMeta({ mimeType, size }),
+      hasFolder: Boolean(folder),
+      tagCount: sanitizeMaterialTags(tags).length,
+    })
     
     res.json({ success: true, data: material })
   } catch (error: any) {
@@ -679,7 +707,7 @@ export const confirmUploads = async (req: Request, res: Response) => {
  * 3. 自动关联已有素材
  */
 export const uploadMaterial = async (req: Request, res: Response) => {
-  logger.info(`[Material] Upload request received`)
+  logger.info('[Material] Upload request received')
   try {
     const file = (req as any).file
     if (!file) {
@@ -687,10 +715,19 @@ export const uploadMaterial = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, error: '请选择要上传的文件' })
     }
     
-    logger.info(`[Material] File received: ${file.originalname}, size: ${file.size}, type: ${file.mimetype}`)
+    logger.info('[Material] File received', {
+      ...getMaterialLogScope(req),
+      file: getMaterialFileLogMeta(file),
+    })
     
     const { folder, tags, notes, skipDuplicateCheck } = req.body
-    logger.info(`[Material] Folder: ${folder}, tags: ${tags}`)
+    logger.info('[Material] Upload metadata received', {
+      ...getMaterialLogScope(req),
+      hasFolder: Boolean(folder),
+      tagCount: sanitizeMaterialTags(tags).length,
+      hasNotes: Boolean(sanitizeMaterialNotes(notes)),
+      skipDuplicateCheck: Boolean(skipDuplicateCheck),
+    })
     
     // 判断文件类型
     const isImage = file.mimetype.startsWith('image/')
@@ -706,15 +743,25 @@ export const uploadMaterial = async (req: Request, res: Response) => {
     const materialType = isImage ? 'image' : 'video'
     
     // ========== 1. 计算素材指纹 ==========
-    logger.info(`[Material] Calculating fingerprint...`)
+    logger.info('[Material] Calculating fingerprint')
     const fingerprint = await calculateFingerprint(file.buffer, materialType)
-    logger.info(`[Material] Fingerprint: ${fingerprint.fingerprintKey}`)
+    logger.info('[Material] Fingerprint calculated', {
+      ...getMaterialLogScope(req),
+      materialType,
+      hasPHash: Boolean(fingerprint.pHash),
+      hasVideoHash: Boolean(fingerprint.videoHash),
+      hasSha256: Boolean(fingerprint.sha256),
+    })
     
     // ========== 2. 去重检测 ==========
     if (!skipDuplicateCheck) {
       const duplicateCheck = await checkDuplicate(fingerprint, materialType, getMaterialFilter(req))
       if (duplicateCheck.isDuplicate && duplicateCheck.existingMaterial) {
-        logger.info(`[Material] Duplicate found: ${duplicateCheck.existingMaterial._id}`)
+        logger.info('[Material] Duplicate found', {
+          ...getMaterialLogScope(req),
+          materialId: idString(duplicateCheck.existingMaterial._id),
+          materialType,
+        })
         return res.json({
           success: true,
           data: duplicateCheck.existingMaterial,
@@ -724,7 +771,11 @@ export const uploadMaterial = async (req: Request, res: Response) => {
       }
     }
     
-    logger.info(`[Material] Starting R2 upload...`)
+    logger.info('[Material] Starting R2 upload', {
+      ...getMaterialLogScope(req),
+      materialType,
+      size: file.size,
+    })
     // 上传到 R2
     const uploadResult = await uploadToR2({
       buffer: file.buffer,
@@ -732,7 +783,11 @@ export const uploadMaterial = async (req: Request, res: Response) => {
       mimeType: file.mimetype,
       folder: getScopedStorageFolder(req, folder || 'materials'),
     })
-    logger.info(`[Material] R2 upload result:`, uploadResult.success ? 'success' : uploadResult.error)
+    logger.info('[Material] R2 upload result', {
+      ...getMaterialLogScope(req),
+      success: uploadResult.success,
+      hasError: Boolean(uploadResult.error),
+    })
     
     if (!uploadResult.success) {
       return res.status(500).json({ success: false, error: uploadResult.error || '上传失败' })
@@ -765,7 +820,14 @@ export const uploadMaterial = async (req: Request, res: Response) => {
     })
     
     await material.save()
-    logger.info(`[Material] Uploaded: ${material._id} - ${material.name} (fingerprint: ${fingerprint.fingerprintKey})`)
+    logger.info('[Material] Uploaded', {
+      ...getMaterialLogScope(req),
+      materialId: idString(material._id),
+      materialType,
+      size: file.size,
+      hasFolder: Boolean(folder),
+      tagCount: sanitizeMaterialTags(tags).length,
+    })
     
     res.json({ success: true, data: material, isDuplicate: false })
   } catch (error: any) {
@@ -1119,7 +1181,12 @@ export const moveToFolder = async (req: Request, res: Response) => {
       { folder }
     )
     
-    logger.info(`[Material] Moved ${result.modifiedCount} items to folder: ${folder}`)
+    logger.info('[Material] Moved items to folder', {
+      ...getMaterialLogScope(req),
+      modifiedCount: result.modifiedCount,
+      requestedCount: ids.length,
+      hasFolder: Boolean(folder),
+    })
     res.json({ success: true, data: { modifiedCount: result.modifiedCount } })
   } catch (error: any) {
     logger.error('[Material] Move to folder failed:', error)
@@ -1221,7 +1288,12 @@ export const createFolder = async (req: Request, res: Response) => {
     })
     
     await folder.save()
-    logger.info(`[Folder] Created: ${path}`)
+    logger.info('[Folder] Created', {
+      ...getMaterialLogScope(req),
+      folderId: idString(folder._id),
+      level,
+      hasParent: Boolean(safeParentId),
+    })
     
     res.json({ success: true, data: folder })
   } catch (error: any) {
@@ -1294,7 +1366,13 @@ export const renameFolder = async (req: Request, res: Response) => {
       [{ $set: { folder: { $replaceOne: { input: '$folder', find: oldPath, replacement: newPath } } } }]
     )
     
-    logger.info(`[Folder] Renamed: ${oldPath} -> ${newPath}`)
+    logger.info('[Folder] Renamed', {
+      ...getMaterialLogScope(req),
+      folderId: safeFolderId,
+      oldLevel: String(oldPath || '').split('/').filter(Boolean).length,
+      newLevel: String(newPath || '').split('/').filter(Boolean).length,
+      nameChanged: oldName !== safeNewName,
+    })
     res.json({ success: true, data: folder })
   } catch (error: any) {
     logger.error('[Folder] Rename failed:', error)
@@ -1341,7 +1419,12 @@ export const deleteFolder = async (req: Request, res: Response) => {
     // 删除当前文件夹
     await Folder.deleteOne(combineFilters({ _id: safeFolderId }, getMaterialFilter(req)))
     
-    logger.info(`[Folder] Deleted: ${folderPath}, materials moved to: ${targetPath}`)
+    logger.info('[Folder] Deleted', {
+      ...getMaterialLogScope(req),
+      folderId: safeFolderId,
+      folderLevel: String(folderPath || '').split('/').filter(Boolean).length,
+      hasMoveTarget: Boolean(targetPath),
+    })
     res.json({ success: true })
   } catch (error: any) {
     logger.error('[Folder] Delete failed:', error)
@@ -1393,7 +1476,13 @@ export const recordFbMapping = async (req: Request, res: Response) => {
       return res.status(500).json({ success: false, error: '记录映射失败' })
     }
     
-    logger.info(`[Material] FB mapping recorded: ${materialId} -> ${accountId}`)
+    logger.info('[Material] FB mapping recorded', {
+      ...getMaterialLogScope(req),
+      materialId,
+      accountId,
+      hasImageHash: Boolean(imageHash),
+      hasVideoId: Boolean(videoId),
+    })
     res.json({ success: true })
   } catch (error: any) {
     logger.error('[Material] Record FB mapping failed:', error)

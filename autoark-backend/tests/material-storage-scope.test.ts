@@ -15,6 +15,7 @@ import {
   checkDuplicate,
 } from '../src/services/materialTracking.service'
 import Material from '../src/models/Material'
+import logger from '../src/utils/logger'
 
 jest.mock('../src/models/Material', () => ({
   __esModule: true,
@@ -198,6 +199,64 @@ describe('material storage tenant scoping', () => {
       success: true,
       isDuplicate: false,
     }))
+  })
+
+  it('does not write customer material names, folders, tags, or fingerprints into upload logs', async () => {
+    const logSpy = jest.spyOn(logger, 'info').mockImplementation(jest.fn())
+    ;(calculateFingerprint as jest.Mock).mockResolvedValue({
+      pHash: 'secret_phash_1',
+      md5: 'secret_md5_1',
+      sha256: 'secret_sha_1',
+      fingerprintKey: 'img_secret_phash_1',
+    })
+    ;(checkDuplicate as jest.Mock).mockResolvedValue({ isDuplicate: false })
+    ;(uploadToR2 as jest.Mock).mockResolvedValue({
+      success: true,
+      key: 'tenants/org-hash/materials/private-client-launch.jpg',
+      url: 'https://cdn.autoark.test/private-client-launch.jpg',
+    })
+    ;(Material as unknown as jest.Mock).mockImplementation(function MaterialMock(this: any, data: any) {
+      Object.assign(this, data)
+      this._id = '665000000000000000000202'
+      this.save = jest.fn().mockResolvedValue(this)
+      return this
+    })
+    const res = createResponse()
+
+    try {
+      await uploadMaterial({
+        body: {
+          folder: 'VIPFolder/Q2 Launch',
+          tags: 'sensitive-tag,client-alpha',
+          notes: 'private brief',
+        },
+        file: {
+          buffer: Buffer.from('image'),
+          originalname: 'private-client-launch.jpg',
+          mimetype: 'image/jpeg',
+          size: 5,
+        },
+        user: {
+          userId: '665000000000000000000002',
+          organizationId: '665000000000000000000001',
+        },
+      } as any, res as any)
+
+      const logged = JSON.stringify(logSpy.mock.calls)
+      expect(logged).not.toContain('private-client-launch.jpg')
+      expect(logged).not.toContain('VIPFolder')
+      expect(logged).not.toContain('sensitive-tag')
+      expect(logged).not.toContain('client-alpha')
+      expect(logged).not.toContain('private brief')
+      expect(logged).not.toContain('img_secret_phash_1')
+      expect(logged).not.toContain('secret_phash_1')
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+        success: true,
+        isDuplicate: false,
+      }))
+    } finally {
+      logSpy.mockRestore()
+    }
   })
 
   it('rejects oversized presigned uploads before generating an upload URL', async () => {
