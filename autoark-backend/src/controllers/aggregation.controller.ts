@@ -27,10 +27,39 @@ import {
 import { authenticate, getUserAccountIds } from '../middlewares/auth'
 import { UserRole } from '../models/User'
 import { getAccountIdsForQuery, normalizeForStorage } from '../utils/accountId'
+import { parseLimitedNumber } from '../utils/pagination'
 
 const router = Router()
 
 router.use(authenticate)
+
+const AGG_MAX_RANGE_DAYS = 90
+const AGG_MAX_ROWS = 500
+
+const parseAggLimit = (value: any, fallback = 200) => parseLimitedNumber(value, fallback, AGG_MAX_ROWS)
+
+const getDate = (value: any, fallback: dayjs.Dayjs) => {
+  if (typeof value !== 'string') return fallback
+  const parsed = dayjs(value)
+  return parsed.isValid() ? parsed : fallback
+}
+
+const parseAggDateRange = (req: Request, fallbackDays = 7) => {
+  const fallbackEnd = dayjs()
+  const end = getDate(req.query.endDate, fallbackEnd)
+  const requestedStart = getDate(req.query.startDate, end.subtract(fallbackDays, 'day'))
+  const maxStart = end.subtract(AGG_MAX_RANGE_DAYS - 1, 'day')
+  const start = requestedStart.isAfter(end)
+    ? end
+    : requestedStart.isBefore(maxStart)
+      ? maxStart
+      : requestedStart
+
+  return {
+    start: start.format('YYYY-MM-DD'),
+    end: end.format('YYYY-MM-DD'),
+  }
+}
 
 const getAccountScope = async (req: Request): Promise<string[] | null> => {
   const accountIds = await getUserAccountIds(req)
@@ -94,9 +123,7 @@ const requireSuperAdmin = (req: Request, res: Response): boolean => {
  */
 router.get('/daily', async (req: Request, res: Response) => {
   try {
-    const { startDate, endDate } = req.query
-    const end = (endDate as string) || dayjs().format('YYYY-MM-DD')
-    const start = (startDate as string) || dayjs().subtract(7, 'day').format('YYYY-MM-DD')
+    const { start, end } = parseAggDateRange(req, 7)
 
     const accountIds = await getAccountScope(req)
     const data = accountIds === null
@@ -145,13 +172,14 @@ router.get('/today', async (req: Request, res: Response) => {
 router.get('/countries', async (req: Request, res: Response) => {
   try {
     const date = (req.query.date as string) || dayjs().format('YYYY-MM-DD')
+    const limit = parseAggLimit(req.query.limit)
     const accountIds = await getAccountScope(req)
-    const data = accountIds === null ? await getCountryData(date) : []
+    const data = accountIds === null ? await getCountryData(date, limit) : []
 
     res.json({
       success: true,
       data,
-      meta: { date, count: data.length },
+      meta: { date, count: data.length, limit },
     })
   } catch (error: any) {
     logger.error('[AggController] Get countries failed:', error.message)
@@ -195,15 +223,16 @@ router.get('/countries/trend', async (req: Request, res: Response) => {
 router.get('/accounts', async (req: Request, res: Response) => {
   try {
     const date = (req.query.date as string) || dayjs().format('YYYY-MM-DD')
+    const limit = parseAggLimit(req.query.limit)
     const accountIds = await getAccountScope(req)
     const data = accountIds === null
-      ? await getAccountData(date)
-      : await AggAccount.find({ date, accountId: { $in: accountIds } }).sort({ spend: -1 }).lean()
+      ? await getAccountData(date, limit)
+      : await AggAccount.find({ date, accountId: { $in: accountIds } }).sort({ spend: -1 }).limit(limit).lean()
 
     res.json({
       success: true,
       data,
-      meta: { date, count: data.length },
+      meta: { date, count: data.length, limit },
     })
   } catch (error: any) {
     logger.error('[AggController] Get accounts failed:', error.message)
@@ -220,6 +249,7 @@ router.get('/accounts', async (req: Request, res: Response) => {
 router.get('/campaigns', async (req: Request, res: Response) => {
   try {
     const date = (req.query.date as string) || dayjs().format('YYYY-MM-DD')
+    const limit = parseAggLimit(req.query.limit)
     const { optimizer, accountId } = req.query
     const optimizerFilter = optimizer as string | undefined
 
@@ -229,7 +259,7 @@ router.get('/campaigns', async (req: Request, res: Response) => {
       return res.json({
         success: true,
         data: [],
-        meta: { date, count: 0 },
+        meta: { date, count: 0, limit },
       })
     }
 
@@ -244,17 +274,18 @@ router.get('/campaigns', async (req: Request, res: Response) => {
     const data = accountIds === null && !accountIdFilter
       ? await getCampaignData(date, {
           optimizer: optimizerFilter,
+          limit,
         })
       : await AggCampaign.find({
           date,
           ...(optimizerFilter ? { optimizer: optimizerFilter } : {}),
           accountId: accountIdFilter ? accountIdFilter : { $in: accountIds },
-        }).sort({ spend: -1 }).lean()
+        }).sort({ spend: -1 }).limit(limit).lean()
 
     res.json({
       success: true,
       data,
-      meta: { date, count: data.length },
+      meta: { date, count: data.length, limit },
     })
   } catch (error: any) {
     logger.error('[AggController] Get campaigns failed:', error.message)
@@ -299,20 +330,22 @@ router.get('/campaigns/trend', async (req: Request, res: Response) => {
 router.get('/optimizers', async (req: Request, res: Response) => {
   try {
     const date = (req.query.date as string) || dayjs().format('YYYY-MM-DD')
+    const limit = parseAggLimit(req.query.limit)
     const accountIds = await getAccountScope(req)
     const data = accountIds === null
-      ? await getOptimizerData(date)
+      ? await getOptimizerData(date, limit)
       : await AggCampaign.aggregate([
           { $match: { date, accountId: { $in: accountIds } } },
           { $group: { _id: '$optimizer', spend: { $sum: '$spend' }, revenue: { $sum: '$revenue' }, campaigns: { $sum: 1 } } },
           { $project: { optimizer: '$_id', spend: 1, revenue: 1, roas: { $cond: [{ $gt: ['$spend', 0] }, { $divide: ['$revenue', '$spend'] }, 0] }, campaigns: 1 } },
           { $sort: { spend: -1 } },
+          { $limit: limit },
         ])
 
     res.json({
       success: true,
       data,
-      meta: { date, count: data.length },
+      meta: { date, count: data.length, limit },
     })
   } catch (error: any) {
     logger.error('[AggController] Get optimizers failed:', error.message)

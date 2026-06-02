@@ -422,40 +422,44 @@ export async function getDailySummary(startDate: string, endDate: string) {
 /**
  * 🌍 获取国家数据
  */
-export async function getCountryData(date: string) {
+export async function getCountryData(date: string, limit = 500) {
   return AggCountry.find({ date })
     .sort({ spend: -1 })
+    .limit(limit)
     .lean()
 }
 
 /**
  * 💰 获取账户数据
  */
-export async function getAccountData(date: string) {
+export async function getAccountData(date: string, limit = 500) {
   return AggAccount.find({ date })
     .sort({ spend: -1 })
+    .limit(limit)
     .lean()
 }
 
 /**
  * 📈 获取广告系列数据
  */
-export async function getCampaignData(date: string, options?: { optimizer?: string; accountId?: string }) {
+export async function getCampaignData(date: string, options?: { optimizer?: string; accountId?: string; limit?: number }) {
   const query: any = { date }
   if (options?.optimizer) query.optimizer = options.optimizer
   if (options?.accountId) query.accountId = options.accountId
 
   return AggCampaign.find(query)
     .sort({ spend: -1 })
+    .limit(options?.limit || 500)
     .lean()
 }
 
 /**
  * 👥 获取投手数据
  */
-export async function getOptimizerData(date: string) {
+export async function getOptimizerData(date: string, limit = 500) {
   return AggOptimizer.find({ date })
     .sort({ spend: -1 })
+    .limit(limit)
     .lean()
 }
 
