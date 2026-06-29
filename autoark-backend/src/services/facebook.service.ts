@@ -18,11 +18,11 @@ const handleApiError = (context: string, error: any) => {
   throw new Error(`Facebook API [${context}] failed: ${errMsg}`)
 }
 
-export const getAccountInfo = async (accountId: string) => {
+export const getAccountInfo = async (accountId: string, accessToken?: string) => {
   const startTime = Date.now()
   logger.info(`[Facebook API] getAccountInfo started for ${accountId}`)
   try {
-    const token = await getFacebookAccessToken()
+    const token = accessToken || await getFacebookAccessToken()
     const url = `${FB_BASE_URL}/${FB_API_VERSION}/${accountId}`
     const res = await axios.get(url, {
       params: {
@@ -37,11 +37,11 @@ export const getAccountInfo = async (accountId: string) => {
   }
 }
 
-export const getCampaigns = async (accountId: string) => {
+export const getCampaigns = async (accountId: string, accessToken?: string) => {
   const startTime = Date.now()
   logger.info(`[Facebook API] getCampaigns started for ${accountId}`)
   try {
-    const token = await getFacebookAccessToken()
+    const token = accessToken || await getFacebookAccessToken()
     const url = `${FB_BASE_URL}/${FB_API_VERSION}/${accountId}/campaigns`
     const res = await axios.get(url, {
       params: {
@@ -57,11 +57,11 @@ export const getCampaigns = async (accountId: string) => {
   }
 }
 
-export const getAdSets = async (accountId: string) => {
+export const getAdSets = async (accountId: string, accessToken?: string) => {
   const startTime = Date.now()
   logger.info(`[Facebook API] getAdSets started for ${accountId}`)
   try {
-    const token = await getFacebookAccessToken()
+    const token = accessToken || await getFacebookAccessToken()
     const url = `${FB_BASE_URL}/${FB_API_VERSION}/${accountId}/adsets`
     const res = await axios.get(url, {
       params: {
@@ -78,11 +78,11 @@ export const getAdSets = async (accountId: string) => {
   }
 }
 
-export const getAds = async (accountId: string) => {
+export const getAds = async (accountId: string, accessToken?: string) => {
   const startTime = Date.now()
   logger.info(`[Facebook API] getAds started for ${accountId}`)
   try {
-    const token = await getFacebookAccessToken()
+    const token = accessToken || await getFacebookAccessToken()
     const url = `${FB_BASE_URL}/${FB_API_VERSION}/${accountId}/ads`
     const res = await axios.get(url, {
       params: {
@@ -104,6 +104,7 @@ export const getAds = async (accountId: string) => {
 export const getInsightsDaily = async (
   accountId: string,
   dateRange?: { since: string; until: string },
+  accessToken?: string,
 ) => {
   const startTime = Date.now()
   // 统一格式：API 调用需要带 act_ 前缀
@@ -112,7 +113,7 @@ export const getInsightsDaily = async (
   const accountIdForStorage = normalizeForStorage(accountId)
   logger.info(`[Facebook API] getInsightsDaily started for ${accountId}`)
   try {
-    const token = await getFacebookAccessToken()
+    const token = accessToken || await getFacebookAccessToken()
     const url = `${FB_BASE_URL}/${FB_API_VERSION}/${accountIdForApi}/insights`
 
     // Requested fields

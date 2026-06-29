@@ -1,7 +1,12 @@
-import { Router } from 'express'
+import { NextFunction, Request, RequestHandler, Response, Router } from 'express'
 import multer from 'multer'
 import * as materialController from '../controllers/material.controller'
 import { authenticate } from '../middlewares/auth'
+import {
+  MAX_DIRECT_UPLOAD_FILES,
+  MAX_MATERIAL_FILE_SIZE,
+  formatBytes,
+} from '../utils/materialUploadLimits'
 
 const router = Router()
 
@@ -15,7 +20,8 @@ router.use(authenticate)
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: 100 * 1024 * 1024, // 100MB 限制
+    fileSize: MAX_MATERIAL_FILE_SIZE,
+    files: MAX_DIRECT_UPLOAD_FILES,
   },
   fileFilter: (req, file, cb) => {
     // 只允许图片和视频
@@ -26,6 +32,31 @@ const upload = multer({
     }
   },
 })
+
+const uploadErrorMessage = (error: any): string => {
+  if (error instanceof multer.MulterError) {
+    if (error.code === 'LIMIT_FILE_SIZE') {
+      return `文件大小超过限制（最大 ${formatBytes(MAX_MATERIAL_FILE_SIZE)}）`
+    }
+    if (error.code === 'LIMIT_FILE_COUNT' || error.code === 'LIMIT_UNEXPECTED_FILE') {
+      return `一次最多上传 ${MAX_DIRECT_UPLOAD_FILES} 个文件`
+    }
+  }
+
+  return error?.message || '素材上传失败，请稍后重试'
+}
+
+const handleUpload = (middleware: RequestHandler): RequestHandler => {
+  return (req: Request, res: Response, next: NextFunction) => {
+    middleware(req, res, (error: any) => {
+      if (!error) return next()
+      return res.status(400).json({
+        success: false,
+        error: uploadErrorMessage(error),
+      })
+    })
+  }
+}
 
 // R2 配置状态
 router.get('/config-status', materialController.getConfigStatus)
@@ -47,10 +78,10 @@ router.post('/confirm-uploads', materialController.confirmUploads)
 // ==================== 传统上传接口（经过服务器） ====================
 
 // 单文件上传
-router.post('/upload', upload.single('file'), materialController.uploadMaterial)
+router.post('/upload', handleUpload(upload.single('file')), materialController.uploadMaterial)
 
-// 批量上传（最多 10 个）
-router.post('/upload-batch', upload.array('files', 10), materialController.uploadMaterialBatch)
+// 批量上传
+router.post('/upload-batch', handleUpload(upload.array('files', MAX_DIRECT_UPLOAD_FILES)), materialController.uploadMaterialBatch)
 
 // 素材列表
 router.get('/', materialController.getMaterialList)

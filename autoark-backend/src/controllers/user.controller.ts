@@ -1,7 +1,18 @@
 import { Request, Response } from 'express'
 import userService from '../services/user.service'
-import { UserRole, UserStatus } from '../models/User'
 import logger from '../utils/logger'
+import { writeAuditLog } from '../services/auditLog.service'
+import { parsePagination, pickSafeQueryString } from '../utils/pagination'
+import {
+  pickSafePassword,
+  pickUserRole,
+  pickUserStatus,
+  sanitizeUserCreateInput,
+  sanitizeUserUpdateInput,
+  USER_ORGANIZATION_ID_MAX_LENGTH,
+} from '../utils/userInput'
+
+const USER_LIST_MAX_PAGE_SIZE = 100
 
 class UserController {
   /**
@@ -15,17 +26,28 @@ class UserController {
         return
       }
 
+      const { page, pageSize, skip } = parsePagination(req.query, {
+        defaultPageSize: 50,
+        maxPageSize: USER_LIST_MAX_PAGE_SIZE,
+      })
       const filters = {
-        organizationId: req.query.organizationId as string,
-        role: req.query.role as UserRole,
-        status: req.query.status as UserStatus,
+        organizationId: pickSafeQueryString(req.query.organizationId, USER_ORGANIZATION_ID_MAX_LENGTH),
+        role: pickUserRole(req.query.role),
+        status: pickUserStatus(req.query.status),
       }
 
-      const users = await userService.getUsers(req.user, filters)
+      const result = await userService.getUsers(req.user, filters, { page, pageSize, skip })
 
       res.json({
         success: true,
-        data: users,
+        data: result.data,
+        total: result.total,
+        pagination: {
+          page: result.page,
+          pageSize: result.pageSize,
+          total: result.total,
+          totalPages: Math.ceil(result.total / result.pageSize),
+        },
       })
     } catch (error: any) {
       logger.error('Get users error:', error)
@@ -73,20 +95,31 @@ class UserController {
         return
       }
 
-      const { username, password, email, role, organizationId } = req.body
+      const input = sanitizeUserCreateInput(req.body)
 
-      if (!username || !password || !email) {
+      if (!input.username || !input.password || !input.email) {
         res.status(400).json({
           success: false,
-          message: '用户名、密码和邮箱不能为空',
+          message: '用户名、邮箱不能为空，密码长度需为6-128位',
         })
         return
       }
 
       const user = await userService.createUser(
-        { username, password, email, role, organizationId },
+        input,
         req.user
       )
+
+      await writeAuditLog(req, {
+        category: 'user',
+        action: 'user.create',
+        status: 'success',
+        organizationId: (user as any).organizationId,
+        targetType: 'user',
+        targetId: String((user as any)._id),
+        summary: `创建用户 ${user.username}`,
+        after: { username: user.username, email: user.email, role: user.role, status: user.status },
+      })
 
       res.status(201).json({
         success: true,
@@ -114,9 +147,20 @@ class UserController {
 
       const user = await userService.updateUser(
         req.params.id,
-        req.body,
+        sanitizeUserUpdateInput(req.body),
         req.user
       )
+
+      await writeAuditLog(req, {
+        category: 'user',
+        action: 'user.update',
+        status: 'success',
+        organizationId: (user as any).organizationId,
+        targetType: 'user',
+        targetId: req.params.id,
+        summary: `更新用户 ${user.username}`,
+        after: { username: user.username, email: user.email, role: user.role, status: user.status },
+      })
 
       res.json({
         success: true,
@@ -144,6 +188,15 @@ class UserController {
 
       await userService.deleteUser(req.params.id, req.user)
 
+      await writeAuditLog(req, {
+        category: 'user',
+        action: 'user.delete',
+        status: 'success',
+        targetType: 'user',
+        targetId: req.params.id,
+        summary: '删除用户',
+      })
+
       res.json({
         success: true,
         message: '用户删除成功',
@@ -168,9 +221,9 @@ class UserController {
         return
       }
 
-      const { status } = req.body
+      const status = pickUserStatus(req.body?.status)
 
-      if (!status || !Object.values(UserStatus).includes(status)) {
+      if (!status) {
         res.status(400).json({
           success: false,
           message: '无效的状态值',
@@ -183,6 +236,17 @@ class UserController {
         status,
         req.user
       )
+
+      await writeAuditLog(req, {
+        category: 'user',
+        action: 'user.update_status',
+        status: 'success',
+        organizationId: (user as any).organizationId,
+        targetType: 'user',
+        targetId: req.params.id,
+        summary: `更新用户状态为 ${status}`,
+        after: { status: user.status },
+      })
 
       res.json({
         success: true,
@@ -208,12 +272,12 @@ class UserController {
         return
       }
 
-      const { newPassword } = req.body
+      const newPassword = pickSafePassword(req.body?.newPassword)
 
-      if (!newPassword || newPassword.length < 6) {
+      if (!newPassword) {
         res.status(400).json({
           success: false,
-          message: '新密码长度不能少于6位',
+          message: '新密码长度需为6-128位',
         })
         return
       }
@@ -223,6 +287,15 @@ class UserController {
         newPassword,
         req.user
       )
+
+      await writeAuditLog(req, {
+        category: 'user',
+        action: 'user.reset_password',
+        status: 'success',
+        targetType: 'user',
+        targetId: req.params.id,
+        summary: '管理员重置用户密码',
+      })
 
       res.json({
         success: true,

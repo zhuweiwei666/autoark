@@ -2,6 +2,23 @@ import { Request, Response } from 'express'
 import organizationService from '../services/organization.service'
 import { OrganizationStatus } from '../models/Organization'
 import logger from '../utils/logger'
+import { writeAuditLog } from '../services/auditLog.service'
+import { parsePagination, pickSafeQueryString } from '../utils/pagination'
+
+const MANAGEMENT_LIST_MAX_PAGE_SIZE = 100
+const MANAGEMENT_ID_MAX_LENGTH = 80
+
+const idString = (value: any): string | undefined => {
+  if (!value) return undefined
+  if (value._id) return String(value._id)
+  return String(value)
+}
+
+const pickOrganizationStatus = (value: any): OrganizationStatus | undefined => (
+  typeof value === 'string' && Object.values(OrganizationStatus).includes(value as OrganizationStatus)
+    ? value as OrganizationStatus
+    : undefined
+)
 
 class OrganizationController {
   /**
@@ -15,18 +32,30 @@ class OrganizationController {
         return
       }
 
+      const { page, pageSize, skip } = parsePagination(req.query, {
+        defaultPageSize: 50,
+        maxPageSize: MANAGEMENT_LIST_MAX_PAGE_SIZE,
+      })
       const filters = {
-        status: req.query.status as OrganizationStatus,
+        status: pickOrganizationStatus(req.query.status),
       }
 
-      const organizations = await organizationService.getOrganizations(
+      const result = await organizationService.getOrganizations(
         req.user,
-        filters
+        filters,
+        { page, pageSize, skip },
       )
 
       res.json({
         success: true,
-        data: organizations,
+        data: result.data,
+        total: result.total,
+        pagination: {
+          page: result.page,
+          pageSize: result.pageSize,
+          total: result.total,
+          totalPages: Math.ceil(result.total / result.pageSize),
+        },
       })
     } catch (error: any) {
       logger.error('Get organizations error:', error)
@@ -106,6 +135,21 @@ class OrganizationController {
         req.user
       )
 
+      await writeAuditLog(req, {
+        category: 'organization',
+        action: 'organization.create',
+        status: 'success',
+        organizationId: (result.organization as any)._id,
+        targetType: 'organization',
+        targetId: String((result.organization as any)._id),
+        summary: `创建组织 ${result.organization.name}`,
+        after: {
+          name: result.organization.name,
+          adminId: result.organization.adminId,
+          status: result.organization.status,
+        },
+      })
+
       res.status(201).json({
         success: true,
         data: result,
@@ -130,11 +174,39 @@ class OrganizationController {
         return
       }
 
+      const beforeOrganization = await organizationService.getOrganizationById(
+        req.params.id,
+        req.user
+      )
+      const beforeSnapshot = beforeOrganization ? {
+        name: beforeOrganization.name,
+        status: beforeOrganization.status,
+        settings: beforeOrganization.settings,
+        billing: beforeOrganization.billing,
+      } : undefined
+
       const organization = await organizationService.updateOrganization(
         req.params.id,
         req.body,
         req.user
       )
+
+      await writeAuditLog(req, {
+        category: 'organization',
+        action: 'organization.update',
+        status: 'success',
+        organizationId: (organization as any)._id,
+        targetType: 'organization',
+        targetId: req.params.id,
+        summary: `更新组织 ${organization.name}`,
+        before: beforeSnapshot,
+        after: {
+          name: organization.name,
+          status: organization.status,
+          settings: organization.settings,
+          billing: organization.billing,
+        },
+      })
 
       res.json({
         success: true,
@@ -161,6 +233,16 @@ class OrganizationController {
       }
 
       await organizationService.deleteOrganization(req.params.id, req.user)
+
+      await writeAuditLog(req, {
+        category: 'organization',
+        action: 'organization.delete',
+        status: 'success',
+        organizationId: req.params.id,
+        targetType: 'organization',
+        targetId: req.params.id,
+        summary: '删除组织',
+      })
 
       res.json({
         success: true,
@@ -202,6 +284,17 @@ class OrganizationController {
         req.user
       )
 
+      await writeAuditLog(req, {
+        category: 'organization',
+        action: 'organization.update_status',
+        status: 'success',
+        organizationId: (organization as any)._id,
+        targetType: 'organization',
+        targetId: req.params.id,
+        summary: `更新组织状态为 ${status}`,
+        after: { status: organization.status },
+      })
+
       res.json({
         success: true,
         data: organization,
@@ -226,14 +319,27 @@ class OrganizationController {
         return
       }
 
-      const members = await organizationService.getOrganizationMembers(
+      const { page, pageSize, skip } = parsePagination(req.query, {
+        defaultPageSize: 50,
+        maxPageSize: MANAGEMENT_LIST_MAX_PAGE_SIZE,
+      })
+
+      const result = await organizationService.getOrganizationMembers(
         req.params.id,
-        req.user
+        req.user,
+        { page, pageSize, skip },
       )
 
       res.json({
         success: true,
-        data: members,
+        data: result.data,
+        total: result.total,
+        pagination: {
+          page: result.page,
+          pageSize: result.pageSize,
+          total: result.total,
+          totalPages: Math.ceil(result.total / result.pageSize),
+        },
       })
     } catch (error: any) {
       logger.error('Get organization members error:', error)
@@ -255,7 +361,7 @@ class OrganizationController {
         return
       }
 
-      const { newAdminId } = req.body
+      const newAdminId = pickSafeQueryString(req.body?.newAdminId, MANAGEMENT_ID_MAX_LENGTH)
 
       if (!newAdminId) {
         res.status(400).json({
@@ -265,11 +371,28 @@ class OrganizationController {
         return
       }
 
+      const beforeOrganization = await organizationService.getOrganizationById(
+        req.params.id,
+        req.user
+      )
+
       const organization = await organizationService.transferAdmin(
         req.params.id,
         newAdminId,
         req.user
       )
+
+      await writeAuditLog(req, {
+        category: 'organization',
+        action: 'organization.transfer_admin',
+        status: 'success',
+        organizationId: (organization as any)._id,
+        targetType: 'organization',
+        targetId: req.params.id,
+        summary: '转移组织管理员',
+        before: { adminId: idString((beforeOrganization as any)?.adminId) },
+        after: { adminId: idString((organization as any).adminId), newAdminId },
+      })
 
       res.json({
         success: true,
@@ -277,6 +400,17 @@ class OrganizationController {
       })
     } catch (error: any) {
       logger.error('Transfer admin error:', error)
+      await writeAuditLog(req, {
+        category: 'organization',
+        action: 'organization.transfer_admin',
+        status: 'failed',
+        organizationId: req.params.id,
+        targetType: 'organization',
+        targetId: req.params.id,
+        summary: '转移组织管理员失败',
+        reason: error.message || '转移管理员失败',
+        after: { newAdminId: pickSafeQueryString(req.body?.newAdminId, MANAGEMENT_ID_MAX_LENGTH) },
+      })
       res.status(error.message.includes('权限') ? 403 : 400).json({
         success: false,
         message: error.message || '转移管理员失败',

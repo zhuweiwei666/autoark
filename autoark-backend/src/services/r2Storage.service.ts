@@ -2,6 +2,7 @@ import { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand } fro
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { v4 as uuidv4 } from 'uuid'
 import path from 'path'
+import { createHash } from 'crypto'
 import logger from '../utils/logger'
 
 /**
@@ -15,6 +16,20 @@ const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID || ''
 const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY || ''
 const R2_BUCKET_NAME = process.env.R2_BUCKET_NAME || ''
 const R2_PUBLIC_URL = process.env.R2_PUBLIC_URL || '' // 公开访问的 URL 前缀
+
+const hashForLog = (value: unknown): string | undefined => {
+  if (!value) return undefined
+  return createHash('sha256').update(String(value)).digest('hex').slice(0, 12)
+}
+
+const getKeyLogMeta = (key?: string) => {
+  if (!key) return { keyHash: undefined, folderDepth: 0 }
+  const parts = String(key).split('/').filter(Boolean)
+  return {
+    keyHash: hashForLog(key),
+    folderDepth: Math.max(0, parts.length - 1),
+  }
+}
 
 // 创建 S3 客户端（R2 兼容）
 let s3Client: S3Client | null = null
@@ -44,8 +59,22 @@ const generateStorageKey = (originalName: string, folder?: string): string => {
   const date = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
   const uuid = uuidv4()
   const ext = path.extname(originalName).toLowerCase() || '.bin'
-  const prefix = folder ? `${folder}/` : 'uploads/'
+  const safeFolder = (folder || 'uploads')
+    .replace(/\\/g, '/')
+    .split('/')
+    .map(part => part.trim())
+    .filter(part => part && part !== '.' && part !== '..')
+    .map(part => part.replace(/[^\w\u4e00-\u9fa5.-]/g, '_').slice(0, 80))
+    .join('/')
+  const prefix = `${safeFolder || 'uploads'}/`
   return `${prefix}${date}/${uuid}${ext}`
+}
+
+export const getPublicUrlForKey = (key: string): string => {
+  const normalizedKey = String(key || '').replace(/^\/+/, '')
+  return R2_PUBLIC_URL
+    ? `${R2_PUBLIC_URL.replace(/\/+$/, '')}/${normalizedKey}`
+    : `https://${R2_BUCKET_NAME}.${R2_ACCOUNT_ID}.r2.dev/${normalizedKey}`
 }
 
 /**
@@ -64,15 +93,22 @@ export const uploadToR2 = async (params: {
 }> => {
   const { buffer, originalName, mimeType, folder } = params
   
-  logger.info(`[R2] Starting upload: ${originalName}, size: ${buffer.length}, type: ${mimeType}, folder: ${folder}`)
+  logger.info('[R2] Starting upload', {
+    size: buffer.length,
+    mimeType,
+    hasFolder: Boolean(folder),
+    extension: path.extname(originalName).toLowerCase() || '.bin',
+  })
   
   try {
-    logger.info(`[R2] Getting S3 client...`)
+    logger.info('[R2] Getting S3 client')
     const client = getS3Client()
     const key = generateStorageKey(originalName, folder)
     
-    logger.info(`[R2] Generated key: ${key}, bucket: ${R2_BUCKET_NAME}`)
-    logger.info(`[R2] Endpoint: https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`)
+    logger.info('[R2] Generated object key', {
+      ...getKeyLogMeta(key),
+      bucketConfigured: Boolean(R2_BUCKET_NAME),
+    })
     
     const command = new PutObjectCommand({
       Bucket: R2_BUCKET_NAME,
@@ -81,18 +117,22 @@ export const uploadToR2 = async (params: {
       ContentType: mimeType,
     })
     
-    logger.info(`[R2] Sending to R2...`)
+    logger.info('[R2] Sending to R2')
     const startTime = Date.now()
     await client.send(command)
     const duration = Date.now() - startTime
-    logger.info(`[R2] Upload completed in ${duration}ms`)
+    logger.info('[R2] Upload completed', {
+      durationMs: duration,
+      ...getKeyLogMeta(key),
+    })
     
     // 生成公开访问 URL
-    const url = R2_PUBLIC_URL 
-      ? `${R2_PUBLIC_URL}/${key}`
-      : `https://${R2_BUCKET_NAME}.${R2_ACCOUNT_ID}.r2.dev/${key}`
+    const url = getPublicUrlForKey(key)
     
-    logger.info(`[R2] File uploaded: ${key}, URL: ${url}`)
+    logger.info('[R2] File uploaded', {
+      ...getKeyLogMeta(key),
+      hasPublicUrl: Boolean(url),
+    })
     
     return {
       success: true,
@@ -125,7 +165,7 @@ export const deleteFromR2 = async (key: string): Promise<{
     })
     
     await client.send(command)
-    logger.info(`[R2] File deleted: ${key}`)
+    logger.info('[R2] File deleted', getKeyLogMeta(key))
     
     return { success: true }
   } catch (error: any) {
@@ -189,7 +229,12 @@ export const generatePresignedUploadUrl = async (params: {
 }> => {
   const { fileName, mimeType, folder, expiresIn = 3600 } = params
   
-  logger.info(`[R2] Generating presigned URL for: ${fileName}, type: ${mimeType}`)
+  logger.info('[R2] Generating presigned URL', {
+    mimeType,
+    hasFolder: Boolean(folder),
+    extension: path.extname(fileName).toLowerCase() || '.bin',
+    expiresIn,
+  })
   
   try {
     const client = getS3Client()
@@ -204,11 +249,9 @@ export const generatePresignedUploadUrl = async (params: {
     const uploadUrl = await getSignedUrl(client, command, { expiresIn })
     
     // 生成公开访问 URL
-    const publicUrl = R2_PUBLIC_URL 
-      ? `${R2_PUBLIC_URL}/${key}`
-      : `https://${R2_BUCKET_NAME}.${R2_ACCOUNT_ID}.r2.dev/${key}`
+    const publicUrl = getPublicUrlForKey(key)
     
-    logger.info(`[R2] Presigned URL generated for: ${key}`)
+    logger.info('[R2] Presigned URL generated', getKeyLogMeta(key))
     
     return {
       success: true,
@@ -232,7 +275,7 @@ export const generatePresignedUploadUrls = async (files: Array<{
   fileName: string
   mimeType: string
   size: number
-}>): Promise<{
+}>, folder = 'materials'): Promise<{
   success: boolean
   urls?: Array<{
     fileName: string
@@ -246,15 +289,15 @@ export const generatePresignedUploadUrls = async (files: Array<{
   
   try {
     const results = await Promise.all(
-      files.map(async (file) => {
+      files.map(async (file, index) => {
         const result = await generatePresignedUploadUrl({
           fileName: file.fileName,
           mimeType: file.mimeType,
-          folder: 'materials',
+          folder,
         })
         
         if (!result.success) {
-          throw new Error(`Failed to generate URL for ${file.fileName}: ${result.error}`)
+          throw new Error(`Failed to generate URL for file #${index + 1}: ${result.error}`)
         }
         
         return {
@@ -286,4 +329,5 @@ export default {
   checkR2Config,
   generatePresignedUploadUrl,
   generatePresignedUploadUrls,
+  getPublicUrlForKey,
 }

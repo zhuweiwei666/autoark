@@ -1,0 +1,1487 @@
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { Link, useSearchParams } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
+import {
+  ArrowRight,
+  CheckCircle,
+  Clock,
+  ClockCounterClockwise,
+  FolderOpen,
+  Lightning,
+  ShieldCheck,
+  Stack,
+  UsersThree,
+  WarningCircle,
+  XCircle,
+} from "@phosphor-icons/react";
+import {
+  getAuditLogs,
+  getCommercialOrganizationReadiness,
+  getCommercialReadiness,
+  getCommercialSupportPackage,
+  getCommercialUsageLedger,
+  getOrganizations,
+  type AuditLogEntry,
+  type CommercialReadiness,
+  type CommercialSupportPackage,
+  type CommercialUsageLedger,
+} from "../services/api";
+import { useAuth } from "../contexts/AuthContext";
+
+const statusCopy: Record<string, { label: string; className: string; icon: any }> = {
+  done: {
+    label: "已就绪",
+    className: "bg-[#e7f3ef] text-[#0f766e] border-[#b7e3d5]",
+    icon: CheckCircle,
+  },
+  warning: {
+    label: "需关注",
+    className: "bg-[#fff7ed] text-[#b45309] border-[#fed7aa]",
+    icon: WarningCircle,
+  },
+  pending: {
+    label: "待完成",
+    className: "bg-zinc-100 text-zinc-600 border-zinc-200",
+    icon: Clock,
+  },
+  blocked: {
+    label: "阻塞",
+    className: "bg-[#fff1f2] text-[#b4233a] border-[#fecdd3]",
+    icon: XCircle,
+  },
+};
+
+const riskTone: Record<string, string> = {
+  critical: "border-[#fecdd3] bg-[#fff1f2] text-[#9f1239]",
+  warning: "border-[#fed7aa] bg-[#fff7ed] text-[#9a3412]",
+  info: "border-zinc-200 bg-white text-zinc-700",
+};
+
+const stateTone: Record<string, { panel: string; badge: string; icon: any }> = {
+  blocked: {
+    panel: "border-[#fecdd3] bg-[#fff8f8] text-[#9f1239]",
+    badge: "bg-[#fff1f2] text-[#9f1239] border-[#fecdd3]",
+    icon: XCircle,
+  },
+  attention: {
+    panel: "border-[#fed7aa] bg-[#fffaf3] text-[#9a3412]",
+    badge: "bg-[#fff7ed] text-[#9a3412] border-[#fed7aa]",
+    icon: WarningCircle,
+  },
+  ready: {
+    panel: "border-[#b7e3d5] bg-[#f4fbf8] text-[#0f766e]",
+    badge: "bg-[#e7f3ef] text-[#0f766e] border-[#b7e3d5]",
+    icon: CheckCircle,
+  },
+};
+
+const priorityTone: Record<string, string> = {
+  critical: "bg-[#fff1f2] text-[#9f1239] border-[#fecdd3]",
+  high: "bg-[#fff7ed] text-[#9a3412] border-[#fed7aa]",
+  medium: "bg-[#f8fafc] text-zinc-700 border-zinc-200",
+  low: "bg-[#f4fbf8] text-[#0f766e] border-[#b7e3d5]",
+};
+
+const priorityLabels: Record<string, string> = {
+  critical: "必须处理",
+  high: "优先处理",
+  medium: "上线前处理",
+  low: "建议完善",
+};
+
+const sourceLabels: Record<string, string> = {
+  setup: "系统配置",
+  facebook: "Facebook 资产",
+  quota: "套餐额度",
+  tasks: "任务闭环",
+  team: "团队权限",
+  materials: "素材准备",
+};
+
+const deploymentLabels: Record<string, string> = {
+  corsConfigured: "跨域白名单",
+  oauthStateSecretConfigured: "OAuth state 密钥",
+  facebookBusinessLoginConfigConfigured: "Business Login config_id",
+  feishuWebhookConfigured: "飞书告警",
+};
+
+const authorizationModeLabels: Record<string, string> = {
+  business_login: "Business Login",
+  scope_oauth: "Scope OAuth 兜底",
+};
+
+const businessLoginSourceLabels: Record<string, string> = {
+  global: "全局 config_id",
+  app: "App 专属 config_id",
+  missing: "未配置",
+};
+
+const authorizationTone: Record<string, { border: string; badge: string; text: string }> = {
+  ready: {
+    border: "border-[#b7e3d5] bg-[#f4fbf8]",
+    badge: "border-[#b7e3d5] bg-[#e7f3ef] text-[#0f766e]",
+    text: "text-[#0f766e]",
+  },
+  warning: {
+    border: "border-[#fed7aa] bg-[#fffaf3]",
+    badge: "border-[#fed7aa] bg-[#fff7ed] text-[#9a3412]",
+    text: "text-[#9a3412]",
+  },
+  blocked: {
+    border: "border-[#fecdd3] bg-[#fff8f8]",
+    badge: "border-[#fecdd3] bg-[#fff1f2] text-[#9f1239]",
+    text: "text-[#9f1239]",
+  },
+};
+
+const metricLabels: Record<string, string> = {
+  members: "成员",
+  adAccounts: "广告账户",
+  materials: "素材",
+  monthlyTasks: "本月任务",
+  concurrentTasks: "当前并发",
+};
+
+const featureLabels: Record<string, string> = {
+  facebook_oauth: "Facebook 授权",
+  bulk_ad_create: "批量建广告",
+  material_library: "素材库",
+  asset_sync: "资产同步",
+  review_tracking: "审核追踪",
+  automation_agent: "投放 Agent",
+  team_management: "团队管理",
+  audit_ready: "审计就绪",
+};
+
+const auditStatusTone: Record<string, string> = {
+  success: "bg-[#e7f3ef] text-[#0f766e] border-[#b7e3d5]",
+  failed: "bg-[#fff1f2] text-[#b4233a] border-[#fecdd3]",
+  warning: "bg-[#fff7ed] text-[#b45309] border-[#fed7aa]",
+};
+
+const auditStatusLabels: Record<string, string> = {
+  success: "成功",
+  failed: "失败",
+  warning: "警告",
+};
+
+const formatDateTime = (value?: string) => {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+};
+
+const metadataNumber = (log: AuditLogEntry, key: string) => {
+  const value = log.metadata?.[key];
+  if (typeof value === "number") return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+};
+
+const metadataText = (log: AuditLogEntry, key: string) => {
+  const value = log.metadata?.[key];
+  return typeof value === "string" ? value : undefined;
+};
+
+const safeFileName = (value: string) => {
+  const normalized = value.trim().replace(/[^\w.-]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+  return normalized.slice(0, 80) || "autoark-support-package";
+};
+
+const summaryNumber = (summary: Record<string, number | string | undefined>, key: string) => {
+  const value = summary[key];
+  if (typeof value === "number") return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
+};
+
+const summaryText = (summary: Record<string, number | string | undefined>, key: string) => {
+  const value = summary[key];
+  return typeof value === "string" && value.trim() ? value : undefined;
+};
+
+const supportPackageInsights = (supportPackage: CommercialSupportPackage) => {
+  const summary = supportPackage.facebookAssets.summary;
+  const tokenCount = summaryNumber(summary, "tokenCount");
+  const accountCount = summaryNumber(summary, "accountCount");
+  const readyAccountCount = summaryNumber(summary, "readyAccountCount");
+  const inactiveAccountCount = summaryNumber(summary, "inactiveAccountCount");
+  const accountsMissingPageCount = summaryNumber(summary, "accountsMissingPageCount");
+  const accountsMissingPixelCount = summaryNumber(summary, "accountsMissingPixelCount");
+  const expiredTokenCount = summaryNumber(summary, "expiredTokenCount");
+  const expiringSoonTokenCount = summaryNumber(summary, "expiringSoonTokenCount");
+  const staleTokenCheckCount = summaryNumber(summary, "staleTokenCheckCount");
+  const tokenWithoutExpiryCount = summaryNumber(summary, "tokenWithoutExpiryCount");
+  const earliestTokenExpiresAt = summaryText(summary, "earliestTokenExpiresAt");
+  const businessLoginConfigured = supportPackage.readiness.deployment.facebookBusinessLoginConfigConfigured;
+  const oauthStateSecretConfigured = supportPackage.readiness.deployment.oauthStateSecretConfigured;
+  const authorization = supportPackage.readiness.facebookAuthorization;
+  const authorizationModeLabel = authorization
+    ? authorizationModeLabels[authorization.authorizationMode] || authorization.authorizationMode
+    : businessLoginConfigured ? "Business Login" : "Scope OAuth 兜底";
+  const businessLoginSourceLabel = authorization
+    ? businessLoginSourceLabels[authorization.businessLoginConfigSource] || authorization.businessLoginConfigSource
+    : businessLoginConfigured ? "已配置" : "未配置";
+  const appSummary = supportPackage.facebookApps?.summary;
+  const firstBlockedApp = supportPackage.facebookApps?.apps?.find((app) => !app.publicOauthReady);
+  const firstAppGap = firstBlockedApp?.gaps?.[0];
+  const firstAuthorizationGap = authorization?.gaps?.[0];
+  const primaryRisk =
+    firstAuthorizationGap ? `Facebook 授权通道：${firstAuthorizationGap.label}，${firstAuthorizationGap.detail}` :
+    firstAppGap ? `${firstBlockedApp?.appName || "Facebook App"}：${firstAppGap.label}，${firstAppGap.detail}` :
+    supportPackage.facebookAssets.risks[0]?.message ||
+    supportPackage.readiness.risks[0]?.message ||
+    "暂无关键风险";
+  const topAction = supportPackage.readiness.nextActions[0]?.title || "暂无优先动作";
+  const topIssue = supportPackage.recentTasks[0]?.topIssue?.errorCode || "暂无最近任务错误";
+  const tokenHealthIssues = expiredTokenCount + expiringSoonTokenCount + staleTokenCheckCount + tokenWithoutExpiryCount;
+  const tokenHealthLabel = tokenCount === 0
+    ? "无授权 Token"
+    : tokenHealthIssues > 0
+      ? `${expiredTokenCount} 过期 · ${expiringSoonTokenCount} 临期 · ${staleTokenCheckCount} 待复检`
+      : "授权健康正常";
+
+  return {
+    tokenCount,
+    accountCount,
+    readyAccountCount,
+    inactiveAccountCount,
+    accountsMissingPageCount,
+    accountsMissingPixelCount,
+    expiredTokenCount,
+    expiringSoonTokenCount,
+    staleTokenCheckCount,
+    tokenWithoutExpiryCount,
+    earliestTokenExpiresAt,
+    businessLoginConfigured,
+    oauthStateSecretConfigured,
+    authorizationModeLabel,
+    businessLoginSourceLabel,
+    authorizationLabel: authorization?.label || "",
+    authorizationGapCount: authorization?.gapCount || 0,
+    appTotal: appSummary?.total || 0,
+    appReady: appSummary?.ready || 0,
+    appBlocked: appSummary?.blocked || 0,
+    appTotalGaps: appSummary?.totalGaps || 0,
+    firstAppGapLabel: firstAppGap?.label || "",
+    primaryRisk,
+    topAction,
+    topIssue,
+    tokenHealthLabel,
+  };
+};
+
+function ReadinessGauge({ score }: { score: number }) {
+  const color = score >= 80 ? "#0f766e" : score >= 55 ? "#b45309" : "#b4233a";
+  return (
+    <div className="relative flex h-36 w-36 items-center justify-center rounded-full bg-white shadow-[0_18px_42px_-32px_rgba(24,24,27,0.75)]">
+      <svg viewBox="0 0 120 120" className="absolute h-full w-full -rotate-90">
+        <circle cx="60" cy="60" r="50" fill="none" stroke="#e7e5e4" strokeWidth="10" />
+        <circle
+          cx="60"
+          cy="60"
+          r="50"
+          fill="none"
+          stroke={color}
+          strokeLinecap="round"
+          strokeWidth="10"
+          strokeDasharray={`${Math.max(0, Math.min(score, 100)) * 3.14} 314`}
+        />
+      </svg>
+      <div className="relative text-center">
+        <div className="font-mono text-4xl font-black text-zinc-950">{score}</div>
+        <div className="mt-1 text-xs font-bold text-zinc-500">商用分</div>
+      </div>
+    </div>
+  );
+}
+
+function MetricCard({
+  label,
+  value,
+  detail,
+  icon,
+}: {
+  label: string;
+  value: string;
+  detail: string;
+  icon: ReactNode;
+}) {
+  return (
+    <article className="rounded-lg border border-zinc-200 bg-white p-5 shadow-[0_18px_38px_-34px_rgba(24,24,27,0.72)]">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <div className="text-sm font-bold text-zinc-500">{label}</div>
+          <div className="mt-4 font-mono text-3xl font-black text-zinc-950">{value}</div>
+        </div>
+        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[#edf4f1] text-[#0f766e]">
+          {icon}
+        </div>
+      </div>
+      <div className="mt-4 text-sm font-bold text-zinc-600">{detail}</div>
+    </article>
+  );
+}
+
+function FacebookAuthorizationPanel({
+  authorization,
+}: {
+  authorization?: NonNullable<CommercialReadiness["facebookAuthorization"]>;
+}) {
+  if (!authorization) return null;
+  const tone = authorizationTone[authorization.level] || authorizationTone.warning;
+  const primaryGap = authorization.gaps[0];
+
+  return (
+    <section className={`mt-6 rounded-lg border p-5 shadow-[0_18px_38px_-34px_rgba(24,24,27,0.72)] ${tone.border}`}>
+      <div className="grid gap-5 lg:grid-cols-[1fr_1.2fr]">
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={`rounded-md border px-2.5 py-1 text-xs font-black ${tone.badge}`}>
+              {authorization.label}
+            </span>
+            <span className="text-xs font-black uppercase text-zinc-500">Facebook 授权通道</span>
+          </div>
+          <h2 className="mt-3 text-xl font-black text-zinc-950">
+            {authorizationModeLabels[authorization.authorizationMode] || authorization.authorizationMode}
+          </h2>
+          <p className="mt-2 text-sm font-bold leading-6 text-zinc-600">{authorization.summary}</p>
+          {primaryGap && (
+            <div className="mt-4 rounded-lg border border-white/70 bg-white/70 px-3 py-2">
+              <div className={`text-sm font-black ${tone.text}`}>{primaryGap.label}</div>
+              <div className="mt-1 text-xs font-bold leading-5 text-zinc-600">{primaryGap.detail}</div>
+              {primaryGap.actionPath && (
+                <Link to={primaryGap.actionPath} className="mt-2 inline-flex text-xs font-black text-zinc-950 underline underline-offset-4">
+                  去处理
+                </Link>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="rounded-lg border border-white/70 bg-white/80 p-4">
+            <div className="text-xs font-black uppercase text-zinc-500">config 来源</div>
+            <div className="mt-2 text-lg font-black text-zinc-950">
+              {businessLoginSourceLabels[authorization.businessLoginConfigSource] || authorization.businessLoginConfigSource}
+            </div>
+            <div className="mt-1 text-xs font-bold text-zinc-500">
+              {authorization.appBusinessLoginConfigCount} 个 App 专属配置
+            </div>
+          </div>
+          <div className="rounded-lg border border-white/70 bg-white/80 p-4">
+            <div className="text-xs font-black uppercase text-zinc-500">公开授权 App</div>
+            <div className="mt-2 text-lg font-black text-zinc-950">
+              {authorization.publicOauthAppCount} / {authorization.healthyAppCount}
+            </div>
+            <div className="mt-1 text-xs font-bold text-zinc-500">可公开授权 / 验证通过</div>
+          </div>
+          <div className="rounded-lg border border-white/70 bg-white/80 p-4">
+            <div className="text-xs font-black uppercase text-zinc-500">OAuth state</div>
+            <div className={`mt-2 text-lg font-black ${authorization.oauthStateSecretConfigured ? "text-[#0f766e]" : "text-[#9a3412]"}`}>
+              {authorization.oauthStateSecretConfigured ? "已配置" : "待配置"}
+            </div>
+            <div className="mt-1 text-xs font-bold text-zinc-500">回调签名保护</div>
+          </div>
+          <div className="rounded-lg border border-white/70 bg-white/80 p-4">
+            <div className="text-xs font-black uppercase text-zinc-500">缺口</div>
+            <div className={`mt-2 text-lg font-black ${tone.text}`}>{authorization.gapCount}</div>
+            <div className="mt-1 text-xs font-bold text-zinc-500">
+              {authorization.gaps.slice(0, 2).map((gap) => gap.label).join(" · ") || "无关键缺口"}
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function UsageBar({
+  label,
+  used,
+  limit,
+  percent,
+  status,
+}: {
+  label: string;
+  used: number;
+  limit: number | null;
+  percent: number | null;
+  status: string;
+}) {
+  const width = limit ? Math.min(percent || 0, 100) : 100;
+  const barClass =
+    status === "exceeded"
+      ? "bg-[#b4233a]"
+      : status === "warning"
+        ? "bg-[#b45309]"
+        : "bg-zinc-950";
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-4 text-sm">
+        <span className="font-bold text-zinc-800">{label}</span>
+        <span className="font-mono text-xs font-bold text-zinc-500">
+          {used} / {limit || "不限"}
+        </span>
+      </div>
+      <div className="h-2 overflow-hidden rounded-full bg-zinc-100">
+        <div className={`h-full rounded-full ${barClass}`} style={{ width: `${width}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function UsageLedgerPanel({
+  ledger,
+  isLoading,
+  error,
+  onRefresh,
+  isFetching,
+}: {
+  ledger?: CommercialUsageLedger;
+  isLoading: boolean;
+  error: unknown;
+  onRefresh: () => void;
+  isFetching: boolean;
+}) {
+  const lastSevenDays = ledger?.dailyTaskCounts.slice(-7) || [];
+  const quotaEvent = ledger?.quotaEvents[0];
+  const issueTrends = ledger?.issueTrends || [];
+  const monthlyTasks = ledger?.usage.monthlyTasks;
+  const concurrentTasks = ledger?.usage.concurrentTasks;
+
+  return (
+    <section className="mt-6 rounded-lg border border-zinc-200 bg-white p-5 shadow-[0_18px_38px_-34px_rgba(24,24,27,0.72)]">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-black text-zinc-950">用量流水</h2>
+          <p className="mt-1 text-sm font-semibold text-zinc-500">
+            看清本月发布量、近 7 天任务走势和额度拦截记录，方便客户续费、扩容和排障。
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onRefresh}
+          disabled={isFetching}
+          className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-bold text-zinc-700 hover:border-zinc-400 disabled:opacity-60"
+        >
+          {isFetching ? "刷新中" : "刷新用量"}
+        </button>
+      </div>
+
+      {isLoading ? (
+        <div className="flex h-32 items-center justify-center text-sm font-bold text-zinc-500">
+          正在加载用量流水...
+        </div>
+      ) : error ? (
+        <div className="rounded-lg border border-[#fecdd3] bg-[#fff1f2] p-3 text-sm font-bold text-[#9f1239]">
+          获取用量流水失败：{(error as Error).message}
+        </div>
+      ) : !ledger ? (
+        <div className="rounded-lg border border-zinc-100 bg-[#fbfbf8] p-4 text-sm font-bold text-zinc-500">
+          暂无用量数据
+        </div>
+      ) : (
+        <div className="grid gap-4 xl:grid-cols-[0.8fr_1.2fr]">
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="rounded-lg border border-zinc-100 bg-[#fbfbf8] p-4">
+                <div className="text-xs font-black uppercase text-zinc-500">本月任务</div>
+                <div className="mt-2 font-mono text-3xl font-black text-zinc-950">
+                  {monthlyTasks?.used ?? 0}
+                </div>
+                <div className="mt-1 text-xs font-bold text-zinc-500">
+                  上限 {monthlyTasks?.limit || "不限"}
+                </div>
+              </div>
+              <div className="rounded-lg border border-zinc-100 bg-[#fbfbf8] p-4">
+                <div className="text-xs font-black uppercase text-zinc-500">当前并发</div>
+                <div className="mt-2 font-mono text-3xl font-black text-zinc-950">
+                  {concurrentTasks?.used ?? 0}
+                </div>
+                <div className="mt-1 text-xs font-bold text-zinc-500">
+                  上限 {concurrentTasks?.limit || "不限"}
+                </div>
+              </div>
+            </div>
+            <div className="rounded-lg border border-zinc-100 bg-white p-4">
+              <div className="mb-3 text-xs font-black uppercase text-zinc-500">本月状态拆分</div>
+              <div className="space-y-2">
+                {ledger.taskStatusBreakdown.length === 0 ? (
+                  <div className="text-sm font-bold text-zinc-500">本月暂无任务</div>
+                ) : ledger.taskStatusBreakdown.map((item) => (
+                  <div key={item.status} className="flex items-center justify-between gap-3 text-sm">
+                    <span className="font-bold text-zinc-800">{item.label}</span>
+                    <span className="font-mono text-xs font-black text-zinc-500">
+                      {item.tasks} 任务 · {item.accountExecutions} 账户
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <div className="rounded-lg border border-zinc-100 bg-white p-4">
+              <div className="mb-3 text-xs font-black uppercase text-zinc-500">近 7 天任务</div>
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-left text-xs">
+                  <thead className="text-zinc-500">
+                    <tr>
+                      <th className="py-2 pr-3">日期</th>
+                      <th className="px-3 py-2">总任务</th>
+                      <th className="px-3 py-2">成功</th>
+                      <th className="px-3 py-2">失败</th>
+                      <th className="py-2 pl-3">账户执行</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-100 font-bold text-zinc-800">
+                    {lastSevenDays.map((day) => (
+                      <tr key={day.date}>
+                        <td className="py-2 pr-3 font-mono text-zinc-500">{day.date.slice(5)}</td>
+                        <td className="px-3 py-2">{day.totalTasks}</td>
+                        <td className="px-3 py-2 text-[#0f766e]">{day.successTasks}</td>
+                        <td className="px-3 py-2 text-[#b4233a]">{day.failedTasks}</td>
+                        <td className="py-2 pl-3">{day.accountExecutions}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-zinc-100 bg-[#fbfbf8] p-4">
+              <div className="mb-2 text-xs font-black uppercase text-zinc-500">最近额度拦截</div>
+              {quotaEvent ? (
+                <div>
+                  <div className="font-black text-zinc-950">{quotaEvent.errorCode || quotaEvent.action}</div>
+                  <div className="mt-1 text-sm font-semibold leading-6 text-zinc-600">
+                    {quotaEvent.reason || quotaEvent.summary || "额度校验失败"}
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-2 text-[11px] font-bold text-zinc-500">
+                    <span>{formatDateTime(quotaEvent.createdAt)}</span>
+                    <span>{quotaEvent.operator || "anonymous"}</span>
+                    {quotaEvent.details?.limit !== undefined && <span>上限 {quotaEvent.details.limit}</span>}
+                  </div>
+                </div>
+              ) : (
+                <div className="text-sm font-bold text-[#0f766e]">最近没有额度拦截</div>
+              )}
+            </div>
+
+            <div className="rounded-lg border border-zinc-100 bg-white p-4">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div className="text-xs font-black uppercase text-zinc-500">失败主因排行</div>
+                <span className="text-[11px] font-bold text-zinc-400">近 30 天</span>
+              </div>
+              {issueTrends.length === 0 ? (
+                <div className="text-sm font-bold text-[#0f766e]">近 30 天没有集中失败主因</div>
+              ) : (
+                <div className="space-y-3">
+                  {issueTrends.slice(0, 4).map((issue) => (
+                    <div key={issue.errorCode} className="border-b border-zinc-100 pb-3 last:border-b-0 last:pb-0">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="font-mono text-xs font-black text-zinc-950">{issue.errorCode}</div>
+                        <span className={`rounded-md border px-2 py-0.5 text-[11px] font-black ${
+                          issue.retryable
+                            ? "border-[#b7e3d5] bg-[#e7f3ef] text-[#0f766e]"
+                            : "border-[#fecdd3] bg-[#fff1f2] text-[#b4233a]"
+                        }`}>
+                          {issue.retryable ? "可重试" : "需处理"}
+                        </span>
+                      </div>
+                      <div className="mt-1 text-sm font-semibold leading-6 text-zinc-600">
+                        {issue.customerMessage}
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-2 text-[11px] font-bold text-zinc-500">
+                        <span>{issue.count} 次错误</span>
+                        <span>{issue.taskCount} 个任务</span>
+                        <span>{issue.accountCount} 个账户</span>
+                        {issue.lastSeenAt && <span>{formatDateTime(issue.lastSeenAt)}</span>}
+                      </div>
+                      {issue.nextActions[0] && (
+                        <div className="mt-2 rounded-md bg-[#fbfbf8] px-3 py-2 text-xs font-bold leading-5 text-zinc-600">
+                          {issue.nextActions[0]}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ChecklistRow({ item }: { item: CommercialReadiness["checklist"][number] }) {
+  const tone = statusCopy[item.status] || statusCopy.pending;
+  const Icon = tone.icon;
+
+  return (
+    <div className="flex items-start gap-4 border-b border-zinc-100 py-4 last:border-b-0">
+      <div className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border ${tone.className}`}>
+        <Icon size={18} weight="fill" />
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <h3 className="font-extrabold text-zinc-950">{item.title}</h3>
+          <span className={`rounded-md border px-2 py-0.5 text-xs font-bold ${tone.className}`}>
+            {tone.label}
+          </span>
+          {item.metric && (
+            <span className="font-mono text-xs font-bold text-zinc-500">{item.metric}</span>
+          )}
+        </div>
+        <p className="mt-1 text-sm font-medium leading-6 text-zinc-600">{item.description}</p>
+      </div>
+      {item.actionPath && (
+        <Link
+          to={item.actionPath}
+          className="hidden shrink-0 items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-bold text-zinc-900 hover:border-zinc-400 md:inline-flex"
+        >
+          处理
+          <ArrowRight size={14} weight="bold" />
+        </Link>
+      )}
+    </div>
+  );
+}
+
+function NextActionCard({ action }: { action: CommercialReadiness["nextActions"][number] }) {
+  return (
+    <article className="flex h-full flex-col justify-between rounded-lg border border-zinc-200 bg-white p-4 shadow-[0_18px_38px_-34px_rgba(24,24,27,0.72)]">
+      <div>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className={`rounded-md border px-2 py-0.5 text-[11px] font-black ${priorityTone[action.priority] || priorityTone.medium}`}>
+            {priorityLabels[action.priority] || action.priority}
+          </span>
+          <span className="rounded-md bg-zinc-100 px-2 py-0.5 text-[11px] font-bold text-zinc-600">
+            {sourceLabels[action.source] || action.source}
+          </span>
+        </div>
+        <h3 className="mt-3 text-base font-black leading-6 text-zinc-950">{action.title}</h3>
+        <p className="mt-2 text-sm font-medium leading-6 text-zinc-600">{action.description}</p>
+      </div>
+      <div className="mt-4 flex items-center justify-between gap-3 border-t border-zinc-100 pt-3">
+        <span className="text-xs font-bold text-zinc-500">{action.owner}</span>
+        {action.actionPath && (
+          <Link
+            to={action.actionPath}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-bold text-zinc-900 hover:border-zinc-400"
+          >
+            去处理
+            <ArrowRight size={14} weight="bold" />
+          </Link>
+        )}
+      </div>
+    </article>
+  );
+}
+
+export default function CommercialCenterPage() {
+  const { isSuperAdmin } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [selectedOrganizationId, setSelectedOrganizationId] = useState(searchParams.get("organizationId") || "");
+  const [supportPackage, setSupportPackage] = useState<CommercialSupportPackage | null>(null);
+  const [supportPackageLoading, setSupportPackageLoading] = useState(false);
+  const [supportPackageError, setSupportPackageError] = useState("");
+  const updateSelectedOrganization = (organizationId: string) => {
+    setSelectedOrganizationId(organizationId);
+    setSearchParams(organizationId ? { organizationId } : {});
+  };
+  const { data, isLoading, error, refetch, isFetching } = useQuery({
+    queryKey: ["commercial-readiness", selectedOrganizationId || "platform"],
+    queryFn: () => getCommercialReadiness(selectedOrganizationId || undefined),
+  });
+  const { data: organizationsData, isLoading: organizationsLoading } = useQuery({
+    queryKey: ["commercial-organizations"],
+    queryFn: () => getOrganizations(),
+    enabled: isSuperAdmin,
+  });
+  const {
+    data: organizationReadinessData,
+    refetch: refetchOrganizationReadiness,
+    isFetching: organizationReadinessFetching,
+  } = useQuery({
+    queryKey: ["commercial-organization-readiness"],
+    queryFn: () => getCommercialOrganizationReadiness(),
+    enabled: isSuperAdmin,
+  });
+  const {
+    data: supportAuditData,
+    isLoading: supportAuditLoading,
+    error: supportAuditError,
+    refetch: refetchSupportAuditLogs,
+    isFetching: supportAuditFetching,
+  } = useQuery({
+    queryKey: ["commercial-support-audit", selectedOrganizationId || "platform"],
+    queryFn: () => getAuditLogs({
+      organizationId: selectedOrganizationId || undefined,
+      category: "commercial",
+      action: "commercial.support_package.generate",
+      limit: 8,
+    }),
+  });
+  const {
+    data: usageLedgerData,
+    isLoading: usageLedgerLoading,
+    error: usageLedgerError,
+    refetch: refetchUsageLedger,
+    isFetching: usageLedgerFetching,
+  } = useQuery({
+    queryKey: ["commercial-usage-ledger", selectedOrganizationId || "platform"],
+    queryFn: () => getCommercialUsageLedger(selectedOrganizationId || undefined),
+  });
+
+  const readiness = data?.data;
+  const organizations = organizationsData?.data || [];
+  const organizationReadiness = organizationReadinessData?.data || [];
+  const supportAuditLogs = supportAuditData?.data || [];
+  const usageLedger = usageLedgerData?.data;
+  const generateSupportPackage = async () => {
+    setSupportPackageLoading(true);
+    setSupportPackageError("");
+    try {
+      const result = await getCommercialSupportPackage(selectedOrganizationId || undefined);
+      setSupportPackage(result.data);
+      await refetchSupportAuditLogs();
+    } catch (err) {
+      setSupportPackageError((err as Error)?.message || "生成支持包失败");
+    } finally {
+      setSupportPackageLoading(false);
+    }
+  };
+
+  const copySupportSummary = async () => {
+    if (!supportPackage) return;
+    const insights = supportPackageInsights(supportPackage);
+    const text = [
+      `支持包：${supportPackage.supportId}`,
+      `客户：${supportPackage.scope.organizationName}`,
+      `版本：${supportPackage.system?.build?.shortCommit || "unknown"} (${supportPackage.system?.build?.ref || "unknown"})`,
+      `状态：${supportPackage.readiness.state.label} / ${supportPackage.readiness.score} 分`,
+      `首要动作：${insights.topAction}`,
+      `授权通道：${insights.authorizationModeLabel}${insights.authorizationLabel ? `（${insights.authorizationLabel}）` : ""}`,
+      `Business Login：${insights.businessLoginConfigured ? insights.businessLoginSourceLabel : "待配置 config_id"}，OAuth state：${insights.oauthStateSecretConfigured ? "已配置" : "待配置"}`,
+      `Facebook App：${insights.appReady}/${insights.appTotal} 个 Public OAuth 就绪，${insights.appTotalGaps} 个缺口`,
+      `授权健康：${insights.tokenCount} 个 Token，${insights.expiredTokenCount} 过期，${insights.expiringSoonTokenCount} 临期，${insights.staleTokenCheckCount} 待复检`,
+      `资产：${insights.readyAccountCount} 个可投放账户 / ${insights.accountCount} 个广告账户`,
+      `资产缺口：${insights.accountsMissingPageCount} 个缺 Page，${insights.accountsMissingPixelCount} 个缺 Pixel，${insights.inactiveAccountCount} 个账户不可投放`,
+      `首要风险：${insights.primaryRisk}`,
+      `最近任务：${supportPackage.recentTasks.length} 条，主因：${insights.topIssue}`,
+    ].join("\n");
+    await navigator.clipboard?.writeText(text);
+  };
+
+  const downloadSupportPackage = () => {
+    if (!supportPackage) return;
+    const insights = supportPackageInsights(supportPackage);
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      exportType: "autoark_commercial_support_package",
+      summary: {
+        supportId: supportPackage.supportId,
+        customer: supportPackage.scope.organizationName,
+        buildRef: supportPackage.system?.build?.ref,
+        buildCommit: supportPackage.system?.build?.commit,
+        buildShortCommit: supportPackage.system?.build?.shortCommit,
+        buildDeployedAt: supportPackage.system?.build?.deployedAt,
+        state: supportPackage.readiness.state.label,
+        score: supportPackage.readiness.score,
+        topAction: insights.topAction,
+        topIssue: insights.topIssue,
+        primaryRisk: insights.primaryRisk,
+        readyAccountCount: insights.readyAccountCount,
+        accountCount: insights.accountCount,
+        inactiveAccountCount: insights.inactiveAccountCount,
+        accountsMissingPageCount: insights.accountsMissingPageCount,
+        accountsMissingPixelCount: insights.accountsMissingPixelCount,
+        tokenCount: insights.tokenCount,
+        expiredTokenCount: insights.expiredTokenCount,
+        expiringSoonTokenCount: insights.expiringSoonTokenCount,
+        staleTokenCheckCount: insights.staleTokenCheckCount,
+        tokenWithoutExpiryCount: insights.tokenWithoutExpiryCount,
+        earliestTokenExpiresAt: insights.earliestTokenExpiresAt,
+        businessLoginConfigured: insights.businessLoginConfigured,
+        oauthStateSecretConfigured: insights.oauthStateSecretConfigured,
+        facebookAppTotal: insights.appTotal,
+        facebookAppReady: insights.appReady,
+        facebookAppBlocked: insights.appBlocked,
+        facebookAppTotalGaps: insights.appTotalGaps,
+        firstFacebookAppGap: insights.firstAppGapLabel,
+        recentTaskCount: supportPackage.recentTasks.length,
+      },
+      supportPackage,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `${safeFileName(supportPackage.supportId)}-${safeFileName(supportPackage.scope.organizationName)}.json`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  useEffect(() => {
+    const queryOrganizationId = searchParams.get("organizationId") || "";
+    if (queryOrganizationId !== selectedOrganizationId) {
+      setSelectedOrganizationId(queryOrganizationId);
+    }
+  }, [searchParams, selectedOrganizationId]);
+  const readinessState = readiness?.state || {
+    level: "attention",
+    label: "状态计算中",
+    summary: "正在同步商用验收状态。",
+  };
+  const readinessTone = stateTone[readinessState.level] || stateTone.attention;
+  const ReadinessStateIcon = readinessTone.icon;
+  const nextActions = readiness?.nextActions || [];
+  const topMetrics = useMemo(() => {
+    if (!readiness) return [];
+    return [
+      {
+        label: "广告账户",
+        value: String(readiness.metrics.adAccounts || 0),
+        detail: `${readiness.metrics.activeTokens || 0} 授权 · ${readiness.metrics.facebookReadyAccounts || 0} 就绪`,
+        icon: <Stack size={22} weight="fill" />,
+      },
+      {
+        label: "素材资产",
+        value: String(readiness.metrics.materials || 0),
+        detail: "可用于批量投放",
+        icon: <FolderOpen size={22} weight="fill" />,
+      },
+      {
+        label: "任务闭环",
+        value: String(readiness.metrics.successfulTasks || 0),
+        detail: `${readiness.metrics.tasks || 0} 个总任务`,
+        icon: <Lightning size={22} weight="fill" />,
+      },
+      {
+        label: "团队成员",
+        value: String(readiness.metrics.members || 0),
+        detail: readiness.scope.mode === "platform" ? "全平台用户" : readiness.plan.billingStatus,
+        icon: <UsersThree size={22} weight="fill" />,
+      },
+    ];
+  }, [readiness]);
+  const supportInsights = supportPackage ? supportPackageInsights(supportPackage) : null;
+
+  if (isLoading) {
+    return (
+      <div className="mx-auto flex min-h-[70vh] max-w-7xl items-center justify-center px-6">
+        <div className="text-sm font-bold text-zinc-500">正在加载商用状态...</div>
+      </div>
+    );
+  }
+
+  if (error || !readiness) {
+    return (
+      <div className="mx-auto max-w-7xl px-6 py-10">
+        <div className="rounded-lg border border-[#fecdd3] bg-[#fff1f2] p-5 text-sm font-bold text-[#9f1239]">
+          获取商用状态失败：{(error as Error)?.message || "未知错误"}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+      <section className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_180px] lg:items-center">
+        <div>
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="inline-flex items-center gap-2 rounded-lg border border-[#b7e3d5] bg-[#e7f3ef] px-3 py-1 text-xs font-black text-[#0f766e]">
+              <ShieldCheck size={15} weight="fill" />
+              SaaS Readiness
+            </span>
+            <span className="rounded-lg bg-white px-3 py-1 text-xs font-bold text-zinc-500">
+              {readiness.scope.organizationName}
+            </span>
+          </div>
+          <h1 className="mt-4 text-3xl font-black tracking-normal text-zinc-950 sm:text-4xl">
+            商用中心
+          </h1>
+          <p className="mt-3 max-w-3xl text-sm font-semibold leading-7 text-zinc-600">
+            汇总组织套餐、额度、Facebook 授权、广告账户、素材和任务闭环状态，作为客户交付前的统一验收入口。
+          </p>
+          {isSuperAdmin && (
+            <div className="mt-5 flex max-w-xl flex-col gap-2 sm:flex-row sm:items-center">
+              <label htmlFor="commercial-organization-scope" className="text-xs font-black uppercase text-zinc-500">
+                验收范围
+              </label>
+              <select
+                id="commercial-organization-scope"
+                value={selectedOrganizationId}
+                onChange={(event) => updateSelectedOrganization(event.target.value)}
+                disabled={organizationsLoading}
+                className="h-10 min-w-0 flex-1 rounded-lg border border-zinc-200 bg-white px-3 text-sm font-bold text-zinc-900 outline-none transition hover:border-zinc-400 focus:border-zinc-950 disabled:opacity-60"
+              >
+                <option value="">全平台汇总</option>
+                {organizations.map((organization) => (
+                  <option key={organization._id} value={organization._id}>
+                    {organization.name} · {organization.status === "active" ? "启用" : "停用"}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          <div className={`mt-5 max-w-4xl rounded-lg border p-4 ${readinessTone.panel}`}>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="flex min-w-0 items-start gap-3">
+                <div className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border ${readinessTone.badge}`}>
+                  <ReadinessStateIcon size={18} weight="fill" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className={`rounded-md border px-2 py-0.5 text-xs font-black ${readinessTone.badge}`}>
+                      {readinessState.label}
+                    </span>
+                    <span className="text-xs font-bold text-zinc-500">当前商用状态</span>
+                  </div>
+                  <p className="mt-2 text-sm font-bold leading-6">{readinessState.summary}</p>
+                </div>
+              </div>
+              {nextActions[0]?.actionPath && (
+                <Link
+                  to={nextActions[0].actionPath}
+                  className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-lg bg-zinc-950 px-4 py-2 text-sm font-black text-white hover:bg-zinc-800"
+                >
+                  先处理：{nextActions[0].title}
+                  <ArrowRight size={15} weight="bold" />
+                </Link>
+              )}
+            </div>
+          </div>
+        </div>
+        <div className="lg:justify-self-end">
+          <ReadinessGauge score={readiness.score} />
+        </div>
+      </section>
+
+      <section className="mt-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        {topMetrics.map((metric) => (
+          <MetricCard key={metric.label} {...metric} />
+        ))}
+      </section>
+
+      <FacebookAuthorizationPanel authorization={readiness.facebookAuthorization} />
+
+      <UsageLedgerPanel
+        ledger={usageLedger}
+        isLoading={usageLedgerLoading}
+        error={usageLedgerError}
+        onRefresh={() => refetchUsageLedger()}
+        isFetching={usageLedgerFetching}
+      />
+
+      <section className="mt-6 rounded-lg border border-zinc-200 bg-white p-5 shadow-[0_18px_38px_-34px_rgba(24,24,27,0.72)]">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-black text-zinc-950">客户支持包</h2>
+            <p className="mt-1 text-sm font-semibold text-zinc-500">
+              生成当前验收范围的排障摘要，包含 readiness、授权资产、最近失败任务和审计线索。
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={generateSupportPackage}
+              disabled={supportPackageLoading}
+              className="rounded-lg bg-zinc-950 px-4 py-2 text-sm font-black text-white hover:bg-zinc-800 disabled:opacity-60"
+            >
+              {supportPackageLoading ? "生成中" : "生成支持包"}
+            </button>
+            {supportPackage && (
+              <>
+                <button
+                  type="button"
+                  onClick={copySupportSummary}
+                  className="rounded-lg border border-zinc-200 bg-white px-4 py-2 text-sm font-bold text-zinc-700 hover:border-zinc-400"
+                >
+                  复制摘要
+                </button>
+                <button
+                  type="button"
+                  onClick={downloadSupportPackage}
+                  className="rounded-lg border border-zinc-200 bg-white px-4 py-2 text-sm font-bold text-zinc-700 hover:border-zinc-400"
+                >
+                  下载 JSON
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+        {supportPackageError && (
+          <div className="mt-4 rounded-lg border border-[#fecdd3] bg-[#fff1f2] p-3 text-sm font-bold text-[#9f1239]">
+            {supportPackageError}
+          </div>
+        )}
+        {supportPackage && (
+          <div className="mt-5 grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
+            <div className="rounded-lg border border-zinc-100 bg-[#fbfbf8] p-4">
+              <div className="text-xs font-black uppercase text-zinc-500">{supportPackage.supportId}</div>
+              <h3 className="mt-2 text-xl font-black text-zinc-950">{supportPackage.scope.organizationName}</h3>
+              <p className="mt-2 text-sm font-bold text-zinc-600">
+                {supportPackage.readiness.state.label} · {supportPackage.readiness.score} 分 · {new Date(supportPackage.generatedAt).toLocaleString("zh-CN")}
+              </p>
+              <div className="mt-2 inline-flex rounded-md border border-zinc-200 bg-white px-2 py-1 font-mono text-[11px] font-black text-zinc-500">
+                build {supportPackage.system?.build?.shortCommit || "unknown"} · {supportPackage.system?.build?.ref || "unknown"}
+              </div>
+              <div className="mt-4 grid grid-cols-2 gap-3 text-sm font-bold text-zinc-700">
+                <div>
+                  <div className="font-mono text-2xl font-black text-zinc-950">{supportInsights?.readyAccountCount || 0}</div>
+                  <div className="text-xs text-zinc-500">可投放账户</div>
+                </div>
+                <div>
+                  <div className="font-mono text-2xl font-black text-zinc-950">{supportPackage.recentTasks.length}</div>
+                  <div className="text-xs text-zinc-500">最近问题任务</div>
+                </div>
+              </div>
+              {supportInsights && (
+                <div className="mt-4 space-y-3 border-t border-zinc-100 pt-4">
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="rounded-lg border border-zinc-100 bg-white p-3">
+                      <div className="font-mono text-lg font-black text-zinc-950">{supportInsights.accountsMissingPageCount}</div>
+                      <div className="text-[11px] font-bold text-zinc-500">缺 Page</div>
+                    </div>
+                    <div className="rounded-lg border border-zinc-100 bg-white p-3">
+                      <div className="font-mono text-lg font-black text-zinc-950">{supportInsights.accountsMissingPixelCount}</div>
+                      <div className="text-[11px] font-bold text-zinc-500">缺 Pixel</div>
+                    </div>
+                    <div className="rounded-lg border border-zinc-100 bg-white p-3">
+                      <div className="font-mono text-lg font-black text-zinc-950">{supportInsights.inactiveAccountCount}</div>
+                      <div className="text-[11px] font-bold text-zinc-500">账户异常</div>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="rounded-lg border border-zinc-100 bg-white p-3">
+                      <div className="font-mono text-lg font-black text-zinc-950">{supportInsights.expiredTokenCount}</div>
+                      <div className="text-[11px] font-bold text-zinc-500">过期 Token</div>
+                    </div>
+                    <div className="rounded-lg border border-zinc-100 bg-white p-3">
+                      <div className="font-mono text-lg font-black text-zinc-950">{supportInsights.expiringSoonTokenCount}</div>
+                      <div className="text-[11px] font-bold text-zinc-500">临期 Token</div>
+                    </div>
+                    <div className="rounded-lg border border-zinc-100 bg-white p-3">
+                      <div className="font-mono text-lg font-black text-zinc-950">{supportInsights.staleTokenCheckCount}</div>
+                      <div className="text-[11px] font-bold text-zinc-500">待复检</div>
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-zinc-100 bg-white p-3 text-sm">
+                    <div className="font-black text-zinc-950">授权健康</div>
+                    <div className="mt-1 font-semibold leading-6 text-zinc-600">{supportInsights.tokenHealthLabel}</div>
+                    {supportInsights.earliestTokenExpiresAt && (
+                      <div className="mt-1 text-xs font-bold text-zinc-500">
+                        最早过期：{formatDateTime(supportInsights.earliestTokenExpiresAt)}
+                      </div>
+                    )}
+                  </div>
+                  <div className="rounded-lg border border-zinc-100 bg-white p-3 text-sm">
+                    <div className="font-black text-zinc-950">登录链路</div>
+                    <div className="mt-1 font-semibold leading-6 text-zinc-600">
+                      {supportInsights.authorizationModeLabel} · {supportInsights.businessLoginConfigured ? supportInsights.businessLoginSourceLabel : "待配置 config_id"}
+                    </div>
+                    <div className="mt-1 font-semibold leading-6 text-zinc-600">
+                      Public OAuth App {supportInsights.appReady}/{supportInsights.appTotal} 就绪 · {supportInsights.authorizationGapCount || supportInsights.appTotalGaps} 个授权缺口
+                    </div>
+                    {supportInsights.firstAppGapLabel && (
+                      <div className="mt-1 text-xs font-bold text-[#b45309]">
+                        首个 App 缺口：{supportInsights.firstAppGapLabel}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+            <div className="space-y-3">
+              {supportInsights && (
+                <div className="rounded-lg border border-zinc-100 bg-white p-3">
+                  <div className="text-xs font-black uppercase text-zinc-500">首要风险</div>
+                  <div className="mt-2 text-sm font-bold leading-6 text-zinc-700">{supportInsights.primaryRisk}</div>
+                </div>
+              )}
+              <div>
+                <div className="text-xs font-black uppercase text-zinc-500">下一步</div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {supportPackage.readiness.nextActions.slice(0, 3).map((action) => (
+                    <span key={action.id} className={`rounded-md border px-2 py-1 text-xs font-black ${priorityTone[action.priority] || priorityTone.medium}`}>
+                      {action.title}
+                    </span>
+                  ))}
+                  {supportPackage.readiness.nextActions.length === 0 && (
+                    <span className="text-sm font-bold text-[#0f766e]">暂无阻断动作</span>
+                  )}
+                </div>
+              </div>
+              <div>
+                <div className="text-xs font-black uppercase text-zinc-500">最近任务主因</div>
+                <div className="mt-2 space-y-2">
+                  {supportPackage.recentTasks.slice(0, 3).map((task) => (
+                    <div key={task.taskId} className="rounded-lg border border-zinc-100 bg-white p-3 text-sm">
+                      <div className="font-black text-zinc-950">{task.taskName || task.taskId}</div>
+                      <div className="mt-1 font-bold text-zinc-600">
+                        {task.topIssue ? `${task.topIssue.errorCode}：${task.topIssue.customerMessage}` : task.status}
+                      </div>
+                    </div>
+                  ))}
+                  {supportPackage.recentTasks.length === 0 && (
+                    <div className="rounded-lg border border-zinc-100 bg-white p-3 text-sm font-bold text-zinc-500">
+                      暂无最近失败任务
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </section>
+
+      <section className="mt-6 rounded-lg border border-zinc-200 bg-white p-5 shadow-[0_18px_38px_-34px_rgba(24,24,27,0.72)]">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-black text-zinc-950">支持包历史</h2>
+            <p className="mt-1 text-sm font-semibold text-zinc-500">
+              记录最近生成的客户支持包，便于交付、客服和运营对齐排障口径。
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => refetchSupportAuditLogs()}
+              disabled={supportAuditFetching}
+              className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-bold text-zinc-700 hover:border-zinc-400 disabled:opacity-60"
+            >
+              {supportAuditFetching ? "刷新中" : "刷新历史"}
+            </button>
+            <Link
+              to="/audit-logs?category=commercial&action=commercial.support_package.generate"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-bold text-zinc-900 hover:border-zinc-400"
+            >
+              全部审计
+              <ArrowRight size={14} weight="bold" />
+            </Link>
+          </div>
+        </div>
+        {supportAuditLoading ? (
+          <div className="flex h-32 items-center justify-center text-sm font-bold text-zinc-500">
+            正在加载支持包历史...
+          </div>
+        ) : supportAuditError ? (
+          <div className="rounded-lg border border-[#fecdd3] bg-[#fff1f2] p-3 text-sm font-bold text-[#9f1239]">
+            获取支持包历史失败：{(supportAuditError as Error).message}
+          </div>
+        ) : supportAuditLogs.length === 0 ? (
+          <div className="flex h-32 flex-col items-center justify-center text-sm font-bold text-zinc-500">
+            <ClockCounterClockwise size={24} className="mb-2 text-zinc-400" />
+            暂无支持包生成记录
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-zinc-100 text-left text-sm">
+              <thead>
+                <tr className="text-xs font-black uppercase text-zinc-500">
+                  <th className="py-3 pr-4">时间</th>
+                  <th className="px-4 py-3">支持包</th>
+                  <th className="px-4 py-3">状态</th>
+                  <th className="px-4 py-3">资产摘要</th>
+                  <th className="py-3 pl-4">操作者</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-zinc-100">
+                {supportAuditLogs.map((log) => {
+                  const statusTone = auditStatusTone[log.status] || auditStatusTone.warning;
+                  const score = metadataNumber(log, "readinessScore");
+                  const stateLabel = metadataText(log, "readinessLabel");
+                  const organizationName = metadataText(log, "organizationName") || readiness.scope.organizationName;
+                  const readyAccountCount = metadataNumber(log, "readyAccountCount");
+                  const tokenCount = metadataNumber(log, "tokenCount");
+                  const expiredTokenCount = metadataNumber(log, "expiredTokenCount");
+                  const expiringSoonTokenCount = metadataNumber(log, "expiringSoonTokenCount");
+                  const staleTokenCheckCount = metadataNumber(log, "staleTokenCheckCount");
+                  const firstFacebookAssetRisk = metadataText(log, "firstFacebookAssetRisk");
+                  return (
+                    <tr key={log._id} className="align-top">
+                      <td className="whitespace-nowrap py-4 pr-4 font-mono text-xs font-bold text-zinc-500">
+                        {formatDateTime(log.createdAt)}
+                      </td>
+                      <td className="px-4 py-4">
+                        <div className="font-black text-zinc-950">{organizationName}</div>
+                        <div className="mt-1 max-w-md text-sm font-semibold leading-6 text-zinc-500">
+                          {log.summary || log.reason || "-"}
+                        </div>
+                        {log.targetId && (
+                          <div className="mt-2 font-mono text-[11px] font-bold text-zinc-400">
+                            {log.targetId}
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-4 py-4">
+                        <span className={`inline-flex rounded-md border px-2 py-0.5 text-xs font-black ${statusTone}`}>
+                          {auditStatusLabels[log.status] || log.status}
+                        </span>
+                        <div className="mt-2 text-xs font-bold text-zinc-500">
+                          {stateLabel || (log.status === "failed" ? "生成失败" : "已生成")}
+                        </div>
+                        {typeof score === "number" && (
+                          <div className="mt-1 font-mono text-lg font-black text-zinc-950">{score}</div>
+                        )}
+                      </td>
+                      <td className="px-4 py-4 font-bold text-zinc-700">
+                        <div>{typeof readyAccountCount === "number" ? readyAccountCount : "-"} 可投放账户</div>
+                        <div className="mt-1 text-xs text-zinc-500">
+                          {typeof tokenCount === "number" ? tokenCount : "-"} 授权 Token
+                        </div>
+                        {(typeof expiredTokenCount === "number" || typeof expiringSoonTokenCount === "number" || typeof staleTokenCheckCount === "number") && (
+                          <div className="mt-1 text-xs text-zinc-500">
+                            {expiredTokenCount || 0} 过期 · {expiringSoonTokenCount || 0} 临期 · {staleTokenCheckCount || 0} 待复检
+                          </div>
+                        )}
+                        {firstFacebookAssetRisk && (
+                          <div className="mt-2 max-w-xs rounded-md bg-[#fbfbf8] px-2 py-1 text-xs font-semibold leading-5 text-zinc-600">
+                            {firstFacebookAssetRisk}
+                          </div>
+                        )}
+                      </td>
+                      <td className="py-4 pl-4 font-bold text-zinc-700">
+                        <div>{log.username || log.userId || "anonymous"}</div>
+                        {log.userRole && <div className="mt-1 text-xs text-zinc-500">{log.userRole}</div>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      {isSuperAdmin && organizationReadiness.length > 0 && (
+        <section className="mt-6 rounded-lg border border-zinc-200 bg-white p-5 shadow-[0_18px_38px_-34px_rgba(24,24,27,0.72)]">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-black text-zinc-950">客户交付队列</h2>
+              <p className="mt-1 text-sm font-semibold text-zinc-500">
+                按阻塞程度排序，点客户名即可切换到该组织验收视图。
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => refetchOrganizationReadiness()}
+              disabled={organizationReadinessFetching}
+              className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-bold text-zinc-700 hover:border-zinc-400 disabled:opacity-60"
+            >
+              {organizationReadinessFetching ? "刷新中" : "刷新队列"}
+            </button>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-zinc-100 text-left text-sm">
+              <thead>
+                <tr className="text-xs font-black uppercase text-zinc-500">
+                  <th className="py-3 pr-4">客户组织</th>
+                  <th className="px-4 py-3">状态</th>
+                  <th className="px-4 py-3">授权与资产</th>
+                  <th className="px-4 py-3">任务</th>
+                  <th className="py-3 pl-4">首要动作</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-zinc-100">
+                {organizationReadiness.map((item) => {
+                  const tone = stateTone[item.state.level] || stateTone.attention;
+                  const tokenRiskCount = (item.metrics.expiredTokens || 0) + (item.metrics.expiringSoonTokens || 0) + (item.metrics.staleTokenChecks || 0);
+                  return (
+                    <tr key={item.organizationId} className="align-top">
+                      <td className="py-4 pr-4">
+                        <button
+                          type="button"
+                          onClick={() => updateSelectedOrganization(item.organizationId)}
+                          className="text-left text-sm font-black text-zinc-950 underline-offset-4 hover:underline"
+                        >
+                          {item.organizationName}
+                        </button>
+                        <div className="mt-1 text-xs font-bold text-zinc-500">
+                          {item.plan.label} · {item.organizationStatus === "active" ? "启用" : "停用"}
+                        </div>
+                      </td>
+                      <td className="px-4 py-4">
+                        <span className={`inline-flex rounded-md border px-2 py-0.5 text-xs font-black ${tone.badge}`}>
+                          {item.state.label}
+                        </span>
+                        <div className="mt-2 font-mono text-lg font-black text-zinc-950">{item.score}</div>
+                      </td>
+                      <td className="px-4 py-4 font-bold text-zinc-700">
+                        <div>{item.metrics.activeTokens} 授权 · {item.metrics.adAccounts} 账户</div>
+                        <div className="mt-1 text-xs text-zinc-500">{item.metrics.facebookReadyAccounts} 个可投放账户 · {item.metrics.materials} 素材</div>
+                        {tokenRiskCount > 0 && (
+                          <div className="mt-1 text-xs font-black text-[#b4233a]">
+                            Token 风险：{item.metrics.expiredTokens || 0} 过期 · {item.metrics.expiringSoonTokens || 0} 临期 · {item.metrics.staleTokenChecks || 0} 待校验
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-4 py-4 font-bold text-zinc-700">
+                        <div>{item.metrics.successfulTasks} 成功</div>
+                        <div className="mt-1 text-xs text-zinc-500">{item.metrics.failedTasks} 失败</div>
+                      </td>
+                      <td className="py-4 pl-4">
+                        {item.firstAction ? (
+                          <div className="max-w-sm">
+                            <span className={`rounded-md border px-2 py-0.5 text-[11px] font-black ${priorityTone[item.firstAction.priority] || priorityTone.medium}`}>
+                              {priorityLabels[item.firstAction.priority] || item.firstAction.priority}
+                            </span>
+                            <div className="mt-2 font-bold leading-6 text-zinc-900">{item.firstAction.title}</div>
+                            <div className="mt-1 text-xs font-bold text-zinc-500">{item.firstAction.owner}</div>
+                          </div>
+                        ) : (
+                          <span className="text-xs font-bold text-[#0f766e]">暂无阻断动作</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {nextActions.length > 0 && (
+        <section className="mt-6">
+          <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-black text-zinc-950">优先处理</h2>
+              <p className="mt-1 text-sm font-semibold text-zinc-500">
+                按顺序处理这些动作，处理后刷新商用状态即可验收。
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => refetch()}
+              disabled={isFetching}
+              className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-bold text-zinc-700 hover:border-zinc-400 disabled:opacity-60"
+            >
+              {isFetching ? "刷新中" : "刷新状态"}
+            </button>
+          </div>
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {nextActions.slice(0, 6).map((action) => (
+              <NextActionCard key={action.id} action={action} />
+            ))}
+          </div>
+        </section>
+      )}
+
+      <section className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1.35fr)_minmax(360px,0.65fr)]">
+        <div className="rounded-lg border border-zinc-200 bg-white p-5 shadow-[0_18px_38px_-34px_rgba(24,24,27,0.72)]">
+          <div className="mb-2 flex items-center justify-between gap-4">
+            <h2 className="text-lg font-black text-zinc-950">商用验收清单</h2>
+            <button
+              type="button"
+              onClick={() => refetch()}
+              disabled={isFetching}
+              className="rounded-lg border border-zinc-200 px-3 py-2 text-xs font-bold text-zinc-700 hover:border-zinc-400 disabled:opacity-60"
+            >
+              {isFetching ? "刷新中" : "刷新"}
+            </button>
+          </div>
+          <div>
+            {readiness.checklist.map((item) => (
+              <ChecklistRow key={item.id} item={item} />
+            ))}
+          </div>
+        </div>
+
+        <aside className="space-y-6">
+          <div className="rounded-lg border border-zinc-200 bg-white p-5 shadow-[0_18px_38px_-34px_rgba(24,24,27,0.72)]">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-lg font-black text-zinc-950">套餐与额度</h2>
+                <p className="mt-1 text-sm font-bold text-zinc-500">{readiness.plan.label}</p>
+              </div>
+              <span className="rounded-lg bg-zinc-100 px-3 py-1 text-xs font-black text-zinc-700">
+                {readiness.plan.code}
+              </span>
+            </div>
+            <div className="mt-5 space-y-4">
+              {Object.entries(readiness.usage).map(([key, value]) => (
+                <UsageBar
+                  key={key}
+                  label={metricLabels[key] || key}
+                  used={value.used}
+                  limit={value.limit}
+                  percent={value.percent}
+                  status={value.status}
+                />
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-zinc-200 bg-white p-5 shadow-[0_18px_38px_-34px_rgba(24,24,27,0.72)]">
+            <h2 className="text-lg font-black text-zinc-950">已开通能力</h2>
+            <div className="mt-4 flex flex-wrap gap-2">
+              {readiness.plan.features.map((feature) => (
+                <span
+                  key={feature}
+                  className="rounded-lg border border-zinc-200 bg-[#fbfbf8] px-3 py-1.5 text-xs font-bold text-zinc-700"
+                >
+                  {featureLabels[feature] || feature}
+                </span>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-zinc-200 bg-white p-5 shadow-[0_18px_38px_-34px_rgba(24,24,27,0.72)]">
+            <h2 className="text-lg font-black text-zinc-950">上线保护</h2>
+            <div className="mt-4 space-y-2 text-sm font-bold text-zinc-700">
+              {Object.entries(readiness.deployment).map(([key, enabled]) => (
+                <div key={key} className="flex items-center justify-between gap-3">
+                  <span>{deploymentLabels[key] || key}</span>
+                  <span className={enabled ? "text-[#0f766e]" : "text-[#b45309]"}>
+                    {enabled ? "已配置" : "待配置"}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </aside>
+      </section>
+
+      {readiness.risks.length > 0 && (
+        <section className="mt-6 rounded-lg border border-zinc-200 bg-white p-5 shadow-[0_18px_38px_-34px_rgba(24,24,27,0.72)]">
+          <h2 className="text-lg font-black text-zinc-950">风险与下一步</h2>
+          <div className="mt-4 grid gap-3">
+            {readiness.risks.map((risk, index) => (
+              <div
+                key={`${risk.message}-${index}`}
+                className={`flex items-start justify-between gap-4 rounded-lg border p-4 text-sm font-bold ${riskTone[risk.level] || riskTone.info}`}
+              >
+                <span>{risk.message}</span>
+                {risk.actionPath && (
+                  <Link to={risk.actionPath} className="shrink-0 underline underline-offset-4">
+                    去处理
+                  </Link>
+                )}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+    </div>
+  );
+}

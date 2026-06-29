@@ -18,6 +18,7 @@ router.get('/auth/apps', bulkAdController.getAvailableApps) // 获取可用的 F
 router.get('/auth/login-url', bulkAdController.getAuthLoginUrl)
 router.get('/auth/callback', bulkAdController.handleAuthCallback)
 router.get('/auth/status', bulkAdController.getAuthStatus)
+router.get('/auth/diagnostics', bulkAdController.getAuthDiagnostics)
 router.get('/auth/ad-accounts', bulkAdController.getAuthAdAccounts)
 router.get('/auth/pages', bulkAdController.getAuthPages)
 router.get('/auth/pixels', bulkAdController.getAuthPixels)
@@ -37,6 +38,8 @@ router.post('/drafts/:id/publish', bulkAdController.publishDraft)
 
 // ==================== 任务管理 ====================
 router.get('/tasks', bulkAdController.getTaskList)
+router.get('/tasks/:id/diagnostics', bulkAdController.getTaskDiagnostics)
+router.get('/tasks/:id/support-package', bulkAdController.getTaskSupportPackage)
 router.get('/tasks/:id', bulkAdController.getTask)
 router.post('/tasks/:id/cancel', bulkAdController.cancelTask)
 router.post('/tasks/:id/retry', bulkAdController.retryTask)
@@ -80,4 +83,3 @@ router.get('/facebook/pixels', bulkAdController.getFacebookPixels)
 router.get('/facebook/custom-conversions', bulkAdController.getFacebookCustomConversions)
 
 export default router
-

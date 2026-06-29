@@ -4,11 +4,13 @@ import MetricsDaily from '../models/MetricsDaily'
 import { fetchUserAdAccounts, fetchInsights } from './facebook.api'
 import logger from '../utils/logger'
 import { normalizeForStorage, getAccountIdsForQuery, normalizeFromQuery, normalizeForApi } from '../utils/accountId'
+import { buildInsightsDateRequest } from '../utils/insightsDateRange'
 
 export const syncAccountsFromTokens = async () => {
   const startTime = Date.now()
   let syncedCount = 0
   let errorCount = 0
+  let skippedCount = 0
   const errors: Array<{ tokenId: string; optimizer?: string; error: string }> = []
 
   try {
@@ -43,8 +45,27 @@ export const syncAccountsFromTokens = async () => {
             accountData.organizationId = tokenDoc.organizationId
           }
 
+          const existingAccount = await Account.findOne({
+            channel: 'facebook',
+            accountId: accountData.accountId,
+          }).select('organizationId').lean()
+          const existingOrgId = (existingAccount as any)?.organizationId?.toString?.()
+          const tokenOrgId = tokenDoc.organizationId?.toString?.()
+
+          if (existingOrgId && (!tokenOrgId || existingOrgId !== tokenOrgId)) {
+            skippedCount++
+            const error = `广告账户 ${accountData.accountId} 已归属其他组织，跳过同步`
+            errors.push({
+              tokenId: String(tokenDoc._id),
+              optimizer: tokenDoc.optimizer,
+              error,
+            })
+            logger.warn(`[AccountSync] ${error}`)
+            continue
+          }
+
           await Account.findOneAndUpdate(
-            { accountId: accountData.accountId },
+            { channel: 'facebook', accountId: accountData.accountId },
             accountData,
             { upsert: true, new: true }
           )
@@ -70,8 +91,8 @@ export const syncAccountsFromTokens = async () => {
       }
     }
 
-    logger.info(`Account sync completed. Synced: ${syncedCount}, Errors: ${errorCount}, Duration: ${Date.now() - startTime}ms`)
-    return { syncedCount, errorCount, errors }
+    logger.info(`Account sync completed. Synced: ${syncedCount}, Skipped: ${skippedCount}, Errors: ${errorCount}, Duration: ${Date.now() - startTime}ms`)
+    return { syncedCount, skippedCount, errorCount, errors }
 
   } catch (error: any) {
     logger.error('Account sync failed:', error)
@@ -140,20 +161,7 @@ export const getAccounts = async (filters: any = {}, pagination: { page: number,
     // 直接从 Facebook Insights API 获取消耗数据（更准确）
     let periodSpendMap: Record<string, number> = {}
     
-    // 构建日期参数
-    let datePreset = 'today'
-    let timeRange: { since: string; until: string } | undefined
-    
-    if (filters.startDate && filters.endDate) {
-        timeRange = { since: filters.startDate, until: filters.endDate }
-        datePreset = ''
-    } else if (filters.startDate) {
-        timeRange = { since: filters.startDate, until: new Date().toISOString().split('T')[0] }
-        datePreset = ''
-    } else if (filters.endDate) {
-        timeRange = { since: '2020-01-01', until: filters.endDate }
-        datePreset = ''
-    }
+    const { datePreset, timeRange } = buildInsightsDateRequest(filters)
     
     // 为每个账户使用其关联的 token（更准确，避免用“任意一个 active token”导致无权限/数据不更新）
     const accountTokenMap: Record<string, string> = {}

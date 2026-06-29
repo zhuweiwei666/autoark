@@ -85,7 +85,8 @@ export const addBulkAdJob = async (taskId: string, accountId: string, priority: 
 export const addBulkAdJobsBatch = async (
   taskId: string,
   accountIds: string[],
-  basePriority: number = 1
+  basePriority: number = 1,
+  jobRunId?: string,
 ) => {
   if (!bulkAdQueue) {
     logger.warn('[BulkAdQueue] Queue not available, skipping batch')
@@ -100,7 +101,7 @@ export const addBulkAdJobsBatch = async (
       timestamp: Date.now(),
     },
     opts: {
-      jobId: `bulk-ad-${taskId}-${accountId}`,
+      jobId: `bulk-ad-${taskId}-${accountId}${jobRunId ? `-${jobRunId}` : ''}`,
       priority: basePriority + index,  // 按顺序优先级递增
     },
   }))
@@ -176,4 +177,3 @@ export const removeTaskJobs = async (taskId: string) => {
 }
 
 export default bulkAdQueue
-

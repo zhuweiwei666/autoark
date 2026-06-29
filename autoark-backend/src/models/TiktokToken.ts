@@ -37,6 +37,22 @@ const TiktokTokenSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
+    toJSON: {
+      virtuals: true,
+      transform: (_doc, ret: any) => {
+        delete ret.accessToken
+        delete ret.refreshToken
+        return ret
+      },
+    },
+    toObject: {
+      virtuals: true,
+      transform: (_doc, ret: any) => {
+        delete ret.accessToken
+        delete ret.refreshToken
+        return ret
+      },
+    },
   }
 )
 

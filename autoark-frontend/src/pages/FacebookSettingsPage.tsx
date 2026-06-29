@@ -1,10 +1,12 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { getTokens, getPixels, getPixelDetails, getPixelEvents, checkTokenStatus, deleteToken, authFetch, type FbToken, type FbPixel, type PixelDetails, type PixelEvent } from '../services/api'
+import { useAuth } from '../contexts/AuthContext'
 
 type TabType = 'tokens' | 'pixels'
 
 export default function FacebookSettingsPage() {
+  const { isSuperAdmin } = useAuth()
   const [activeTab, setActiveTab] = useState<TabType>('tokens')
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   
@@ -35,7 +37,7 @@ export default function FacebookSettingsPage() {
   const { data: pixelData, isLoading: pixelsLoading, refetch: refetchPixels, isFetching: pixelsFetching } = useQuery({
     queryKey: ['pixels', { allTokens }],
     queryFn: () => getPixels({ allTokens }),
-    enabled: activeTab === 'pixels', // 进入像素页时自动加载
+    enabled: isSuperAdmin && activeTab === 'pixels', // Pixel API 是超管诊断能力
     staleTime: Infinity,
   })
   const pixels = pixelData?.data || []
@@ -44,7 +46,7 @@ export default function FacebookSettingsPage() {
   const handleRefresh = () => {
     if (activeTab === 'tokens') {
       refetchTokens()
-    } else {
+    } else if (isSuperAdmin) {
       refetchPixels()
     }
   }
@@ -156,13 +158,13 @@ export default function FacebookSettingsPage() {
         {/* 头部 */}
         <header className="flex items-center justify-between bg-white rounded-3xl p-6 shadow-lg shadow-black/5 border border-slate-200">
           <div className="flex items-center gap-4">
-            <h1 className="text-3xl font-bold text-slate-900 tracking-tight">Token & 像素</h1>
+            <h1 className="text-3xl font-bold text-slate-900 tracking-tight">{isSuperAdmin ? 'Token & 像素' : 'Token 管理'}</h1>
             <span className="bg-slate-100 border border-slate-200 px-3 py-1 rounded-full text-xs font-medium text-slate-500">
               低频配置
             </span>
           </div>
           <div className="flex items-center gap-3">
-            {activeTab === 'pixels' && (
+            {isSuperAdmin && activeTab === 'pixels' && (
               <label className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-300 rounded-2xl text-sm font-medium text-slate-700 cursor-pointer hover:bg-slate-50 transition-all">
                 <input
                   type="checkbox"
@@ -225,16 +227,18 @@ export default function FacebookSettingsPage() {
           >
             🔑 Token 管理
           </button>
-          <button
-            onClick={() => setActiveTab('pixels')}
-            className={`px-6 py-3 text-sm font-medium transition-colors ${
-              activeTab === 'pixels'
-                ? 'text-blue-600 border-b-2 border-blue-600'
-                : 'text-slate-500 hover:text-slate-700'
-            }`}
-          >
-            ✨ 像素管理
-          </button>
+          {isSuperAdmin && (
+            <button
+              onClick={() => setActiveTab('pixels')}
+              className={`px-6 py-3 text-sm font-medium transition-colors ${
+                activeTab === 'pixels'
+                  ? 'text-blue-600 border-b-2 border-blue-600'
+                  : 'text-slate-500 hover:text-slate-700'
+              }`}
+            >
+              ✨ 像素管理
+            </button>
+          )}
         </div>
 
         {/* 空状态 */}
@@ -299,7 +303,7 @@ export default function FacebookSettingsPage() {
         )}
 
         {/* Pixel 列表 */}
-        {activeTab === 'pixels' && pixels.length > 0 && (
+        {isSuperAdmin && activeTab === 'pixels' && pixels.length > 0 && (
           <section className="bg-white rounded-3xl overflow-hidden shadow-lg shadow-black/5 border border-slate-200">
             <div className="overflow-x-auto">
               <table className="w-full text-sm text-left">
@@ -499,4 +503,3 @@ export default function FacebookSettingsPage() {
     </div>
   )
 }
-

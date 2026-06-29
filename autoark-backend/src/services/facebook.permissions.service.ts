@@ -2,6 +2,15 @@ import { fbClient } from './facebook.api'
 import logger from '../utils/logger'
 import FbToken from '../models/FbToken'
 
+const TOKEN_DIAGNOSIS_BATCH_LIMIT = 20
+const TOKEN_DIAGNOSIS_MAX_BATCH_LIMIT = 100
+
+const parseDiagnosisLimit = (value: any): number => {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed) || parsed <= 0) return TOKEN_DIAGNOSIS_BATCH_LIMIT
+  return Math.min(TOKEN_DIAGNOSIS_MAX_BATCH_LIMIT, Math.floor(parsed))
+}
+
 /**
  * Facebook Token 权限检测服务
  */
@@ -18,6 +27,16 @@ export interface TokenDiagnosisResult {
   permissions: PermissionCheckResult[]
   overall: 'healthy' | 'warning' | 'critical'
   recommendations: string[]
+}
+
+export interface TokenDiagnosisBatchResult {
+  results: TokenDiagnosisResult[]
+  meta: {
+    totalFound: number
+    checked: number
+    limit: number
+    truncated: boolean
+  }
 }
 
 /**
@@ -260,8 +279,18 @@ export const diagnoseToken = async (tokenId: string): Promise<TokenDiagnosisResu
 /**
  * 诊断所有 Token
  */
-export const diagnoseAllTokens = async (): Promise<TokenDiagnosisResult[]> => {
-  const tokens = await FbToken.find({ status: 'active' }).lean()
+export const diagnoseAllTokens = async (options: {
+  limit?: number
+} = {}): Promise<TokenDiagnosisBatchResult> => {
+  const limit = parseDiagnosisLimit(options.limit)
+  const query = { status: 'active' as const }
+  const [totalFound, tokens] = await Promise.all([
+    FbToken.countDocuments(query),
+    FbToken.find(query)
+      .sort({ lastCheckedAt: 1, updatedAt: 1, _id: 1 })
+      .limit(limit)
+      .lean(),
+  ])
   const results: TokenDiagnosisResult[] = []
 
   for (const token of tokens) {
@@ -281,6 +310,13 @@ export const diagnoseAllTokens = async (): Promise<TokenDiagnosisResult[]> => {
     }
   }
 
-  return results
+  return {
+    results,
+    meta: {
+      totalFound,
+      checked: tokens.length,
+      limit,
+      truncated: totalFound > tokens.length,
+    },
+  }
 }
-

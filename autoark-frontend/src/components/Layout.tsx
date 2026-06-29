@@ -28,6 +28,7 @@ import type { IconProps } from "@phosphor-icons/react";
 import {
   getAccounts,
   getCampaigns,
+  getCommercialReadiness,
   getCountries,
   getMaterialRankings,
 } from "../services/api";
@@ -89,6 +90,12 @@ export default function Layout({ children }: LayoutProps) {
           }),
       });
     },
+    "/commercial": () => {
+      queryClient.prefetchQuery({
+        queryKey: ["commercial-readiness"],
+        queryFn: () => getCommercialReadiness(),
+      });
+    },
     "/fb-campaigns": () => {
       queryClient.prefetchQuery({
         queryKey: [
@@ -134,6 +141,12 @@ export default function Layout({ children }: LayoutProps) {
       items: [
         { to: "/dashboard", label: "仪表盘", icon: AppWindow },
         {
+          to: "/commercial",
+          label: "商用中心",
+          icon: Lightning,
+          prefetch: prefetchConfig["/commercial"],
+        },
+        {
           to: "/fb-accounts",
           label: "账户管理",
           icon: UsersThree,
@@ -156,9 +169,10 @@ export default function Layout({ children }: LayoutProps) {
           label: "素材数据",
           icon: ImageSquare,
           prefetch: prefetchConfig["/fb-materials"],
+          superAdminOnly: true,
         },
         { to: "/fb-settings", label: "Token 与像素", icon: Key },
-        { to: "/fb-apps", label: "App 管理", icon: Stack },
+        { to: "/fb-apps", label: "App 管理", icon: Stack, superAdminOnly: true },
       ],
     },
     {
@@ -177,9 +191,9 @@ export default function Layout({ children }: LayoutProps) {
       id: "agent",
       title: "Agent",
       items: [
-        { to: "/ai/chat", label: "对话", icon: ChatCircleText },
-        { to: "/ai/agents", label: "Agent 管理", icon: Robot },
-        { to: "/ai/automation-jobs", label: "自动化任务", icon: Lightning },
+        { to: "/ai/chat", label: "对话", icon: ChatCircleText, superAdminOnly: true },
+        { to: "/ai/agents", label: "Agent 管理", icon: Robot, superAdminOnly: true },
+        { to: "/ai/automation-jobs", label: "自动化任务", icon: Lightning, superAdminOnly: true },
       ],
     },
     {
@@ -187,6 +201,7 @@ export default function Layout({ children }: LayoutProps) {
       title: "系统",
       items: [
         { to: "/users", label: "用户管理", icon: UserGear, adminOnly: true },
+        { to: "/audit-logs", label: "审计日志", icon: ClipboardText, adminOnly: true },
         {
           to: "/organizations",
           label: "组织管理",

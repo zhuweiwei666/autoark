@@ -17,6 +17,7 @@ const adMaterialMappingSchema = new mongoose.Schema(
     // ========== 核心映射 ==========
     adId: { type: String, required: true, index: true },      // Facebook 广告 ID
     materialId: { type: mongoose.Schema.Types.ObjectId, ref: 'Material', required: true, index: true },
+    organizationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Organization', index: true },
     
     // ========== 广告层级信息 ==========
     accountId: { type: String, index: true },      // Facebook 账户 ID
@@ -55,6 +56,7 @@ adMaterialMappingSchema.index({ adId: 1 }, { unique: true })
 
 // 查询索引
 adMaterialMappingSchema.index({ materialId: 1, status: 1 })
+adMaterialMappingSchema.index({ organizationId: 1, materialId: 1 })
 adMaterialMappingSchema.index({ accountId: 1, materialId: 1 })
 adMaterialMappingSchema.index({ campaignId: 1, materialId: 1 })
 adMaterialMappingSchema.index({ publishedBy: 1, publishedAt: -1 })
@@ -68,6 +70,7 @@ adMaterialMappingSchema.index({ publishedAt: -1 })
 adMaterialMappingSchema.statics.recordMapping = async function(data: {
   adId: string
   materialId: string
+  organizationId?: string
   accountId?: string
   campaignId?: string
   adsetId?: string
@@ -152,4 +155,3 @@ adMaterialMappingSchema.statics.getMaterialUsageStats = async function(materialI
 }
 
 export default mongoose.model('AdMaterialMapping', adMaterialMappingSchema)
-

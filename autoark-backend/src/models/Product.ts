@@ -1,4 +1,5 @@
 import mongoose from 'mongoose'
+import { normalizeForStorage } from '../utils/accountId'
 
 /**
  * 产品数据模型
@@ -45,8 +46,9 @@ const urlPatternSchema = new mongoose.Schema({
 const productSchema = new mongoose.Schema(
   {
     // 基本信息
+    organizationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Organization', index: true },
     name: { type: String, required: true, index: true },
-    identifier: { type: String, required: true, unique: true }, // 唯一标识符（从URL提取）
+    identifier: { type: String, required: true }, // 唯一标识符（从URL提取）
     description: { type: String },
     
     // URL 匹配规则
@@ -98,6 +100,16 @@ const productSchema = new mongoose.Schema(
 
 // 索引
 productSchema.index({ primaryDomain: 1 })
+productSchema.index(
+  { organizationId: 1, identifier: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      organizationId: { $exists: true },
+      identifier: { $exists: true },
+    },
+  },
+)
 productSchema.index({ 'pixels.pixelId': 1 })
 productSchema.index({ 'accounts.accountId': 1 })
 productSchema.index({ status: 1, createdAt: -1 })
@@ -109,8 +121,11 @@ productSchema.virtual('availableAccountCount').get(function() {
 
 // 方法：检查账户是否可投放该产品
 productSchema.methods.canAdvertiseWith = function(accountId: string): boolean {
+  const normalizedAccountId = normalizeForStorage(accountId)
+  if (!normalizedAccountId) return false
+
   return this.accounts?.some(
-    (a: any) => a.accountId === accountId && a.status === 'active'
+    (a: any) => normalizeForStorage(a.accountId) === normalizedAccountId && a.status === 'active'
   ) || false
 }
 
@@ -121,7 +136,7 @@ productSchema.methods.getBestAccount = function(): string | null {
   
   // 按广告数排序，选择使用最少的账户（负载均衡）
   activeAccounts.sort((a: any, b: any) => (a.adCount || 0) - (b.adCount || 0))
-  return activeAccounts[0].accountId
+  return normalizeForStorage(activeAccounts[0].accountId) || null
 }
 
 // 方法：获取主 Pixel
@@ -144,4 +159,3 @@ productSchema.methods.getPrimaryPixel = function(): { pixelId: string; pixelName
 }
 
 export default mongoose.model('Product', productSchema)
-

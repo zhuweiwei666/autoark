@@ -11,10 +11,16 @@
  */
 
 import axios from 'axios'
+import { createHash } from 'crypto'
 import Creative from '../models/Creative'
 import Material from '../models/Material'
 import { uploadToR2 } from './r2Storage.service'
 import logger from '../utils/logger'
+
+const hashForLog = (value: unknown): string | undefined => {
+  if (!value) return undefined
+  return createHash('sha256').update(String(value)).digest('hex').slice(0, 12)
+}
 
 /**
  * 生成素材指纹
@@ -54,7 +60,11 @@ const downloadFile = async (url: string): Promise<{ buffer: Buffer; mimeType: st
       mimeType,
     }
   } catch (error: any) {
-    logger.error(`[MaterialSync] Failed to download: ${url}`, error.message)
+    logger.error('[MaterialSync] Failed to download preview', {
+      urlHash: hashForLog(url),
+      message: error.message,
+      status: error?.response?.status,
+    })
     return null
   }
 }
@@ -118,7 +128,11 @@ export const syncCreativeToMaterial = async (creative: any): Promise<{
     // 获取预览图 URL
     const previewUrl = getPreviewUrl(creative)
     if (!previewUrl) {
-      logger.warn(`[MaterialSync] No preview URL for creative ${creative.creativeId}`)
+      logger.warn('[MaterialSync] No preview URL for creative', {
+        creativeHash: hashForLog(creative.creativeId || creative.id),
+        hasImageHash: Boolean(creative.imageHash),
+        hasVideoId: Boolean(creative.videoId),
+      })
       return { success: false, error: 'No preview URL available', fingerprint }
     }
     
@@ -188,7 +202,11 @@ export const syncCreativeToMaterial = async (creative: any): Promise<{
       { materialId: material._id }
     )
     
-    logger.info(`[MaterialSync] Synced creative ${creative.creativeId} → material ${material._id}`)
+    logger.info('[MaterialSync] Synced creative to material', {
+      creativeHash: hashForLog(creative.creativeId || creative.id),
+      materialId: material._id?.toString?.(),
+      materialType: isVideo ? 'video' : 'image',
+    })
     
     return {
       success: true,
@@ -245,7 +263,7 @@ export const syncCreativesToMaterials = async (options?: {
     } else {
       stats.failed++
       if (result.error) {
-        stats.errors.push(`${creative.creativeId}: ${result.error}`)
+        stats.errors.push(`${hashForLog(creative.creativeId || (creative as any).id) || 'unknown'}: ${result.error}`)
       }
     }
   }

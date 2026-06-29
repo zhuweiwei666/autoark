@@ -15,7 +15,8 @@
  */
 
 import { Router, Request, Response } from 'express'
-import { authenticate } from '../middlewares/auth'
+import { authenticate, authorize } from '../middlewares/auth'
+import { UserRole } from '../models/User'
 import {
   runAnalyst,
   runExecutor,
@@ -37,6 +38,7 @@ const router = Router()
 
 // All routes require authentication
 router.use(authenticate)
+router.use(authorize(UserRole.SUPER_ADMIN))
 
 /**
  * Build AgentConfig from the DB model (bridge old → new)

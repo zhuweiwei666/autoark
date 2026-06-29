@@ -1,7 +1,8 @@
 import { Router, Request, Response } from 'express'
 import dayjs from 'dayjs'
 import logger from '../utils/logger'
-import { authenticate } from '../middlewares/auth'
+import { authenticate, authorize } from '../middlewares/auth'
+import { UserRole } from '../models/User'
 import {
   aggregateMaterialMetrics,
   getMaterialRankings,
@@ -11,11 +12,94 @@ import {
   getRecommendedMaterials,
   getDecliningMaterials,
 } from '../services/materialMetrics.service'
+import { parseLimitedNumber, pickAllowedString, pickSafeQueryString } from '../utils/pagination'
 
 const router = Router()
+const MAX_BACKFILL_DAYS = 31
+const MAX_RANKING_DAYS = 90
+const DEFAULT_RANKING_LOOKBACK_DAYS = 7
+const MATERIAL_RANKING_SORT_FIELDS = ['roas', 'spend', 'qualityScore', 'impressions'] as const
+const MATERIAL_TYPE_FILTERS = ['image', 'video'] as const
+const MATERIAL_MIN_SPEND_MAX = 1_000_000
+const MATERIAL_ROAS_MAX = 100
+const MATERIAL_MIN_DAYS_MAX = 30
+const MATERIAL_DECLINE_THRESHOLD_MAX = 100
+const MATERIAL_COUNTRY_MAX_LENGTH = 40
+const MATERIAL_IDENTIFIER_MAX_LENGTH = 160
+
+const parseMaterialMetricsDate = (value: any) => {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null
+  const parsed = dayjs(value)
+  return parsed.isValid() && parsed.format('YYYY-MM-DD') === value ? parsed : null
+}
+
+const pickOptionalAllowedString = (value: any, allowedValues: readonly string[]) => (
+  typeof value === 'string' && allowedValues.includes(value) ? value : undefined
+)
+
+const parseBoundedNumber = (
+  value: any,
+  fallback: number,
+  options: { min?: number; max: number; integer?: boolean },
+) => {
+  const min = options.min ?? 0
+  const next = Number(value)
+  if (!Number.isFinite(next) || next < min) return fallback
+  const bounded = Math.min(options.max, next)
+  return options.integer ? Math.floor(bounded) : bounded
+}
+
+const resolveMaterialMetricsDateRange = (
+  input: { startDate?: any; endDate?: any },
+  options: { defaultLookbackDays: number; maxDays: number },
+) => {
+  const end = input.endDate === undefined
+    ? dayjs()
+    : parseMaterialMetricsDate(input.endDate)
+
+  if (!end) {
+    return {
+      error: 'endDate must be a valid YYYY-MM-DD date',
+    }
+  }
+
+  const start = input.startDate === undefined
+    ? end.subtract(options.defaultLookbackDays, 'day')
+    : parseMaterialMetricsDate(input.startDate)
+
+  if (!start) {
+    return {
+      error: 'startDate must be a valid YYYY-MM-DD date',
+    }
+  }
+
+  const dayCount = end.diff(start, 'day') + 1
+  if (dayCount <= 0) {
+    return {
+      error: 'endDate must be on or after startDate',
+    }
+  }
+
+  if (dayCount > options.maxDays) {
+    return {
+      error: `一次最多查询 ${options.maxDays} 天素材排行榜，请缩小日期范围`,
+      meta: {
+        requestedDays: dayCount,
+        maxDays: options.maxDays,
+      },
+    }
+  }
+
+  return {
+    startDate: start.format('YYYY-MM-DD'),
+    endDate: end.format('YYYY-MM-DD'),
+    dayCount,
+  }
+}
 
 // 所有路由都需要认证
 router.use(authenticate)
+router.use(authorize(UserRole.SUPER_ADMIN))
 
 // ==================== 素材排行榜 ====================
 
@@ -27,26 +111,48 @@ router.use(authenticate)
 router.get('/rankings', async (req: Request, res: Response) => {
   try {
     const {
-      startDate = dayjs().subtract(7, 'day').format('YYYY-MM-DD'),
-      endDate = dayjs().format('YYYY-MM-DD'),
       sortBy = 'roas',
       limit = '20',
       type,
       country,  // 🌍 新增：国家筛选
     } = req.query
+
+    const dateRange = resolveMaterialMetricsDateRange(
+      { startDate: req.query.startDate, endDate: req.query.endDate },
+      { defaultLookbackDays: DEFAULT_RANKING_LOOKBACK_DAYS, maxDays: MAX_RANKING_DAYS },
+    )
+
+    if ('error' in dateRange) {
+      return res.status(400).json({
+        success: false,
+        error: dateRange.error,
+        meta: dateRange.meta,
+      })
+    }
     
+    const safeLimit = parseLimitedNumber(limit, 20, 100)
+    const safeSortBy = pickAllowedString(sortBy, MATERIAL_RANKING_SORT_FIELDS, 'roas')
+    const safeType = pickOptionalAllowedString(type, MATERIAL_TYPE_FILTERS)
+    const safeCountry = pickSafeQueryString(country, MATERIAL_COUNTRY_MAX_LENGTH)
     const rankings = await getMaterialRankings({
-      dateRange: { start: startDate as string, end: endDate as string },
-      sortBy: sortBy as any,
-      limit: parseInt(limit as string, 10),
-      materialType: type as any,
-      country: country as string,  // 🌍 传递国家参数
+      dateRange: { start: dateRange.startDate, end: dateRange.endDate },
+      sortBy: safeSortBy as any,
+      limit: safeLimit,
+      materialType: safeType as any,
+      country: safeCountry,
     })
     
     res.json({
       success: true,
       data: rankings,
-      query: { startDate, endDate, sortBy, limit, type, country },
+      query: {
+        startDate: dateRange.startDate,
+        endDate: dateRange.endDate,
+        sortBy: safeSortBy,
+        limit: safeLimit,
+        type: safeType,
+        country: safeCountry,
+      },
     })
   } catch (error: any) {
     logger.error('[MaterialController] Get rankings failed:', error)
@@ -63,7 +169,9 @@ router.get('/rankings', async (req: Request, res: Response) => {
  */
 router.get('/trend', async (req: Request, res: Response) => {
   try {
-    const { imageHash, videoId, days = '7' } = req.query
+    const { days = '7' } = req.query
+    const imageHash = pickSafeQueryString(req.query.imageHash, MATERIAL_IDENTIFIER_MAX_LENGTH)
+    const videoId = pickSafeQueryString(req.query.videoId, MATERIAL_IDENTIFIER_MAX_LENGTH)
     
     if (!imageHash && !videoId) {
       return res.status(400).json({
@@ -74,7 +182,7 @@ router.get('/trend', async (req: Request, res: Response) => {
     
     const trend = await getMaterialTrend(
       { imageHash: imageHash as string, videoId: videoId as string },
-      parseInt(days as string, 10)
+      parseLimitedNumber(days, 7, 90)
     )
     
     res.json({ success: true, data: trend })
@@ -92,7 +200,9 @@ router.get('/trend', async (req: Request, res: Response) => {
  */
 router.get('/duplicates', async (req: Request, res: Response) => {
   try {
-    const duplicates = await findDuplicateMaterials()
+    const groupLimit = parseLimitedNumber(req.query.groupLimit ?? req.query.limit, 50, 100)
+    const detailLimit = parseLimitedNumber(req.query.detailLimit, 25, 100)
+    const duplicates = await findDuplicateMaterials({ groupLimit, detailLimit })
     
     res.json({
       success: true,
@@ -100,6 +210,8 @@ router.get('/duplicates', async (req: Request, res: Response) => {
       summary: {
         duplicateImages: duplicates.byImageHash.length,
         duplicateVideos: duplicates.byVideoId.length,
+        groupLimit,
+        detailLimit,
       },
     })
   } catch (error: any) {
@@ -115,7 +227,9 @@ router.get('/duplicates', async (req: Request, res: Response) => {
  */
 router.get('/usage', async (req: Request, res: Response) => {
   try {
-    const { imageHash, videoId, creativeId } = req.query
+    const imageHash = pickSafeQueryString(req.query.imageHash, MATERIAL_IDENTIFIER_MAX_LENGTH)
+    const videoId = pickSafeQueryString(req.query.videoId, MATERIAL_IDENTIFIER_MAX_LENGTH)
+    const creativeId = pickSafeQueryString(req.query.creativeId, MATERIAL_IDENTIFIER_MAX_LENGTH)
     
     if (!imageHash && !videoId && !creativeId) {
       return res.status(400).json({
@@ -154,12 +268,17 @@ router.get('/recommendations', async (req: Request, res: Response) => {
       limit = '20',
     } = req.query
     
+    const safeLimit = parseLimitedNumber(limit, 20, 100)
+    const safeType = pickOptionalAllowedString(type, MATERIAL_TYPE_FILTERS)
+    const safeMinSpend = parseBoundedNumber(minSpend, 50, { max: MATERIAL_MIN_SPEND_MAX })
+    const safeMinRoas = parseBoundedNumber(minRoas, 1.0, { max: MATERIAL_ROAS_MAX })
+    const safeMinDays = parseBoundedNumber(minDays, 3, { max: MATERIAL_MIN_DAYS_MAX, integer: true })
     const recommendations = await getRecommendedMaterials({
-      type: type as any,
-      minSpend: parseFloat(minSpend as string),
-      minRoas: parseFloat(minRoas as string),
-      minDays: parseInt(minDays as string, 10),
-      limit: parseInt(limit as string, 10),
+      type: safeType as any,
+      minSpend: safeMinSpend,
+      minRoas: safeMinRoas,
+      minDays: safeMinDays,
+      limit: safeLimit,
     })
     
     res.json({ success: true, data: recommendations })
@@ -182,10 +301,13 @@ router.get('/declining', async (req: Request, res: Response) => {
       limit = '20',
     } = req.query
     
+    const safeLimit = parseLimitedNumber(limit, 20, 100)
+    const safeMinSpend = parseBoundedNumber(minSpend, 30, { max: MATERIAL_MIN_SPEND_MAX })
+    const safeDeclineThreshold = parseBoundedNumber(declineThreshold, 30, { max: MATERIAL_DECLINE_THRESHOLD_MAX })
     const declining = await getDecliningMaterials({
-      minSpend: parseFloat(minSpend as string),
-      declineThreshold: parseFloat(declineThreshold as string),
-      limit: parseInt(limit as string, 10),
+      minSpend: safeMinSpend,
+      declineThreshold: safeDeclineThreshold,
+      limit: safeLimit,
     })
     
     res.json({ success: true, data: declining })
@@ -204,7 +326,15 @@ router.get('/declining', async (req: Request, res: Response) => {
  */
 router.post('/aggregate', async (req: Request, res: Response) => {
   try {
-    const { date = dayjs().format('YYYY-MM-DD') } = req.body
+    const requestedDate = req.body?.date || dayjs().format('YYYY-MM-DD')
+    const aggregateDate = parseMaterialMetricsDate(requestedDate)
+    if (!aggregateDate) {
+      return res.status(400).json({
+        success: false,
+        error: 'date must be a valid YYYY-MM-DD date',
+      })
+    }
+    const date = aggregateDate.format('YYYY-MM-DD')
     
     logger.info(`[MaterialController] Manual aggregation triggered for ${date}`)
     const result = await aggregateMaterialMetrics(date)
@@ -229,18 +359,38 @@ router.post('/backfill', async (req: Request, res: Response) => {
   try {
     const { startDate, endDate } = req.body
     
-    if (!startDate || !endDate) {
+    const start = parseMaterialMetricsDate(startDate)
+    const end = parseMaterialMetricsDate(endDate)
+
+    if (!start || !end) {
       return res.status(400).json({
         success: false,
-        error: 'startDate and endDate are required',
+        error: 'startDate and endDate must be valid YYYY-MM-DD dates',
+      })
+    }
+
+    const dayCount = end.diff(start, 'day') + 1
+    if (dayCount <= 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'endDate must be on or after startDate',
+      })
+    }
+    if (dayCount > MAX_BACKFILL_DAYS) {
+      return res.status(400).json({
+        success: false,
+        error: `一次最多补 ${MAX_BACKFILL_DAYS} 天素材指标，请缩小日期范围`,
+        meta: {
+          requestedDays: dayCount,
+          maxDays: MAX_BACKFILL_DAYS,
+        },
       })
     }
     
     logger.info(`[MaterialController] Backfill triggered for ${startDate} to ${endDate}`)
     
     const results: Array<{ date: string; result: any }> = []
-    let currentDate = dayjs(startDate)
-    const end = dayjs(endDate)
+    let currentDate = start
     
     while (currentDate.isBefore(end) || currentDate.isSame(end, 'day')) {
       const dateStr = currentDate.format('YYYY-MM-DD')

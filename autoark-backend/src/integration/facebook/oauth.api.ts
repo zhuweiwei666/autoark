@@ -1,4 +1,5 @@
 import axios from 'axios'
+import crypto from 'crypto'
 import logger from '../../utils/logger'
 import FacebookApp from '../../models/FacebookApp'
 import { FB_API_VERSION, FB_BASE_URL } from '../../config/facebook.config'
@@ -12,6 +13,44 @@ const ENV_FB_APP_SECRET = process.env.FACEBOOK_APP_SECRET || ''
 const ENV_FB_BUSINESS_LOGIN_CONFIG_ID =
   process.env.FACEBOOK_BUSINESS_LOGIN_CONFIG_ID || process.env.FACEBOOK_CONFIG_ID || ''
 const FB_REDIRECT_URI = process.env.FACEBOOK_REDIRECT_URI || 'http://localhost:3001/api/facebook/oauth/callback'
+const OAUTH_STATE_SECRET =
+  process.env.OAUTH_STATE_SECRET ||
+  process.env.JWT_SECRET ||
+  process.env.FACEBOOK_APP_SECRET ||
+  'autoark-oauth-state-dev-secret'
+const OAUTH_STATE_TTL_MS = Number(process.env.OAUTH_STATE_TTL_MS || 10 * 60 * 1000)
+
+const summarizeOAuthError = (error: any) => ({
+  status: error.response?.status,
+  code: error.response?.data?.error?.code,
+  subcode: error.response?.data?.error?.error_subcode,
+  type: error.response?.data?.error?.type,
+  message: error.response?.data?.error?.message || error.message,
+})
+
+const businessLoginConfigFilter = (): Record<string, any> => (
+  ENV_FB_BUSINESS_LOGIN_CONFIG_ID
+    ? {}
+    : { 'config.businessLoginConfigId': { $exists: true, $nin: ['', null] } }
+)
+
+const activeBusinessLoginConfigQuery = (): Record<string, any> => ({
+  status: 'active',
+  'validation.isValid': true,
+  'config.businessLoginConfigId': { $exists: true, $nin: ['', null] },
+})
+
+const publicOauthReadyAppQuery = (extra: Record<string, any> = {}): Record<string, any> => ({
+  status: 'active',
+  'validation.isValid': true,
+  'compliance.publicOauthReady': true,
+  'compliance.appMode': 'live',
+  'compliance.businessVerification': 'verified',
+  'compliance.appReview': 'approved',
+  'config.enabledForBulkAds': { $ne: false },
+  ...businessLoginConfigFilter(),
+  ...extra,
+})
 
 const getBulkAdRedirectUri = (): string => {
   if (process.env.FACEBOOK_BULK_AD_REDIRECT_URI) {
@@ -32,6 +71,68 @@ export interface FacebookLoginUrlOptions {
   redirectUri?: string
 }
 
+export type BusinessLoginConfigSource = 'env' | 'database' | 'env_and_database' | 'none'
+
+export interface BusinessLoginConfigStatus {
+  configured: boolean
+  source: BusinessLoginConfigSource
+  envConfigured: boolean
+  activeDbConfiguredAppCount: number
+}
+
+interface OAuthStatePayload {
+  originalState: string
+  appId?: string
+  redirectUri?: string
+  iat?: number
+  exp?: number
+  nonce?: string
+  sig?: string
+}
+
+const signStatePayload = (payload: Omit<OAuthStatePayload, 'sig'>): string => {
+  return crypto
+    .createHmac('sha256', OAUTH_STATE_SECRET)
+    .update(JSON.stringify(payload))
+    .digest('hex')
+}
+
+const buildStateParam = (payload: Omit<OAuthStatePayload, 'sig' | 'iat' | 'exp' | 'nonce'>): string => {
+  const now = Date.now()
+  const signedPayload: Omit<OAuthStatePayload, 'sig'> = {
+    ...payload,
+    iat: now,
+    exp: now + OAUTH_STATE_TTL_MS,
+    nonce: crypto.randomUUID(),
+  }
+
+  return Buffer.from(JSON.stringify({
+    ...signedPayload,
+    sig: signStatePayload(signedPayload),
+  })).toString('base64url')
+}
+
+const verifySignedState = (stateObj: OAuthStatePayload): void => {
+  const { sig, ...payload } = stateObj
+  if (!sig) {
+    throw new Error('OAuth state signature missing')
+  }
+
+  const expected = signStatePayload(payload)
+  const actualBuffer = Buffer.from(sig)
+  const expectedBuffer = Buffer.from(expected)
+  if (
+    actualBuffer.length !== expectedBuffer.length ||
+    !crypto.timingSafeEqual(actualBuffer, expectedBuffer)
+  ) {
+    throw new Error('OAuth state signature invalid')
+  }
+
+  if (!stateObj.exp || stateObj.exp < Date.now()) {
+    throw new Error('OAuth state expired')
+  }
+}
+
 /**
  * 获取可用的 App 配置（优先从数据库，后备环境变量）
  */
@@ -40,11 +141,24 @@ export const getActiveAppConfig = async (appId?: string): Promise<{
   appSecret: string
   businessLoginConfigId?: string
   source: 'database' | 'env'
+}> => getActiveAppConfigWithOptions(appId)
+
+export const getActiveAppConfigWithOptions = async (
+  appId?: string,
+  options: { requirePublicOauthReady?: boolean } = {},
+): Promise<{
+  appId: string
+  appSecret: string
+  businessLoginConfigId?: string
+  source: 'database' | 'env'
 }> => {
   try {
     // 如果指定了 appId，直接查找
     if (appId) {
-      const app = await FacebookApp.findOne({ appId, status: 'active' })
+      const appQuery = options.requirePublicOauthReady
+        ? publicOauthReadyAppQuery({ appId })
+        : { appId, status: 'active' }
+      const app = await FacebookApp.findOne(appQuery)
       if (app) {
         return {
           appId: app.appId,
@@ -53,23 +167,24 @@ export const getActiveAppConfig = async (appId?: string): Promise<{
           source: 'database',
         }
       }
+
+      if (options.requirePublicOauthReady) {
+        throw Object.assign(
+          new Error(`Facebook App ${appId} 尚未满足公开授权条件。请先在 App 管理登记 Live、Business verified、App Review approved、所需权限 Advanced + Approved，以及 Business Login config_id。`),
+          {
+            statusCode: 400,
+            code: 'FACEBOOK_APP_PUBLIC_OAUTH_NOT_READY',
+          },
+        )
+      }
     }
 
     // 1. 优先查找默认 App（且满足公开 OAuth 准入）
-    let app = await FacebookApp.findOne({
-      status: 'active',
-      isDefault: true,
-      'validation.isValid': true,
-      'compliance.publicOauthReady': true,
-    })
+    let app = await FacebookApp.findOne(publicOauthReadyAppQuery({ isDefault: true }))
     
     // 2. 如果没有默认 App，查找负载最低的活跃 App（且满足公开 OAuth 准入）
     if (!app) {
-      app = await FacebookApp.findOne({
-        status: 'active',
-        'validation.isValid': true,
-        'compliance.publicOauthReady': true,
-      }).sort({
+      app = await FacebookApp.findOne(publicOauthReadyAppQuery()).sort({
         'currentLoad.activeTasks': 1,
         'config.priority': -1,
       })
@@ -135,6 +250,27 @@ export const getAvailableApps = async (): Promise<Array<{
   }))
 }
 
+export const getBusinessLoginConfigStatus = async (): Promise<BusinessLoginConfigStatus> => {
+  const envConfigured = Boolean(ENV_FB_BUSINESS_LOGIN_CONFIG_ID)
+  const activeDbConfiguredAppCount = await FacebookApp.countDocuments(activeBusinessLoginConfigQuery())
+
+  let source: BusinessLoginConfigSource = 'none'
+  if (envConfigured && activeDbConfiguredAppCount > 0) {
+    source = 'env_and_database'
+  } else if (envConfigured) {
+    source = 'env'
+  } else if (activeDbConfiguredAppCount > 0) {
+    source = 'database'
+  }
+
+  return {
+    configured: envConfigured || activeDbConfiguredAppCount > 0,
+    source,
+    envConfigured,
+    activeDbConfiguredAppCount,
+  }
+}
+
 /**
  * 生成 Facebook 登录 URL
  * @param state - 状态参数
@@ -145,7 +281,7 @@ export const getFacebookLoginUrl = async (
   appId?: string,
   options: FacebookLoginUrlOptions = {},
 ): Promise<string> => {
-  const config = await getActiveAppConfig(appId)
+  const config = await getActiveAppConfigWithOptions(appId, { requirePublicOauthReady: true })
   const redirectUri = options.redirectUri || FB_REDIRECT_URI
   const businessLoginConfigId = config.businessLoginConfigId || ENV_FB_BUSINESS_LOGIN_CONFIG_ID
   
@@ -158,7 +294,7 @@ export const getFacebookLoginUrl = async (
     'pages_manage_ads',
   ].join(',')
 
-  // 在 state 中编码 appId，以便回调时知道用哪个 app
+  // 在 state 中编码 appId，以便回调时知道用哪个 app；state 带 HMAC 签名，防止回调被伪造绑定到其他用户/组织。
   const stateData = {
     originalState: state || '',
     appId: config.appId,
@@ -169,7 +305,7 @@ export const getFacebookLoginUrl = async (
     client_id: config.appId,
     redirect_uri: redirectUri,
     response_type: 'code',
-    state: Buffer.from(JSON.stringify(stateData)).toString('base64'),
+    state: buildStateParam(stateData),
   })
 
   if (options.businessLogin && businessLoginConfigId) {
@@ -207,7 +343,11 @@ export const getFacebookLoginUrlSync = (state?: string): string => {
     client_id: ENV_FB_APP_ID,
     redirect_uri: FB_REDIRECT_URI,
     response_type: 'code',
-    state: state || '',
+    state: buildStateParam({
+      originalState: state || '',
+      appId: ENV_FB_APP_ID,
+      redirectUri: FB_REDIRECT_URI,
+    }),
   })
 
   if (ENV_FB_BUSINESS_LOGIN_CONFIG_ID) {
@@ -229,10 +369,32 @@ export const parseStateParam = (state: string): {
   appId?: string
   redirectUri?: string
 } => {
+  return parseStateParamWithOptions(state)
+}
+
+export const parseStateParamWithOptions = (state: string, options: { requireSignature?: boolean } = {}): {
+  originalState: string
+  appId?: string
+  redirectUri?: string
+} => {
   try {
     const decoded = Buffer.from(state, 'base64').toString('utf-8')
-    return JSON.parse(decoded)
+    const stateObj = JSON.parse(decoded)
+    if (stateObj?.sig) {
+      verifySignedState(stateObj)
+    } else if (options.requireSignature) {
+      throw new Error('OAuth state signature missing')
+    }
+
+    return {
+      originalState: stateObj.originalState || '',
+      appId: stateObj.appId,
+      redirectUri: stateObj.redirectUri,
+    }
   } catch {
+    if (options.requireSignature) {
+      throw new Error('Invalid OAuth state')
+    }
     // 旧格式，直接返回
     return { originalState: state }
   }
@@ -279,7 +441,7 @@ export const exchangeCodeForToken = async (code: string, appId?: string, redirec
     logger.info('[OAuth] Successfully exchanged code for access token')
     return response.data
   } catch (error: any) {
-    logger.error('[OAuth] Failed to exchange code for token:', error.response?.data || error.message)
+    logger.error('[OAuth] Failed to exchange code for token:', JSON.stringify(summarizeOAuthError(error)))
     
     // 记录请求失败
     if (appId) {
@@ -338,7 +500,7 @@ export const exchangeForLongLivedToken = async (shortLivedToken: string, appId?:
     logger.info(`[OAuth] Successfully exchanged for long-lived token, expires in ${response.data.expires_in} seconds`)
     return response.data
   } catch (error: any) {
-    logger.error('[OAuth] Failed to exchange for long-lived token:', error.response?.data || error.message)
+    logger.error('[OAuth] Failed to exchange for long-lived token:', JSON.stringify(summarizeOAuthError(error)))
     throw new Error(
       `Failed to exchange for long-lived token: ${error.response?.data?.error?.message || error.message}`
     )
@@ -367,7 +529,7 @@ export const getUserInfo = async (accessToken: string): Promise<{
       email: response.data.email,
     }
   } catch (error: any) {
-    logger.error('[OAuth] Failed to get user info:', error.response?.data || error.message)
+    logger.error('[OAuth] Failed to get user info:', JSON.stringify(summarizeOAuthError(error)))
     throw new Error(`Failed to get user info: ${error.response?.data?.error?.message || error.message}`)
   }
 }

@@ -5,6 +5,17 @@ import FbToken from '../models/FbToken'
 import Account from '../models/Account'
 import { facebookClient } from '../integration/facebook/facebookClient'
 import { URL } from 'url'
+import { createHash } from 'crypto'
+import { combineFilters } from '../utils/accessControl'
+import { normalizeForStorage } from '../utils/accountId'
+
+const PRODUCT_MAPPING_FACEBOOK_PAGE_LIMIT = 10
+const PRODUCT_MAPPING_FACEBOOK_PAGE_SIZE = 100
+
+const hashForLog = (value: unknown): string | undefined => {
+  if (!value) return undefined
+  return createHash('sha256').update(String(value)).digest('hex').slice(0, 12)
+}
 
 /**
  * 产品映射服务
@@ -80,8 +91,11 @@ export function parseProductUrl(urlString: string): UrlParseResult | null {
       productIdentifier: `${domain}:${productIdentifier}`.toLowerCase(),
       productName: productName || productIdentifier,
     }
-  } catch (error) {
-    logger.warn(`[ProductMapping] Failed to parse URL: ${urlString}`, error)
+  } catch (error: any) {
+    logger.warn('[ProductMapping] Failed to parse URL', {
+      urlHash: hashForLog(urlString),
+      message: error?.message || String(error),
+    })
     return null
   }
 }
@@ -104,7 +118,7 @@ function formatProductName(slug: string): string {
 /**
  * 从所有文案包扫描并创建产品
  */
-export async function scanProductsFromCopyPackages(): Promise<{
+export async function scanProductsFromCopyPackages(accessFilter: any = {}, ownerData: any = {}): Promise<{
   created: number
   updated: number
   errors: string[]
@@ -112,9 +126,9 @@ export async function scanProductsFromCopyPackages(): Promise<{
   const result = { created: 0, updated: 0, errors: [] as string[] }
   
   try {
-    const packages = await CopywritingPackage.find({
+    const packages = await CopywritingPackage.find(combineFilters(accessFilter, {
       'links.websiteUrl': { $exists: true, $ne: '' }
-    })
+    }))
     
     logger.info(`[ProductMapping] Scanning ${packages.length} copy packages for products`)
     
@@ -127,7 +141,7 @@ export async function scanProductsFromCopyPackages(): Promise<{
         if (!parsed) continue
         
         // 查找或创建产品
-        let product = await Product.findOne({ identifier: parsed.productIdentifier })
+        let product = await Product.findOne(combineFilters({ identifier: parsed.productIdentifier }, accessFilter))
         
         if (product) {
           // 更新：添加文案包引用
@@ -141,6 +155,7 @@ export async function scanProductsFromCopyPackages(): Promise<{
           product = await Product.create({
             name: parsed.productName,
             identifier: parsed.productIdentifier,
+            ...ownerData,
             primaryDomain: parsed.domain,
             urlPatterns: [{
               pattern: parsed.domain,
@@ -174,38 +189,97 @@ interface PixelInfo {
   accountName?: string
 }
 
+const getScopedTokenForAccount = async (account: any, tokens: any[]) => {
+  const accountId = normalizeForStorage(account.accountId)
+  if (!accountId || tokens.length === 0) return null
+
+  if (account.token) {
+    const directlyLinkedToken = tokens.find(token => token.token === account.token)
+    if (directlyLinkedToken) {
+      return directlyLinkedToken
+    }
+  }
+
+  for (const token of tokens) {
+    try {
+      const result = await facebookClient.get(`/act_${accountId}`, {
+        access_token: token.token,
+        fields: 'id,name',
+      })
+      if (result?.id) {
+        return token
+      }
+    } catch (error: any) {
+      logger.debug(`[ProductMapping] Token ${token.fbUserName || token._id} cannot access account ${accountId}`)
+    }
+  }
+
+  return null
+}
+
+const fetchAccountPixelsFromFacebook = async (
+  accountId: string,
+  accessToken: string,
+  fields: string,
+) => {
+  const pixels: any[] = []
+  let after: string | undefined
+  let pageCount = 0
+
+  while (pageCount < PRODUCT_MAPPING_FACEBOOK_PAGE_LIMIT) {
+    const result = await facebookClient.get(`/act_${accountId}/adspixels`, {
+      access_token: accessToken,
+      fields,
+      limit: PRODUCT_MAPPING_FACEBOOK_PAGE_SIZE,
+      ...(after && { after }),
+    })
+
+    pixels.push(...(result.data || []))
+    pageCount += 1
+
+    after = result.paging?.cursors?.after
+    if (!after || !result.paging?.next) {
+      break
+    }
+  }
+
+  return pixels
+}
+
 /**
  * 从所有授权账户获取 Pixels
  */
-export async function fetchAllPixels(): Promise<PixelInfo[]> {
+export async function fetchAllPixels(accountFilter: any = {}, tokenFilter: any = {}): Promise<PixelInfo[]> {
   const allPixels: PixelInfo[] = []
   
   try {
     // 获取所有活跃账户
-    const accounts = await Account.find({ status: { $ne: 'disabled' } })
+    const accounts = await Account.find(combineFilters({
+      channel: 'facebook',
+      status: { $ne: 'disabled' },
+    }, accountFilter))
     
     // 获取有效 Token
-    const fbToken: any = await FbToken.findOne({ status: 'active' }).sort({ updatedAt: -1 })
-    if (!fbToken) {
+    const fbTokens: any[] = await FbToken.find({ status: 'active', ...tokenFilter })
+    if (fbTokens.length === 0) {
       logger.warn('[ProductMapping] No active Facebook token found')
       return []
     }
     
     for (const account of accounts) {
       try {
-        const accountId = account.accountId.replace('act_', '')
-        const result = await facebookClient.get(`/act_${accountId}/adspixels`, {
-          access_token: fbToken.token,
-          fields: 'id,name',
-          limit: 100,
-        })
-        
-        const pixels = result.data || []
+        const accountId = normalizeForStorage(account.accountId)
+        const fbToken = await getScopedTokenForAccount(account, fbTokens)
+        if (!fbToken) {
+          logger.warn(`[ProductMapping] No scoped Facebook token can access account ${accountId}`)
+          continue
+        }
+        const pixels = await fetchAccountPixelsFromFacebook(accountId, fbToken.token, 'id,name')
         for (const pixel of pixels) {
           allPixels.push({
             id: pixel.id,
             name: pixel.name || 'Unnamed Pixel',
-            accountId: account.accountId,
+            accountId,
             accountName: account.name,
           })
         }
@@ -263,7 +337,10 @@ function calculateSimilarity(str1: string, str2: string): number {
  * 为所有产品匹配 Pixels
  */
 export async function matchProductsWithPixels(
-  minConfidence: number = 50
+  minConfidence: number = 50,
+  accessFilter: any = {},
+  accountFilter: any = {},
+  tokenFilter: any = {},
 ): Promise<{
   matched: number
   unmatched: number
@@ -272,8 +349,8 @@ export async function matchProductsWithPixels(
   const result = { matched: 0, unmatched: 0, details: [] as any[] }
   
   try {
-    const products = await Product.find({ status: 'active' })
-    const pixels = await fetchAllPixels()
+    const products = await Product.find(combineFilters({ status: 'active' }, accessFilter))
+    const pixels = await fetchAllPixels(accountFilter, tokenFilter)
     
     logger.info(`[ProductMapping] Matching ${products.length} products with ${pixels.length} pixels`)
     
@@ -355,22 +432,29 @@ export async function matchProductsWithPixels(
 /**
  * 扫描所有账户，建立 Pixel-账户 关系
  */
-export async function discoverAccountsByPixels(): Promise<{
+export async function discoverAccountsByPixels(
+  accessFilter: any = {},
+  accountFilter: any = {},
+  tokenFilter: any = {},
+): Promise<{
   productsUpdated: number
   newAccountMappings: number
 }> {
   const result = { productsUpdated: 0, newAccountMappings: 0 }
   
   try {
-    const products = await Product.find({ 
+    const products = await Product.find(combineFilters({
       status: 'active',
       'pixels.0': { $exists: true } // 至少有一个 Pixel
-    })
+    }, accessFilter))
     
-    const accounts = await Account.find({ status: { $ne: 'disabled' } })
-    const fbToken: any = await FbToken.findOne({ status: 'active' }).sort({ updatedAt: -1 })
+    const accounts = await Account.find(combineFilters({
+      channel: 'facebook',
+      status: { $ne: 'disabled' },
+    }, accountFilter))
+    const fbTokens: any[] = await FbToken.find({ status: 'active', ...tokenFilter })
     
-    if (!fbToken) {
+    if (fbTokens.length === 0) {
       logger.warn('[ProductMapping] No active Facebook token found')
       return result
     }
@@ -380,17 +464,16 @@ export async function discoverAccountsByPixels(): Promise<{
     
     for (const account of accounts) {
       try {
-        const accountId = account.accountId.replace('act_', '')
-        const pixelsResult = await facebookClient.get(`/act_${accountId}/adspixels`, {
-          access_token: fbToken.token,
-          fields: 'id',
-          limit: 100,
-        })
-        
-        const pixels = pixelsResult.data || []
+        const accountId = normalizeForStorage(account.accountId)
+        const fbToken = await getScopedTokenForAccount(account, fbTokens)
+        if (!fbToken) {
+          logger.warn(`[ProductMapping] No scoped Facebook token can access account ${accountId}`)
+          continue
+        }
+        const pixels = await fetchAccountPixelsFromFacebook(accountId, fbToken.token, 'id')
         for (const pixel of pixels) {
           const existing = pixelToAccounts.get(pixel.id) || []
-          existing.push({ accountId: account.accountId, accountName: account.name })
+          existing.push({ accountId, accountName: account.name })
           pixelToAccounts.set(pixel.id, existing)
         }
       } catch (error: any) {
@@ -439,29 +522,29 @@ export async function discoverAccountsByPixels(): Promise<{
 /**
  * 通过 URL 查找匹配的产品
  */
-export async function findProductByUrl(urlString: string): Promise<any | null> {
+export async function findProductByUrl(urlString: string, accessFilter: any = {}): Promise<any | null> {
   const parsed = parseProductUrl(urlString)
   if (!parsed) return null
   
   // 精确匹配
-  let product = await Product.findOne({ identifier: parsed.productIdentifier })
+  let product = await Product.findOne(combineFilters({ identifier: parsed.productIdentifier }, accessFilter))
   if (product) return product
   
   // 域名匹配
-  product = await Product.findOne({ primaryDomain: parsed.domain })
+  product = await Product.findOne(combineFilters({ primaryDomain: parsed.domain }, accessFilter))
   return product
 }
 
 /**
  * 获取产品的可用投放账户
  */
-export async function getAvailableAccountsForProduct(productId: string): Promise<Array<{
+export async function getAvailableAccountsForProduct(productId: string, accessFilter: any = {}): Promise<Array<{
   accountId: string
   accountName?: string
   pixelId?: string
   pixelName?: string
 }>> {
-  const product = await Product.findById(productId)
+  const product = await Product.findOne(combineFilters({ _id: productId }, accessFilter))
   if (!product) return []
   
   return product.accounts
@@ -480,12 +563,12 @@ export async function getAvailableAccountsForProduct(productId: string): Promise
 /**
  * 为自动投放选择最佳账户和 Pixel
  */
-export async function selectBestAccountForProduct(productId: string): Promise<{
+export async function selectBestAccountForProduct(productId: string, accessFilter: any = {}): Promise<{
   accountId: string
   pixelId: string
   pixelName?: string
 } | null> {
-  const product = await Product.findById(productId)
+  const product = await Product.findOne(combineFilters({ _id: productId }, accessFilter))
   if (!product) return null
   
   // 获取主 Pixel
@@ -506,7 +589,12 @@ export async function selectBestAccountForProduct(productId: string): Promise<{
 /**
  * 完整的产品关系同步（一键执行所有步骤）
  */
-export async function syncAllProductMappings(): Promise<{
+export async function syncAllProductMappings(
+  accessFilter: any = {},
+  ownerData: any = {},
+  accountFilter: any = {},
+  tokenFilter: any = {},
+): Promise<{
   products: { created: number; updated: number }
   pixelMatches: { matched: number; unmatched: number }
   accountDiscovery: { productsUpdated: number; newAccountMappings: number }
@@ -514,13 +602,13 @@ export async function syncAllProductMappings(): Promise<{
   logger.info('[ProductMapping] Starting full sync...')
   
   // 步骤1: 从文案包扫描产品
-  const productResult = await scanProductsFromCopyPackages()
+  const productResult = await scanProductsFromCopyPackages(accessFilter, ownerData)
   
   // 步骤2: 匹配 Pixels
-  const pixelResult = await matchProductsWithPixels()
+  const pixelResult = await matchProductsWithPixels(50, accessFilter, accountFilter, tokenFilter)
   
   // 步骤3: 发现账户
-  const accountResult = await discoverAccountsByPixels()
+  const accountResult = await discoverAccountsByPixels(accessFilter, accountFilter, tokenFilter)
   
   logger.info('[ProductMapping] Full sync complete!')
   
@@ -530,4 +618,3 @@ export async function syncAllProductMappings(): Promise<{
     accountDiscovery: accountResult,
   }
 }
-

@@ -1,6 +1,25 @@
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 
+const safeDecode = (value: string) => {
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    return value
+  }
+}
+
+const formatOAuthError = (rawError: string) => {
+  const decoded = safeDecode(rawError)
+  if (decoded.includes('Invalid OAuth state') || decoded.includes('Missing OAuth state')) {
+    return '授权链接已失效或来源不匹配，请回到 AutoArk 重新点击 Facebook 登录。'
+  }
+  if (decoded.includes('No authorization code')) {
+    return 'Facebook 未返回授权码，请关闭窗口后重新发起授权。'
+  }
+  return decoded
+}
+
 const OAuthCallbackPage = () => {
   const [searchParams] = useSearchParams()
   const [status, setStatus] = useState<'processing' | 'success' | 'error'>('processing')
@@ -14,24 +33,26 @@ const OAuthCallbackPage = () => {
 
     if (oauthSuccess === 'true') {
       setStatus('success')
-      setMessage(`授权成功${fbUserName ? ` - ${decodeURIComponent(fbUserName)}` : ''}`)
+      setMessage(`授权成功${fbUserName ? ` - ${safeDecode(fbUserName)}` : ''}`)
       
       if (window.opener) {
+        const targetOrigin = window.location.origin
         window.opener.postMessage({
           type: 'oauth-success',
           tokenId,
-          fbUserName: fbUserName ? decodeURIComponent(fbUserName) : undefined,
-        }, '*')
+          fbUserName: fbUserName ? safeDecode(fbUserName) : undefined,
+        }, targetOrigin)
         setTimeout(() => window.close(), 1500)
       } else {
         setTimeout(() => { window.location.href = '/bulk-ad/create' }, 1500)
       }
     } else if (oauthError) {
+      const friendlyError = formatOAuthError(oauthError)
       setStatus('error')
-      setMessage(decodeURIComponent(oauthError))
+      setMessage(friendlyError)
       
       if (window.opener) {
-        window.opener.postMessage({ type: 'oauth-error', error: decodeURIComponent(oauthError) }, '*')
+        window.opener.postMessage({ type: 'oauth-error', error: friendlyError }, window.location.origin)
         setTimeout(() => window.close(), 3000)
       }
     } else {
@@ -112,9 +133,14 @@ const OAuthCallbackPage = () => {
           </div>
           <h2 style={{ marginTop: 16, color: '#dc2626', fontSize: 24, fontWeight: 600 }}>授权失败</h2>
           <p style={{ marginTop: 8, color: '#6b7280', fontSize: 14, textAlign: 'center', maxWidth: 300 }}>{message}</p>
-          <button onClick={() => window.close()} style={{ marginTop: 24, padding: '10px 24px', backgroundColor: '#ef4444', color: 'white', border: 'none', borderRadius: 8, fontSize: 14, cursor: 'pointer' }}>
-            关闭窗口
-          </button>
+          <div style={{ display: 'flex', gap: 10, marginTop: 24, flexWrap: 'wrap', justifyContent: 'center' }}>
+            <button onClick={() => { window.location.href = '/bulk-ad/create' }} style={{ padding: '10px 18px', backgroundColor: '#111827', color: 'white', border: 'none', borderRadius: 8, fontSize: 14, cursor: 'pointer', fontWeight: 600 }}>
+              返回创建广告
+            </button>
+            <button onClick={() => window.close()} style={{ padding: '10px 18px', backgroundColor: '#ef4444', color: 'white', border: 'none', borderRadius: 8, fontSize: 14, cursor: 'pointer', fontWeight: 600 }}>
+              关闭窗口
+            </button>
+          </div>
         </>
       )}
     </div>
@@ -122,4 +148,3 @@ const OAuthCallbackPage = () => {
 }
 
 export default OAuthCallbackPage
-

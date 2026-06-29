@@ -1,11 +1,13 @@
 import { Request, Response, NextFunction } from 'express'
+import dayjs from 'dayjs'
 import FbToken, { IFbToken } from '../models/FbToken'
 import {
   validateToken,
   checkAndUpdateTokenStatus,
 } from '../services/fbToken.validation.service'
 import logger from '../utils/logger'
-import { UserRole } from '../models/User'
+import { combineFilters, scopedIdFilter, scopedTokenFilter } from '../utils/accessControl'
+import { parsePagination, pickAllowedString, pickSafeQueryString } from '../utils/pagination'
 
 /**
  * 获取 Token 过滤条件
@@ -14,33 +16,37 @@ import { UserRole } from '../models/User'
  * - 普通成员：看自己绑定的 + 公共数据
  */
 const getTokenFilter = (req: Request): any => {
-  if (!req.user) return { _id: null } // 未认证，返回空结果
-  
-  // 超级管理员看所有
-  if (req.user.role === UserRole.SUPER_ADMIN) return {}
-  
-  // 组织管理员看本组织 + 公共数据（无 userId 或 userId 为空）
-  if (req.user.role === UserRole.ORG_ADMIN && req.user.organizationId) {
-    return {
-      $or: [
-        { organizationId: req.user.organizationId },
-        { userId: { $exists: false } },
-        { userId: null },
-        { userId: '' },
-        { userId: 'default-user' } // 兼容旧数据
-      ]
-    }
+  return scopedTokenFilter(req)
+}
+
+const FB_TOKEN_MAX_LENGTH = 4096
+const FB_TOKEN_OPTIMIZER_MAX_LENGTH = 80
+const FB_TOKEN_STATUSES = ['active', 'expired', 'invalid'] as const
+
+const sanitizeFbTokenValue = (value: any): string | undefined => (
+  pickSafeQueryString(value, FB_TOKEN_MAX_LENGTH)
+)
+
+const sanitizeTokenOptimizer = (value: any): string | undefined => (
+  pickSafeQueryString(value, FB_TOKEN_OPTIMIZER_MAX_LENGTH)
+)
+
+const hasOwn = (input: any, key: string): boolean => (
+  Object.prototype.hasOwnProperty.call(input || {}, key)
+)
+
+const parseTokenListDate = (value: any, fieldName: string, boundary: 'start' | 'end') => {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return { error: `${fieldName} must be a valid YYYY-MM-DD date` }
   }
-  
-  // 普通成员看自己绑定的 + 公共数据（无 userId 或 userId 为空）
+
+  const parsed = dayjs(value)
+  if (!parsed.isValid() || parsed.format('YYYY-MM-DD') !== value) {
+    return { error: `${fieldName} must be a valid YYYY-MM-DD date` }
+  }
+
   return {
-    $or: [
-      { userId: req.user.userId },
-      { userId: { $exists: false } },
-      { userId: null },
-      { userId: '' },
-      { userId: 'default-user' } // 兼容旧数据
-    ]
+    date: (boundary === 'start' ? parsed.startOf('day') : parsed.endOf('day')).toDate(),
   }
 }
 
@@ -55,7 +61,8 @@ export const bindToken = async (
   next: NextFunction,
 ) => {
   try {
-    const { token, optimizer } = req.body
+    const token = sanitizeFbTokenValue(req.body?.token)
+    const optimizer = sanitizeTokenOptimizer(req.body?.optimizer)
     // 使用当前登录用户的 ID
     const userId = req.user?.userId || 'default-user'
 
@@ -108,7 +115,7 @@ export const bindToken = async (
     // 使用 fbUserId 作为唯一标识，而不是 userId
     // 这样同一个 Facebook 用户只能有一个 token，但不同的 Facebook 用户可以有多个 token
     const savedToken = await FbToken.findOneAndUpdate(
-      { fbUserId: fbUserId },
+      combineFilters({ fbUserId: fbUserId }, scopedTokenFilter(req)),
       tokenData,
       { new: true, upsert: true },
     )
@@ -146,31 +153,55 @@ export const getTokens = async (
 ) => {
   try {
     const { optimizer, startDate, endDate, status } = req.query
+    const { page, pageSize, skip } = parsePagination(
+      {
+        page: req.query.page,
+        pageSize: req.query.pageSize,
+        limit: req.query.limit,
+      },
+      { defaultPageSize: 50, maxPageSize: 200 },
+    )
 
     // 构建查询条件 - 根据用户角色过滤
     const query: any = { ...getTokenFilter(req) }
 
-    if (optimizer) {
-      query.optimizer = optimizer as string
+    const safeOptimizer = sanitizeTokenOptimizer(optimizer)
+    const safeStatus = pickAllowedString(status, FB_TOKEN_STATUSES, '')
+
+    if (safeOptimizer) {
+      query.optimizer = safeOptimizer
     }
 
-    if (status) {
-      query.status = status as string
+    if (safeStatus) {
+      query.status = safeStatus
     }
 
     if (startDate || endDate) {
       query.createdAt = {}
       if (startDate) {
-        query.createdAt.$gte = new Date(startDate as string)
+        const parsedStartDate = parseTokenListDate(startDate, 'startDate', 'start')
+        if (parsedStartDate.error) {
+          return res.status(400).json({ success: false, message: parsedStartDate.error })
+        }
+        query.createdAt.$gte = parsedStartDate.date
       }
       if (endDate) {
-        query.createdAt.$lte = new Date(endDate as string)
+        const parsedEndDate = parseTokenListDate(endDate, 'endDate', 'end')
+        if (parsedEndDate.error) {
+          return res.status(400).json({ success: false, message: parsedEndDate.error })
+        }
+        query.createdAt.$lte = parsedEndDate.date
+      }
+      if (query.createdAt.$gte && query.createdAt.$lte && query.createdAt.$gte > query.createdAt.$lte) {
+        return res.status(400).json({ success: false, message: 'endDate must be on or after startDate' })
       }
     }
 
     // 查询 tokens
     const tokens = await FbToken.find(query)
       .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(pageSize)
       .lean()
 
     // 移除敏感信息（token）
@@ -192,6 +223,10 @@ export const getTokens = async (
       success: true,
       data: safeTokens,
       count: safeTokens.length,
+      pagination: {
+        page,
+        pageSize,
+      },
     })
   } catch (error: any) {
     logger.error('[Token Get] Error:', error)
@@ -211,7 +246,7 @@ export const getTokenById = async (
   try {
     const { id } = req.params
 
-    const token = await FbToken.findById(id).lean()
+    const token = await FbToken.findOne(scopedIdFilter(req, id, scopedTokenFilter(req))).lean()
 
     if (!token) {
       return res.status(404).json({
@@ -254,7 +289,7 @@ export const checkTokenStatus = async (
   try {
     const { id } = req.params
 
-    const token = await FbToken.findById(id)
+    const token = await FbToken.findOne(scopedIdFilter(req, id, scopedTokenFilter(req)))
 
     if (!token) {
       return res.status(404).json({
@@ -267,7 +302,7 @@ export const checkTokenStatus = async (
     const newStatus = await checkAndUpdateTokenStatus(token)
 
     // 重新获取更新后的 token
-    const updatedToken = await FbToken.findById(id).lean()
+    const updatedToken = await FbToken.findOne(scopedIdFilter(req, id, scopedTokenFilter(req))).lean()
 
     return res.json({
       success: true,
@@ -297,17 +332,21 @@ export const updateToken = async (
 ) => {
   try {
     const { id } = req.params
-    const { optimizer } = req.body
 
     const updateData: any = {
       updatedAt: new Date(),
     }
 
-    if (optimizer !== undefined) {
-      updateData.optimizer = optimizer
+    if (hasOwn(req.body, 'optimizer')) {
+      if (req.body.optimizer === null || req.body.optimizer === '') {
+        updateData.optimizer = ''
+      } else {
+        const optimizer = sanitizeTokenOptimizer(req.body.optimizer)
+        if (optimizer) updateData.optimizer = optimizer
+      }
     }
 
-    const updatedToken = await FbToken.findByIdAndUpdate(id, updateData, {
+    const updatedToken = await FbToken.findOneAndUpdate(scopedIdFilter(req, id, scopedTokenFilter(req)), updateData, {
       new: true,
     }).lean()
 
@@ -352,7 +391,7 @@ export const deleteToken = async (
   try {
     const { id } = req.params
 
-    const token = await FbToken.findByIdAndDelete(id)
+    const token = await FbToken.findOneAndDelete(scopedIdFilter(req, id, scopedTokenFilter(req)))
 
     if (!token) {
       return res.status(404).json({
@@ -370,4 +409,3 @@ export const deleteToken = async (
     next(error)
   }
 }
-

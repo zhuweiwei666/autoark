@@ -1,5 +1,6 @@
 import { facebookClient } from './facebookClient'
 import logger from '../../utils/logger'
+import { createHash } from 'crypto'
 
 /**
  * Facebook 批量创建 API 集成
@@ -7,6 +8,47 @@ import logger from '../../utils/logger'
  */
 
 // ==================== Campaign 创建 ====================
+
+const SENSITIVE_KEYS = new Set(['access_token', 'token', 'client_secret', 'appSecret', 'authorization'])
+
+const redactSensitive = (value: any): any => {
+  if (Array.isArray(value)) {
+    return value.map(redactSensitive)
+  }
+
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, nestedValue]) => [
+        key,
+        SENSITIVE_KEYS.has(key) ? '[REDACTED]' : redactSensitive(nestedValue),
+      ]),
+    )
+  }
+
+  return value
+}
+
+const safeJson = (value: any): string => JSON.stringify(redactSensitive(value), null, 2)
+
+const hashForLog = (value: unknown): string | undefined => {
+  if (!value) return undefined
+  return createHash('sha256').update(String(value)).digest('hex').slice(0, 12)
+}
+
+export const buildFacebookBulkCreateErrorPayload = (error: any) => {
+  const responseData = error?.response?.data || error?.response || {}
+  const fbError = responseData?.error || {}
+
+  return {
+    code: error?.code || fbError.code || 'UNKNOWN',
+    subcode: error?.subcode || fbError.error_subcode,
+    message: fbError.message || error?.message || 'Unknown Facebook API error',
+    userTitle: fbError.error_user_title,
+    userMsg: error?.userMessage || fbError.error_user_msg || fbError.error_user_title,
+    type: fbError.type,
+    details: redactSensitive(responseData),
+  }
+}
 
 export interface CreateCampaignParams {
   accountId: string
@@ -66,34 +108,25 @@ export const createCampaign = async (params: CreateCampaignParams) => {
 
   try {
     logger.info(`[BulkCreate] Creating campaign for account ${accountId}: ${name}`)
-    logger.info(`[BulkCreate] Campaign params: ${JSON.stringify(requestParams, null, 2)}`)
+    logger.info(`[BulkCreate] Campaign params: ${safeJson(requestParams)}`)
     const res = await facebookClient.post(`/act_${accountId}/campaigns`, requestParams)
     logger.info(`[BulkCreate] Campaign created: ${res.id}`)
     return { success: true, id: res.id, data: res }
   } catch (error: any) {
-    // FacebookApiError 有特殊结构: { response, code, subcode, userMessage }
-    const fbResponse = error.response || {}
-    const fbError = fbResponse.error || {}
+    const errorPayload = buildFacebookBulkCreateErrorPayload(error)
     
-    logger.error(`[BulkCreate] Failed to create campaign - Full error:`, JSON.stringify({
+    logger.error(`[BulkCreate] Failed to create campaign - Full error:`, safeJson({
       message: error.message,
-      code: error.code || fbError.code,
-      subcode: error.subcode || fbError.error_subcode,
-      userMessage: error.userMessage || fbError.error_user_msg || fbError.error_user_title,
-      fbResponse: fbResponse,
+      code: errorPayload.code,
+      subcode: errorPayload.subcode,
+      userMessage: errorPayload.userMsg || errorPayload.userTitle,
+      fbResponse: errorPayload.details,
       rawError: String(error),
-    }, null, 2))
+    }))
     
     return {
       success: false,
-      error: {
-        code: error.code || fbError.code || 'UNKNOWN',
-        subcode: error.subcode || fbError.error_subcode,
-        message: fbError.message || error.message,
-        userTitle: fbError.error_user_title,
-        userMsg: error.userMessage || fbError.error_user_msg,
-        details: fbResponse,
-      },
+      error: errorPayload,
     }
   }
 }
@@ -207,21 +240,17 @@ export const createAdSet = async (params: CreateAdSetParams) => {
 
   try {
     logger.info(`[BulkCreate] Creating adset for campaign ${campaignId}: ${name}`)
-    logger.info(`[BulkCreate] AdSet params: ${JSON.stringify(requestParams, null, 2)}`)
+    logger.info(`[BulkCreate] AdSet params: ${safeJson(requestParams)}`)
     const res = await facebookClient.post(`/act_${accountId}/adsets`, requestParams)
     logger.info(`[BulkCreate] AdSet created: ${res.id}`)
     return { success: true, id: res.id, data: res }
   } catch (error: any) {
-    const errorData = error.response?.data?.error || error.response?.data || error.message
-    logger.error(`[BulkCreate] Failed to create adset - Full error:`, JSON.stringify(errorData, null, 2))
-    logger.error(`[BulkCreate] AdSet failed params: ${JSON.stringify(requestParams, null, 2)}`)
+    const errorPayload = buildFacebookBulkCreateErrorPayload(error)
+    logger.error(`[BulkCreate] Failed to create adset - Full error:`, safeJson(errorPayload))
+    logger.error(`[BulkCreate] AdSet failed params: ${safeJson(requestParams)}`)
     return {
       success: false,
-      error: {
-        code: error.response?.data?.error?.code || 'UNKNOWN',
-        message: error.response?.data?.error?.message || error.message,
-        details: error.response?.data,
-      },
+      error: errorPayload,
     }
   }
 }
@@ -262,29 +291,23 @@ export const createAdCreative = async (params: CreateAdCreativeParams) => {
 
   try {
     logger.info(`[BulkCreate] Creating ad creative for account ${accountId}: ${name}`)
-    logger.info(`[BulkCreate] Creative params: ${JSON.stringify(requestParams, null, 2)}`)
+    logger.info(`[BulkCreate] Creative params: ${safeJson(requestParams)}`)
     const res = await facebookClient.post(`/act_${accountId}/adcreatives`, requestParams)
     logger.info(`[BulkCreate] Ad Creative created: ${res.id}`)
     return { success: true, id: res.id, data: res }
   } catch (error: any) {
-    // 从 FacebookApiError 获取详细信息
-    const fbError = error.response?.error || {}
-    const responseData = error.response || {}
+    const errorPayload = buildFacebookBulkCreateErrorPayload(error)
     logger.error(`[BulkCreate] Failed to create ad creative - Full error:`)
-    logger.error(`[BulkCreate] Error code: ${error.code || fbError.code}`)
-    logger.error(`[BulkCreate] Error message: ${fbError.message || error.message}`)
-    logger.error(`[BulkCreate] Error type: ${fbError.type}`)
-    logger.error(`[BulkCreate] Error subcode: ${error.subcode || fbError.error_subcode}`)
-    logger.error(`[BulkCreate] Error user_msg: ${error.userMessage || fbError.error_user_msg || fbError.error_user_title}`)
-    logger.error(`[BulkCreate] Full response: ${JSON.stringify(responseData, null, 2)}`)
-    logger.error(`[BulkCreate] Creative failed params: ${JSON.stringify(requestParams, null, 2)}`)
+    logger.error(`[BulkCreate] Error code: ${errorPayload.code}`)
+    logger.error(`[BulkCreate] Error message: ${errorPayload.message}`)
+    logger.error(`[BulkCreate] Error type: ${errorPayload.type}`)
+    logger.error(`[BulkCreate] Error subcode: ${errorPayload.subcode}`)
+    logger.error(`[BulkCreate] Error user_msg: ${errorPayload.userMsg || errorPayload.userTitle}`)
+    logger.error(`[BulkCreate] Full response: ${safeJson(errorPayload.details)}`)
+    logger.error(`[BulkCreate] Creative failed params: ${safeJson(requestParams)}`)
     return {
       success: false,
-      error: {
-        code: error.code || fbError.code || 'UNKNOWN',
-        message: fbError.message || error.message,
-        details: responseData,
-      },
+      error: errorPayload,
     }
   }
 }
@@ -335,14 +358,11 @@ export const createAd = async (params: CreateAdParams) => {
     logger.info(`[BulkCreate] Ad created: ${res.id}`)
     return { success: true, id: res.id, data: res }
   } catch (error: any) {
-    logger.error(`[BulkCreate] Failed to create ad:`, error.response?.data || error.message)
+    const errorPayload = buildFacebookBulkCreateErrorPayload(error)
+    logger.error(`[BulkCreate] Failed to create ad:`, safeJson(errorPayload))
     return {
       success: false,
-      error: {
-        code: error.response?.data?.error?.code || 'UNKNOWN',
-        message: error.response?.data?.error?.message || error.message,
-        details: error.response?.data,
-      },
+      error: errorPayload,
     }
   }
 }
@@ -372,17 +392,18 @@ export const uploadImageFromUrl = async (params: UploadImageParams) => {
     const res = await facebookClient.post(`/act_${accountId}/adimages`, requestParams)
     const images = res.images || {}
     const imageHash = Object.values(images)[0] as any
-    logger.info(`[BulkCreate] Image uploaded, hash: ${imageHash?.hash}`)
+    logger.info('[BulkCreate] Image uploaded', {
+      accountId,
+      hasImageHash: Boolean(imageHash?.hash),
+      imageHashRef: hashForLog(imageHash?.hash),
+    })
     return { success: true, hash: imageHash?.hash, data: res }
   } catch (error: any) {
-    logger.error(`[BulkCreate] Failed to upload image:`, error.response?.data || error.message)
+    const errorPayload = buildFacebookBulkCreateErrorPayload(error)
+    logger.error(`[BulkCreate] Failed to upload image:`, safeJson(errorPayload))
     return {
       success: false,
-      error: {
-        code: error.response?.data?.error?.code || 'UNKNOWN',
-        message: error.response?.data?.error?.message || error.message,
-        details: error.response?.data,
-      },
+      error: errorPayload,
     }
   }
 }
@@ -431,21 +452,22 @@ export const uploadVideoFromUrl = async (params: UploadVideoParams) => {
       } else if (videoDetails.thumbnails?.data?.[0]?.uri) {
         thumbnailUrl = videoDetails.thumbnails.data[0].uri
       }
-      logger.info(`[BulkCreate] Video thumbnail: ${thumbnailUrl}`)
+      logger.info('[BulkCreate] Video thumbnail resolved', {
+        videoId: res.id,
+        hasThumbnailUrl: Boolean(thumbnailUrl),
+        thumbnailRef: hashForLog(thumbnailUrl),
+      })
     } catch (thumbError: any) {
       logger.warn(`[BulkCreate] Failed to get video thumbnail: ${thumbError.message}`)
     }
     
     return { success: true, id: res.id, thumbnailUrl, data: res }
   } catch (error: any) {
-    logger.error(`[BulkCreate] Failed to upload video:`, error.response?.data || error.message)
+    const errorPayload = buildFacebookBulkCreateErrorPayload(error)
+    logger.error(`[BulkCreate] Failed to upload video:`, safeJson(errorPayload))
     return {
       success: false,
-      error: {
-        code: error.response?.data?.error?.code || 'UNKNOWN',
-        message: error.response?.data?.error?.message || error.message,
-        details: error.response?.data,
-      },
+      error: errorPayload,
     }
   }
 }

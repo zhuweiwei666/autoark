@@ -178,17 +178,8 @@ const adDraftSchema = new mongoose.Schema(
     
     // 验证结果
     validation: {
-      isValid: { type: Boolean, default: false },
-      errors: [{ 
-        field: String,
-        message: String,
-        severity: { type: String, enum: ['error', 'warning'] },
-      }],
-      warnings: [{ 
-        field: String,
-        message: String,
-      }],
-      validatedAt: { type: Date },
+      type: mongoose.Schema.Types.Mixed,
+      default: () => ({ isValid: false, errors: [], warnings: [] }),
     },
     
     // 关联的任务（发布后）
@@ -253,7 +244,7 @@ adDraftSchema.methods.calculateEstimates = function() {
 }
 
 // 验证草稿配置
-adDraftSchema.methods.validate = async function() {
+adDraftSchema.methods.validateDraftConfig = async function() {
   const errors: any[] = []
   const warnings: any[] = []
   
@@ -309,4 +300,3 @@ adDraftSchema.methods.validate = async function() {
 }
 
 export default mongoose.model('AdDraft', adDraftSchema)
-

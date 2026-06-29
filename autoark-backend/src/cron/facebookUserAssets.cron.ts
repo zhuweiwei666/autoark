@@ -25,7 +25,7 @@ export const initFacebookUserAssetsCron = () => {
           batch.map(async (t) => {
             if (!t.fbUserId || !t.token) return
             try {
-              await syncFacebookUserAssets(t.fbUserId, t.token, String(t._id))
+              await syncFacebookUserAssets(t.fbUserId, t.token, String(t._id), t.organizationId)
             } catch (e: any) {
               logger.warn(`[FacebookUserCron] Sync failed for token ${t._id}: ${e?.message || e}`)
             }
@@ -39,4 +39,3 @@ export const initFacebookUserAssetsCron = () => {
     }
   })
 }
-

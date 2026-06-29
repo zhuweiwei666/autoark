@@ -99,9 +99,11 @@ export const syncAccount = async (accountId: string) => {
     for (const c of campaigns) {
       await writeToMongo(
         Campaign,
-        { campaignId: c.id },
+        { channel: 'facebook', campaignId: c.id },
         {
           campaignId: c.id,
+          channel: 'facebook',
+          platform: 'facebook',
           accountId: accountIdForStorage, // 统一格式：数据库存储时去掉前缀
           name: c.name,
           status: c.status,
@@ -123,9 +125,11 @@ export const syncAccount = async (accountId: string) => {
     for (const a of adsets) {
       await writeToMongo(
         AdSet,
-        { adsetId: a.id },
+        { channel: 'facebook', adsetId: a.id },
         {
           adsetId: a.id,
+          channel: 'facebook',
+          platform: 'facebook',
           accountId: accountIdForStorage, // 统一格式：数据库存储时去掉前缀
           campaignId: a.campaign_id,
           name: a.name,
@@ -154,9 +158,11 @@ export const syncAccount = async (accountId: string) => {
       
       await writeToMongo(
         Ad,
-        { adId: a.id },
+        { channel: 'facebook', adId: a.id },
         {
           adId: a.id,
+          channel: 'facebook',
+          platform: 'facebook',
           accountId: accountIdForStorage,
           adsetId: a.adset_id,
           campaignId: a.campaign_id,
@@ -194,7 +200,7 @@ export const syncAccount = async (accountId: string) => {
       
       await writeToMongo(
         Creative,
-        { creativeId: c.id },
+        { channel: 'facebook', creativeId: c.id },
         {
           creativeId: c.id,
           channel: 'facebook',
@@ -260,6 +266,7 @@ export const syncAccount = async (accountId: string) => {
       await writeToMongo(
         MetricsDaily,
         { 
+          channel: 'facebook',
           date: i.date_start,
           level: dataLevel,
           entityId: entityId,
@@ -317,6 +324,7 @@ export const syncAccount = async (accountId: string) => {
       await writeToMongo(
         MetricsDaily,
         { 
+          channel: 'facebook',
           date: i.date_start,
           level: 'ad',
           entityId: i.ad_id,

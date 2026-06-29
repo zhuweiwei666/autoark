@@ -4,34 +4,97 @@ import Organization from '../models/Organization'
 import { JwtPayload } from '../utils/jwt'
 import { UserRole } from '../models/User'
 import logger from '../utils/logger'
+import { pickSafeQueryString } from '../utils/pagination'
+
+const ACCOUNT_CHANNELS = ['facebook', 'tiktok'] as const
+const MAX_TAG_FILTERS = 20
+const MAX_ACCOUNT_ID_LIST_COUNT = 500
+const ACCOUNT_ID_MAX_LENGTH = 80
+const ACCOUNT_TAG_MAX_LENGTH = 30
+const ACCOUNT_NOTE_MAX_LENGTH = 500
+const ACCOUNT_GROUP_NAME_MAX_LENGTH = 50
+const ACCOUNT_GROUP_DESCRIPTION_MAX_LENGTH = 200
+const ACCOUNT_GROUP_COLOR_MAX_LENGTH = 32
+const ORGANIZATION_ID_MAX_LENGTH = 80
+
+const getUserOrgScope = (currentUser: JwtPayload): any => {
+  if (currentUser.role === UserRole.SUPER_ADMIN) return {}
+  if (!currentUser.organizationId) return { _id: null }
+  return { organizationId: currentUser.organizationId }
+}
+
+const uniqueAccountIds = (accountIds?: any[]): string[] => {
+  return Array.from(new Set((Array.isArray(accountIds) ? accountIds : [])
+    .map(accountId => pickSafeQueryString(accountId, ACCOUNT_ID_MAX_LENGTH))
+    .filter(Boolean) as string[]))
+    .slice(0, MAX_ACCOUNT_ID_LIST_COUNT)
+}
+
+const pickAccountChannel = (value: any): string | undefined => {
+  const channel = pickSafeQueryString(value, 20)
+  return channel && (ACCOUNT_CHANNELS as readonly string[]).includes(channel) ? channel : undefined
+}
+
+const pickTagFilters = (value: any): string[] => {
+  const values = Array.isArray(value) ? value : [value]
+  return Array.from(new Set(values
+    .map(tag => pickSafeQueryString(tag, ACCOUNT_TAG_MAX_LENGTH))
+    .filter(Boolean) as string[]))
+    .slice(0, MAX_TAG_FILTERS)
+}
+
+const pickOrganizationId = (value: any): string | undefined => (
+  pickSafeQueryString(value, ORGANIZATION_ID_MAX_LENGTH)
+)
+
+const pickAccountId = (value: any): string | undefined => (
+  pickSafeQueryString(value, ACCOUNT_ID_MAX_LENGTH)
+)
+
+const pickGroupName = (value: any): string | undefined => (
+  pickSafeQueryString(value, ACCOUNT_GROUP_NAME_MAX_LENGTH)
+)
+
+const pickGroupDescription = (value: any): string | undefined => (
+  pickSafeQueryString(value, ACCOUNT_GROUP_DESCRIPTION_MAX_LENGTH)
+)
+
+const pickGroupColor = (value: any): string => (
+  pickSafeQueryString(value, ACCOUNT_GROUP_COLOR_MAX_LENGTH) || '#3B82F6'
+)
 
 class AccountManagementService {
   /**
    * 获取账户列表（带组织和标签信息）
    */
   async getAccounts(currentUser: JwtPayload, filters?: any): Promise<IAccount[]> {
-    const query: any = {}
-
-    // 超级管理员可以看到所有账户
-    if (currentUser.role !== UserRole.SUPER_ADMIN) {
-      query.organizationId = currentUser.organizationId
-    }
+    const query: any = { ...getUserOrgScope(currentUser) }
 
     // 应用过滤条件
-    if (filters?.organizationId) {
-      query.organizationId = filters.organizationId
+    const channel = pickAccountChannel(filters?.channel)
+    const organizationId = pickSafeQueryString(filters?.organizationId, 80)
+    const groupId = pickSafeQueryString(filters?.groupId, 80)
+    const tags = filters?.tags ? pickTagFilters(filters.tags) : []
+    const unassigned = pickSafeQueryString(filters?.unassigned, 10)
+
+    if (channel) {
+      query.channel = channel
     }
-    if (filters?.tags) {
-      query.tags = { $in: Array.isArray(filters.tags) ? filters.tags : [filters.tags] }
+    if (organizationId && currentUser.role === UserRole.SUPER_ADMIN) {
+      query.organizationId = organizationId
     }
-    if (filters?.groupId) {
-      query.groupId = filters.groupId
+    if (tags.length > 0) {
+      query.tags = { $in: tags }
     }
-    if (filters?.unassigned === 'true') {
+    if (groupId) {
+      query.groupId = groupId
+    }
+    if (unassigned === 'true' && currentUser.role === UserRole.SUPER_ADMIN) {
       query.organizationId = null
     }
 
     const accounts = await Account.find(query)
+      .select('-token')
       .populate('organizationId', 'name')
       .populate('groupId', 'name color')
       .populate('createdBy', 'username')
@@ -49,24 +112,23 @@ class AccountManagementService {
     tags: string[],
     currentUser: JwtPayload
   ): Promise<IAccount> {
-    const account = await Account.findOne({ accountId })
+    const safeAccountId = pickAccountId(accountId)
+    const safeTags = pickTagFilters(tags)
+    if (!safeAccountId || safeTags.length === 0) {
+      throw new Error('账户ID和标签不能为空')
+    }
+
+    const account = await Account.findOne({ accountId: safeAccountId, ...getUserOrgScope(currentUser) }).select('-token')
     if (!account) {
       throw new Error('账户不存在')
     }
 
-    // 权限检查：超级管理员或账户所属组织的管理员
-    if (currentUser.role !== UserRole.SUPER_ADMIN) {
-      if (account.organizationId?.toString() !== currentUser.organizationId) {
-        throw new Error('无权修改此账户')
-      }
-    }
-
     // 添加标签（去重）
     const existingTags = account.tags || []
-    account.tags = [...new Set([...existingTags, ...tags])]
+    account.tags = [...new Set([...existingTags, ...safeTags])]
     await account.save()
 
-    logger.info(`Tags added to account ${accountId}: ${tags.join(', ')}`)
+    logger.info(`Tags added to account ${safeAccountId}: ${safeTags.join(', ')}`)
 
     return account
   }
@@ -79,20 +141,19 @@ class AccountManagementService {
     tags: string[],
     currentUser: JwtPayload
   ): Promise<IAccount> {
-    const account = await Account.findOne({ accountId })
+    const safeAccountId = pickAccountId(accountId)
+    const safeTags = pickTagFilters(tags)
+    if (!safeAccountId || safeTags.length === 0) {
+      throw new Error('账户ID和标签不能为空')
+    }
+
+    const account = await Account.findOne({ accountId: safeAccountId, ...getUserOrgScope(currentUser) }).select('-token')
     if (!account) {
       throw new Error('账户不存在')
     }
 
-    // 权限检查
-    if (currentUser.role !== UserRole.SUPER_ADMIN) {
-      if (account.organizationId?.toString() !== currentUser.organizationId) {
-        throw new Error('无权修改此账户')
-      }
-    }
-
     // 移除标签
-    account.tags = (account.tags || []).filter(tag => !tags.includes(tag))
+    account.tags = (account.tags || []).filter(tag => !safeTags.includes(tag))
     await account.save()
 
     return account
@@ -111,18 +172,24 @@ class AccountManagementService {
       throw new Error('只有超级管理员可以分配账户')
     }
 
+    const requestedAccountIds = uniqueAccountIds(accountIds)
+    const safeOrganizationId = pickOrganizationId(organizationId)
+    if (requestedAccountIds.length === 0 || !safeOrganizationId) {
+      throw new Error('账户ID列表和组织ID不能为空')
+    }
+
     // 验证组织是否存在
-    const organization = await Organization.findById(organizationId)
+    const organization = await Organization.findById(safeOrganizationId)
     if (!organization) {
       throw new Error('组织不存在')
     }
 
     // 批量更新账户
     const result = await Account.updateMany(
-      { accountId: { $in: accountIds } },
+      { accountId: { $in: requestedAccountIds } },
       {
         $set: {
-          organizationId,
+          organizationId: safeOrganizationId,
           assignedBy: currentUser.userId,
           assignedAt: new Date(),
         },
@@ -148,8 +215,13 @@ class AccountManagementService {
       throw new Error('只有超级管理员可以取消分配')
     }
 
+    const requestedAccountIds = uniqueAccountIds(accountIds)
+    if (requestedAccountIds.length === 0) {
+      throw new Error('账户ID列表不能为空')
+    }
+
     const result = await Account.updateMany(
-      { accountId: { $in: accountIds } },
+      { accountId: { $in: requestedAccountIds } },
       {
         $unset: {
           organizationId: '',
@@ -177,32 +249,71 @@ class AccountManagementService {
     },
     currentUser: JwtPayload
   ): Promise<IAccountGroup> {
+    const groupName = pickGroupName(data.name)
+    if (!groupName) {
+      throw new Error('分组名称不能为空')
+    }
+
+    const requestedOrganizationId = pickOrganizationId(data.organizationId)
+    const organizationId =
+      currentUser.role === UserRole.SUPER_ADMIN
+        ? requestedOrganizationId
+        : currentUser.organizationId
+    const requestedAccountIds = uniqueAccountIds(data.accounts)
+
+    if (currentUser.role !== UserRole.SUPER_ADMIN && !organizationId) {
+      throw new Error('用户未关联组织，无法创建分组')
+    }
+
+    if (
+      currentUser.role !== UserRole.SUPER_ADMIN &&
+      requestedOrganizationId &&
+      requestedOrganizationId !== currentUser.organizationId
+    ) {
+      throw new Error('无权为其他组织创建分组')
+    }
+
     // 检查分组名是否已存在
-    const existingGroup = await AccountGroup.findOne({ name: data.name })
+    const existingGroup = await AccountGroup.findOne({ name: groupName, ...(organizationId ? { organizationId } : {}) })
     if (existingGroup) {
       throw new Error('分组名称已存在')
     }
 
+    let scopedAccountIds: string[] = []
+    if (requestedAccountIds.length > 0) {
+      const accountQuery: any = { accountId: { $in: requestedAccountIds } }
+      if (organizationId) {
+        accountQuery.organizationId = organizationId
+      }
+
+      const scopedAccounts = await Account.find(accountQuery).select('accountId').lean()
+      scopedAccountIds = scopedAccounts.map((account: any) => account.accountId).filter(Boolean)
+
+      if (scopedAccountIds.length !== requestedAccountIds.length) {
+        throw new Error('分组包含不存在或无权访问的账户')
+      }
+    }
+
     const group = new AccountGroup({
-      name: data.name,
-      description: data.description,
-      color: data.color || '#3B82F6',
-      organizationId: data.organizationId,
-      accounts: data.accounts || [],
+      name: groupName,
+      description: pickGroupDescription(data.description),
+      color: pickGroupColor(data.color),
+      organizationId,
+      accounts: scopedAccountIds,
       createdBy: currentUser.userId,
     })
 
     await group.save()
 
     // 更新账户的 groupId
-    if (data.accounts && data.accounts.length > 0) {
+    if (scopedAccountIds.length > 0) {
       await Account.updateMany(
-        { accountId: { $in: data.accounts } },
+        { accountId: { $in: scopedAccountIds }, ...(organizationId ? { organizationId } : {}) },
         { $set: { groupId: group._id } }
       )
     }
 
-    logger.info(`Account group ${data.name} created`)
+    logger.info(`Account group ${groupName} created`)
 
     return group
   }
@@ -211,15 +322,11 @@ class AccountManagementService {
    * 获取分组列表
    */
   async getGroups(currentUser: JwtPayload, filters?: any): Promise<IAccountGroup[]> {
-    const query: any = {}
+    const query: any = { ...getUserOrgScope(currentUser) }
 
-    // 非超级管理员只能看到自己组织的分组
-    if (currentUser.role !== UserRole.SUPER_ADMIN) {
-      query.organizationId = currentUser.organizationId
-    }
-
-    if (filters?.organizationId) {
-      query.organizationId = filters.organizationId
+    const organizationId = pickSafeQueryString(filters?.organizationId, 80)
+    if (organizationId && currentUser.role === UserRole.SUPER_ADMIN) {
+      query.organizationId = organizationId
     }
 
     const groups = await AccountGroup.find(query)
@@ -238,19 +345,17 @@ class AccountManagementService {
     notes: string,
     currentUser: JwtPayload
   ): Promise<IAccount> {
-    const account = await Account.findOne({ accountId })
+    const safeAccountId = pickAccountId(accountId)
+    if (!safeAccountId) {
+      throw new Error('账户ID不能为空')
+    }
+
+    const account = await Account.findOne({ accountId: safeAccountId, ...getUserOrgScope(currentUser) }).select('-token')
     if (!account) {
       throw new Error('账户不存在')
     }
 
-    // 权限检查
-    if (currentUser.role !== UserRole.SUPER_ADMIN) {
-      if (account.organizationId?.toString() !== currentUser.organizationId) {
-        throw new Error('无权修改此账户')
-      }
-    }
-
-    account.notes = notes
+    account.notes = pickSafeQueryString(notes, ACCOUNT_NOTE_MAX_LENGTH) || ''
     await account.save()
 
     return account
@@ -271,6 +376,7 @@ class AccountManagementService {
         { organizationId: { $exists: false } },
       ],
     })
+      .select('-token')
       .populate('groupId', 'name color')
       .sort({ createdAt: -1 })
 
@@ -281,16 +387,12 @@ class AccountManagementService {
    * 获取账户统计信息
    */
   async getAccountStats(currentUser: JwtPayload) {
-    const query: any = {}
-
-    if (currentUser.role !== UserRole.SUPER_ADMIN) {
-      query.organizationId = currentUser.organizationId
-    }
+    const query: any = { ...getUserOrgScope(currentUser) }
 
     const total = await Account.countDocuments(query)
-    const unassigned = await Account.countDocuments({
-      organizationId: null,
-    })
+    const unassigned = currentUser.role === UserRole.SUPER_ADMIN
+      ? await Account.countDocuments({ organizationId: null })
+      : 0
     
     // 按组织统计
     const byOrganization = await Account.aggregate([

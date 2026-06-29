@@ -14,6 +14,38 @@ const getApiBaseUrl = () => {
 }
 
 const API_BASE_URL = getApiBaseUrl()
+const DEFAULT_FETCH_TIMEOUT_MS = 45000
+
+export type FetchWithTimeoutOptions = RequestInit & {
+  timeoutMs?: number
+}
+
+export const fetchWithTimeout = async (
+  url: string,
+  options: FetchWithTimeoutOptions = {},
+): Promise<Response> => {
+  const { timeoutMs = DEFAULT_FETCH_TIMEOUT_MS, signal, ...fetchOptions } = options
+
+  if (!timeoutMs || timeoutMs <= 0) {
+    return fetch(url, { ...fetchOptions, signal })
+  }
+
+  const controller = new AbortController()
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs)
+  const abortFromCaller = () => controller.abort()
+  if (signal?.aborted) {
+    controller.abort()
+  } else {
+    signal?.addEventListener('abort', abortFromCaller, { once: true })
+  }
+
+  try {
+    return await fetch(url, { ...fetchOptions, signal: controller.signal })
+  } finally {
+    window.clearTimeout(timeoutId)
+    signal?.removeEventListener('abort', abortFromCaller)
+  }
+}
 
 /**
  * 获取当前认证 Token
@@ -26,18 +58,440 @@ const getAuthToken = (): string | null => {
  * 带认证的 fetch 封装
  * 默认添加 Content-Type: application/json，可通过 options.headers 覆盖
  */
-export const authFetch = async (url: string, options: RequestInit = {}): Promise<Response> => {
+export const authFetch = async (url: string, options: FetchWithTimeoutOptions = {}): Promise<Response> => {
   const token = getAuthToken()
-  const headers: HeadersInit = {
-    'Content-Type': 'application/json',
-    ...(options.headers || {}),
+  const { timeoutMs = DEFAULT_FETCH_TIMEOUT_MS, signal, ...fetchOptions } = options
+  const headers = new Headers(fetchOptions.headers || {})
+  if (!headers.has('Content-Type') && !(fetchOptions.body instanceof FormData)) {
+    headers.set('Content-Type', 'application/json')
   }
   
   if (token) {
-    ;(headers as Record<string, string>)['Authorization'] = `Bearer ${token}`
+    headers.set('Authorization', `Bearer ${token}`)
   }
-  
-  return fetch(url, { ...options, headers })
+
+  return fetchWithTimeout(url, { ...fetchOptions, headers, signal, timeoutMs })
+}
+
+// === 商用 SaaS 状态 ===
+
+export interface CommercialReadiness {
+  scope: {
+    mode: 'organization' | 'platform'
+    organizationId?: string
+    organizationName: string
+  }
+  plan: {
+    code: string
+    label: string
+    billingStatus: string
+    trialEndsAt?: string
+    currentPeriodEndsAt?: string
+    features: string[]
+    limits: Record<string, number | null>
+  }
+  usage: Record<string, {
+    used: number
+    limit: number | null
+    percent: number | null
+    status: 'ok' | 'warning' | 'exceeded'
+  }>
+  metrics: Record<string, number>
+  checklist: Array<{
+    id: string
+    title: string
+    description: string
+    status: 'done' | 'warning' | 'pending' | 'blocked'
+    actionPath?: string
+    metric?: string
+  }>
+  score: number
+  state: {
+    level: 'blocked' | 'attention' | 'ready'
+    label: string
+    summary: string
+  }
+  nextActions: Array<{
+    id: string
+    priority: 'critical' | 'high' | 'medium' | 'low'
+    title: string
+    description: string
+    actionPath?: string
+    owner: string
+    source: 'setup' | 'facebook' | 'quota' | 'tasks' | 'team' | 'materials'
+  }>
+  risks: Array<{
+    level: 'critical' | 'warning' | 'info'
+    message: string
+    actionPath?: string
+  }>
+  deployment: {
+    corsConfigured: boolean
+    oauthStateSecretConfigured: boolean
+    facebookBusinessLoginConfigConfigured: boolean
+    feishuWebhookConfigured: boolean
+  }
+  facebookAuthorization?: {
+    level: 'ready' | 'warning' | 'blocked'
+    label: string
+    authorizationMode: 'business_login' | 'scope_oauth'
+    businessLoginConfigured: boolean
+    businessLoginConfigSource: 'global' | 'app' | 'missing'
+    publicOauthAppCount: number
+    healthyAppCount: number
+    appBusinessLoginConfigCount: number
+    oauthStateSecretConfigured: boolean
+    gapCount: number
+    summary: string
+    gaps: Array<{
+      code: string
+      label: string
+      severity: 'critical' | 'warning' | 'info'
+      detail: string
+      actionPath?: string
+    }>
+  }
+}
+
+export async function getCommercialReadiness(organizationId?: string): Promise<{
+  success: boolean
+  data: CommercialReadiness
+}> {
+  const params = new URLSearchParams()
+  if (organizationId) params.append('organizationId', organizationId)
+  const url = `${API_BASE_URL}/api/commercial/readiness${params.toString() ? `?${params.toString()}` : ''}`
+  const response = await authFetch(url)
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}))
+    throw new Error(error.message || 'Failed to fetch commercial readiness')
+  }
+
+  return response.json()
+}
+
+export interface CommercialOrganizationReadiness {
+  organizationId: string
+  organizationName: string
+  organizationStatus: string
+  plan: CommercialReadiness['plan']
+  score: number
+  state: CommercialReadiness['state']
+  firstAction: null | {
+    id: string
+    priority: 'critical' | 'high' | 'medium' | 'low'
+    title: string
+    owner: string
+    actionPath?: string
+    source: 'setup' | 'facebook' | 'quota' | 'tasks' | 'team' | 'materials'
+  }
+  metrics: {
+    activeTokens: number
+    expiredTokens?: number
+    expiringSoonTokens?: number
+    staleTokenChecks?: number
+    adAccounts: number
+    facebookReadyAccounts: number
+    materials: number
+    successfulTasks: number
+    failedTasks: number
+  }
+  updatedAt?: string
+}
+
+export async function getCommercialOrganizationReadiness(): Promise<{
+  success: boolean
+  data: CommercialOrganizationReadiness[]
+}> {
+  const response = await authFetch(`${API_BASE_URL}/api/commercial/organizations/readiness`)
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}))
+    throw new Error(error.message || 'Failed to fetch organization readiness')
+  }
+
+  return response.json()
+}
+
+export interface CommercialSupportPackage {
+  supportId: string
+  generatedAt: string
+  system?: {
+    build?: {
+      service?: string
+      environment?: string
+      ref?: string
+      commit?: string
+      shortCommit?: string
+      deployedAt?: string | null
+      uptime?: number
+    }
+  }
+  scope: {
+    mode: 'organization' | 'platform'
+    organizationId?: string
+    organizationName: string
+    organizationStatus?: string
+  }
+  readiness: {
+    score: number
+    state: CommercialReadiness['state']
+    risks: CommercialReadiness['risks']
+    nextActions: CommercialReadiness['nextActions']
+    metrics: Record<string, number>
+    deployment: CommercialReadiness['deployment']
+    facebookAuthorization?: CommercialReadiness['facebookAuthorization']
+  }
+  facebookAssets: {
+    summary: Record<string, number | string | undefined>
+    risks: Array<{ level: 'critical' | 'warning' | 'info'; message: string }>
+    checklist: Array<{ id: string; title: string; status: string; metric?: string }>
+    accounts: Array<{
+      accountId: string
+      name: string
+      status: number
+      statusLabel: string
+      ready: boolean
+      issues: string[]
+      pageCount: number
+      pixelCount: number
+    }>
+  }
+  facebookApps?: {
+    summary: {
+      total: number
+      ready: number
+      blocked: number
+      totalGaps: number
+    }
+    apps: Array<{
+      appId: string
+      appName: string
+      status: string
+      healthScore: number
+      validationIsValid: boolean
+      businessLoginConfigured: boolean
+      publicOauthReady: boolean
+      complianceReady: boolean
+      runtimeReady: boolean
+      gapCount: number
+      gapCodes: string[]
+      gaps: Array<{
+        code: string
+        label: string
+        detail: string
+        severity: 'critical' | 'warning'
+      }>
+    }>
+  }
+  recentTasks: Array<{
+    taskId: string
+    taskName: string
+    status: string
+    createdAt?: string
+    health: string
+    summary: Record<string, number>
+    topIssue: null | {
+      errorCode: string
+      count: number
+      retryable: boolean
+      customerMessage: string
+      nextActions: string[]
+    }
+  }>
+  recentAuditLogs: Array<{
+    category?: string
+    action?: string
+    status?: string
+    summary?: string
+    reason?: string
+    requestId?: string
+    createdAt?: string
+  }>
+}
+
+export async function getCommercialSupportPackage(organizationId?: string): Promise<{
+  success: boolean
+  data: CommercialSupportPackage
+}> {
+  const params = new URLSearchParams()
+  if (organizationId) params.append('organizationId', organizationId)
+  const url = `${API_BASE_URL}/api/commercial/support-package${params.toString() ? `?${params.toString()}` : ''}`
+  const response = await authFetch(url)
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}))
+    throw new Error(error.message || 'Failed to fetch commercial support package')
+  }
+
+  return response.json()
+}
+
+export interface CommercialUsageLedger {
+  generatedAt: string
+  scope: CommercialReadiness['scope']
+  period: {
+    currentMonthStart: string
+    dailyStart: string
+    dailyEnd: string
+    issueWindowStart?: string
+  }
+  plan: {
+    code: string
+    label: string
+    billingStatus: string
+    limits: Record<string, number | null>
+  }
+  usage: CommercialReadiness['usage']
+  taskStatusBreakdown: Array<{
+    status: string
+    label: string
+    tasks: number
+    accountExecutions: number
+  }>
+  dailyTaskCounts: Array<{
+    date: string
+    totalTasks: number
+    successTasks: number
+    failedTasks: number
+    runningTasks: number
+    cancelledTasks: number
+    accountExecutions: number
+  }>
+  quotaEvents: Array<{
+    action?: string
+    status?: string
+    summary?: string
+    reason?: string
+    errorCode?: string
+    details?: Record<string, any>
+    requestId?: string
+    createdAt?: string
+    operator?: string
+    userRole?: string
+  }>
+  issueTrends: Array<{
+    errorCode: string
+    count: number
+    taskCount: number
+    accountCount: number
+    retryable: boolean
+    source: string
+    customerMessage: string
+    nextActions: string[]
+    lastSeenAt?: string
+  }>
+  recentTasks: Array<{
+    taskId: string
+    taskName?: string
+    status: string
+    statusLabel: string
+    createdAt?: string
+    accountCount: number
+    createdAds: number
+    health: string
+    totalErrors: number
+    topIssue: null | {
+      errorCode: string
+      count: number
+      retryable: boolean
+      customerMessage: string
+    }
+  }>
+}
+
+export async function getCommercialUsageLedger(organizationId?: string): Promise<{
+  success: boolean
+  data: CommercialUsageLedger
+}> {
+  const params = new URLSearchParams()
+  if (organizationId) params.append('organizationId', organizationId)
+  const url = `${API_BASE_URL}/api/commercial/usage-ledger${params.toString() ? `?${params.toString()}` : ''}`
+  const response = await authFetch(url)
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}))
+    throw new Error(error.message || 'Failed to fetch commercial usage ledger')
+  }
+
+  return response.json()
+}
+
+export interface OrganizationSummary {
+  _id: string
+  name: string
+  description?: string
+  status: 'active' | 'inactive' | 'suspended' | string
+  adminId?: {
+    _id?: string
+    username?: string
+    email?: string
+  } | string
+  createdAt?: string
+}
+
+export async function getOrganizations(): Promise<{
+  success: boolean
+  data: OrganizationSummary[]
+}> {
+  const response = await authFetch(`${API_BASE_URL}/api/organizations`)
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}))
+    throw new Error(error.message || 'Failed to fetch organizations')
+  }
+
+  return response.json()
+}
+
+// === 审计日志 ===
+
+export interface AuditLogEntry {
+  _id: string
+  organizationId?: string
+  userId?: string
+  username?: string
+  userEmail?: string
+  userRole?: string
+  category?: string
+  action: string
+  status: 'success' | 'failed' | 'warning'
+  targetType?: string
+  targetId?: string
+  summary?: string
+  before?: Record<string, unknown>
+  after?: Record<string, unknown>
+  reason?: string
+  related?: Record<string, unknown>
+  metadata?: Record<string, unknown>
+  requestId?: string
+  ip?: string
+  createdAt: string
+}
+
+export async function getAuditLogs(params?: {
+  organizationId?: string
+  category?: string
+  action?: string
+  status?: string
+  limit?: number
+}): Promise<{ success: boolean; data: AuditLogEntry[] }> {
+  const queryParams = new URLSearchParams()
+  if (params?.organizationId) queryParams.append('organizationId', params.organizationId)
+  if (params?.category) queryParams.append('category', params.category)
+  if (params?.action) queryParams.append('action', params.action)
+  if (params?.status) queryParams.append('status', params.status)
+  if (params?.limit) queryParams.append('limit', String(params.limit))
+
+  const url = `${API_BASE_URL}/api/audit-logs${queryParams.toString() ? `?${queryParams.toString()}` : ''}`
+  const response = await authFetch(url)
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}))
+    throw new Error(error.message || 'Failed to fetch audit logs')
+  }
+
+  return response.json()
 }
 
 export interface FbToken {
@@ -821,6 +1275,9 @@ export interface OAuthConfig {
   configured: boolean
   missing: string[]
   redirectUri: string
+  hasDbApps?: boolean
+  businessLoginConfigIdConfigured?: boolean
+  oauthStateSecretConfigured?: boolean
 }
 
 // 获取 OAuth 配置状态
@@ -846,7 +1303,8 @@ export async function getFacebookLoginUrl(state?: string): Promise<{ success: bo
   const response = await authFetch(url)
 
   if (!response.ok) {
-    throw new Error('Failed to get Facebook login URL')
+    const error = await response.json().catch(() => ({}))
+    throw new Error(error.message || error.error || 'Failed to get Facebook login URL')
   }
 
   return response.json()

@@ -18,12 +18,16 @@ import authRoutes from './routes/auth.routes' // New: 认证路由
 import userRoutes from './routes/user.routes' // New: 用户管理路由
 import organizationRoutes from './routes/organization.routes' // New: 组织管理路由
 import accountManagementRoutes from './routes/account.management.routes' // New: 账户管理路由
+import auditLogRoutes from './routes/auditLog.routes' // SaaS audit logs
 import aggregationRoutes from './controllers/aggregation.controller' // New: 预聚合数据 API
 import automationJobRoutes from './routes/automationJob.routes' // New: 自动化 Job 编排
+import commercialRoutes from './routes/commercial.routes' // SaaS commercial readiness
 import agentV2Routes from './agent/agent.controller' // Agent V2: LLM-powered multi-agent system
 import { handleFeishuInteraction } from './controllers/feishu.webhook.controller'
 import logger from './utils/logger'
 import { errorHandler } from './middlewares/errorHandler'
+import { getBuildInfo } from './utils/buildInfo'
+import { parsePositiveInteger } from './utils/config'
 
 // NOTE: All infrastructure initialization (DB/Redis/Queues/Crons) is done in `server.ts`.
 // `app.ts` should remain side-effect free so it can be imported safely (tests, scripts, etc.).
@@ -38,14 +42,67 @@ declare global {
 }
 
 const app = express()
-app.use(cors())
-app.use(express.json())
+app.set('trust proxy', parsePositiveInteger(process.env.TRUST_PROXY_HOPS, 1))
+
+const configuredOrigins = (process.env.CORS_ALLOWED_ORIGINS || '')
+  .split(',')
+  .map(origin => origin.trim())
+  .filter(Boolean)
+
+const defaultAllowedOrigins = [
+  'https://app.autoark.work',
+  'https://autoark.work',
+  'http://localhost:5173',
+  'http://localhost:3000',
+  'http://localhost:3001',
+]
+
+const allowedOrigins = configuredOrigins.length > 0 ? configuredOrigins : defaultAllowedOrigins
+
+app.use(cors({
+  origin(origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) {
+      return callback(null, true)
+    }
+    return callback(new Error('CORS origin denied'))
+  },
+  credentials: true,
+}))
+app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '2mb' }))
+
+const authAttempts = new Map<string, { count: number; resetAt: number }>()
+const authRateLimit = (req: Request, res: Response, next: NextFunction) => {
+  const windowMs = parsePositiveInteger(process.env.AUTH_RATE_LIMIT_WINDOW_MS, 15 * 60 * 1000)
+  const maxAttempts = parsePositiveInteger(process.env.AUTH_RATE_LIMIT_MAX, 20)
+  const key = `${req.ip}:${req.path}`
+  const now = Date.now()
+  const current = authAttempts.get(key)
+
+  if (!current || current.resetAt <= now) {
+    authAttempts.set(key, { count: 1, resetAt: now + windowMs })
+    return next()
+  }
+
+  current.count += 1
+  if (current.count > maxAttempts) {
+    return res.status(429).json({ success: false, message: '请求过于频繁，请稍后再试' })
+  }
+
+  return next()
+}
 
 app.get('/healthz', (_req: Request, res: Response) => {
   res.json({
     ok: true,
     service: 'autoark-backend',
     uptime: process.uptime(),
+  })
+})
+
+app.get('/api/build', (_req: Request, res: Response) => {
+  res.json({
+    success: true,
+    data: getBuildInfo(),
   })
 })
 
@@ -56,6 +113,28 @@ app.use((req: Request, res: Response, next: NextFunction) => {
     typeof headerId === 'string' && headerId.trim().length > 0 ? headerId : randomUUID()
   req.requestId = requestId
   res.setHeader('X-Request-Id', requestId)
+  next()
+})
+
+// Attach requestId to manually-created JSON error bodies so support can trace UI reports.
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const originalJson = res.json.bind(res)
+
+  res.json = ((body?: any) => {
+    if (
+      body
+      && typeof body === 'object'
+      && !Array.isArray(body)
+      && body.success === false
+      && !body.requestId
+      && req.requestId
+    ) {
+      return originalJson({ ...body, requestId: req.requestId })
+    }
+
+    return originalJson(body)
+  }) as Response['json']
+
   next()
 })
 
@@ -74,11 +153,12 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 
 // API Routes
 // 认证路由（公开）
-app.use('/api/auth', authRoutes)
+app.use('/api/auth', authRateLimit, authRoutes)
 // 用户和组织管理（需要认证）
 app.use('/api/users', userRoutes)
 app.use('/api/organizations', organizationRoutes)
 app.use('/api/account-management', accountManagementRoutes)
+app.use('/api/audit-logs', auditLogRoutes)
 // 其他业务路由
 app.use('/api/facebook', facebookRoutes)
 app.use('/api/facebook', facebookSyncRoutes)
@@ -94,6 +174,7 @@ app.use('/api/product-mapping', productMappingRoutes) // New: 产品关系映射
 app.use('/api/facebook-apps', facebookAppRoutes) // New: Facebook App 管理（多App负载均衡）
 app.use('/api/agg', aggregationRoutes) // New: 统一预聚合数据 API（前端+AI 共用）
 app.use('/api/automation-jobs', automationJobRoutes) // New: AI Planner/Executor jobs
+app.use('/api/commercial', commercialRoutes) // SaaS readiness, plan and quota status
 app.use('/api/v2/agent', agentV2Routes) // Agent V2: LLM-powered multi-agent system
 
 // 飞书 Webhook 交互回调

@@ -35,6 +35,27 @@ const UserManagementPage: React.FC = () => {
     status: 'active',
   })
 
+  const getCurrentOrganizationId = () => {
+    const value = user?.organizationId as any
+    if (!value) return ''
+    return typeof value === 'string' ? value : value._id || ''
+  }
+
+  const resetCreateForm = () => {
+    setFormData({
+      username: '',
+      password: '',
+      email: '',
+      role: 'member',
+      organizationId: isOrgAdmin ? getCurrentOrganizationId() : '',
+    })
+  }
+
+  const handleOpenCreateModal = () => {
+    resetCreateForm()
+    setShowCreateModal(true)
+  }
+
   const fetchUsers = async () => {
     try {
       const response = await authFetch('/api/users', {
@@ -99,13 +120,7 @@ const UserManagementPage: React.FC = () => {
       if (data.success) {
         alert('用户创建成功')
         setShowCreateModal(false)
-        setFormData({
-          username: '',
-          password: '',
-          email: '',
-          role: 'member',
-          organizationId: '',
-        })
+        resetCreateForm()
         fetchUsers()
       } else {
         alert(data.message || '创建失败')
@@ -156,16 +171,44 @@ const UserManagementPage: React.FC = () => {
     if (!editingUser) return
 
     try {
+      const updatePayload: any = {
+        username: editFormData.username,
+        email: editFormData.email,
+      }
+
+      if (isSuperAdmin) {
+        updatePayload.role = editFormData.role
+        updatePayload.organizationId = editFormData.organizationId
+        updatePayload.status = editFormData.status
+      }
+
       const response = await authFetch(`/api/users/${editingUser._id}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`,
         },
-        body: JSON.stringify(editFormData),
+        body: JSON.stringify(updatePayload),
       })
       const data = await response.json()
       if (data.success) {
+        if (!isSuperAdmin && isOrgAdmin && editFormData.status !== editingUser.status) {
+          const statusResponse = await authFetch(`/api/users/${editingUser._id}/status`, {
+            method: 'PUT',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}`,
+            },
+            body: JSON.stringify({ status: editFormData.status }),
+          })
+          const statusData = await statusResponse.json()
+          if (!statusData.success) {
+            alert(statusData.message || '用户基础信息已更新，但状态更新失败')
+            fetchUsers()
+            return
+          }
+        }
+
         alert('用户更新成功')
         setShowEditModal(false)
         setEditingUser(null)
@@ -197,6 +240,17 @@ const UserManagementPage: React.FC = () => {
     return statusMap[status] || status
   }
 
+  const canEditUser = (targetUser: User) => {
+    if (isSuperAdmin) return true
+    return isOrgAdmin && targetUser.role === 'member'
+  }
+
+  const canDeleteUser = (targetUser: User) => {
+    if (targetUser._id === user?._id) return false
+    if (isSuperAdmin) return targetUser.role !== 'super_admin'
+    return isOrgAdmin && targetUser.role === 'member'
+  }
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -211,7 +265,7 @@ const UserManagementPage: React.FC = () => {
           <h1 className="text-2xl font-bold text-gray-800">用户管理</h1>
           {(isSuperAdmin || isOrgAdmin) && (
             <button
-              onClick={() => setShowCreateModal(true)}
+              onClick={handleOpenCreateModal}
             className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
             >
             + 创建用户
@@ -270,7 +324,7 @@ const UserManagementPage: React.FC = () => {
                     </span>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 space-x-3">
-                    {(isSuperAdmin || isOrgAdmin) && (
+                    {canEditUser(u) && (
                       <button
                         onClick={() => handleEditClick(u)}
                         className="text-blue-600 hover:text-blue-900"
@@ -279,8 +333,7 @@ const UserManagementPage: React.FC = () => {
                       </button>
                     )}
                     {/* 超级管理员可删除非超管用户，组织管理员只能删除普通成员 */}
-                    {((isSuperAdmin && u.role !== 'superadmin' && u._id !== user?._id) ||
-                      (isOrgAdmin && u.role === 'member')) && (
+                    {canDeleteUser(u) && (
                       <button
                         onClick={() => handleDeleteUser(u._id)}
                         className="text-red-600 hover:text-red-900"
@@ -502,10 +555,9 @@ const UserManagementPage: React.FC = () => {
                 {isOrgAdmin && user?.organizationId && (
                   <input
                     type="hidden"
-                    value={user.organizationId}
-                    onChange={(e) =>
-                      setFormData({ ...formData, organizationId: e.target.value })
-                    }
+                    name="organizationId"
+                    value={formData.organizationId || getCurrentOrganizationId()}
+                    readOnly
                   />
                 )}
                 <div className="flex gap-2 justify-end mt-6">

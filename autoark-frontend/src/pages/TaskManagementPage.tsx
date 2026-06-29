@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import type { ReactNode } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import Loading from '../components/Loading'
 import { authFetch } from '../services/api'
 
@@ -12,6 +13,21 @@ interface AdDetail {
   reviewFeedback?: any
 }
 
+interface TaskError {
+  entityType: string
+  errorCode?: string
+  errorMessage: string
+  customerMessage?: string
+  operatorMessage?: string
+  severity?: 'error' | 'warning'
+  retryable?: boolean
+  nextActions?: string[]
+  source?: 'meta' | 'autoark' | 'worker' | 'validation'
+  rawCode?: string | number
+  rawSubcode?: string | number
+  timestamp?: string
+}
+
 interface TaskItem {
   accountId: string
   accountName: string
@@ -19,7 +35,7 @@ interface TaskItem {
   progress: { current: number; total: number; percentage: number }
   result?: { campaignId?: string; adsetIds?: string[]; adIds?: string[]; createdCount?: number }
   ads?: AdDetail[]  // 广告详情（含审核状态）
-  errors?: Array<{ entityType: string; errorMessage: string }>
+  errors?: TaskError[]
   startedAt?: string
   completedAt?: string
 }
@@ -53,6 +69,117 @@ interface Task {
   startedAt?: string
   completedAt?: string
   duration?: number
+  operationalDiagnostics?: TaskDiagnostics
+}
+
+interface TaskDiagnostics {
+  taskId?: string
+  status?: string
+  health: 'healthy' | 'running' | 'retryable' | 'blocked' | 'mixed' | 'unknown'
+  summary: {
+    totalAccounts: number
+    successAccounts: number
+    failedAccounts: number
+    processingAccounts: number
+    pendingAccounts: number
+    totalErrors: number
+    retryableErrors: number
+    blockedErrors: number
+  }
+  buckets: Array<{
+    errorCode: string
+    entityType: string
+    customerMessage: string
+    retryable: boolean
+    source: 'meta' | 'autoark' | 'worker' | 'validation'
+    count: number
+    accounts: Array<{ accountId: string; accountName?: string }>
+    nextActions: string[]
+  }>
+  topNextActions: string[]
+}
+
+interface TaskSupportPackage {
+  supportId: string
+  generatedAt: string
+  system?: {
+    build?: {
+      ref?: string
+      commit?: string
+      shortCommit?: string
+      deployedAt?: string | null
+    }
+  }
+  task: {
+    id: string
+    name?: string
+    status: string
+    platform?: string
+    taskType?: string
+    createdAt?: string
+    startedAt?: string
+    completedAt?: string
+    duration?: number
+    progress?: Task['progress']
+  }
+  diagnostics: TaskDiagnostics
+  failedItems: Array<{
+    accountId: string
+    accountName?: string
+    status: string
+    createdCount?: number
+    errorTotal?: number
+    errorsTruncated?: boolean
+    errors: TaskError[]
+  }>
+  limits?: {
+    failedItems?: {
+      total: number
+      returned: number
+      maxReturned: number
+      truncated: boolean
+    }
+    itemErrors?: {
+      maxReturned: number
+    }
+  }
+  recentAuditLogs: Array<{
+    category: string
+    action: string
+    status: 'success' | 'failed' | 'warning'
+    summary?: string
+    reason?: string
+    requestId?: string
+    createdAt?: string
+  }>
+}
+
+interface ApiErrorData {
+  success?: boolean
+  error?: string
+  message?: string
+  requestId?: string
+  data?: any
+}
+
+interface ScopedMessage {
+  taskId: string
+  message: string
+}
+
+interface TaskNotice {
+  type: 'success' | 'error'
+  text: string
+}
+
+interface TaskListMeta {
+  diagnosticScan?: {
+    enabled: boolean
+    scanLimit: number
+    scannedCount: number
+    matchedCount: number
+    truncated: boolean
+  }
 }
 
 const STATUS_MAP: Record<string, { label: string; color: string }> = {
@@ -83,45 +210,340 @@ const getReviewStatusInfo = (status: string) => {
   return REVIEW_STATUS_MAP[status] || { label: status || '未知', color: 'bg-slate-100 text-slate-600', icon: '❓' }
 }
 
+const getErrorSourceLabel = (source?: string) => {
+  const labels: Record<string, string> = {
+    meta: 'Meta',
+    autoark: 'AutoArk',
+    worker: 'Worker',
+    validation: '配置校验',
+  }
+  return source ? labels[source] || source : '未知来源'
+}
+
+const ERROR_CODE_INFO: Record<string, {
+  label: string
+  owner: string
+  actionPath?: string
+  actionLabel?: string
+}> = {
+  FACEBOOK_AUTH_REQUIRED: {
+    label: '授权失效',
+    owner: '授权',
+    actionPath: '/fb-settings',
+    actionLabel: '去重新授权',
+  },
+  FACEBOOK_PERMISSION_DENIED: {
+    label: '权限不足',
+    owner: 'App 权限',
+    actionPath: '/fb-apps',
+    actionLabel: '查看 App',
+  },
+  AD_ACCOUNT_ACCESS_DENIED: {
+    label: '账户无权限',
+    owner: '账户资产',
+    actionPath: '/fb-accounts',
+    actionLabel: '看账户',
+  },
+  AD_ACCOUNT_UNAVAILABLE: {
+    label: '账户不可投放',
+    owner: '账户/账单',
+    actionPath: '/fb-accounts',
+    actionLabel: '看账户',
+  },
+  PAGE_ACCESS_REQUIRED: {
+    label: '主页不可用',
+    owner: 'Page 资产',
+    actionPath: '/fb-settings',
+    actionLabel: '同步资产',
+  },
+  PIXEL_ACCESS_REQUIRED: {
+    label: 'Pixel 不可用',
+    owner: 'Pixel 资产',
+    actionPath: '/fb-settings',
+    actionLabel: '同步 Pixel',
+  },
+  INSTAGRAM_ACCESS_REQUIRED: {
+    label: 'Instagram 不可用',
+    owner: '主页/IG 资产',
+    actionPath: '/fb-settings',
+    actionLabel: '同步主页',
+  },
+  CATALOG_ACCESS_REQUIRED: {
+    label: '商品目录不可用',
+    owner: 'Catalog 资产',
+    actionPath: '/bulk-ad/assets',
+    actionLabel: '看资产',
+  },
+  DESTINATION_URL_INVALID: {
+    label: '落地页无效',
+    owner: '文案包',
+    actionPath: '/bulk-ad/copywriting',
+    actionLabel: '改文案包',
+  },
+  AD_POLICY_REVIEW: {
+    label: '广告政策/审核',
+    owner: '素材/文案',
+    actionPath: '/bulk-ad/review',
+    actionLabel: '看审核',
+  },
+  BUDGET_OR_BID_INVALID: {
+    label: '预算/出价错误',
+    owner: '草稿配置',
+    actionPath: '/bulk-ad/create',
+    actionLabel: '改草稿',
+  },
+  TARGETING_INVALID: {
+    label: '定向错误',
+    owner: '定向包',
+    actionPath: '/bulk-ad/assets',
+    actionLabel: '改定向',
+  },
+  CREATIVE_OR_MATERIAL_FAILED: {
+    label: '素材/创意失败',
+    owner: '素材组',
+    actionPath: '/bulk-ad/materials',
+    actionLabel: '看素材',
+  },
+  META_RATE_LIMIT: {
+    label: 'Meta 限流',
+    owner: '并发/API',
+    actionPath: '/commercial',
+    actionLabel: '看额度',
+  },
+  WORKER_TIMEOUT: {
+    label: '执行超时',
+    owner: '队列',
+    actionLabel: '刷新任务',
+  },
+  NO_ADS_CREATED: {
+    label: '未创建广告',
+    owner: '任务配置',
+    actionPath: '/bulk-ad/create',
+    actionLabel: '检查配置',
+  },
+  META_VALIDATION_ERROR: {
+    label: 'Meta 校验拒绝',
+    owner: '草稿配置',
+    actionPath: '/bulk-ad/create',
+    actionLabel: '改草稿',
+  },
+  EXECUTION_ERROR: {
+    label: '执行错误',
+    owner: '系统排查',
+  },
+}
+
+const QUICK_ERROR_FILTERS = [
+  'PIXEL_ACCESS_REQUIRED',
+  'PAGE_ACCESS_REQUIRED',
+  'FACEBOOK_PERMISSION_DENIED',
+  'AD_ACCOUNT_UNAVAILABLE',
+  'CREATIVE_OR_MATERIAL_FAILED',
+  'AD_POLICY_REVIEW',
+  'DESTINATION_URL_INVALID',
+  'META_RATE_LIMIT',
+]
+
+const getDiagnosticInfo = (code?: string) => code ? ERROR_CODE_INFO[code] : undefined
+
+const getErrorPrimaryMessage = (error: TaskError) => {
+  return error.customerMessage || error.errorMessage || '任务执行失败'
+}
+
+const getErrorOperatorMessage = (error: TaskError) => {
+  return error.operatorMessage || error.errorMessage
+}
+
+const getErrorCodeLabel = (error: TaskError) => {
+  return error.errorCode || error.entityType || 'EXECUTION_ERROR'
+}
+
+const getReadableErrorTitle = (code?: string, fallback?: string) => {
+  const info = getDiagnosticInfo(code)
+  return info ? `${info.label} · ${code}` : (fallback || code || 'EXECUTION_ERROR')
+}
+
+const DIAGNOSTIC_HEALTH_MAP: Record<TaskDiagnostics['health'], { label: string; color: string }> = {
+  healthy: { label: '健康', color: 'bg-green-100 text-green-700' },
+  running: { label: '执行中', color: 'bg-blue-100 text-blue-700' },
+  retryable: { label: '可重试', color: 'bg-blue-100 text-blue-700' },
+  blocked: { label: '需处理', color: 'bg-red-100 text-red-700' },
+  mixed: { label: '混合问题', color: 'bg-orange-100 text-orange-700' },
+  unknown: { label: '未知', color: 'bg-slate-100 text-slate-600' },
+}
+
+const TASK_STATUS_FILTERS = [
+  { value: '', label: '全部状态' },
+  { value: 'queued', label: '排队中' },
+  { value: 'processing', label: '执行中' },
+  { value: 'failed', label: '失败' },
+  { value: 'partial_success', label: '部分成功' },
+  { value: 'success', label: '成功' },
+  { value: 'cancelled', label: '已取消' },
+]
+
+const TASK_HEALTH_FILTERS = [
+  { value: '', label: '全部诊断' },
+  { value: 'blocked', label: '需处理' },
+  { value: 'retryable', label: '可重试' },
+  { value: 'mixed', label: '混合问题' },
+  { value: 'running', label: '执行中' },
+  { value: 'healthy', label: '健康' },
+  { value: 'unknown', label: '未知' },
+]
+
+const getTaskListDiagnostics = (task: Task) => task.operationalDiagnostics
+
+const getTaskListIssueText = (task: Task) => {
+  const diagnostics = getTaskListDiagnostics(task)
+  const topBucket = diagnostics?.buckets?.[0]
+  if (!diagnostics || diagnostics.summary.totalErrors === 0) {
+    return null
+  }
+  if (topBucket) {
+    return `${getReadableErrorTitle(topBucket.errorCode)} · ${topBucket.customerMessage}`
+  }
+  return `${diagnostics.summary.totalErrors} 个错误`
+}
+
+const readApiJson = async (res: Response): Promise<ApiErrorData> => {
+  try {
+    return await res.json()
+  } catch {
+    return {}
+  }
+}
+
+const formatApiError = (data: ApiErrorData, fallback: string, res?: Response) => {
+  const nestedErrors = Array.isArray(data.data?.errors)
+    ? data.data.errors.filter(Boolean).join('；')
+    : ''
+  const message = data.message
+    || data.error
+    || data.data?.message
+    || data.data?.error
+    || nestedErrors
+    || fallback
+  const requestId = data.requestId || data.data?.requestId || res?.headers.get('x-request-id')
+  return requestId ? `${message}（请求 ID：${requestId}）` : message
+}
+
+const formatUnknownError = (err: unknown, fallback: string) => {
+  return err instanceof Error && err.message ? err.message : fallback
+}
+
+const safeFileName = (value?: string) => {
+  const normalized = String(value || '')
+    .trim()
+    .replace(/[^\w.-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+  return normalized.slice(0, 80) || 'autoark-task-support-package'
+}
+
+function InlineNotice({
+  type,
+  children,
+  onClose,
+}: {
+  type: 'success' | 'error' | 'warning'
+  children: ReactNode
+  onClose?: () => void
+}) {
+  const toneClass = type === 'success'
+    ? 'border-green-200 bg-green-50 text-green-700'
+    : type === 'warning'
+      ? 'border-orange-200 bg-orange-50 text-orange-700'
+      : 'border-red-200 bg-red-50 text-red-700'
+
+  return (
+    <div className={`rounded-lg border px-3 py-2 text-sm ${toneClass}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 break-words">{children}</div>
+        {onClose && (
+          <button
+            onClick={onClose}
+            className="shrink-0 text-xs font-semibold opacity-70 hover:opacity-100"
+          >
+            关闭
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export default function TaskManagementPage() {
   const [searchParams] = useSearchParams()
+  const navigate = useNavigate()
   const taskIdFromUrl = searchParams.get('taskId')
   
   const [tasks, setTasks] = useState<Task[]>([])
+  const [taskTotal, setTaskTotal] = useState(0)
   const [selectedTask, setSelectedTask] = useState<Task | null>(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [checkingReview, setCheckingReview] = useState(false)
   const [reviewDetails, setReviewDetails] = useState<any>(null)
+  const [taskDiagnostics, setTaskDiagnostics] = useState<TaskDiagnostics | null>(null)
+  const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
+  const [taskSupportPackage, setTaskSupportPackage] = useState<TaskSupportPackage | null>(null)
+  const [supportPackageLoading, setSupportPackageLoading] = useState(false)
+  const [supportPackageError, setSupportPackageError] = useState<string | null>(null)
+  const [taskListError, setTaskListError] = useState<string | null>(null)
+  const [taskDetailError, setTaskDetailError] = useState<ScopedMessage | null>(null)
+  const [diagnosticsError, setDiagnosticsError] = useState<ScopedMessage | null>(null)
+  const [reviewError, setReviewError] = useState<ScopedMessage | null>(null)
+  const [taskNotice, setTaskNotice] = useState<TaskNotice | null>(null)
+  const [taskListMeta, setTaskListMeta] = useState<TaskListMeta | null>(null)
   
   // 🆕 倍率执行弹窗状态
   const [showRerunModal, setShowRerunModal] = useState(false)
   const [rerunMultiplier, setRerunMultiplier] = useState(1)
   const [rerunTaskId, setRerunTaskId] = useState<string>('')
   const [rerunning, setRerunning] = useState(false)
+  const [rerunError, setRerunError] = useState<string | null>(null)
+  const [statusFilter, setStatusFilter] = useState('')
+  const [healthFilter, setHealthFilter] = useState('')
+  const [errorCodeFilter, setErrorCodeFilter] = useState('')
   
   useEffect(() => {
     loadTasks()
     const interval = setInterval(loadTasks, 5000) // Auto refresh every 5s
     return () => clearInterval(interval)
-  }, [])
+  }, [statusFilter, healthFilter, errorCodeFilter])
   
   useEffect(() => {
-    if (taskIdFromUrl && tasks.length > 0) {
-      const task = tasks.find(t => t._id === taskIdFromUrl)
-      if (task) setSelectedTask(task)
+    if (taskIdFromUrl && selectedTask?._id !== taskIdFromUrl) {
+      loadTaskDetail(taskIdFromUrl)
     }
-  }, [taskIdFromUrl, tasks])
+  }, [taskIdFromUrl, selectedTask?._id])
   
   const loadTasks = async () => {
     try {
-      const res = await authFetch(`${API_BASE}/bulk-ad/tasks`)
-      const data = await res.json()
+      const params = new URLSearchParams()
+      if (statusFilter) params.set('status', statusFilter)
+      if (healthFilter) params.set('diagnosticHealth', healthFilter)
+      if (errorCodeFilter.trim()) params.set('errorCode', errorCodeFilter.trim())
+      const query = params.toString()
+      const res = await authFetch(`${API_BASE}/bulk-ad/tasks${query ? `?${query}` : ''}`)
+      const data = await readApiJson(res)
+      if (!res.ok || !data.success) {
+        setTaskListError(formatApiError(data, '任务列表加载失败', res))
+        setTaskListMeta(null)
+        return
+      }
       if (data.success) {
-        setTasks(data.data?.list || [])
+        const nextTasks = data.data?.list || []
+        setTasks(nextTasks)
+        setTaskTotal(data.data?.total ?? nextTasks.length)
+        setTaskListMeta(data.data?.meta || null)
+        setTaskListError(null)
       }
     } catch (err) {
       console.error('Failed to load tasks:', err)
+      setTaskListMeta(null)
+      setTaskListError(formatUnknownError(err, '任务列表加载失败，请检查网络后重试'))
     } finally {
       setLoading(false)
     }
@@ -129,47 +551,112 @@ export default function TaskManagementPage() {
   
   const loadTaskDetail = async (taskId: string) => {
     setRefreshing(true)
+    setSupportPackageError(null)
+    setTaskDetailError(null)
     try {
       const res = await authFetch(`${API_BASE}/bulk-ad/tasks/${taskId}`)
-      const data = await res.json()
+      const data = await readApiJson(res)
+      if (!res.ok || !data.success) {
+        setTaskDetailError({ taskId, message: formatApiError(data, '任务详情加载失败', res) })
+        return
+      }
       if (data.success) {
         setSelectedTask(data.data)
         // Update in list too
-        setTasks(tasks.map(t => t._id === taskId ? data.data : t))
+        setTasks(prev => prev.map(t => t._id === taskId ? data.data : t))
         // 加载审核详情
         loadReviewDetails(taskId)
+        loadTaskDiagnostics(taskId)
       }
     } catch (err) {
       console.error('Failed to load task detail:', err)
+      setTaskDetailError({ taskId, message: formatUnknownError(err, '任务详情加载失败，请检查网络后重试') })
     } finally {
       setRefreshing(false)
+    }
+  }
+
+  const loadTaskDiagnostics = async (taskId: string) => {
+    setDiagnosticsLoading(true)
+    setDiagnosticsError(null)
+    try {
+      const res = await authFetch(`${API_BASE}/bulk-ad/tasks/${taskId}/diagnostics`)
+      const data = await readApiJson(res)
+      if (!res.ok || !data.success) {
+        setDiagnosticsError({ taskId, message: formatApiError(data, '任务诊断加载失败', res) })
+        return
+      }
+      if (data.success) {
+        setTaskDiagnostics(data.data)
+        setDiagnosticsError(null)
+      }
+    } catch (err) {
+      console.error('Failed to load task diagnostics:', err)
+      setDiagnosticsError({ taskId, message: formatUnknownError(err, '任务诊断加载失败，请稍后重试') })
+    } finally {
+      setDiagnosticsLoading(false)
+    }
+  }
+
+  const generateTaskSupportPackage = async (taskId: string) => {
+    setSupportPackageLoading(true)
+    setSupportPackageError(null)
+    try {
+      const res = await authFetch(`${API_BASE}/bulk-ad/tasks/${taskId}/support-package`)
+      const data = await readApiJson(res)
+      if (!res.ok || !data.success) {
+        setSupportPackageError(formatApiError(data, '生成排障包失败', res))
+        return
+      }
+      if (data.success) {
+        setTaskSupportPackage(data.data)
+      }
+    } catch (err) {
+      console.error('Failed to generate task support package:', err)
+      setSupportPackageError(formatUnknownError(err, '生成排障包失败，请刷新后重试'))
+    } finally {
+      setSupportPackageLoading(false)
     }
   }
   
   const handleCancel = async (taskId: string) => {
     if (!confirm('确定要取消此任务吗？')) return
+    setTaskNotice(null)
     try {
       const res = await authFetch(`${API_BASE}/bulk-ad/tasks/${taskId}/cancel`, { method: 'POST' })
-      const data = await res.json()
+      const data = await readApiJson(res)
+      if (!res.ok || !data.success) {
+        setTaskNotice({ type: 'error', text: formatApiError(data, '取消任务失败', res) })
+        return
+      }
       if (data.success) {
+        setTaskNotice({ type: 'success', text: '任务取消已提交' })
         loadTasks()
         if (selectedTask?._id === taskId) loadTaskDetail(taskId)
       }
     } catch (err) {
       console.error('Failed to cancel task:', err)
+      setTaskNotice({ type: 'error', text: formatUnknownError(err, '取消任务失败，请稍后重试') })
     }
   }
   
   const handleRetry = async (taskId: string) => {
+    setTaskNotice(null)
     try {
       const res = await authFetch(`${API_BASE}/bulk-ad/tasks/${taskId}/retry`, { method: 'POST' })
-      const data = await res.json()
+      const data = await readApiJson(res)
+      if (!res.ok || !data.success) {
+        setTaskNotice({ type: 'error', text: formatApiError(data, '当前失败项不可重试', res) })
+        return
+      }
       if (data.success) {
+        setTaskNotice({ type: 'success', text: '已提交失败项重试' })
         loadTasks()
         if (selectedTask?._id === taskId) loadTaskDetail(taskId)
       }
     } catch (err) {
       console.error('Failed to retry task:', err)
+      setTaskNotice({ type: 'error', text: formatUnknownError(err, '重试失败，请刷新任务诊断后再试') })
     }
   }
   
@@ -177,6 +664,7 @@ export default function TaskManagementPage() {
   const openRerunModal = (taskId: string) => {
     setRerunTaskId(taskId)
     setRerunMultiplier(1)
+    setRerunError(null)
     setShowRerunModal(true)
   }
   
@@ -184,26 +672,31 @@ export default function TaskManagementPage() {
   const handleRerun = async () => {
     if (!rerunTaskId) return
     setRerunning(true)
+    setRerunError(null)
+    setTaskNotice(null)
     try {
       const res = await authFetch(`${API_BASE}/bulk-ad/tasks/${rerunTaskId}/rerun`, { 
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ multiplier: rerunMultiplier })
       })
-      const data = await res.json()
+      const data = await readApiJson(res)
+      if (!res.ok || !data.success) {
+        setRerunError(formatApiError(data, '重新执行失败', res))
+        return
+      }
       if (data.success) {
-        const count = data.data.length || 1
-        alert(`已创建 ${count} 个新任务`)
+        const createdTasks = Array.isArray(data.data) ? data.data : []
+        const count = createdTasks.length || 1
+        setTaskNotice({ type: 'success', text: `已创建 ${count} 个新任务` })
         loadTasks()
         setShowRerunModal(false)
         // 选中第一个新任务
-        if (data.data[0]) setSelectedTask(data.data[0])
-      } else {
-        alert(`重新执行失败：${data.error}`)
+        if (createdTasks[0]) setSelectedTask(createdTasks[0])
       }
     } catch (err) {
       console.error('Failed to rerun task:', err)
-      alert('重新执行失败')
+      setRerunError(formatUnknownError(err, '重新执行失败，请稍后重试'))
     } finally {
       setRerunning(false)
     }
@@ -212,20 +705,23 @@ export default function TaskManagementPage() {
   // 检查广告审核状态
   const checkReviewStatus = async (taskId: string) => {
     setCheckingReview(true)
+    setReviewError(null)
+    setTaskNotice(null)
     try {
       const res = await authFetch(`${API_BASE}/bulk-ad/tasks/${taskId}/check-review`, { method: 'POST' })
-      const data = await res.json()
+      const data = await readApiJson(res)
+      if (!res.ok || !data.success) {
+        setReviewError({ taskId, message: formatApiError(data, '检查审核状态失败', res) })
+        return
+      }
       if (data.success) {
         // 重新加载任务详情
-        loadTaskDetail(taskId)
-        // 加载审核详情
-        loadReviewDetails(taskId)
-      } else {
-        alert(`检查审核状态失败：${data.error || data.data?.errors?.join(', ')}`)
+        await loadTaskDetail(taskId)
+        setTaskNotice({ type: 'success', text: '审核状态已刷新' })
       }
     } catch (err) {
       console.error('Failed to check review status:', err)
-      alert('检查审核状态失败')
+      setReviewError({ taskId, message: formatUnknownError(err, '检查审核状态失败，请稍后重试') })
     } finally {
       setCheckingReview(false)
     }
@@ -233,14 +729,21 @@ export default function TaskManagementPage() {
   
   // 加载审核详情
   const loadReviewDetails = async (taskId: string) => {
+    setReviewError(null)
     try {
       const res = await authFetch(`${API_BASE}/bulk-ad/tasks/${taskId}/review-status`)
-      const data = await res.json()
+      const data = await readApiJson(res)
+      if (!res.ok || !data.success) {
+        setReviewError({ taskId, message: formatApiError(data, '审核详情加载失败', res) })
+        return
+      }
       if (data.success) {
         setReviewDetails(data.data)
+        setReviewError(null)
       }
     } catch (err) {
       console.error('Failed to load review details:', err)
+      setReviewError({ taskId, message: formatUnknownError(err, '审核详情加载失败，请稍后重试') })
     }
   }
   
@@ -256,6 +759,92 @@ export default function TaskManagementPage() {
     if (!iso) return '-'
     return new Date(iso).toLocaleString('zh-CN')
   }
+
+  const selectedTaskSupportPackage = taskSupportPackage?.task.id === selectedTask?._id ? taskSupportPackage : null
+  const selectedTaskSupportFailedItemLimit = selectedTaskSupportPackage?.limits?.failedItems
+  const selectedTaskSupportFailedItemTotal = selectedTaskSupportFailedItemLimit?.total ?? selectedTaskSupportPackage?.failedItems.length ?? 0
+  const selectedTaskSupportFailedItemReturned = selectedTaskSupportFailedItemLimit?.returned ?? selectedTaskSupportPackage?.failedItems.length ?? 0
+  const selectedTaskSupportItemErrorLimit = selectedTaskSupportPackage?.limits?.itemErrors?.maxReturned
+  const selectedTaskSupportTopBucket = selectedTaskSupportPackage?.diagnostics.buckets[0]
+  const selectedTaskSupportTopInfo = getDiagnosticInfo(selectedTaskSupportTopBucket?.errorCode)
+  const selectedTaskDetailError = selectedTask
+    ? taskDetailError?.taskId === selectedTask._id ? taskDetailError.message : null
+    : taskDetailError?.message || null
+  const selectedDiagnosticsError = selectedTask && diagnosticsError?.taskId === selectedTask._id
+    ? diagnosticsError.message
+    : null
+  const selectedReviewError = selectedTask && reviewError?.taskId === selectedTask._id
+    ? reviewError.message
+    : null
+
+  const copyTaskSupportSummary = async () => {
+    if (!selectedTaskSupportPackage) return
+    const topIssue = selectedTaskSupportPackage.diagnostics.buckets[0]
+    const topIssueInfo = getDiagnosticInfo(topIssue?.errorCode)
+    const lines = [
+      `排障包：${selectedTaskSupportPackage.supportId}`,
+      `任务：${selectedTaskSupportPackage.task.name || selectedTaskSupportPackage.task.id}`,
+      `版本：${selectedTaskSupportPackage.system?.build?.shortCommit || 'unknown'} (${selectedTaskSupportPackage.system?.build?.ref || 'unknown'})`,
+      `状态：${STATUS_MAP[selectedTaskSupportPackage.task.status]?.label || selectedTaskSupportPackage.task.status}`,
+      `健康度：${DIAGNOSTIC_HEALTH_MAP[selectedTaskSupportPackage.diagnostics.health]?.label || selectedTaskSupportPackage.diagnostics.health}`,
+      `账户：成功 ${selectedTaskSupportPackage.diagnostics.summary.successAccounts} / 失败 ${selectedTaskSupportPackage.diagnostics.summary.failedAccounts} / 总计 ${selectedTaskSupportPackage.diagnostics.summary.totalAccounts}`,
+      `错误：总计 ${selectedTaskSupportPackage.diagnostics.summary.totalErrors}，可重试 ${selectedTaskSupportPackage.diagnostics.summary.retryableErrors}，需处理 ${selectedTaskSupportPackage.diagnostics.summary.blockedErrors}`,
+      `失败项：展示 ${selectedTaskSupportFailedItemReturned} / 总计 ${selectedTaskSupportFailedItemTotal}`,
+      topIssue ? `首要问题：${topIssueInfo?.label || topIssue.errorCode}（${topIssue.errorCode}）- ${topIssue.customerMessage}` : '首要问题：无',
+      selectedTaskSupportPackage.diagnostics.topNextActions.length > 0
+        ? `建议动作：${selectedTaskSupportPackage.diagnostics.topNextActions.slice(0, 3).join('；')}`
+        : '建议动作：暂无',
+    ]
+    await navigator.clipboard.writeText(lines.join('\n'))
+    setTaskNotice({ type: 'success', text: '排障摘要已复制' })
+  }
+
+  const downloadTaskSupportPackage = () => {
+    if (!selectedTaskSupportPackage) return
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      supportId: selectedTaskSupportPackage.supportId,
+      buildRef: selectedTaskSupportPackage.system?.build?.ref,
+      buildCommit: selectedTaskSupportPackage.system?.build?.commit,
+      buildShortCommit: selectedTaskSupportPackage.system?.build?.shortCommit,
+      taskId: selectedTaskSupportPackage.task.id,
+      taskName: selectedTaskSupportPackage.task.name,
+      health: selectedTaskSupportPackage.diagnostics.health,
+      summary: selectedTaskSupportPackage.diagnostics.summary,
+      topIssue: selectedTaskSupportTopBucket
+        ? {
+            errorCode: selectedTaskSupportTopBucket.errorCode,
+            label: selectedTaskSupportTopInfo?.label,
+            owner: selectedTaskSupportTopInfo?.owner,
+            customerMessage: selectedTaskSupportTopBucket.customerMessage,
+            retryable: selectedTaskSupportTopBucket.retryable,
+            count: selectedTaskSupportTopBucket.count,
+            nextActions: selectedTaskSupportTopBucket.nextActions,
+          }
+        : undefined,
+      supportPackage: selectedTaskSupportPackage,
+    }
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `${safeFileName(selectedTaskSupportPackage.supportId)}-${safeFileName(selectedTaskSupportPackage.task.name || selectedTaskSupportPackage.task.id)}.json`
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
+    URL.revokeObjectURL(url)
+    setTaskNotice({ type: 'success', text: '排障包 JSON 已下载' })
+  }
+
+  const selectedTaskDiagnostics = taskDiagnostics?.taskId === selectedTask?._id ? taskDiagnostics : null
+  const retryBlocked = Boolean(selectedTaskDiagnostics
+    && selectedTaskDiagnostics.summary.retryableErrors === 0
+    && selectedTaskDiagnostics.summary.blockedErrors > 0)
+  const rerunBlocked = Boolean(retryBlocked
+    && selectedTask
+    && ['failed', 'partial_success'].includes(selectedTask.status))
+  const hasTaskFilters = Boolean(statusFilter || healthFilter || errorCodeFilter.trim())
+  const diagnosticScan = taskListMeta?.diagnosticScan
   
   if (loading) {
     return <Loading.Page message="加载任务列表..." />
@@ -268,12 +857,103 @@ export default function TaskManagementPage() {
           <h1 className="text-2xl font-bold text-slate-900">任务管理</h1>
           <p className="text-slate-500 mt-1">查看和管理批量广告创建任务</p>
         </div>
+
+        {taskNotice && (
+          <div className="mb-4">
+            <InlineNotice type={taskNotice.type} onClose={() => setTaskNotice(null)}>
+              {taskNotice.text}
+            </InlineNotice>
+          </div>
+        )}
         
         <div className="grid grid-cols-3 gap-6">
           {/* Task List */}
           <div className="col-span-1 bg-white rounded-xl border border-slate-200 overflow-hidden">
             <div className="p-4 border-b border-slate-200">
-              <h2 className="font-semibold">任务列表</h2>
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="font-semibold">任务列表</h2>
+                <span className="text-xs text-slate-400">共 {taskTotal} 个</span>
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <select
+                  value={statusFilter}
+                  onChange={(event) => setStatusFilter(event.target.value)}
+                  className="h-9 rounded-md border border-slate-200 bg-white px-2 text-xs font-medium text-slate-700 outline-none focus:border-blue-400"
+                >
+                  {TASK_STATUS_FILTERS.map(option => (
+                    <option key={option.value || 'all-status'} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+                <select
+                  value={healthFilter}
+                  onChange={(event) => setHealthFilter(event.target.value)}
+                  className="h-9 rounded-md border border-slate-200 bg-white px-2 text-xs font-medium text-slate-700 outline-none focus:border-blue-400"
+                >
+                  {TASK_HEALTH_FILTERS.map(option => (
+                    <option key={option.value || 'all-health'} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="mt-2 flex items-center gap-2">
+                <input
+                  value={errorCodeFilter}
+                  onChange={(event) => setErrorCodeFilter(event.target.value)}
+                  placeholder="错误码"
+                  className="h-9 min-w-0 flex-1 rounded-md border border-slate-200 px-2 text-xs font-medium text-slate-700 outline-none placeholder:text-slate-400 focus:border-blue-400"
+                />
+                {hasTaskFilters && (
+                  <button
+                    onClick={() => {
+                      setStatusFilter('')
+                      setHealthFilter('')
+                      setErrorCodeFilter('')
+                    }}
+                    className="h-9 rounded-md border border-slate-200 px-3 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                  >
+                    重置
+                  </button>
+                )}
+              </div>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {QUICK_ERROR_FILTERS.map(code => {
+                  const info = getDiagnosticInfo(code)
+                  const selected = errorCodeFilter === code
+                  return (
+                    <button
+                      key={code}
+                      type="button"
+                      onClick={() => setErrorCodeFilter(selected ? '' : code)}
+                      className={`rounded border px-2 py-1 text-[11px] font-semibold transition-colors ${
+                        selected
+                          ? 'border-blue-300 bg-blue-50 text-blue-700'
+                          : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:text-slate-700'
+                      }`}
+                    >
+                      {info?.label || code}
+                    </button>
+                  )
+                })}
+              </div>
+              {diagnosticScan?.truncated && (
+                <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] font-medium leading-5 text-amber-700">
+                  诊断筛选仅扫描最近 {diagnosticScan.scanLimit} 个任务，结果可能不含更早任务。
+                </div>
+              )}
+              {taskListError && (
+                <div className="mt-3">
+                  <InlineNotice type="error">
+                    <div className="flex flex-col gap-2">
+                      <span>{taskListError}</span>
+                      <button
+                        onClick={loadTasks}
+                        className="self-start rounded-md border border-red-200 bg-white px-2 py-1 text-xs font-semibold text-red-700 hover:bg-red-50"
+                      >
+                        重新加载
+                      </button>
+                    </div>
+                  </InlineNotice>
+                </div>
+              )}
             </div>
             <div className="divide-y divide-slate-100 max-h-[600px] overflow-y-auto">
               {tasks.length === 0 ? (
@@ -286,9 +966,16 @@ export default function TaskManagementPage() {
                     className={`p-4 cursor-pointer hover:bg-slate-50 transition-colors ${selectedTask?._id === task._id ? 'bg-blue-50' : ''}`}
                   >
                     <div className="flex items-center justify-between mb-2">
-                      <span className={`text-xs px-2 py-1 rounded ${STATUS_MAP[task.status]?.color || 'bg-slate-100'}`}>
-                        {STATUS_MAP[task.status]?.label || task.status}
-                      </span>
+                      <div className="flex flex-wrap items-center gap-1">
+                        <span className={`text-xs px-2 py-1 rounded ${STATUS_MAP[task.status]?.color || 'bg-slate-100'}`}>
+                          {STATUS_MAP[task.status]?.label || task.status}
+                        </span>
+                        {getTaskListDiagnostics(task) && (
+                          <span className={`text-xs px-2 py-1 rounded ${DIAGNOSTIC_HEALTH_MAP[getTaskListDiagnostics(task)!.health]?.color || DIAGNOSTIC_HEALTH_MAP.unknown.color}`}>
+                            {DIAGNOSTIC_HEALTH_MAP[getTaskListDiagnostics(task)!.health]?.label || getTaskListDiagnostics(task)!.health}
+                          </span>
+                        )}
+                      </div>
                       <span className="text-xs text-slate-400">{formatTime(task.createdAt).split(' ')[0]}</span>
                     </div>
                     <div className="text-sm font-medium text-slate-700 truncate">{task.name || `任务 #${task._id.slice(-6)}`}</div>
@@ -299,6 +986,23 @@ export default function TaskManagementPage() {
                     <div className="mt-2 h-1 bg-slate-100 rounded-full overflow-hidden">
                       <div className={`h-full transition-all ${task.status === 'failed' ? 'bg-red-500' : 'bg-blue-500'}`} style={{ width: `${task.progress.percentage}%` }} />
                     </div>
+                    {getTaskListDiagnostics(task)?.summary.totalErrors ? (
+                      <div className="mt-2 rounded-md border border-slate-200 bg-white px-2 py-1">
+                        <div className="flex items-center justify-between gap-2 text-[11px] font-semibold">
+                          <span className={getTaskListDiagnostics(task)!.summary.blockedErrors > 0 ? 'text-red-700' : 'text-blue-700'}>
+                            {getTaskListDiagnostics(task)!.summary.blockedErrors > 0
+                              ? `${getTaskListDiagnostics(task)!.summary.blockedErrors} 个需处理`
+                              : `${getTaskListDiagnostics(task)!.summary.retryableErrors} 个可重试`}
+                          </span>
+                          <span className="text-slate-400">{getTaskListDiagnostics(task)!.summary.totalErrors} 错误</span>
+                        </div>
+                        {getTaskListIssueText(task) && (
+                          <div className="mt-1 max-h-8 overflow-hidden break-words text-[11px] leading-4 text-slate-500">
+                            {getTaskListIssueText(task)}
+                          </div>
+                        )}
+                      </div>
+                    ) : null}
                   </div>
                 ))
               )}
@@ -319,16 +1023,57 @@ export default function TaskManagementPage() {
                       <button onClick={() => handleCancel(selectedTask._id)} className="px-3 py-1 text-sm border border-red-300 text-red-600 rounded hover:bg-red-50">取消任务</button>
                     )}
                     {['failed', 'partial_success'].includes(selectedTask.status) && (
-                      <button onClick={() => handleRetry(selectedTask._id)} className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">重试失败项</button>
+                      <button
+                        onClick={() => handleRetry(selectedTask._id)}
+                        disabled={retryBlocked}
+                        title={retryBlocked ? '当前失败原因需要先处理权限、账户、Page、Pixel 或素材配置' : undefined}
+                        className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-slate-300 disabled:cursor-not-allowed"
+                      >
+                        {retryBlocked ? '需先处理后重试' : '重试失败项'}
+                      </button>
                     )}
                     {['success', 'failed', 'partial_success', 'cancelled', 'completed'].includes(selectedTask.status) && (
-                      <button onClick={() => openRerunModal(selectedTask._id)} className="px-3 py-1 text-sm bg-green-600 text-white rounded hover:bg-green-700">🔄 再次执行</button>
+                      <button
+                        onClick={() => openRerunModal(selectedTask._id)}
+                        disabled={rerunBlocked}
+                        title={rerunBlocked ? '当前失败原因需要先处理权限、账户、Page、Pixel 或素材配置' : undefined}
+                        className="px-3 py-1 text-sm bg-green-600 text-white rounded hover:bg-green-700 disabled:bg-slate-300 disabled:cursor-not-allowed"
+                      >
+                        {rerunBlocked ? '需先处理后再执行' : '再次执行'}
+                      </button>
                     )}
+                    <button
+                      onClick={() => generateTaskSupportPackage(selectedTask._id)}
+                      disabled={supportPackageLoading}
+                      className="px-3 py-1 text-sm border border-teal-300 text-teal-700 rounded hover:bg-teal-50 disabled:opacity-50"
+                    >
+                      {supportPackageLoading ? '生成中...' : '生成排障包'}
+                    </button>
                     <button onClick={() => loadTaskDetail(selectedTask._id)} disabled={refreshing} className="px-3 py-1 text-sm border border-slate-300 rounded hover:bg-slate-50 disabled:opacity-50">
                       {refreshing ? '刷新中...' : '刷新'}
                     </button>
                   </div>
                 </div>
+                {supportPackageError && (
+                  <div className="border-b border-red-100 px-4 py-3">
+                    <InlineNotice type="error">{supportPackageError}</InlineNotice>
+                  </div>
+                )}
+                {selectedTaskDetailError && (
+                  <div className="border-b border-red-100 px-4 py-3">
+                    <InlineNotice type="error">
+                      <div className="flex flex-col gap-2">
+                        <span>{selectedTaskDetailError}</span>
+                        <button
+                          onClick={() => loadTaskDetail(selectedTask._id)}
+                          className="self-start rounded-md border border-red-200 bg-white px-2 py-1 text-xs font-semibold text-red-700 hover:bg-red-50"
+                        >
+                          重新加载详情
+                        </button>
+                      </div>
+                    </InlineNotice>
+                  </div>
+                )}
                 
                 <div className="p-4 border-b border-slate-200">
                   <div className="grid grid-cols-4 gap-4 text-center">
@@ -344,6 +1089,248 @@ export default function TaskManagementPage() {
                     </div>
                   </div>
                 </div>
+
+                {(diagnosticsLoading || selectedDiagnosticsError || (taskDiagnostics && taskDiagnostics.taskId === selectedTask._id)) && (
+                  <div className="p-4 border-b border-slate-200 bg-white">
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                      <h3 className="font-semibold text-sm">运营诊断</h3>
+                      {taskDiagnostics && taskDiagnostics.taskId === selectedTask._id && (
+                        <span className={`rounded px-2 py-0.5 text-xs font-semibold ${DIAGNOSTIC_HEALTH_MAP[taskDiagnostics.health]?.color || DIAGNOSTIC_HEALTH_MAP.unknown.color}`}>
+                          {DIAGNOSTIC_HEALTH_MAP[taskDiagnostics.health]?.label || taskDiagnostics.health}
+                        </span>
+                      )}
+                    </div>
+                    {selectedDiagnosticsError && (
+                      <div className="mb-3">
+                        <InlineNotice type="error">
+                          <div className="flex flex-col gap-2">
+                            <span>{selectedDiagnosticsError}</span>
+                            <button
+                              onClick={() => loadTaskDiagnostics(selectedTask._id)}
+                              className="self-start rounded-md border border-red-200 bg-white px-2 py-1 text-xs font-semibold text-red-700 hover:bg-red-50"
+                            >
+                              重新加载诊断
+                            </button>
+                          </div>
+                        </InlineNotice>
+                      </div>
+                    )}
+                    {diagnosticsLoading && (!taskDiagnostics || taskDiagnostics.taskId !== selectedTask._id) ? (
+                      <div className="text-sm text-slate-500">正在生成任务诊断...</div>
+                    ) : taskDiagnostics && taskDiagnostics.taskId === selectedTask._id ? (
+                      <div className="space-y-3">
+                        <div className="grid grid-cols-4 gap-2 text-center">
+                          <div className="rounded-lg bg-slate-50 px-2 py-2">
+                            <div className="text-lg font-bold text-slate-800">{taskDiagnostics.summary.totalErrors}</div>
+                            <div className="text-[11px] text-slate-500">错误数</div>
+                          </div>
+                          <div className="rounded-lg bg-blue-50 px-2 py-2">
+                            <div className="text-lg font-bold text-blue-700">{taskDiagnostics.summary.retryableErrors}</div>
+                            <div className="text-[11px] text-blue-600">可重试</div>
+                          </div>
+                          <div className="rounded-lg bg-red-50 px-2 py-2">
+                            <div className="text-lg font-bold text-red-700">{taskDiagnostics.summary.blockedErrors}</div>
+                            <div className="text-[11px] text-red-600">需处理</div>
+                          </div>
+                          <div className="rounded-lg bg-slate-50 px-2 py-2">
+                            <div className="text-lg font-bold text-slate-800">{taskDiagnostics.buckets.length}</div>
+                            <div className="text-[11px] text-slate-500">问题类型</div>
+                          </div>
+                        </div>
+                        {taskDiagnostics.buckets.length === 0 ? (
+                          <div className="rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-sm font-medium text-green-700">
+                            当前任务没有聚合到失败问题。
+                          </div>
+                        ) : (
+                          <div className="space-y-2">
+                            {taskDiagnostics.buckets.slice(0, 4).map(bucket => {
+                              const info = getDiagnosticInfo(bucket.errorCode)
+                              return (
+                              <div key={bucket.errorCode} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="rounded bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-800">
+                                    {info?.label || bucket.errorCode}
+                                  </span>
+                                  <span className="rounded bg-white px-2 py-0.5 font-mono text-[11px] font-semibold text-slate-500">
+                                    {bucket.errorCode}
+                                  </span>
+                                  <span className={`rounded px-2 py-0.5 text-[11px] font-medium ${bucket.retryable ? 'bg-blue-100 text-blue-700' : 'bg-red-100 text-red-700'}`}>
+                                    {bucket.retryable ? '可重试' : '需先处理'}
+                                  </span>
+                                  <span className="text-[11px] text-slate-500">{bucket.count} 次 · {getErrorSourceLabel(bucket.source)} · {info?.owner || bucket.entityType}</span>
+                                </div>
+                                <div className="mt-1 text-sm font-medium text-slate-700">{bucket.customerMessage}</div>
+                                {bucket.accounts.length > 0 && (
+                                  <div className="mt-1 text-xs text-slate-500">
+                                    影响账户：{bucket.accounts.slice(0, 3).map(account => account.accountName || account.accountId).join('、')}
+                                    {bucket.accounts.length > 3 ? ` 等 ${bucket.accounts.length} 个` : ''}
+                                  </div>
+                                )}
+                                {bucket.nextActions.length > 0 && (
+                                  <div className="mt-2 text-xs leading-5 text-slate-600">
+                                    建议：{bucket.nextActions.slice(0, 2).join('；')}
+                                  </div>
+                                )}
+                                {info?.actionPath && (
+                                  <button
+                                    type="button"
+                                    onClick={() => navigate(info.actionPath!)}
+                                    className="mt-2 rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                                  >
+                                    {info.actionLabel || '去处理'}
+                                  </button>
+                                )}
+                              </div>
+                              )
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    ) : null}
+                  </div>
+                )}
+
+                {selectedTaskSupportPackage && (
+                  <div className="p-4 border-b border-slate-200 bg-teal-50/50">
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                      <div>
+                        <h3 className="font-semibold text-sm text-slate-900">任务排障包</h3>
+                        <div className="mt-1 font-mono text-xs text-slate-500">{selectedTaskSupportPackage.supportId}</div>
+                        <div className="mt-1 font-mono text-[11px] font-semibold text-slate-400">
+                          build {selectedTaskSupportPackage.system?.build?.shortCommit || 'unknown'}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className={`rounded px-2 py-0.5 text-xs font-semibold ${DIAGNOSTIC_HEALTH_MAP[selectedTaskSupportPackage.diagnostics.health]?.color || DIAGNOSTIC_HEALTH_MAP.unknown.color}`}>
+                          {DIAGNOSTIC_HEALTH_MAP[selectedTaskSupportPackage.diagnostics.health]?.label || selectedTaskSupportPackage.diagnostics.health}
+                        </span>
+                        <button
+                          onClick={copyTaskSupportSummary}
+                          className="rounded border border-teal-300 bg-white px-3 py-1 text-xs font-medium text-teal-700 hover:bg-teal-50"
+                        >
+                          复制摘要
+                        </button>
+                        <button
+                          onClick={downloadTaskSupportPackage}
+                          className="rounded border border-slate-300 bg-white px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                        >
+                          下载 JSON
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-4 gap-2 text-center">
+                      <div className="rounded-lg bg-white px-2 py-2">
+                        <div className="text-lg font-bold text-slate-800">{selectedTaskSupportPackage.diagnostics.summary.totalErrors}</div>
+                        <div className="text-[11px] text-slate-500">错误数</div>
+                      </div>
+                      <div className="rounded-lg bg-white px-2 py-2">
+                        <div className="text-lg font-bold text-red-700">{selectedTaskSupportPackage.diagnostics.summary.blockedErrors}</div>
+                        <div className="text-[11px] text-red-600">需处理</div>
+                      </div>
+                      <div className="rounded-lg bg-white px-2 py-2">
+                        <div className="text-lg font-bold text-blue-700">{selectedTaskSupportPackage.diagnostics.summary.retryableErrors}</div>
+                        <div className="text-[11px] text-blue-600">可重试</div>
+                      </div>
+                      <div className="rounded-lg bg-white px-2 py-2">
+                        <div className="text-lg font-bold text-slate-800">{selectedTaskSupportFailedItemTotal}</div>
+                        <div className="text-[11px] text-slate-500">失败项</div>
+                      </div>
+                    </div>
+                    {selectedTaskSupportFailedItemLimit?.truncated && (
+                      <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
+                        失败项较多，当前排障包展示前 {selectedTaskSupportFailedItemReturned} 个，共 {selectedTaskSupportFailedItemTotal} 个；完整数量已用于上方诊断统计。
+                      </div>
+                    )}
+
+                    {selectedTaskSupportTopBucket && (
+                      <div className="mt-3 rounded-lg border border-teal-200 bg-white px-3 py-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="rounded bg-teal-50 px-2 py-0.5 text-[11px] font-semibold text-teal-800">
+                            {selectedTaskSupportTopInfo?.label || selectedTaskSupportTopBucket.errorCode}
+                          </span>
+                          <span className="rounded bg-slate-100 px-2 py-0.5 font-mono text-[11px] font-semibold text-slate-700">
+                            {selectedTaskSupportTopBucket.errorCode}
+                          </span>
+                          <span className="text-[11px] text-slate-500">
+                            影响 {selectedTaskSupportTopBucket.count} 次 · {selectedTaskSupportTopInfo?.owner || selectedTaskSupportTopBucket.entityType}
+                          </span>
+                        </div>
+                        <div className="mt-1 text-sm font-medium text-slate-800">
+                          {selectedTaskSupportTopBucket.customerMessage}
+                        </div>
+                        {selectedTaskSupportPackage.diagnostics.topNextActions.length > 0 && (
+                          <div className="mt-2 text-xs leading-5 text-slate-600">
+                            建议：{selectedTaskSupportPackage.diagnostics.topNextActions.slice(0, 3).join('；')}
+                          </div>
+                        )}
+                        {selectedTaskSupportTopInfo?.actionPath && (
+                          <button
+                            type="button"
+                            onClick={() => navigate(selectedTaskSupportTopInfo.actionPath!)}
+                            className="mt-2 rounded-md border border-teal-300 bg-teal-50 px-2.5 py-1 text-xs font-semibold text-teal-800 hover:bg-teal-100"
+                          >
+                            {selectedTaskSupportTopInfo.actionLabel || '去处理'}
+                          </button>
+                        )}
+                      </div>
+                    )}
+
+                    <div className="mt-3 grid grid-cols-2 gap-3">
+                      <div className="rounded-lg border border-slate-200 bg-white p-3">
+                        <div className="mb-2 flex items-center justify-between gap-2 text-xs font-semibold text-slate-700">
+                          <span>失败账户</span>
+                          <span className="font-normal text-slate-400">
+                            {selectedTaskSupportFailedItemReturned}/{selectedTaskSupportFailedItemTotal}
+                          </span>
+                        </div>
+                        {selectedTaskSupportPackage.failedItems.length === 0 ? (
+                          <div className="text-xs text-slate-500">暂无失败账户</div>
+                        ) : (
+                          <div className="space-y-2">
+                            {selectedTaskSupportPackage.failedItems.slice(0, 3).map(item => (
+                              <div key={item.accountId} className="text-xs">
+                                <div className="font-medium text-slate-800">{item.accountName || item.accountId}</div>
+                                <div className="mt-0.5 text-slate-500">
+                                  {(item.errors || []).slice(0, 2).map(error => getReadableErrorTitle(error.errorCode, getErrorCodeLabel(error))).join('、') || item.status}
+                                </div>
+                                {item.errorsTruncated && (
+                                  <div className="mt-0.5 text-[11px] text-amber-600">
+                                    已展示前 {selectedTaskSupportItemErrorLimit || item.errors.length} 条错误，共 {item.errorTotal || item.errors.length} 条
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      <div className="rounded-lg border border-slate-200 bg-white p-3">
+                        <div className="mb-2 text-xs font-semibold text-slate-700">最近审计</div>
+                        {selectedTaskSupportPackage.recentAuditLogs.length === 0 ? (
+                          <div className="text-xs text-slate-500">暂无审计记录</div>
+                        ) : (
+                          <div className="space-y-2">
+                            {selectedTaskSupportPackage.recentAuditLogs.slice(0, 3).map((log, idx) => (
+                              <div key={`${log.action}-${idx}`} className="text-xs">
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="font-medium text-slate-800">{log.summary || log.action}</span>
+                                  <span className={log.status === 'failed' ? 'text-red-600' : log.status === 'warning' ? 'text-orange-600' : 'text-green-600'}>
+                                    {log.status}
+                                  </span>
+                                </div>
+                                <div className="mt-0.5 text-slate-500">{formatTime(log.createdAt)}</div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="mt-3 text-right text-[11px] text-slate-500">
+                      生成时间：{formatTime(selectedTaskSupportPackage.generatedAt)}
+                    </div>
+                  </div>
+                )}
                 
                 {/* 广告审核状态 */}
                 {['success', 'partial_success'].includes(selectedTask.status) && (
@@ -358,6 +1345,22 @@ export default function TaskManagementPage() {
                         {checkingReview ? '检查中...' : '🔄 刷新审核状态'}
                       </button>
                     </div>
+
+                    {selectedReviewError && (
+                      <div className="mb-3">
+                        <InlineNotice type="error">
+                          <div className="flex flex-col gap-2">
+                            <span>{selectedReviewError}</span>
+                            <button
+                              onClick={() => loadReviewDetails(selectedTask._id)}
+                              className="self-start rounded-md border border-red-200 bg-white px-2 py-1 text-xs font-semibold text-red-700 hover:bg-red-50"
+                            >
+                              重新加载审核详情
+                            </button>
+                          </div>
+                        </InlineNotice>
+                      </div>
+                    )}
                     
                     {reviewDetails?.summary ? (
                       <div className="grid grid-cols-4 gap-3 text-center">
@@ -429,21 +1432,58 @@ export default function TaskManagementPage() {
                   <h3 className="font-semibold mb-3">账户执行详情</h3>
                   <div className="space-y-2 max-h-[300px] overflow-y-auto">
                     {selectedTask.items.map((item, idx) => (
-                      <div key={idx} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
-                        <div className="flex items-center gap-3">
-                          <span className={`w-2 h-2 rounded-full ${(item.status === 'success' || item.status === 'completed') ? 'bg-green-500' : item.status === 'failed' ? 'bg-red-500' : item.status === 'processing' ? 'bg-blue-500 animate-pulse' : 'bg-slate-300'}`} />
-                          <div>
-                            <div className="font-medium text-sm">{item.accountName || item.accountId}</div>
-                            <div className="text-xs text-slate-500">{item.accountId}</div>
+                      <div key={idx} className="p-3 bg-slate-50 rounded-lg">
+                        <div className="flex items-center justify-between gap-4">
+                          <div className="flex items-center gap-3 min-w-0">
+                            <span className={`w-2 h-2 shrink-0 rounded-full ${(item.status === 'success' || item.status === 'completed') ? 'bg-green-500' : item.status === 'failed' ? 'bg-red-500' : item.status === 'processing' ? 'bg-blue-500 animate-pulse' : 'bg-slate-300'}`} />
+                            <div className="min-w-0">
+                              <div className="font-medium text-sm truncate">{item.accountName || item.accountId}</div>
+                              <div className="text-xs text-slate-500 break-all">{item.accountId}</div>
+                            </div>
+                          </div>
+                          <div className="text-right shrink-0">
+                            <span className={`text-xs px-2 py-0.5 rounded ${STATUS_MAP[item.status]?.color || 'bg-slate-100'}`}>{STATUS_MAP[item.status]?.label || item.status}</span>
+                            {item.result?.createdCount !== undefined && <div className="text-xs text-slate-500 mt-1">创建 {item.result.createdCount} 个广告</div>}
                           </div>
                         </div>
-                        <div className="text-right">
-                          <span className={`text-xs px-2 py-0.5 rounded ${STATUS_MAP[item.status]?.color || 'bg-slate-100'}`}>{STATUS_MAP[item.status]?.label || item.status}</span>
-                          {item.result?.createdCount !== undefined && <div className="text-xs text-slate-500 mt-1">创建 {item.result.createdCount} 个广告</div>}
-                          {item.errors && item.errors.length > 0 && (
-                            <div className="text-xs text-red-500 mt-1 max-w-xs truncate" title={item.errors[0].errorMessage}>{item.errors[0].errorMessage}</div>
-                          )}
-                        </div>
+                        {item.errors && item.errors.length > 0 && (
+                          <div className="mt-3 space-y-3 border-l-2 border-red-300 pl-3">
+                            {item.errors.map((error, errorIdx) => (
+                              <div key={`${getErrorCodeLabel(error)}-${errorIdx}`}>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="rounded bg-red-100 px-2 py-0.5 text-[11px] font-semibold text-red-700">
+                                    {getReadableErrorTitle(error.errorCode, getErrorCodeLabel(error))}
+                                  </span>
+                                  <span className={`rounded px-2 py-0.5 text-[11px] font-medium ${error.retryable ? 'bg-blue-100 text-blue-700' : 'bg-slate-200 text-slate-700'}`}>
+                                    {error.retryable ? '可重试' : '需先处理'}
+                                  </span>
+                                  <span className="text-[11px] text-slate-500">{getErrorSourceLabel(error.source)} · {getDiagnosticInfo(error.errorCode)?.owner || error.entityType}</span>
+                                </div>
+                                <div className="mt-1 text-sm font-medium text-red-700 break-words">
+                                  {getErrorPrimaryMessage(error)}
+                                </div>
+                                {error.nextActions && error.nextActions.length > 0 && (
+                                  <div className="mt-2">
+                                    <div className="text-xs font-medium text-slate-600">建议动作</div>
+                                    <ul className="mt-1 list-disc space-y-0.5 pl-4 text-xs leading-5 text-slate-600">
+                                      {error.nextActions.slice(0, 3).map((action, actionIdx) => (
+                                        <li key={actionIdx}>{action}</li>
+                                      ))}
+                                    </ul>
+                                  </div>
+                                )}
+                                {getErrorOperatorMessage(error) && (
+                                  <details className="mt-2 text-xs text-slate-500">
+                                    <summary className="cursor-pointer select-none text-slate-600">原始错误</summary>
+                                    <div className="mt-1 whitespace-pre-wrap break-words rounded bg-white px-2 py-1 text-slate-500">
+                                      {getErrorOperatorMessage(error)}
+                                    </div>
+                                  </details>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -455,7 +1495,25 @@ export default function TaskManagementPage() {
                   <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-12 h-12 mx-auto mb-3 text-slate-300">
                     <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 002.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 00-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 00.75-.75 2.25 2.25 0 00-.1-.664m-5.8 0A2.251 2.251 0 0113.5 2.25H15c1.012 0 1.867.668 2.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V19.5a2.25 2.25 0 002.25 2.25h.75m0-3H12m5.25-3.75h-1.5m1.5 3.75h-1.5m-4.5-3.75h1.5m-1.5 3.75h1.5" />
                   </svg>
-                  <p>选择一个任务查看详情</p>
+                  {selectedTaskDetailError ? (
+                    <div className="mt-3 max-w-md text-left">
+                      <InlineNotice type="error">
+                        <div className="flex flex-col gap-2">
+                          <span>{selectedTaskDetailError}</span>
+                          {taskDetailError?.taskId && (
+                            <button
+                              onClick={() => loadTaskDetail(taskDetailError.taskId)}
+                              className="self-start rounded-md border border-red-200 bg-white px-2 py-1 text-xs font-semibold text-red-700 hover:bg-red-50"
+                            >
+                              重新加载详情
+                            </button>
+                          )}
+                        </div>
+                      </InlineNotice>
+                    </div>
+                  ) : (
+                    <p>选择一个任务查看详情</p>
+                  )}
                 </div>
               </div>
             )}
@@ -469,6 +1527,12 @@ export default function TaskManagementPage() {
           <div className="bg-white rounded-2xl p-6 w-96 shadow-xl">
             <h3 className="text-lg font-semibold mb-4">🔄 再次执行任务</h3>
             <p className="text-sm text-slate-600 mb-4">选择执行次数，将基于原任务配置创建多个新任务。</p>
+
+            {rerunError && (
+              <div className="mb-4">
+                <InlineNotice type="error">{rerunError}</InlineNotice>
+              </div>
+            )}
             
             <div className="mb-6">
               <label className="block text-sm font-medium text-slate-700 mb-2">执行次数（倍率）</label>
@@ -519,4 +1583,3 @@ export default function TaskManagementPage() {
     </div>
   )
 }
-

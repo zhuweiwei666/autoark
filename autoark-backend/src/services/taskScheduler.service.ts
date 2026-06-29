@@ -32,14 +32,17 @@ interface AppAllocation {
   isAvailable: boolean
 }
 
+export const assignableBulkAdAppQuery: Record<string, any> = {
+  status: 'active',
+  'validation.isValid': true,
+  'config.enabledForBulkAds': { $ne: false },
+}
+
 /**
  * 获取所有可用的 Apps 并按负载排序
  */
 export async function getAvailableApps(): Promise<AppAllocation[]> {
-  const apps = await FacebookApp.find({
-    status: 'active',
-    'validation.isValid': true,
-  }).lean()
+  const apps = await FacebookApp.find(assignableBulkAdAppQuery).lean()
 
   return apps
     .map(app => ({
@@ -48,7 +51,8 @@ export async function getAvailableApps(): Promise<AppAllocation[]> {
       currentLoad: app.currentLoad?.activeTasks || 0,
       maxConcurrent: app.config?.maxConcurrentTasks || 5,
       priority: app.config?.priority || 1,
-      isAvailable: (app.currentLoad?.activeTasks || 0) < (app.config?.maxConcurrentTasks || 5),
+      isAvailable: app.config?.enabledForBulkAds !== false
+        && (app.currentLoad?.activeTasks || 0) < (app.config?.maxConcurrentTasks || 5),
     }))
     .filter(app => app.isAvailable)
     .sort((a, b) => {
@@ -227,7 +231,11 @@ export async function getSchedulerStatus(): Promise<{
 }> {
   const apps = await FacebookApp.find().lean()
   
-  const activeApps = apps.filter(a => a.status === 'active' && a.validation?.isValid)
+  const activeApps = apps.filter(a => (
+    a.status === 'active'
+    && a.validation?.isValid
+    && a.config?.enabledForBulkAds !== false
+  ))
   const totalCapacity = activeApps.reduce((sum, a) => sum + (a.config?.maxConcurrentTasks || 5), 0)
   const usedCapacity = activeApps.reduce((sum, a) => sum + (a.currentLoad?.activeTasks || 0), 0)
   
@@ -289,7 +297,8 @@ export async function checkAndRecoverRateLimitedApps(): Promise<void> {
 }
 
 // 定期检查限流恢复（每5分钟）
-setInterval(checkAndRecoverRateLimitedApps, 5 * 60 * 1000)
+const rateLimitRecoveryInterval = setInterval(checkAndRecoverRateLimitedApps, 5 * 60 * 1000)
+rateLimitRecoveryInterval.unref?.()
 
 export default {
   getAvailableApps,
@@ -301,4 +310,3 @@ export default {
   resetAllAppLoads,
   checkAndRecoverRateLimitedApps,
 }
-

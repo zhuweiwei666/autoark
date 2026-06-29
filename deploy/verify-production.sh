@@ -7,17 +7,27 @@ AGENT_URL="${AGENT_URL:-${APP_URL%/}/agent}"
 CREDENTIALS_FILE="${AUTOARK_ADMIN_CREDENTIALS:-$HOME/.config/autoark/admin-credentials.txt}"
 CURL_RETRIES="${CURL_RETRIES:-3}"
 CURL_RETRY_DELAY="${CURL_RETRY_DELAY:-2}"
+CURL_CONNECT_TIMEOUT="${CURL_CONNECT_TIMEOUT:-8}"
+CURL_MAX_TIME="${CURL_MAX_TIME:-25}"
+NODE_REQUEST_TIMEOUT_MS="${NODE_REQUEST_TIMEOUT_MS:-25000}"
 
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
-CURL_RETRY_ARGS=(--retry "$CURL_RETRIES" --retry-delay "$CURL_RETRY_DELAY")
+CURL_COMMON_ARGS=(
+  -sS
+  -L
+  --connect-timeout "$CURL_CONNECT_TIMEOUT"
+  --max-time "$CURL_MAX_TIME"
+  --retry "$CURL_RETRIES"
+  --retry-delay "$CURL_RETRY_DELAY"
+)
 
 if curl --help all 2>/dev/null | grep -q -- '--retry-all-errors'; then
-  CURL_RETRY_ARGS+=(--retry-all-errors)
+  CURL_COMMON_ARGS+=(--retry-all-errors)
 fi
 
 if curl --help all 2>/dev/null | grep -q -- '--retry-connrefused'; then
-  CURL_RETRY_ARGS+=(--retry-connrefused)
+  CURL_COMMON_ARGS+=(--retry-connrefused)
 fi
 
 log() {
@@ -39,13 +49,15 @@ check_get() {
   local body="$TMP_DIR/${label}.body"
   local status
 
-  status="$(
-    curl -sS -L \
-      "${CURL_RETRY_ARGS[@]}" \
+  if ! status="$(
+    curl \
+      "${CURL_COMMON_ARGS[@]}" \
       -o "$body" \
       -w '%{http_code}' \
       "$url"
-  )"
+  )"; then
+    fail "$label request failed for $url"
+  fi
 
   if [ "$status" != "200" ]; then
     fail "$label returned HTTP $status for $url"
@@ -78,18 +90,29 @@ check_login_with_node() {
     AUTOARK_VERIFY_URL="$url" \
     AUTOARK_VERIFY_USERNAME="$username" \
     AUTOARK_VERIFY_PASSWORD="$password" \
+    AUTOARK_VERIFY_TIMEOUT_MS="$NODE_REQUEST_TIMEOUT_MS" \
     node <<'NODE'
 const label = process.env.AUTOARK_VERIFY_LABEL;
 const url = process.env.AUTOARK_VERIFY_URL;
 const username = process.env.AUTOARK_VERIFY_USERNAME;
 const password = process.env.AUTOARK_VERIFY_PASSWORD;
+const timeoutMs = Number(process.env.AUTOARK_VERIFY_TIMEOUT_MS || '25000');
 
 async function main() {
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ username, password }),
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  let response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
 
   let payload = {};
   try {
@@ -106,7 +129,8 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error(`${label} login failed: ${error.message}`);
+  const suffix = error?.name === 'AbortError' ? `timed out after ${timeoutMs}ms` : error.message;
+  console.error(`${label} login failed: ${suffix}`);
   process.exit(1);
 });
 NODE

@@ -25,6 +25,11 @@ import {
 import { fetchCampaigns } from '../../integration/facebook/campaigns.api'
 import { fetchInsights } from '../../integration/facebook/insights.api'
 import FbToken from '../../models/FbToken'
+import Account from '../../models/Account'
+import Campaign from '../../models/Campaign'
+import AdSet from '../../models/AdSet'
+import Ad from '../../models/Ad'
+import { getAccountIdsForQuery, normalizeForStorage } from '../../utils/accountId'
 import logger from '../../utils/logger'
 
 /**
@@ -53,6 +58,67 @@ async function resolveToken(context: AgentContext): Promise<string | null> {
   }
 
   return null
+}
+
+async function resolveScopedAccountIds(context: AgentContext): Promise<string[] | null> {
+  const explicitAccountIds = context.scope?.adAccountIds || []
+  if (explicitAccountIds.length > 0) {
+    return getAccountIdsForQuery(explicitAccountIds)
+  }
+
+  if (context.organizationId) {
+    const accounts = await Account.find({ organizationId: context.organizationId })
+      .select('accountId')
+      .lean()
+    return getAccountIdsForQuery(accounts.map((account: any) => account.accountId).filter(Boolean))
+  }
+
+  return null
+}
+
+const isAccountAllowed = (scopedAccountIds: string[] | null, accountId: string): boolean => {
+  if (scopedAccountIds === null) return true
+  const requested = normalizeForStorage(accountId)
+  return scopedAccountIds.some(id => normalizeForStorage(id) === requested)
+}
+
+const scopedOut = (target: string): ToolResult => ({
+  success: false,
+  error: `Account or entity is outside this agent scope: ${target}`,
+  metadata: { scopedOut: true },
+})
+
+const assertAccountInScope = async (context: AgentContext, accountId: string): Promise<ToolResult | null> => {
+  const scopedAccountIds = await resolveScopedAccountIds(context)
+  return isAccountAllowed(scopedAccountIds, accountId) ? null : scopedOut(accountId)
+}
+
+const resolveEntityAccountId = async (
+  entityType: 'campaign' | 'adset' | 'ad',
+  entityId: string,
+): Promise<string | null> => {
+  if (entityType === 'campaign') {
+    const campaign = await Campaign.findOne({ channel: 'facebook', campaignId: entityId }).select('accountId').lean() as any
+    return campaign?.accountId || null
+  }
+  if (entityType === 'adset') {
+    const adset = await AdSet.findOne({ channel: 'facebook', adsetId: entityId }).select('accountId').lean() as any
+    return adset?.accountId || null
+  }
+  const ad = await Ad.findOne({ channel: 'facebook', adId: entityId }).select('accountId').lean() as any
+  return ad?.accountId || null
+}
+
+const assertEntityInScope = async (
+  context: AgentContext,
+  entityType: 'campaign' | 'adset' | 'ad',
+  entityId: string,
+): Promise<ToolResult | null> => {
+  const scopedAccountIds = await resolveScopedAccountIds(context)
+  if (scopedAccountIds === null) return null
+  const accountId = await resolveEntityAccountId(entityType, entityId)
+  if (!accountId) return scopedOut(entityId)
+  return isAccountAllowed(scopedAccountIds, accountId) ? null : scopedOut(entityId)
 }
 
 // ==================== Read Tools ====================
@@ -126,6 +192,9 @@ const getCampaignInsightsTool: ToolDefinition = {
     required: ['entityId', 'level'],
   },
   handler: async (args: any, context: AgentContext): Promise<ToolResult> => {
+    const scopeError = await assertEntityInScope(context, args.level, args.entityId)
+    if (scopeError) return scopeError
+
     const token = await resolveToken(context)
     if (!token) return { success: false, error: 'No Facebook access token available' }
 
@@ -186,6 +255,9 @@ const getPixelsTool: ToolDefinition = {
     required: ['accountId'],
   },
   handler: async (args: any, context: AgentContext): Promise<ToolResult> => {
+    const scopeError = await assertAccountInScope(context, args.accountId)
+    if (scopeError) return scopeError
+
     const token = await resolveToken(context)
     if (!token) return { success: false, error: 'No Facebook access token available' }
     const result = await getPixels(args.accountId, token)
@@ -208,6 +280,9 @@ const searchInterestsTool: ToolDefinition = {
     required: ['query'],
   },
   handler: async (args: any, context: AgentContext): Promise<ToolResult> => {
+    const scopeError = await assertAccountInScope(context, args.accountId)
+    if (scopeError) return scopeError
+
     const token = await resolveToken(context)
     if (!token) return { success: false, error: 'No Facebook access token available' }
     const result = await searchTargetingInterests({ token, query: args.query })
@@ -230,6 +305,9 @@ const searchLocationsTool: ToolDefinition = {
     required: ['query'],
   },
   handler: async (args: any, context: AgentContext): Promise<ToolResult> => {
+    const scopeError = await assertAccountInScope(context, args.accountId)
+    if (scopeError) return scopeError
+
     const token = await resolveToken(context)
     if (!token) return { success: false, error: 'No Facebook access token available' }
     const result = await searchTargetingLocations({ token, query: args.query })
@@ -266,6 +344,9 @@ const createCampaignTool: ToolDefinition = {
     maxCallsPerRun: 10,
   },
   handler: async (args: any, context: AgentContext): Promise<ToolResult> => {
+    const scopeError = await assertAccountInScope(context, args.accountId)
+    if (scopeError) return scopeError
+
     const token = await resolveToken(context)
     if (!token) return { success: false, error: 'No Facebook access token available' }
 
@@ -313,6 +394,9 @@ const createAdSetTool: ToolDefinition = {
     maxCallsPerRun: 20,
   },
   handler: async (args: any, context: AgentContext): Promise<ToolResult> => {
+    const scopeError = await assertAccountInScope(context, args.accountId)
+    if (scopeError) return scopeError
+
     const token = await resolveToken(context)
     if (!token) return { success: false, error: 'No Facebook access token available' }
 
@@ -374,6 +458,9 @@ const createAdCreativeTool: ToolDefinition = {
     maxCallsPerRun: 20,
   },
   handler: async (args: any, context: AgentContext): Promise<ToolResult> => {
+    const scopeError = await assertAccountInScope(context, args.accountId)
+    if (scopeError) return scopeError
+
     const token = await resolveToken(context)
     if (!token) return { success: false, error: 'No Facebook access token available' }
 
@@ -441,6 +528,9 @@ const createAdTool: ToolDefinition = {
     maxCallsPerRun: 50,
   },
   handler: async (args: any, context: AgentContext): Promise<ToolResult> => {
+    const scopeError = await assertAccountInScope(context, args.accountId)
+    if (scopeError) return scopeError
+
     const token = await resolveToken(context)
     if (!token) return { success: false, error: 'No Facebook access token available' }
 
@@ -482,6 +572,9 @@ const adjustBudgetTool: ToolDefinition = {
     minBudget: 5,
   },
   handler: async (args: any, context: AgentContext): Promise<ToolResult> => {
+    const scopeError = await assertEntityInScope(context, args.entityType, args.entityId)
+    if (scopeError) return scopeError
+
     const token = await resolveToken(context)
     if (!token) return { success: false, error: 'No Facebook access token available' }
 
@@ -526,6 +619,9 @@ const pauseEntityTool: ToolDefinition = {
     cooldownMinutes: 240, // 4 hours
   },
   handler: async (args: any, context: AgentContext): Promise<ToolResult> => {
+    const scopeError = await assertEntityInScope(context, args.entityType, args.entityId)
+    if (scopeError) return scopeError
+
     const token = await resolveToken(context)
     if (!token) return { success: false, error: 'No Facebook access token available' }
 
@@ -563,6 +659,9 @@ const resumeEntityTool: ToolDefinition = {
     cooldownMinutes: 240,
   },
   handler: async (args: any, context: AgentContext): Promise<ToolResult> => {
+    const scopeError = await assertEntityInScope(context, args.entityType, args.entityId)
+    if (scopeError) return scopeError
+
     const token = await resolveToken(context)
     if (!token) return { success: false, error: 'No Facebook access token available' }
 

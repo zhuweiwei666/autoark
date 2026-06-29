@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react'
+import { Link } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { authFetch } from '../services/api'
 
@@ -8,16 +9,52 @@ interface Organization {
   description?: string
   adminId: any
   status: string
+  billing?: {
+    plan?: string
+    status?: string
+    seats?: number
+    trialEndsAt?: string
+    currentPeriodEndsAt?: string
+  }
   settings?: {
     maxMembers?: number
+    maxAdAccounts?: number
+    maxMaterials?: number
+    maxConcurrentTasks?: number
+    monthlyTaskLimit?: number
     features?: string[]
   }
   createdAt: string
 }
 
+interface CommercialPlan {
+  code: string
+  label: string
+  limits: {
+    maxMembers: number | null
+    maxAdAccounts: number | null
+    maxMaterials: number | null
+    maxConcurrentTasks: number | null
+    monthlyTaskLimit: number | null
+  }
+  features: string[]
+}
+
+const commercialFeatureLabels: Record<string, string> = {
+  facebook_oauth: 'Facebook 授权',
+  bulk_ad_create: '批量建广告',
+  material_library: '素材库',
+  asset_sync: '资产同步',
+  review_tracking: '审核追踪',
+  automation_agent: '投放 Agent',
+  team_management: '团队管理',
+  audit_ready: '审计就绪',
+}
+
 const OrganizationManagementPage: React.FC = () => {
   const { token, isSuperAdmin } = useAuth()
   const [organizations, setOrganizations] = useState<Organization[]>([])
+  const [commercialPlans, setCommercialPlans] = useState<CommercialPlan[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [showEditModal, setShowEditModal] = useState(false)
@@ -33,6 +70,15 @@ const OrganizationManagementPage: React.FC = () => {
     name: '',
     description: '',
     status: 'active',
+    plan: 'trial',
+    billingStatus: 'trialing',
+    maxMembers: '',
+    maxAdAccounts: '',
+    maxMaterials: '',
+    maxConcurrentTasks: '',
+    monthlyTaskLimit: '',
+    featureMode: 'default',
+    features: [] as string[],
   })
 
   const fetchOrganizations = async () => {
@@ -60,9 +106,26 @@ const OrganizationManagementPage: React.FC = () => {
     }
   }
 
+  const fetchCommercialPlans = async () => {
+    try {
+      const response = await authFetch('/api/commercial/plans', {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      })
+      const data = await response.json()
+      if (data.success) {
+        setCommercialPlans(data.data)
+      }
+    } catch (error) {
+      console.error('获取套餐默认额度失败:', error)
+    }
+  }
+
   useEffect(() => {
     if (isSuperAdmin && token) {
       fetchOrganizations()
+      fetchCommercialPlans()
     } else {
       setIsLoading(false)
     }
@@ -129,6 +192,15 @@ const OrganizationManagementPage: React.FC = () => {
       name: org.name,
       description: org.description || '',
       status: org.status,
+      plan: org.billing?.plan || 'trial',
+      billingStatus: org.billing?.status || 'trialing',
+      maxMembers: org.settings?.maxMembers?.toString() || '',
+      maxAdAccounts: org.settings?.maxAdAccounts?.toString() || '',
+      maxMaterials: org.settings?.maxMaterials?.toString() || '',
+      maxConcurrentTasks: org.settings?.maxConcurrentTasks?.toString() || '',
+      monthlyTaskLimit: org.settings?.monthlyTaskLimit?.toString() || '',
+      featureMode: org.settings?.features?.length ? 'custom' : 'default',
+      features: org.settings?.features || [],
     })
     setShowEditModal(true)
   }
@@ -137,6 +209,29 @@ const OrganizationManagementPage: React.FC = () => {
     e.preventDefault()
     if (!editingOrg) return
 
+    const optionalNumber = (value: string) => {
+      if (value.trim() === '') return null
+      const parsed = Number(value)
+      return Number.isFinite(parsed) ? parsed : null
+    }
+    const payload = {
+      name: editFormData.name,
+      description: editFormData.description,
+      status: editFormData.status,
+      billing: {
+        plan: editFormData.plan,
+        status: editFormData.billingStatus,
+      },
+      settings: {
+        maxMembers: optionalNumber(editFormData.maxMembers),
+        maxAdAccounts: optionalNumber(editFormData.maxAdAccounts),
+        maxMaterials: optionalNumber(editFormData.maxMaterials),
+        maxConcurrentTasks: optionalNumber(editFormData.maxConcurrentTasks),
+        monthlyTaskLimit: optionalNumber(editFormData.monthlyTaskLimit),
+        features: editFormData.featureMode === 'default' ? [] : editFormData.features,
+      },
+    }
+
     try {
       const response = await authFetch(`/api/organizations/${editingOrg._id}`, {
         method: 'PUT',
@@ -144,7 +239,7 @@ const OrganizationManagementPage: React.FC = () => {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`,
         },
-        body: JSON.stringify(editFormData),
+        body: JSON.stringify(payload),
       })
       const data = await response.json()
       if (data.success) {
@@ -179,6 +274,45 @@ const OrganizationManagementPage: React.FC = () => {
     )
   }
 
+  const selectedPlan = commercialPlans.find((plan) => plan.code === editFormData.plan)
+  const formatLimit = (value: number | null | undefined) => value === null ? '不限' : value ?? '-'
+  const planForOrganization = (org: Organization) => (
+    commercialPlans.find((plan) => plan.code === (org.billing?.plan || 'trial'))
+  )
+  const effectiveLimit = (
+    org: Organization,
+    key: keyof CommercialPlan['limits'],
+  ) => org.settings?.[key] ?? planForOrganization(org)?.limits[key]
+  const hasQuotaOverrides = (org: Organization) => (
+    ['maxMembers', 'maxAdAccounts', 'maxMaterials', 'maxConcurrentTasks', 'monthlyTaskLimit']
+      .some((key) => org.settings?.[key as keyof Organization['settings']] !== undefined)
+  )
+  const allFeatureCodes = commercialPlans.length > 0
+    ? Array.from(new Set(commercialPlans.flatMap((plan) => plan.features)))
+    : Object.keys(commercialFeatureLabels)
+  const selectedFeatureCodes = editFormData.featureMode === 'default'
+    ? selectedPlan?.features || []
+    : editFormData.features
+  const selectedFeatureSet = new Set(selectedFeatureCodes)
+  const setFeatureMode = (featureMode: string) => {
+    setEditFormData({
+      ...editFormData,
+      featureMode,
+      features: featureMode === 'custom' && editFormData.features.length === 0
+        ? selectedPlan?.features || []
+        : editFormData.features,
+    })
+  }
+  const toggleFeature = (feature: string) => {
+    const current = new Set(editFormData.features)
+    if (current.has(feature)) {
+      current.delete(feature)
+    } else {
+      current.add(feature)
+    }
+    setEditFormData({ ...editFormData, featureMode: 'custom', features: Array.from(current) })
+  }
+
   return (
     <div className="p-6">
         <div className="flex justify-between items-center mb-6">
@@ -206,6 +340,9 @@ const OrganizationManagementPage: React.FC = () => {
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   状态
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  套餐/额度
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   创建时间
@@ -239,9 +376,24 @@ const OrganizationManagementPage: React.FC = () => {
                     </span>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    <div className="font-medium text-gray-900">{org.billing?.plan || 'trial'} · {org.billing?.status || 'trialing'}</div>
+                    <div className="text-xs text-gray-500">
+                      成员 {formatLimit(effectiveLimit(org, 'maxMembers'))} · 账户 {formatLimit(effectiveLimit(org, 'maxAdAccounts'))} · 月任务 {formatLimit(effectiveLimit(org, 'monthlyTaskLimit'))}
+                    </div>
+                    <div className="text-xs text-gray-400">
+                      {hasQuotaOverrides(org) ? '含额度覆盖' : '套餐默认额度'} · 功能 {org.settings?.features?.length ? `${org.settings.features.length} 项自定义` : '跟随套餐'}
+                    </div>
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                     {new Date(org.createdAt).toLocaleDateString('zh-CN')}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 space-x-3">
+                    <Link
+                      to={`/commercial?organizationId=${org._id}`}
+                      className="text-emerald-700 hover:text-emerald-900"
+                    >
+                      商用验收
+                    </Link>
                     <button
                       onClick={() => handleEditClick(org)}
                       className="text-blue-600 hover:text-blue-900"
@@ -372,7 +524,7 @@ const OrganizationManagementPage: React.FC = () => {
         {/* 编辑组织模态框 */}
         {showEditModal && editingOrg && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div className="bg-white rounded-lg p-6 w-full max-w-md">
+            <div className="bg-white rounded-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
               <h2 className="text-xl font-bold mb-4">编辑组织</h2>
               <form onSubmit={handleUpdateOrganization} className="space-y-4">
                 <div>
@@ -416,6 +568,148 @@ const OrganizationManagementPage: React.FC = () => {
                     <option value="active">激活</option>
                     <option value="inactive">停用</option>
                   </select>
+                </div>
+                <div className="border-t pt-4">
+                  <h3 className="text-sm font-semibold text-gray-800 mb-3">套餐与账单</h3>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        套餐
+                      </label>
+                      <select
+                        value={editFormData.plan}
+                        onChange={(e) =>
+                          setEditFormData({ ...editFormData, plan: e.target.value })
+                        }
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                      >
+                        <option value="trial">试用版</option>
+                        <option value="starter">标准版</option>
+                        <option value="growth">增长版</option>
+                        <option value="enterprise">企业版</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        账单状态
+                      </label>
+                      <select
+                        value={editFormData.billingStatus}
+                        onChange={(e) =>
+                          setEditFormData({ ...editFormData, billingStatus: e.target.value })
+                        }
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                      >
+                        <option value="trialing">试用中</option>
+                        <option value="active">正常</option>
+                        <option value="past_due">逾期</option>
+                        <option value="paused">暂停</option>
+                        <option value="canceled">已取消</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+                <div className="border-t pt-4">
+                  <h3 className="text-sm font-semibold text-gray-800 mb-3">额度覆盖</h3>
+                  <p className="mb-3 text-xs font-medium text-gray-500">
+                    留空会清除手动覆盖并回到当前套餐默认额度；填 0 表示显式限制为 0。
+                  </p>
+                  {selectedPlan && (
+                    <div className="mb-3 rounded-lg border border-emerald-100 bg-emerald-50 p-3 text-xs font-semibold text-emerald-900">
+                      <div className="mb-2 font-bold">{selectedPlan.label} 默认额度</div>
+                      <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+                        <span>成员 {formatLimit(selectedPlan.limits.maxMembers)}</span>
+                        <span>账户 {formatLimit(selectedPlan.limits.maxAdAccounts)}</span>
+                        <span>素材 {formatLimit(selectedPlan.limits.maxMaterials)}</span>
+                        <span>并发 {formatLimit(selectedPlan.limits.maxConcurrentTasks)}</span>
+                        <span>月任务 {formatLimit(selectedPlan.limits.monthlyTaskLimit)}</span>
+                      </div>
+                    </div>
+                  )}
+                  <div className="grid grid-cols-2 gap-3">
+                    {[
+                      ['maxMembers', '成员上限'],
+                      ['maxAdAccounts', '广告账户上限'],
+                      ['maxMaterials', '素材上限'],
+                      ['maxConcurrentTasks', '并发任务上限'],
+                      ['monthlyTaskLimit', '月任务上限'],
+                    ].map(([key, label]) => (
+                      <div key={key}>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          {label}
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          value={(editFormData as any)[key]}
+                          onChange={(e) =>
+                            setEditFormData({ ...editFormData, [key]: e.target.value })
+                          }
+                          placeholder="使用套餐默认"
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="border-t pt-4">
+                  <h3 className="text-sm font-semibold text-gray-800 mb-3">功能开关</h3>
+                  <div className="mb-3 grid grid-cols-2 gap-2">
+                    <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm font-medium text-gray-700">
+                      <input
+                        type="radio"
+                        name="featureMode"
+                        value="default"
+                        checked={editFormData.featureMode === 'default'}
+                        onChange={(e) => setFeatureMode(e.target.value)}
+                      />
+                      跟随套餐
+                    </label>
+                    <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm font-medium text-gray-700">
+                      <input
+                        type="radio"
+                        name="featureMode"
+                        value="custom"
+                        checked={editFormData.featureMode === 'custom'}
+                        onChange={(e) => setFeatureMode(e.target.value)}
+                      />
+                      自定义开关
+                    </label>
+                  </div>
+                  {selectedPlan && editFormData.featureMode === 'default' && (
+                    <p className="mb-3 text-xs font-medium text-gray-500">
+                      当前跟随 {selectedPlan.label} 默认功能；保存后会清除手动功能覆盖。
+                    </p>
+                  )}
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    {allFeatureCodes.map((feature) => {
+                      const checked = selectedFeatureSet.has(feature)
+                      const disabled = editFormData.featureMode === 'default'
+                      return (
+                        <label
+                          key={feature}
+                          className={`flex min-h-[44px] items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium ${
+                            checked
+                              ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+                              : 'border-gray-200 bg-white text-gray-500'
+                          } ${disabled ? 'cursor-default opacity-80' : 'cursor-pointer'}`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            disabled={disabled}
+                            onChange={() => toggleFeature(feature)}
+                          />
+                          <span>{commercialFeatureLabels[feature] || feature}</span>
+                        </label>
+                      )
+                    })}
+                  </div>
+                  {editFormData.featureMode === 'custom' && !selectedFeatureSet.has('bulk_ad_create') && (
+                    <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">
+                      未开启“批量建广告”时，该客户组织会被禁止发布批量广告任务。
+                    </div>
+                  )}
                 </div>
                 <div className="flex gap-2 justify-end mt-6">
                   <button

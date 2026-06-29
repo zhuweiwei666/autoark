@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { fetchWithTimeout } from '../services/api'
 
 interface User {
   _id: string
@@ -14,7 +15,7 @@ interface AuthContextType {
   user: User | null
   token: string | null
   login: (username: string, password: string) => Promise<void>
-  logout: () => void
+  logout: () => Promise<void>
   isAuthenticated: boolean
   isLoading: boolean
   isSuperAdmin: boolean
@@ -22,6 +23,30 @@ interface AuthContextType {
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
+
+const clearStoredAuth = () => {
+  localStorage.removeItem('auth_token')
+  localStorage.removeItem('auth_user')
+}
+
+const parseStoredUser = (storedUser: string | null): User | null => {
+  if (!storedUser) return null
+  try {
+    const parsed = JSON.parse(storedUser)
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      typeof parsed._id === 'string' &&
+      typeof parsed.username === 'string' &&
+      typeof parsed.email === 'string'
+    ) {
+      return parsed as User
+    }
+  } catch {
+    return null
+  }
+  return null
+}
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null)
@@ -32,43 +57,43 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // 从 localStorage 加载用户信息
   useEffect(() => {
     const loadUser = async () => {
-      const storedToken = localStorage.getItem('auth_token')
-      const storedUser = localStorage.getItem('auth_user')
+      try {
+        const storedToken = localStorage.getItem('auth_token')
+        const storedUserValue = localStorage.getItem('auth_user')
+        const storedUser = parseStoredUser(storedUserValue)
 
-      if (storedToken && storedUser) {
-        setToken(storedToken)
-        setUser(JSON.parse(storedUser))
-        
-        // 验证 token 是否仍然有效
-        try {
-          const response = await fetch('/api/auth/me', {
+        if (storedToken && storedUser) {
+          setToken(storedToken)
+          setUser(storedUser)
+
+          // 验证 token 是否仍然有效
+          const response = await fetchWithTimeout('/api/auth/me', {
             headers: {
               'Authorization': `Bearer ${storedToken}`,
             },
+            timeoutMs: 15000,
           })
           
           if (!response.ok) {
             // 只有在明确未授权时才清除（避免服务重启/临时 5xx 导致“看起来像数据丢失”）
             if (response.status === 401 || response.status === 403) {
-            localStorage.removeItem('auth_token')
-            localStorage.removeItem('auth_user')
-            setToken(null)
-            setUser(null)
-            } else {
-              console.warn('验证用户失败（非 401/403），保留本地登录态以便重试:', response.status)
+              clearStoredAuth()
+              setToken(null)
+              setUser(null)
             }
           } else {
             const data = await response.json()
             setUser(data.data)
             localStorage.setItem('auth_user', JSON.stringify(data.data))
           }
-        } catch (error) {
-          // 网络/临时错误：不要清空 token，避免用户被动登出
-          console.error('验证用户失败（网络或临时错误），保留本地登录态:', error)
+        } else if (storedToken || storedUserValue) {
+          clearStoredAuth()
         }
+      } catch {
+        // 网络/临时错误：不要清空 token，避免用户被动登出
+      } finally {
+        setIsLoading(false)
       }
-      
-      setIsLoading(false)
     }
 
     loadUser()
@@ -76,12 +101,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const login = async (username: string, password: string) => {
     try {
-      const response = await fetch('/api/auth/login', {
+      const response = await fetchWithTimeout('/api/auth/login', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ username, password }),
+        timeoutMs: 30000,
       })
 
       const data = await response.json()
@@ -97,16 +123,33 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       navigate('/dashboard')
     } catch (error: any) {
+      if (error?.name === 'AbortError') {
+        throw new Error('登录请求超时，请检查网络后重试')
+      }
       throw new Error(error.message || '登录失败')
     }
   }
 
-  const logout = () => {
-    setToken(null)
-    setUser(null)
-    localStorage.removeItem('auth_token')
-    localStorage.removeItem('auth_user')
-    navigate('/login')
+  const logout = async () => {
+    const currentToken = token || localStorage.getItem('auth_token')
+    try {
+      if (currentToken) {
+        await fetchWithTimeout('/api/auth/logout', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${currentToken}`,
+          },
+          timeoutMs: 10000,
+        })
+      }
+    } catch {
+      // 登出审计失败不影响用户退出。
+    } finally {
+      setToken(null)
+      setUser(null)
+      clearStoredAuth()
+      navigate('/login')
+    }
   }
 
   const value: AuthContextType = {

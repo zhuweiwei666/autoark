@@ -1,10 +1,12 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import Loading from '../components/Loading'
 import { useAuth } from '../contexts/AuthContext'
 import { authFetch } from '../services/api'
 
 const API_BASE = '/api'
+const FACEBOOK_LOGIN_URL_TIMEOUT_MS = 15000
+const FACEBOOK_LOGIN_POPUP_TIMEOUT_MS = 120000
 
 const STEPS = [
   { id: 1, title: '选择产品', description: '选择文案包(产品)' },
@@ -33,19 +35,323 @@ interface AuthStatus {
   tokenId?: string
 }
 
+interface AuthDiagnostics {
+  authorized: boolean
+  summary: {
+    tokenCount: number
+    syncedUserCount: number
+    accountCount: number
+    activeAccountCount: number
+    inactiveAccountCount?: number
+    pageLinkedAccountCount: number
+    pixelLinkedAccountCount: number
+    readyAccountCount: number
+    accountsMissingPageCount?: number
+    accountsMissingPixelCount?: number
+    expiredTokenCount?: number
+    expiringSoonTokenCount?: number
+    staleTokenCheckCount?: number
+    tokenWithoutExpiryCount?: number
+    earliestTokenExpiresAt?: string
+    oldestTokenCheckedAt?: string
+    lastSyncedAt?: string
+  }
+  accounts: Array<{
+    accountId: string
+    name?: string
+    statusLabel?: string
+    pageCount: number
+    pixelCount: number
+    ready: boolean
+    issues: string[]
+    issueDetails?: Array<{
+      code: string
+      severity: 'blocked' | 'warning'
+      message: string
+      action: string
+    }>
+  }>
+  limits?: {
+    accounts?: {
+      total: number
+      returned: number
+      maxReturned: number
+      truncated: boolean
+    }
+  }
+  risks: Array<{ level: 'critical' | 'warning' | 'info'; message: string }>
+}
+
+const assetIssueLabels: Record<string, string> = {
+  ACCOUNT_NOT_ACTIVE: '账户不可投放',
+  MISSING_PAGE: '缺 Page',
+  MISSING_PIXEL: '缺 Pixel',
+}
+
+const getAssetIssueSummary = (diagnostics: AuthDiagnostics | null) => {
+  if (!diagnostics) return []
+  const counts = new Map<string, number>()
+  for (const account of diagnostics.accounts || []) {
+    for (const issue of account.issueDetails || []) {
+      counts.set(issue.code, (counts.get(issue.code) || 0) + 1)
+    }
+  }
+  return Array.from(counts.entries())
+    .map(([code, count]) => ({ code, label: assetIssueLabels[code] || code, count }))
+    .sort((a, b) => b.count - a.count)
+}
+
+interface FacebookLoginAttempt {
+  clientId?: string
+  redirectUri?: string
+  authorizationMode?: 'business_login' | 'scope_oauth' | string
+  diagnostics: string[]
+  openedAt: string
+}
+
+interface PublishBlocker {
+  message: string
+  errorCode?: string
+  details?: Record<string, any>
+  nextActions: string[]
+  actionPath?: string
+}
+
+interface FacebookAssetResponseMeta {
+  failedTokenCount?: number
+  fetchedPageCount?: number
+  pageLimit?: number
+  pageLimitPerToken?: number
+  pageSize?: number
+  paginationTruncated?: boolean
+  promotePagesFailed?: boolean
+  source?: 'promote_pages' | 'user_pages' | 'none' | string
+}
+
+const commercialBlockerActions: Record<string, { actions: string[]; actionPath?: string }> = {
+  ORGANIZATION_NOT_ACTIVE: {
+    actions: ['联系平台运营启用客户组织。', '启用后刷新页面并重新发布任务。'],
+    actionPath: '/users',
+  },
+  BILLING_NOT_ACTIVE: {
+    actions: ['处理客户续费或账单暂停问题。', '恢复账单状态后重新发布任务。'],
+    actionPath: '/commercial',
+  },
+  FEATURE_NOT_INCLUDED: {
+    actions: ['在组织管理中开启“批量建广告”功能，或升级到包含该能力的套餐。', '开启功能后刷新页面并重新发布任务。'],
+    actionPath: '/organizations',
+  },
+  TASK_ACCOUNT_LIMIT_EXCEEDED: {
+    actions: ['减少本次选择的广告账户数量。', '升级套餐或让平台运营调整单次账户额度。'],
+    actionPath: '/commercial',
+  },
+  MAX_CONCURRENT_TASKS_REACHED: {
+    actions: ['等待当前执行中的任务完成。', '降低重跑倍率或升级并发额度。'],
+    actionPath: '/bulk-ad/tasks',
+  },
+  MONTHLY_TASK_LIMIT_REACHED: {
+    actions: ['暂停本月新增发布，或升级月度任务额度。', '清理测试组织用量后再发布正式任务。'],
+    actionPath: '/commercial',
+  },
+  DRAFT_VALIDATION_FAILED: {
+    actions: ['回到对应步骤修正草稿配置。', '修正后重新点击发布，系统会重新执行预检。'],
+  },
+}
+
+const buildPublishBlocker = (data: any): PublishBlocker => {
+  const preset = data?.errorCode ? commercialBlockerActions[data.errorCode] : undefined
+  const details = data?.details || {}
+  const detailActions: string[] = []
+  if (details.firstError?.message) detailActions.push(`首个错误：${details.firstError.message}`)
+  if (Array.isArray(details.errorFields) && details.errorFields.length > 0) {
+    detailActions.push(`涉及字段：${details.errorFields.slice(0, 5).join('、')}`)
+  }
+  if (details.limit !== undefined) detailActions.push(`当前额度上限：${details.limit}`)
+  if (details.monthlyTaskCount !== undefined) detailActions.push(`本月已发布任务：${details.monthlyTaskCount}`)
+  if (details.runningTaskCount !== undefined) detailActions.push(`当前执行中任务：${details.runningTaskCount}`)
+  if (details.requestedAccounts !== undefined) detailActions.push(`本次选择账户：${details.requestedAccounts}`)
+  if (details.requestedTasks !== undefined) detailActions.push(`本次请求任务数：${details.requestedTasks}`)
+
+  return {
+    message: data?.error || '发布失败',
+    errorCode: data?.errorCode,
+    details,
+    nextActions: [...detailActions, ...(preset?.actions || ['按错误提示修正配置后重新发布。'])],
+    actionPath: preset?.actionPath,
+  }
+}
+
+const formatCompactDateTime = (value?: string) => {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return date.toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+const getTokenHealthItems = (diagnostics: AuthDiagnostics) => {
+  const items: Array<{ label: string; value: string; tone: 'red' | 'amber' | 'slate' }> = []
+  if ((diagnostics.summary.expiredTokenCount || 0) > 0) {
+    items.push({ label: '已过期', value: String(diagnostics.summary.expiredTokenCount), tone: 'red' })
+  }
+  if ((diagnostics.summary.expiringSoonTokenCount || 0) > 0) {
+    items.push({ label: '即将过期', value: String(diagnostics.summary.expiringSoonTokenCount), tone: 'amber' })
+  }
+  if ((diagnostics.summary.staleTokenCheckCount || 0) > 0) {
+    items.push({ label: '待校验', value: String(diagnostics.summary.staleTokenCheckCount), tone: 'amber' })
+  }
+  if ((diagnostics.summary.tokenWithoutExpiryCount || 0) > 0) {
+    items.push({ label: '无过期时间', value: String(diagnostics.summary.tokenWithoutExpiryCount), tone: 'slate' })
+  }
+  return items
+}
+
+const getFacebookAssetReadLimit = (meta?: FacebookAssetResponseMeta) => {
+  const pageSize = Number(meta?.pageSize || 100)
+  const pageLimit = Number(meta?.pageLimitPerToken || meta?.pageLimit || 10)
+  return pageSize * pageLimit
+}
+
+const buildAdAccountAssetWarning = (meta?: FacebookAssetResponseMeta) => {
+  const parts: string[] = []
+  if ((meta?.failedTokenCount || 0) > 0) {
+    parts.push(`${meta?.failedTokenCount} 个 Facebook 授权账号暂时无法读取广告账户。`)
+  }
+  if (meta?.paginationTruncated) {
+    parts.push(`广告账户数量超过本次读取上限，最多读取前 ${getFacebookAssetReadLimit(meta)} 个/授权账号。`)
+  }
+  return parts.join(' ')
+}
+
+const buildPixelAssetWarning = (meta: FacebookAssetResponseMeta | undefined, accountName: string) => {
+  if (!meta?.paginationTruncated) return ''
+  return `账户 ${accountName} 的 Pixel 数量超过本次读取上限，最多读取前 ${getFacebookAssetReadLimit(meta)} 个。`
+}
+
+const buildPageAssetWarning = (meta: FacebookAssetResponseMeta | undefined, accountName: string) => {
+  const parts: string[] = []
+  if (meta?.promotePagesFailed) {
+    parts.push('读取广告账户分配主页失败，已尝试回退。')
+  } else if (meta?.source === 'user_pages') {
+    parts.push('未从广告账户读取到 BM 分配主页，已回退到授权用户管理的主页。')
+  }
+  if (meta?.paginationTruncated) {
+    parts.push(`主页数量超过本次读取上限，最多读取前 ${getFacebookAssetReadLimit(meta)} 个。`)
+  }
+  return parts.length > 0 ? `账户 ${accountName}：${parts.join(' ')}` : ''
+}
+
+function FacebookLoginAttemptPanel({
+  attempt,
+  onStop,
+}: {
+  attempt: FacebookLoginAttempt
+  onStop: () => void
+}) {
+  const modeLabel = attempt.authorizationMode === 'business_login'
+    ? 'Facebook Login for Business'
+    : 'Scope OAuth 兜底'
+
+  return (
+    <div className="mx-auto mt-4 max-w-xl rounded-xl border border-blue-200 bg-white p-4 text-left shadow-sm">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <div className="text-sm font-semibold text-slate-900">授权窗口已打开 · {attempt.openedAt}</div>
+          <div className="mt-1 text-xs leading-5 text-slate-500">
+            正在等待 Facebook 授权结果。关闭弹窗会自动恢复；若弹窗显示“功能不可用”，先关闭弹窗，再检查当前 App 的高级权限、Public OAuth 和 Login for Business 配置。
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onStop}
+          className="shrink-0 rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:border-slate-400"
+        >
+          停止等待
+        </button>
+      </div>
+      <div className="mt-3 grid gap-2 text-xs font-semibold text-slate-600 sm:grid-cols-2">
+        <div className="rounded-lg bg-slate-50 px-3 py-2">
+          模式：<span className="text-slate-950">{modeLabel}</span>
+        </div>
+        <div className="rounded-lg bg-slate-50 px-3 py-2">
+          App ID：<span className="font-mono text-slate-950">{attempt.clientId || '-'}</span>
+        </div>
+        <div className="rounded-lg bg-slate-50 px-3 py-2 sm:col-span-2">
+          回调：<span className="font-mono text-slate-950">{attempt.redirectUri || '-'}</span>
+        </div>
+      </div>
+      {attempt.diagnostics.length > 0 && (
+        <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold leading-5 text-amber-800">
+          {attempt.diagnostics.map((item) => (
+            <div key={item}>{item}</div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function BulkAdCreatePage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const { user, token } = useAuth()  // 获取当前用户信息和认证状态
+  const facebookLoginCleanupRef = useRef<((options?: { closePopup?: boolean }) => void) | null>(null)
   const [currentStep, setCurrentStep] = useState(1)
   
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [publishBlocker, setPublishBlocker] = useState<PublishBlocker | null>(null)
   
   // 授权状态
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null)
   const [authLoading, setAuthLoading] = useState(true)
   const [loginLoading, setLoginLoading] = useState(false)
+  const [loginAttempt, setLoginAttempt] = useState<FacebookLoginAttempt | null>(null)
+  const [authDiagnostics, setAuthDiagnostics] = useState<AuthDiagnostics | null>(null)
+  const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
+  const [resyncing, setResyncing] = useState(false)
+  const [resyncMessage, setResyncMessage] = useState<string | null>(null)
+  const [assetWarningMap, setAssetWarningMap] = useState<Record<string, string>>({})
+
+  const clearFacebookLoginWait = (options: { closePopup?: boolean } = {}) => {
+    facebookLoginCleanupRef.current?.(options)
+    facebookLoginCleanupRef.current = null
+  }
+
+  const setAssetWarning = (key: string, message?: string) => {
+    setAssetWarningMap(prev => {
+      if (message) {
+        if (prev[key] === message) return prev
+        return { ...prev, [key]: message }
+      }
+      if (!(key in prev)) return prev
+      const next = { ...prev }
+      delete next[key]
+      return next
+    })
+  }
+
+  const clearAssetWarningsByPrefix = (prefix: string) => {
+    setAssetWarningMap(prev => {
+      const next = Object.fromEntries(Object.entries(prev).filter(([key]) => !key.startsWith(prefix)))
+      return Object.keys(next).length === Object.keys(prev).length ? prev : next
+    })
+  }
+
+  const getAccountDisplayName = (accountId: string) => {
+    const matchedAccount = accounts.find(acc => (acc.account_id || acc.id?.replace('act_', '')) === accountId)
+    return matchedAccount?.name || selectedAccounts.find(acc => acc.accountId === accountId)?.accountName || accountId
+  }
+
+  useEffect(() => {
+    return () => {
+      clearFacebookLoginWait()
+    }
+  }, [])
   
   // 账户资产
   const [accounts, setAccounts] = useState<any[]>([])
@@ -172,6 +478,7 @@ export default function BulkAdCreatePage() {
         // 如果已授权，自动加载账户
         if (data.data.authorized) {
           loadAdAccounts()
+          loadAuthDiagnostics()
         }
       }
     } catch (err) {
@@ -181,23 +488,60 @@ export default function BulkAdCreatePage() {
       setAuthLoading(false)
     }
   }
+
+  const loadAuthDiagnostics = async () => {
+    setDiagnosticsLoading(true)
+    try {
+      const res = await authFetch(`${API_BASE}/bulk-ad/auth/diagnostics`)
+      const data = await res.json()
+      if (data.success) {
+        setAuthDiagnostics(data.data)
+      }
+    } catch (err) {
+      console.error('Failed to load auth diagnostics:', err)
+    } finally {
+      setDiagnosticsLoading(false)
+    }
+  }
   
   // Facebook 登录（弹窗方式）
   const handleFacebookLogin = async () => {
+    clearFacebookLoginWait()
     setLoginLoading(true)
     setError(null)
+    setPublishBlocker(null)
+    setLoginAttempt(null)
     
     try {
       // 获取登录 URL（传递认证信息以绑定到当前用户）
       // 防止浏览器/代理缓存登录链接导致 304/旧 client_id
-      const res = await authFetch(`${API_BASE}/bulk-ad/auth/login-url?ts=${Date.now()}`, { cache: 'no-store' as any })
-      const data = await res.json()
+      const controller = new AbortController()
+      const loginUrlTimeoutId = window.setTimeout(() => controller.abort(), FACEBOOK_LOGIN_URL_TIMEOUT_MS)
+      const res = await (async () => {
+        try {
+          return await authFetch(`${API_BASE}/bulk-ad/auth/login-url?ts=${Date.now()}`, {
+            cache: 'no-store',
+            signal: controller.signal,
+          } as RequestInit)
+        } finally {
+          window.clearTimeout(loginUrlTimeoutId)
+        }
+      })()
+      const data = await res.json().catch(() => ({}))
       
-      if (!data.success || !data.data.loginUrl) {
-        throw new Error(data.error || '获取登录链接失败')
+      if (!res.ok || !data.success || !data.data?.loginUrl) {
+        throw new Error(data.message || data.error || '获取登录链接失败')
       }
       
-      const loginUrl = data.data.loginUrl
+      const loginData = data.data
+      const loginUrl = loginData.loginUrl
+      setLoginAttempt({
+        clientId: loginData.clientId,
+        redirectUri: loginData.redirectUri,
+        authorizationMode: loginData.authorizationMode,
+        diagnostics: Array.isArray(loginData.diagnostics) ? loginData.diagnostics : [],
+        openedAt: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+      })
       
       // 打开弹窗进行授权
       const width = 600
@@ -213,51 +557,90 @@ export default function BulkAdCreatePage() {
       
       if (!popup) {
         // 弹窗被阻止，回退到页面跳转
+        setLoginLoading(false)
+        setLoginAttempt(null)
+        setError('浏览器拦截了 Facebook 授权弹窗，已切换为当前页面跳转。若没有跳转，请允许弹窗后重试。')
         window.location.href = loginUrl
         return
       }
       
+      let settled = false
+      let checkPopup: ReturnType<typeof setInterval>
+      let timeoutId: ReturnType<typeof setTimeout>
+      let handleMessage: (event: MessageEvent) => void
+      const cleanup = (options: { closePopup?: boolean } = {}) => {
+        if (settled) return
+        settled = true
+        clearInterval(checkPopup)
+        clearTimeout(timeoutId)
+        window.removeEventListener('message', handleMessage)
+        if (options.closePopup && !popup.closed) {
+          popup.close()
+        }
+        if (facebookLoginCleanupRef.current === cleanup) {
+          facebookLoginCleanupRef.current = null
+        }
+      }
+
       // 监听弹窗关闭和消息
-      const checkPopup = setInterval(() => {
+      checkPopup = setInterval(() => {
         if (popup.closed) {
-          clearInterval(checkPopup)
+          cleanup()
           setLoginLoading(false)
+          setLoginAttempt(null)
           // 弹窗关闭后检查授权状态
           checkAuthStatus()
         }
       }, 500)
       
       // 监听来自弹窗的消息
-      const handleMessage = (event: MessageEvent) => {
+      handleMessage = (event: MessageEvent) => {
+        if (event.origin !== window.location.origin) {
+          return
+        }
         if (event.data?.type === 'oauth-success') {
-          clearInterval(checkPopup)
-          window.removeEventListener('message', handleMessage)
-          popup.close()
+          cleanup({ closePopup: true })
           setLoginLoading(false)
+          setLoginAttempt(null)
           checkAuthStatus()
         } else if (event.data?.type === 'oauth-error') {
-          clearInterval(checkPopup)
-          window.removeEventListener('message', handleMessage)
-          popup.close()
+          cleanup({ closePopup: true })
           setLoginLoading(false)
+          setLoginAttempt(null)
           setError(event.data.error || '授权失败')
         }
       }
       window.addEventListener('message', handleMessage)
+      facebookLoginCleanupRef.current = cleanup
       
-      // 超时处理（5分钟）
-      setTimeout(() => {
-        clearInterval(checkPopup)
-        window.removeEventListener('message', handleMessage)
+      // 超时处理
+      timeoutId = setTimeout(() => {
         if (!popup.closed) {
+          cleanup({ closePopup: true })
           setLoginLoading(false)
+          setLoginAttempt(null)
+          setError('Facebook 授权窗口等待超时，已自动关闭授权窗口。请重新点击登录；若弹窗显示“功能不可用”，请检查 Facebook App 的 Public OAuth 与 Login for Business 配置。')
+          checkAuthStatus()
         }
-      }, 300000)
+      }, FACEBOOK_LOGIN_POPUP_TIMEOUT_MS)
       
     } catch (err: any) {
-      setError(err.message || '登录失败')
+      const message = err.name === 'AbortError'
+        ? '获取 Facebook 登录链接超时，请刷新后重试。'
+        : err.message || '登录失败'
+      setError(message)
       setLoginLoading(false)
+      setLoginAttempt(null)
     }
+  }
+
+  const stopFacebookLoginWait = () => {
+    clearFacebookLoginWait({ closePopup: true })
+    setLoginLoading(false)
+    setLoginAttempt(null)
+    setPublishBlocker(null)
+    setError('已停止等待 Facebook 授权窗口，并回查当前授权状态。若弹窗显示“功能不可用”，请到 App 管理检查 Public OAuth 与 Login for Business 配置。')
+    checkAuthStatus()
   }
   
   // 加载广告账户
@@ -268,9 +651,11 @@ export default function BulkAdCreatePage() {
       const data = await res.json()
       if (data.success) {
         setAccounts(data.data || [])
+        setAssetWarning('ad-accounts', buildAdAccountAssetWarning(data.meta))
       }
     } catch (err) {
       console.error('Failed to load ad accounts:', err)
+      setAssetWarning('ad-accounts', '广告账户读取失败，请检查 Facebook 授权后重新同步。')
     } finally {
       setAccountsLoading(false)
     }
@@ -341,25 +726,52 @@ export default function BulkAdCreatePage() {
   
   // 手动触发重新同步
   const triggerResync = async () => {
+    if (resyncing) return
+    setResyncing(true)
+    setResyncMessage('正在重新同步 Facebook 资产...')
     try {
-      await authFetch(`${API_BASE}/bulk-ad/auth/resync`, { method: 'POST' })
+      const res = await authFetch(`${API_BASE}/bulk-ad/auth/resync`, { method: 'POST' })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || data.success === false) {
+        throw new Error(data.error || '触发同步失败')
+      }
       // 开始轮询状态
+      let finished = false
       const pollInterval = setInterval(async () => {
         const status = await checkSyncStatus()
         if (status?.status === 'completed') {
+          finished = true
           clearInterval(pollInterval)
+          setResyncing(false)
+          setResyncMessage('资产同步完成，已刷新账户和 Pixel。')
           loadCachedPixels()
+          loadAdAccounts()
+          loadAuthDiagnostics()
+        } else if (status?.status === 'failed') {
+          finished = true
+          clearInterval(pollInterval)
+          setResyncing(false)
+          setResyncMessage('资产同步失败，请检查 Facebook 授权后重试。')
         }
       }, 2000)
       // 30秒后停止轮询
-      setTimeout(() => clearInterval(pollInterval), 30000)
-    } catch (err) {
+      setTimeout(() => {
+        clearInterval(pollInterval)
+        if (!finished) {
+          setResyncing(false)
+          setResyncMessage('资产仍在后台同步，稍后可刷新页面查看最新状态。')
+        }
+      }, 30000)
+    } catch (err: any) {
       console.error('Failed to trigger resync:', err)
+      setResyncing(false)
+      setResyncMessage(err.message || '触发同步失败，请稍后重试。')
     }
   }
   
   // 传统方式加载 Pixels（作为后备）
   const loadAllPixels = async () => {
+    clearAssetWarningsByPrefix('pixels:')
     // 先尝试从缓存加载
     const cached = await loadCachedPixels()
     if (cached) return
@@ -376,6 +788,7 @@ export default function BulkAdCreatePage() {
           const res = await authFetch(`${API_BASE}/bulk-ad/auth/pixels?accountId=${accountId}`)
           const data = await res.json()
           if (data.success && data.data) {
+            setAssetWarning(`pixels:${accountId}`, buildPixelAssetWarning(data.meta, account.name || accountId))
             for (const pixel of data.data) {
               if (!pixelMap.has(pixel.id)) {
                 pixelMap.set(pixel.id, {
@@ -390,6 +803,7 @@ export default function BulkAdCreatePage() {
           }
         } catch (err) {
           console.error(`Failed to load pixels for account ${accountId}:`, err)
+          setAssetWarning(`pixels:${accountId}`, `账户 ${account.name || accountId} 的 Pixel 读取失败，请检查 Facebook 授权或重新同步。`)
         }
       }
       
@@ -445,10 +859,12 @@ export default function BulkAdCreatePage() {
           if (data.success && data.data) {
             pagesForAccount = data.data
             newAccountPages[accountId] = pagesForAccount
+            setAssetWarning(`pages:${accountId}`, buildPageAssetWarning(data.meta, account.name || accountId))
           }
         } catch (err) {
           console.error(`Failed to load pages for account ${accountId}:`, err)
           pagesForAccount = []
+          setAssetWarning(`pages:${accountId}`, `账户 ${account.name || accountId} 的主页读取失败，请检查主页授权或重新同步。`)
         }
       }
       
@@ -562,10 +978,12 @@ export default function BulkAdCreatePage() {
       const data = await res.json()
       if (data.success && data.data) {
         setAccountPages(prev => ({ ...prev, [accountId]: data.data }))
+        setAssetWarning(`pages:${accountId}`, buildPageAssetWarning(data.meta, getAccountDisplayName(accountId)))
         return data.data
       }
     } catch (err) {
       console.error(`Failed to load pages for account ${accountId}:`, err)
+      setAssetWarning(`pages:${accountId}`, `账户 ${getAccountDisplayName(accountId)} 的主页读取失败，请检查主页授权或重新同步。`)
     }
     return []
   }
@@ -624,6 +1042,7 @@ export default function BulkAdCreatePage() {
   const handlePublish = async () => {
     setLoading(true)
     setError(null)
+    setPublishBlocker(null)
     try {
       const draft = {
         name: `批量广告_${new Date().toISOString().slice(0, 10)}`,
@@ -642,17 +1061,47 @@ export default function BulkAdCreatePage() {
       const draftId = createData.data._id
       const validateRes = await authFetch(`${API_BASE}/bulk-ad/drafts/${draftId}/validate`, { method: 'POST' })
       const validateData = await validateRes.json()
-      if (!validateData.success || !validateData.data.isValid) {
-        throw new Error(`验证失败: ${validateData.data?.errors?.map((e: any) => e.message).join(', ')}`)
+      if (!validateData.success) {
+        const blocker = buildPublishBlocker(validateData)
+        setPublishBlocker(blocker)
+        setError(blocker.message)
+        return
+      }
+      if (!validateData.data.isValid) {
+        const validationErrors = validateData.data?.errors || []
+        const validationWarnings = validateData.data?.warnings || []
+        const blocker = buildPublishBlocker({
+          error: validationErrors[0]?.message
+            ? `草稿预检未通过：${validationErrors[0].message}`
+            : '草稿预检未通过，请按提示修正配置后重新发布。',
+          errorCode: 'DRAFT_VALIDATION_FAILED',
+          details: {
+            errorCount: validationErrors.length,
+            warningCount: validationWarnings.length,
+            firstError: validationErrors[0],
+            errorFields: validationErrors.map((error: any) => error.field).filter(Boolean),
+            errors: validationErrors.slice(0, 10),
+            warnings: validationWarnings.slice(0, 10),
+          },
+        })
+        setPublishBlocker(blocker)
+        setError(blocker.message)
+        return
       }
       
       const publishRes = await authFetch(`${API_BASE}/bulk-ad/drafts/${draftId}/publish`, { method: 'POST' })
       const publishData = await publishRes.json()
-      if (!publishData.success) throw new Error(publishData.error || '发布失败')
+      if (!publishData.success) {
+        const blocker = buildPublishBlocker(publishData)
+        setPublishBlocker(blocker)
+        setError(blocker.message)
+        return
+      }
       
       navigate(`/bulk-ad/tasks?taskId=${publishData.data._id}`)
     } catch (err: any) {
       setError(err.message)
+      setPublishBlocker(null)
     } finally {
       setLoading(false)
     }
@@ -667,6 +1116,26 @@ export default function BulkAdCreatePage() {
       (publishStrategy.copywritingMode === 'SEQUENTIAL' ? Math.max(1, ad.copywritingPackageIds.length) : 1),
     dailyBudget: campaign.budget * selectedAccounts.length,
   }
+  const tokenHealthItems = authDiagnostics ? getTokenHealthItems(authDiagnostics) : []
+  const assetIssueSummary = getAssetIssueSummary(authDiagnostics)
+  const authDiagnosticAccountLimit = authDiagnostics?.limits?.accounts
+  const authDiagnosticAccountTotal = authDiagnosticAccountLimit?.total ?? authDiagnostics?.accounts.length ?? 0
+  const authDiagnosticAccountReturned = authDiagnosticAccountLimit?.returned ?? authDiagnostics?.accounts.length ?? 0
+  const assetWarningEntries = Object.entries(assetWarningMap)
+  const visibleAssetWarningEntries = assetWarningEntries.slice(0, 4)
+  const facebookAssetsBlocked = Boolean(
+    authStatus?.authorized &&
+    authDiagnostics &&
+    (authDiagnostics.summary.readyAccountCount || 0) <= 0
+  )
+  const nextDisabled = (
+    (currentStep === 1 && (!authStatus?.authorized || !selectedProduct || facebookAssetsBlocked)) ||
+    (currentStep === 2 && !selectedPixel) ||
+    (currentStep === 3 && (selectedAccounts.length === 0 || selectedAccounts.some(acc => !acc.pageId)))
+  )
+  const nextDisabledTitle = currentStep === 1 && facebookAssetsBlocked
+    ? '当前没有同时具备 Page 和 Pixel 的活跃广告账户，请先完成资产分配并重新同步。'
+    : undefined
   
   return (
     <div className="p-6">
@@ -678,9 +1147,42 @@ export default function BulkAdCreatePage() {
         
         {/* 错误提示 */}
         {error && (
-          <div className="mb-6 bg-red-50 border border-red-200 text-red-600 px-4 py-3 rounded-lg flex items-center justify-between">
-            <span>{error}</span>
-            <button onClick={() => setError(null)} className="text-red-400 hover:text-red-600">✕</button>
+          <div className="mb-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-red-700">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-sm font-semibold">{publishBlocker ? '发布被阻断' : '操作失败'}</div>
+                <div className="mt-1 text-sm font-medium">{error}</div>
+              </div>
+              <button onClick={() => { setError(null); setPublishBlocker(null) }} className="text-red-400 hover:text-red-600">✕</button>
+            </div>
+            {publishBlocker && (
+              <div className="mt-3 rounded-lg border border-red-100 bg-white px-3 py-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  {publishBlocker.errorCode && (
+                    <span className="rounded bg-red-100 px-2 py-0.5 font-mono text-xs font-semibold text-red-700">
+                      {publishBlocker.errorCode}
+                    </span>
+                  )}
+                  <span className="text-xs font-semibold text-slate-500">
+                    {publishBlocker.errorCode === 'DRAFT_VALIDATION_FAILED' ? '发布前预检已生效' : '商业额度或账单保护已生效'}
+                  </span>
+                </div>
+                <ul className="mt-2 list-disc space-y-1 pl-4 text-sm leading-6 text-slate-700">
+                  {publishBlocker.nextActions.map((action) => (
+                    <li key={action}>{action}</li>
+                  ))}
+                </ul>
+                {publishBlocker.actionPath && (
+                  <button
+                    type="button"
+                    onClick={() => navigate(publishBlocker.actionPath!)}
+                    className="mt-3 rounded-lg bg-slate-950 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800"
+                  >
+                    去处理
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         )}
         
@@ -732,25 +1234,176 @@ export default function BulkAdCreatePage() {
                         <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
                       </svg>
                     )}
-                    使用 Facebook 登录
+                    {loginLoading ? (loginAttempt ? '等待 Facebook 授权结果...' : '获取 Facebook 授权链接...') : '使用 Facebook 登录'}
                   </button>
+                  {loginAttempt && loginLoading && (
+                    <FacebookLoginAttemptPanel attempt={loginAttempt} onStop={stopFacebookLoginWait} />
+                  )}
                 </div>
               ) : (
                 /* 已授权 - 显示状态 + 后台加载 Pixels */
-                <div className="flex items-center justify-between p-3 bg-green-50 border border-green-200 rounded-lg mb-4">
-                  <div className="flex items-center gap-2">
-                    <div className="w-8 h-8 bg-green-500 rounded-full flex items-center justify-center">
-                      <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                      </svg>
+                <div className="p-3 bg-green-50 border border-green-200 rounded-lg mb-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <div className="w-8 h-8 bg-green-500 rounded-full flex items-center justify-center">
+                        <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                        </svg>
+                      </div>
+                      <div>
+                        <span className="text-sm font-medium text-green-800">已授权: {authStatus.fbUserName}</span>
+                        {pixelsLoading && <span className="text-xs text-green-600 ml-2">（正在加载 Pixel...）</span>}
+                        {allPixels.length > 0 && <span className="text-xs text-green-600 ml-2">（已加载 {allPixels.length} 个 Pixel）</span>}
+                      </div>
                     </div>
-                    <div>
-                      <span className="text-sm font-medium text-green-800">已授权: {authStatus.fbUserName}</span>
-                      {pixelsLoading && <span className="text-xs text-green-600 ml-2">（正在加载 Pixel...）</span>}
-                      {allPixels.length > 0 && <span className="text-xs text-green-600 ml-2">（已加载 {allPixels.length} 个 Pixel）</span>}
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={triggerResync}
+                        disabled={resyncing}
+                        className="rounded-md border border-green-300 bg-white px-3 py-1 text-xs font-semibold text-green-700 hover:bg-green-50 disabled:opacity-60"
+                      >
+                        {resyncing ? '同步中...' : '重新同步'}
+                      </button>
+                      <button
+                        onClick={handleFacebookLogin}
+                        disabled={loginLoading}
+                        className="text-xs text-green-600 hover:underline disabled:cursor-not-allowed disabled:text-green-400 disabled:no-underline"
+                      >
+                        {loginLoading ? '等待授权中...' : '切换账号'}
+                      </button>
                     </div>
                   </div>
-                  <button onClick={handleFacebookLogin} className="text-xs text-green-600 hover:underline">切换账号</button>
+                  {loginAttempt && loginLoading && (
+                    <FacebookLoginAttemptPanel attempt={loginAttempt} onStop={stopFacebookLoginWait} />
+                  )}
+                  {resyncMessage && (
+                    <div className="mt-3 rounded-lg border border-green-200 bg-white/80 px-3 py-2 text-xs font-semibold text-green-800">
+                      {resyncMessage}
+                    </div>
+                  )}
+                  {visibleAssetWarningEntries.length > 0 && (
+                    <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold leading-5 text-amber-800">
+                      <div className="flex items-center gap-2 text-amber-900">
+                        <svg className="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v4m0 4h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                        </svg>
+                        <span>资产读取提示</span>
+                      </div>
+                      <div className="mt-1 space-y-1">
+                        {visibleAssetWarningEntries.map(([key, message]) => (
+                          <div key={key}>{message}</div>
+                        ))}
+                        {assetWarningEntries.length > visibleAssetWarningEntries.length && (
+                          <div className="text-amber-700">
+                            还有 {assetWarningEntries.length - visibleAssetWarningEntries.length} 条提示未展示，可重新同步后刷新。
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                  {diagnosticsLoading && (
+                    <div className="mt-3 text-xs font-medium text-green-700">正在检查账户、Page 和 Pixel...</div>
+                  )}
+                  {authDiagnostics && (
+                    <div className="mt-3 border-t border-green-200 pt-3">
+                      <div className="grid grid-cols-4 gap-2 text-center">
+                        <div className="rounded-lg bg-white/70 px-2 py-2">
+                          <div className="text-lg font-bold text-green-800">{authDiagnostics.summary.readyAccountCount}</div>
+                          <div className="text-[11px] text-green-700">就绪账户</div>
+                        </div>
+                        <div className="rounded-lg bg-white/70 px-2 py-2">
+                          <div className="text-lg font-bold text-green-800">{authDiagnostics.summary.activeAccountCount}</div>
+                          <div className="text-[11px] text-green-700">活跃账户</div>
+                        </div>
+                        <div className="rounded-lg bg-white/70 px-2 py-2">
+                          <div className="text-lg font-bold text-green-800">{authDiagnostics.summary.pageLinkedAccountCount}</div>
+                          <div className="text-[11px] text-green-700">Page 可用</div>
+                        </div>
+                        <div className="rounded-lg bg-white/70 px-2 py-2">
+                          <div className="text-lg font-bold text-green-800">{authDiagnostics.summary.pixelLinkedAccountCount}</div>
+                          <div className="text-[11px] text-green-700">Pixel 可用</div>
+                        </div>
+                      </div>
+                      {tokenHealthItems.length > 0 && (
+                        <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-amber-200 bg-white/80 px-3 py-2 text-[11px] font-semibold">
+                          <span className="text-slate-600">授权健康</span>
+                          {tokenHealthItems.map(item => (
+                            <span
+                              key={item.label}
+                              className={`rounded px-2 py-0.5 ${
+                                item.tone === 'red'
+                                  ? 'bg-red-100 text-red-700'
+                                  : item.tone === 'amber'
+                                    ? 'bg-amber-100 text-amber-700'
+                                    : 'bg-slate-100 text-slate-600'
+                              }`}
+                            >
+                              {item.label} {item.value}
+                            </span>
+                          ))}
+                          {authDiagnostics.summary.earliestTokenExpiresAt && (
+                            <span className="text-slate-500">
+                              最近过期 {formatCompactDateTime(authDiagnostics.summary.earliestTokenExpiresAt)}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      {authDiagnostics.risks.length > 0 && (
+                        <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
+                          {authDiagnostics.risks[0].message}
+                        </div>
+                      )}
+                      {assetIssueSummary.length > 0 && (
+                        <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-amber-200 bg-white/80 px-3 py-2 text-[11px] font-semibold">
+                          <span className="text-slate-600">资产缺口</span>
+                          {assetIssueSummary.map(item => (
+                            <span key={item.code} className="rounded bg-amber-100 px-2 py-0.5 text-amber-700">
+                              {item.label} {item.count}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      {authDiagnostics.accounts.length > 0 && (
+                        <div className="mt-3 space-y-2">
+                          <div className="flex items-center justify-between gap-2 text-xs font-semibold text-green-800">
+                            <span>账户诊断</span>
+                            <span className="font-normal text-green-700">
+                              展示 {authDiagnosticAccountReturned}/{authDiagnosticAccountTotal}
+                            </span>
+                          </div>
+                          {authDiagnostics.accounts.slice(0, 3).map(account => (
+                            <div key={account.accountId} className="rounded-lg bg-white/70 px-3 py-2">
+                              <div className="flex items-center justify-between gap-3">
+                                <div className="min-w-0">
+                                  <div className="truncate text-xs font-semibold text-slate-800">{account.name || account.accountId}</div>
+                                  <div className="text-[11px] text-slate-500">{account.accountId}</div>
+                                </div>
+                                <span className={`shrink-0 rounded px-2 py-0.5 text-[11px] font-medium ${account.ready ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
+                                  {account.ready ? '可投放' : '未就绪'}
+                                </span>
+                              </div>
+                              {account.issues.length > 0 && (
+                                <div className="mt-1 text-[11px] leading-5 text-amber-700">
+                                  {account.issues.join(' / ')}
+                                </div>
+                              )}
+                              {account.issueDetails?.[0]?.action && (
+                                <div className="mt-1 text-[11px] leading-5 text-slate-500">
+                                  建议：{account.issueDetails[0].action}
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                          {authDiagnosticAccountTotal > 3 && (
+                            <div className="text-[11px] text-green-700">
+                              还有 {Math.max(0, authDiagnosticAccountTotal - 3)} 个账户未展示
+                              {authDiagnosticAccountLimit?.truncated ? `，接口仅返回前 ${authDiagnosticAccountReturned} 个重点账户` : ''}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
               
@@ -893,8 +1546,11 @@ export default function BulkAdCreatePage() {
                   <h3 className="text-xl font-semibold text-slate-800 mb-2">请先登录 Facebook</h3>
                   <p className="text-slate-500 mb-6">登录后才能获取您的 Pixel 列表</p>
                   <button onClick={handleFacebookLogin} disabled={loginLoading} className="px-6 py-3 bg-[#1877F2] text-white rounded-xl hover:bg-[#166FE5]">
-                    {loginLoading ? '登录中...' : '使用 Facebook 登录'}
+                    {loginLoading ? (loginAttempt ? '等待 Facebook 授权结果...' : '获取 Facebook 授权链接...') : '使用 Facebook 登录'}
                     </button>
+                  {loginAttempt && loginLoading && (
+                    <FacebookLoginAttemptPanel attempt={loginAttempt} onStop={stopFacebookLoginWait} />
+                  )}
                 </div>
               ) : (
                 <>
@@ -915,9 +1571,16 @@ export default function BulkAdCreatePage() {
                       <button onClick={loadAllPixels} className="px-6 py-3 bg-purple-600 text-white rounded-xl hover:bg-purple-700">
                         立即加载
                       </button>
-                      <button onClick={triggerResync} className="ml-3 px-4 py-3 text-purple-600 hover:underline text-sm">
-                        重新同步
+                      <button
+                        onClick={triggerResync}
+                        disabled={resyncing}
+                        className="ml-3 px-4 py-3 text-sm text-purple-600 hover:underline disabled:text-slate-400"
+                      >
+                        {resyncing ? '同步中...' : '重新同步'}
                       </button>
+                      {resyncMessage && (
+                        <div className="mt-3 text-xs font-semibold text-slate-500">{resyncMessage}</div>
+                      )}
                     </div>
                   )}
                   
@@ -1356,6 +2019,7 @@ export default function BulkAdCreatePage() {
                     >
                       <option value={1}>1天</option>
                       <option value={7}>7天</option>
+                      <option value={28}>28天</option>
                     </select>
                   </div>
                   <div>
@@ -1505,6 +2169,22 @@ export default function BulkAdCreatePage() {
         </div>
         
         {/* Bottom buttons */}
+        {currentStep === 1 && facebookAssetsBlocked && (
+          <div className="mt-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
+            <div className="font-bold">暂不能进入下一步</div>
+            <div className="mt-1 leading-6">
+              当前没有同时具备 Page 和 Pixel 的活跃广告账户。请先在 Meta 里完成 Page/Pixel 分配，再回到 AutoArk 重新同步。
+            </div>
+            <button
+              type="button"
+              onClick={triggerResync}
+              disabled={resyncing}
+              className="mt-3 rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs font-bold text-amber-800 hover:bg-amber-100 disabled:opacity-60"
+            >
+              {resyncing ? '同步中...' : '重新同步'}
+            </button>
+          </div>
+        )}
         <div className="flex justify-between mt-6">
           <button 
             onClick={() => setCurrentStep(prev => Math.max(1, prev - 1))} 
@@ -1516,11 +2196,8 @@ export default function BulkAdCreatePage() {
           {currentStep < STEPS.length ? (
             <button 
               onClick={() => setCurrentStep(prev => Math.min(STEPS.length, prev + 1))} 
-              disabled={
-                (currentStep === 1 && (!authStatus?.authorized || !selectedProduct)) || // 步骤1: 必须授权并选择产品
-                (currentStep === 2 && !selectedPixel) || // 步骤2: 必须选择 Pixel
-                (currentStep === 3 && (selectedAccounts.length === 0 || selectedAccounts.some(acc => !acc.pageId))) // 步骤3: 必须选择账户且所有账户都有主页
-              }
+              disabled={nextDisabled}
+              title={nextDisabledTitle}
               className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               下一步

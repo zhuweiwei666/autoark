@@ -11,8 +11,183 @@ import { getEffectiveAdAccounts } from '../services/facebook.sync.service'
 import { getOrgFilter, getUserAccountIds } from '../middlewares/auth'
 import { UserRole } from '../models/User'
 import { FB_VERSIONED_URL } from '../config/facebook.config'
+import { buildInsightsDateRequest, InsightsDateRangeError } from '../utils/insightsDateRange'
 import Ad from '../models/Ad'
 import Campaign from '../models/Campaign'
+import Account from '../models/Account'
+import FbToken from '../models/FbToken'
+import { normalizeForApi, normalizeForStorage } from '../utils/accountId'
+import {
+  parseLimitedNumber,
+  parsePagination,
+  pickAllowedString,
+  pickSafeQueryString,
+  pickSafeRegexLiteral,
+} from '../utils/pagination'
+import logger from '../utils/logger'
+
+const FACEBOOK_LIST_MAX_LIMIT = 100
+const FACEBOOK_DIAGNOSE_DEFAULT_LIMIT = 20
+const FACEBOOK_DIAGNOSE_MAX_LIMIT = 100
+const FACEBOOK_CAMPAIGN_ID_MAX_LENGTH = 160
+const FACEBOOK_COUNTRY_MAX_LENGTH = 40
+const FACEBOOK_CAMPAIGN_SORT_FIELDS = [
+  'accountId',
+  'accountName',
+  'campaignId',
+  'campaignName',
+  'clicks',
+  'cpc',
+  'cpi',
+  'cpm',
+  'ctr',
+  'createdAt',
+  'impressions',
+  'installs',
+  'name',
+  'objective',
+  'purchase_roas',
+  'purchase_value',
+  'revenue',
+  'roas',
+  'spend',
+  'status',
+  'updatedAt',
+]
+const FACEBOOK_ACCOUNT_SORT_FIELDS = [
+  'accountId',
+  'clicks',
+  'ctr',
+  'impressions',
+  'installs',
+  'name',
+  'periodSpend',
+  'purchase_value',
+  'roas',
+  'spend',
+  'status',
+  'updatedAt',
+]
+const FACEBOOK_COUNTRY_SORT_FIELDS = [
+  'campaigns',
+  'clicks',
+  'country',
+  'countryName',
+  'ctr',
+  'impressions',
+  'installs',
+  'purchase_roas',
+  'purchase_value',
+  'roas',
+  'spend',
+]
+
+const getListPagination = (
+  req: Request,
+  allowedSortFields: readonly string[],
+  defaultSortBy: string,
+) => {
+  const { page, pageSize } = parsePagination(
+    { page: req.query.page, limit: req.query.limit },
+    { defaultPageSize: 20, maxPageSize: FACEBOOK_LIST_MAX_LIMIT },
+  )
+  return {
+    page,
+    limit: pageSize,
+    sortBy: pickAllowedString(req.query.sortBy, allowedSortFields, defaultSortBy),
+    sortOrder: (req.query.sortOrder as 'asc' | 'desc') === 'asc' ? 'asc' as const : 'desc' as const,
+  }
+}
+
+const requireSuperAdmin = (req: Request, res: Response): boolean => {
+  if (req.user?.role === UserRole.SUPER_ADMIN) return true
+  res.status(403).json({ success: false, error: 'Forbidden' })
+  return false
+}
+
+const ensureAccountAccess = async (req: Request, accountId: string): Promise<boolean> => {
+  const accountIds = await getUserAccountIds(req)
+  if (accountIds === null) return true
+  const requestedAccountId = normalizeForStorage(accountId)
+  return accountIds.some(id => normalizeForStorage(id) === requestedAccountId)
+}
+
+const accountIdVariants = (accountId: string): string[] => {
+  const normalized = normalizeForStorage(accountId)
+  const apiId = normalizeForApi(accountId)
+  return Array.from(new Set([normalized, apiId].filter(Boolean)))
+}
+
+const accountAuthorizationError = (message: string) => Object.assign(new Error(message), { statusCode: 403 })
+
+const sendFacebookDateRangeError = (res: Response, error: any): boolean => {
+  if (error instanceof InsightsDateRangeError) {
+    res.status(error.statusCode).json({
+      success: false,
+      message: error.message,
+    })
+    return true
+  }
+  return false
+}
+
+const parseFacebookDateFilters = (req: Request) => {
+  if (req.query.startDate === undefined && req.query.endDate === undefined) return {}
+
+  const dateRequest = buildInsightsDateRequest({
+    startDate: req.query.startDate,
+    endDate: req.query.endDate,
+  })
+
+  return {
+    startDate: dateRequest.startDate,
+    endDate: dateRequest.endDate,
+  }
+}
+
+const parseRequiredFacebookDate = (value: any, fieldName: string): string | undefined => {
+  if (value === undefined || value === null || value === '') return undefined
+  try {
+    const dateRequest = buildInsightsDateRequest({ startDate: value, endDate: value })
+    return dateRequest.startDate
+  } catch (error) {
+    if (error instanceof InsightsDateRangeError) {
+      throw new InsightsDateRangeError(`${fieldName} must be a valid YYYY-MM-DD date`)
+    }
+    throw error
+  }
+}
+
+const resolveAccountAccessToken = async (req: Request, accountId: string): Promise<string> => {
+  const query: any = {
+    channel: 'facebook',
+    accountId: { $in: accountIdVariants(accountId) },
+  }
+
+  if (req.user?.role !== UserRole.SUPER_ADMIN) {
+    const tokenQuery: any = { status: 'active' }
+    if (req.user?.role === UserRole.ORG_ADMIN && req.user.organizationId) {
+      tokenQuery.organizationId = req.user.organizationId
+    } else {
+      tokenQuery.userId = req.user?.userId
+    }
+
+    const tokens = await FbToken.find(tokenQuery).select('token').lean()
+    const tokenValues = tokens.map((token: any) => token.token).filter(Boolean)
+    if (tokenValues.length === 0) {
+      throw accountAuthorizationError('未找到当前用户可用的 Facebook 授权')
+    }
+
+    query.token = { $in: tokenValues }
+  }
+
+  const account = await Account.findOne(query).select('token').lean()
+  if (!account?.token) {
+    throw accountAuthorizationError(`没有找到可访问账户 ${normalizeForStorage(accountId)} 的 Facebook 授权`)
+  }
+
+  return account.token
+}
 
 export const syncCampaigns = async (
   req: Request,
@@ -20,6 +195,7 @@ export const syncCampaigns = async (
   next: NextFunction,
 ) => {
   try {
+    if (!requireSuperAdmin(req, res)) return
     // 使用新的队列系统（V2）
     const useV2 = req.query.v2 === 'true' || process.env.USE_QUEUE_SYNC === 'true'
     
@@ -51,6 +227,7 @@ export const getQueueStatus = async (
   next: NextFunction,
 ) => {
   try {
+    if (!requireSuperAdmin(req, res)) return
     const status = await facebookCampaignsV2Service.getQueueStatus()
     res.json({
       success: true,
@@ -68,6 +245,7 @@ export const diagnoseTokens = async (
   next: NextFunction,
 ) => {
   try {
+    if (!requireSuperAdmin(req, res)) return
     const { tokenId } = req.query
     
     if (tokenId) {
@@ -79,10 +257,12 @@ export const diagnoseTokens = async (
       })
     } else {
       // 诊断所有 token
-      const results = await facebookPermissionsService.diagnoseAllTokens()
+      const limit = parseLimitedNumber(req.query.limit, FACEBOOK_DIAGNOSE_DEFAULT_LIMIT, FACEBOOK_DIAGNOSE_MAX_LIMIT)
+      const diagnosis = await facebookPermissionsService.diagnoseAllTokens({ limit })
       res.json({
         success: true,
-        data: results,
+        data: diagnosis.results,
+        meta: diagnosis.meta,
       })
     }
   } catch (error) {
@@ -97,6 +277,7 @@ export const getTokenPoolStatus = async (
   next: NextFunction,
 ) => {
   try {
+    if (!requireSuperAdmin(req, res)) return
     const status = tokenPool.getTokenStatus()
     res.json({
       success: true,
@@ -114,7 +295,9 @@ export const getPurchaseValueInfo = async (
   next: NextFunction,
 ) => {
   try {
-    const { campaignId, date, country } = req.query
+    const campaignId = pickSafeQueryString(req.query.campaignId, FACEBOOK_CAMPAIGN_ID_MAX_LENGTH)
+    const date = parseRequiredFacebookDate(req.query.date, 'date')
+    const country = pickSafeQueryString(req.query.country, FACEBOOK_COUNTRY_MAX_LENGTH)
     
     if (!campaignId || !date) {
       return res.status(400).json({
@@ -123,10 +306,18 @@ export const getPurchaseValueInfo = async (
       })
     }
 
+    const campaign = await Campaign.findOne({ channel: 'facebook', campaignId }).select('accountId').lean()
+    if (!campaign?.accountId) {
+      return res.status(404).json({ success: false, error: 'Campaign not found' })
+    }
+    if (!(await ensureAccountAccess(req, campaign.accountId))) {
+      return res.status(403).json({ success: false, error: 'Forbidden' })
+    }
+
     const info = await facebookPurchaseCorrectionService.getPurchaseValueInfo(
-      campaignId as string,
-      date as string,
-      country as string | undefined
+      campaignId,
+      date,
+      country
     )
 
     res.json({
@@ -134,6 +325,7 @@ export const getPurchaseValueInfo = async (
       data: info,
     })
   } catch (error) {
+    if (sendFacebookDateRangeError(res, error)) return
     next(error)
   }
 }
@@ -147,17 +339,14 @@ export const getCampaignsList = async (
     // 确保设置正确的 Content-Type
     res.setHeader('Content-Type', 'application/json; charset=utf-8')
     
-    const page = parseInt(req.query.page as string) || 1
-    const limit = parseInt(req.query.limit as string) || 20
-    const sortBy = (req.query.sortBy as string) || 'spend' // 默认按消耗排序
-    const sortOrder = (req.query.sortOrder as 'asc' | 'desc') || 'desc'
+    const pagination = getListPagination(req, FACEBOOK_CAMPAIGN_SORT_FIELDS, 'spend')
+    const dateFilters = parseFacebookDateFilters(req)
     const filters: any = {
-        name: req.query.name,
-        accountId: req.query.accountId,
-        status: req.query.status,
-        objective: req.query.objective,
-        startDate: req.query.startDate as string | undefined,
-        endDate: req.query.endDate as string | undefined,
+        name: pickSafeRegexLiteral(req.query.name),
+        accountId: pickSafeQueryString(req.query.accountId),
+        status: pickSafeQueryString(req.query.status),
+        objective: pickSafeQueryString(req.query.objective),
+        ...dateFilters,
     }
 
     // 用户隔离：根据用户绑定的 Token 过滤账户
@@ -166,12 +355,13 @@ export const getCampaignsList = async (
       filters.accountIds = userAccountIds
     }
 
-    const result = await facebookCampaignsService.getCampaigns(filters, { page, limit, sortBy, sortOrder })
+    const result = await facebookCampaignsService.getCampaigns(filters, pagination)
     res.json({
       success: true,
       ...result
     })
   } catch (error) {
+    if (sendFacebookDateRangeError(res, error)) return
     next(error)
   }
 }
@@ -182,6 +372,7 @@ export const syncAccounts = async (
   next: NextFunction,
 ) => {
   try {
+    if (!requireSuperAdmin(req, res)) return
     const result = await facebookAccountsService.syncAccountsFromTokens()
     res.json({
       success: true,
@@ -199,17 +390,15 @@ export const getAccountsList = async (
   next: NextFunction,
 ) => {
   try {
-    const page = parseInt(req.query.page as string) || 1
-    const limit = parseInt(req.query.limit as string) || 20
-    const sortBy = (req.query.sortBy as string) || 'periodSpend'
-    const sortOrder = (req.query.sortOrder as 'asc' | 'desc') || 'desc'
+    if (!requireSuperAdmin(req, res)) return
+    const pagination = getListPagination(req, FACEBOOK_ACCOUNT_SORT_FIELDS, 'periodSpend')
+    const dateFilters = parseFacebookDateFilters(req)
     const filters: any = {
-        optimizer: req.query.optimizer,
-        status: req.query.status,
-        accountId: req.query.accountId,
-        name: req.query.name,
-        startDate: req.query.startDate as string | undefined,
-        endDate: req.query.endDate as string | undefined,
+        optimizer: pickSafeRegexLiteral(req.query.optimizer),
+        status: pickSafeQueryString(req.query.status),
+        accountId: pickSafeRegexLiteral(req.query.accountId),
+        name: pickSafeRegexLiteral(req.query.name),
+        ...dateFilters,
     }
 
     // 用户隔离：根据用户绑定的 Token 过滤账户
@@ -221,12 +410,13 @@ export const getAccountsList = async (
     
     // 组织隔离（兼容旧逻辑）
     const organizationId = req.user?.role === UserRole.SUPER_ADMIN ? undefined : req.user?.organizationId
-    const result = await facebookAccountsService.getAccounts(filters, { page, limit, sortBy, sortOrder }, organizationId)
+    const result = await facebookAccountsService.getAccounts(filters, pagination, organizationId)
     res.json({
       success: true,
       ...result
     })
   } catch (error) {
+    if (sendFacebookDateRangeError(res, error)) return
     next(error)
   }
 }
@@ -240,25 +430,42 @@ export const getCountriesList = async (
     // 确保设置正确的 Content-Type
     res.setHeader('Content-Type', 'application/json; charset=utf-8')
     
-    const page = parseInt(req.query.page as string) || 1
-    const limit = parseInt(req.query.limit as string) || 20
-    const sortBy = (req.query.sortBy as string) || 'spend'
-    const sortOrder = (req.query.sortOrder as 'asc' | 'desc') || 'desc'
+    const pagination = getListPagination(req, FACEBOOK_COUNTRY_SORT_FIELDS, 'spend')
+    const dateFilters = parseFacebookDateFilters(req)
     const filters = {
-        name: req.query.name,
-        accountId: req.query.accountId,
-        status: req.query.status,
-        objective: req.query.objective,
-        startDate: req.query.startDate as string | undefined,
-        endDate: req.query.endDate as string | undefined,
+        name: pickSafeRegexLiteral(req.query.name),
+        accountId: pickSafeQueryString(req.query.accountId),
+        status: pickSafeQueryString(req.query.status),
+        objective: pickSafeQueryString(req.query.objective),
+        ...dateFilters,
     }
 
-    const result = await facebookCountriesService.getCountries(filters, { page, limit, sortBy, sortOrder })
+    const accountIds = await getUserAccountIds(req)
+    const tokenFilter: any = {}
+    if (req.user?.role === UserRole.ORG_ADMIN && req.user.organizationId) {
+      tokenFilter.organizationId = req.user.organizationId
+    } else if (req.user?.role !== UserRole.SUPER_ADMIN) {
+      tokenFilter.userId = req.user?.userId
+    }
+
+    const result = await facebookCountriesService.getCountries(
+      filters,
+      pagination,
+      accountIds === null
+        ? {}
+        : {
+            accountIds,
+            tokenFilter,
+            allowCacheFallback: false,
+            allowCacheWrite: false,
+          },
+    )
     res.json({
       success: true,
       ...result
     })
   } catch (error) {
+    if (sendFacebookDateRangeError(res, error)) return
     next(error)
   }
 }
@@ -270,7 +477,11 @@ export const getCampaigns = async (
 ) => {
   try {
     const { id } = req.params
-    const data = await facebookService.getCampaigns(id)
+    if (!(await ensureAccountAccess(req, id))) {
+      return res.status(403).json({ success: false, error: 'Forbidden' })
+    }
+    const token = await resolveAccountAccessToken(req, id)
+    const data = await facebookService.getCampaigns(id, token)
     res.json(data)
   } catch (error) {
     next(error)
@@ -284,7 +495,11 @@ export const getAdSets = async (
 ) => {
   try {
     const { id } = req.params
-    const data = await facebookService.getAdSets(id)
+    if (!(await ensureAccountAccess(req, id))) {
+      return res.status(403).json({ success: false, error: 'Forbidden' })
+    }
+    const token = await resolveAccountAccessToken(req, id)
+    const data = await facebookService.getAdSets(id, token)
     res.json(data)
   } catch (error) {
     next(error)
@@ -298,7 +513,11 @@ export const getAds = async (
 ) => {
   try {
     const { id } = req.params
-    const data = await facebookService.getAds(id)
+    if (!(await ensureAccountAccess(req, id))) {
+      return res.status(403).json({ success: false, error: 'Forbidden' })
+    }
+    const token = await resolveAccountAccessToken(req, id)
+    const data = await facebookService.getAds(id, token)
     res.json(data)
   } catch (error) {
     next(error)
@@ -312,7 +531,11 @@ export const getInsightsDaily = async (
 ) => {
   try {
     const { id } = req.params
-    const data = await facebookService.getInsightsDaily(id)
+    if (!(await ensureAccountAccess(req, id))) {
+      return res.status(403).json({ success: false, error: 'Forbidden' })
+    }
+    const token = await resolveAccountAccessToken(req, id)
+    const data = await facebookService.getInsightsDaily(id, undefined, token)
     res.json(data)
   } catch (error) {
     next(error)
@@ -326,9 +549,13 @@ export const getAccounts = async (
 ) => {
   try {
     const accounts = await getEffectiveAdAccounts()
+    const accountIds = await getUserAccountIds(req)
+    const filteredAccounts = accountIds === null
+      ? accounts
+      : accounts.filter((account: any) => accountIds.includes(account.accountId) || accountIds.includes(String(account.accountId || '').replace(/^act_/, '')))
     res.json({
       success: true,
-      accounts,
+      accounts: filteredAccounts,
     })
   } catch (error) {
     next(error)
@@ -336,9 +563,9 @@ export const getAccounts = async (
 }
 
 // 刷新指定 Campaign 下所有广告的状态
-async function refreshCampaignAdsStatus(campaignId: string, token: string) {
+async function refreshCampaignAdsStatus(campaignId: string, accountId: string, token: string) {
   // 获取该 Campaign 下的所有广告
-  const ads = await Ad.find({ campaignId }).select('adId').lean()
+  const ads = await Ad.find({ channel: 'facebook', campaignId, accountId }).select('adId').lean()
   if (ads.length === 0) return
   
   const adIds = ads.map((ad: any) => ad.adId)
@@ -359,17 +586,17 @@ async function refreshCampaignAdsStatus(campaignId: string, token: string) {
       for (const adId of batch) {
         if (result[adId] && result[adId].effective_status) {
           await Ad.findOneAndUpdate(
-            { adId },
+            { channel: 'facebook', adId, accountId },
             { effectiveStatus: result[adId].effective_status, updatedAt: new Date() }
           )
         }
       }
     } catch (err: any) {
-      console.error(`[RefreshAdsStatus] Batch failed:`, err.message)
+      logger.error('[RefreshAdsStatus] Batch failed:', err.message)
     }
   }
   
-  console.log(`[RefreshAdsStatus] Refreshed ${adIds.length} ads for campaign ${campaignId}`)
+  logger.info(`[RefreshAdsStatus] Refreshed ${adIds.length} ads for campaign ${campaignId}`)
 }
 
 // 更新 Campaign 状态 (ACTIVE/PAUSED)
@@ -379,6 +606,7 @@ export const updateCampaignStatus = async (
   next: NextFunction,
 ) => {
   try {
+    if (!requireSuperAdmin(req, res)) return
     const { campaignId } = req.params
     const { status } = req.body
     
@@ -390,11 +618,12 @@ export const updateCampaignStatus = async (
       return res.status(400).json({ success: false, error: 'Status must be ACTIVE or PAUSED' })
     }
     
-    // 获取 token
-    const token = tokenPool.getNextToken()
-    if (!token) {
-      return res.status(500).json({ success: false, error: 'No valid Facebook token available' })
+    const campaign = await Campaign.findOne({ channel: 'facebook', campaignId }).select('accountId').lean()
+    if (!campaign?.accountId) {
+      return res.status(404).json({ success: false, error: 'Campaign not found' })
     }
+
+    const token = await resolveAccountAccessToken(req, campaign.accountId)
     
     // 调用 Facebook API 更新状态
     const response = await fetch(`${FB_VERSIONED_URL}/${campaignId}`, {
@@ -417,13 +646,13 @@ export const updateCampaignStatus = async (
     
     // 更新本地数据库
     await Campaign.findOneAndUpdate(
-      { campaignId },
+      { channel: 'facebook', campaignId, accountId: campaign.accountId },
       { status, updatedAt: new Date() }
     )
     
     // 异步刷新该 Campaign 下所有广告的状态
-    refreshCampaignAdsStatus(campaignId, token).catch(err => {
-      console.error(`[Campaign Status] Failed to refresh ads status:`, err.message)
+    refreshCampaignAdsStatus(campaignId, campaign.accountId, token).catch(err => {
+      logger.error('[Campaign Status] Failed to refresh ads status:', err.message)
     })
     
     res.json({ 

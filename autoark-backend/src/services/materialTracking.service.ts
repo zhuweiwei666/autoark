@@ -104,19 +104,24 @@ export async function calculateFingerprint(
  */
 export async function checkDuplicate(
   fingerprint: { pHash?: string; md5?: string; videoHash?: string },
-  type: 'image' | 'video'
+  type: 'image' | 'video',
+  scopeFilter: any = {},
 ): Promise<{ isDuplicate: boolean; existingMaterial?: any }> {
-  const query: any = { type }
+  const fingerprintQuery: any = { type }
   
   if (type === 'image' && fingerprint.pHash) {
     // 图片：优先用 pHash 匹配
-    query['fingerprint.pHash'] = fingerprint.pHash
+    fingerprintQuery['fingerprint.pHash'] = fingerprint.pHash
   } else if (fingerprint.md5) {
     // 精确匹配 MD5
-    query['fingerprint.md5'] = fingerprint.md5
+    fingerprintQuery['fingerprint.md5'] = fingerprint.md5
   } else if (type === 'video' && fingerprint.videoHash) {
-    query['fingerprint.videoHash'] = fingerprint.videoHash
+    fingerprintQuery['fingerprint.videoHash'] = fingerprint.videoHash
   }
+
+  const query = scopeFilter && Object.keys(scopeFilter).length > 0
+    ? { $and: [fingerprintQuery, scopeFilter] }
+    : fingerprintQuery
   
   const existingMaterial = await Material.findOne(query).lean()
   
@@ -140,7 +145,7 @@ export async function recordFacebookMapping(
   try {
     const material = await Material.findById(materialId)
     if (!material) {
-      logger.error(`[MaterialTracking] Material not found: ${materialId}`)
+      logger.error('[MaterialTracking] Material not found', { materialId })
       return false
     }
     
@@ -178,7 +183,12 @@ export async function recordFacebookMapping(
     
     await material.save()
     
-    logger.info(`[MaterialTracking] Recorded FB mapping: Material ${materialId} -> Account ${accountId} (hash: ${mapping.imageHash || mapping.videoId})`)
+    logger.info('[MaterialTracking] Recorded FB mapping', {
+      materialId,
+      accountId,
+      hasImageHash: Boolean(mapping.imageHash),
+      hasVideoId: Boolean(mapping.videoId),
+    })
     
     return true
   } catch (error: any) {
@@ -222,6 +232,7 @@ export async function findMaterialByFacebookId(
 export async function recordAdMaterialMapping(data: {
   adId: string
   materialId: string
+  organizationId?: string
   accountId?: string
   campaignId?: string
   adsetId?: string
@@ -242,7 +253,13 @@ export async function recordAdMaterialMapping(data: {
     
     await (AdMaterialMapping as any).recordMapping(data)
     
-    logger.info(`[MaterialTracking] Recorded ad-material mapping: Ad ${data.adId} -> Material ${data.materialId}`)
+    logger.info('[MaterialTracking] Recorded ad-material mapping', {
+      materialId: data.materialId,
+      hasAdId: Boolean(data.adId),
+      hasAccountId: Boolean(data.accountId),
+      hasCampaignId: Boolean(data.campaignId),
+      hasTaskId: Boolean(data.taskId),
+    })
     
     // 同时更新素材的使用统计
     await Material.findByIdAndUpdate(data.materialId, {
@@ -268,6 +285,7 @@ export async function recordAdMaterialMappings(
   mappings: Array<{
     adId: string
     materialId: string
+    organizationId?: string
     accountId?: string
     campaignId?: string
     adsetId?: string
@@ -522,6 +540,7 @@ export async function getReusableMaterials(options: {
   minQualityScore?: number
   limit?: number
   sortBy?: 'roas' | 'spend' | 'qualityScore'
+  scopeFilter?: any
 }): Promise<any[]> {
   const {
     type,
@@ -529,17 +548,22 @@ export async function getReusableMaterials(options: {
     minSpend = 50,
     minQualityScore = 60,
     limit = 20,
-    sortBy = 'qualityScore'
+    sortBy = 'qualityScore',
+    scopeFilter = {},
   } = options
   
-  const query: any = {
+  const baseQuery: any = {
     status: 'uploaded',
     'metrics.totalSpend': { $gte: minSpend },
     'metrics.avgRoas': { $gte: minRoas },
     'metrics.qualityScore': { $gte: minQualityScore },
   }
   
-  if (type) query.type = type
+  if (type) baseQuery.type = type
+
+  const query = scopeFilter && Object.keys(scopeFilter).length > 0
+    ? { $and: [baseQuery, scopeFilter] }
+    : baseQuery
   
   const sortField = sortBy === 'roas' 
     ? 'metrics.avgRoas'
@@ -586,4 +610,3 @@ export default {
   getReusableMaterials,
   getMaterialFullData,
 }
-

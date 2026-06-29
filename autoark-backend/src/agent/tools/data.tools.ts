@@ -14,7 +14,77 @@ import AdSet from '../../models/AdSet'
 import Ad from '../../models/Ad'
 import Account from '../../models/Account'
 import { AggDaily, AggAccount, AggCampaign, AggCountry } from '../../models/Aggregation'
+import { getAccountIdsForQuery, normalizeForStorage } from '../../utils/accountId'
 import dayjs from 'dayjs'
+
+const resolveScopedAccountIds = async (context: AgentContext): Promise<string[] | null> => {
+  const explicitAccountIds = context.scope?.adAccountIds || []
+  if (explicitAccountIds.length > 0) {
+    return getAccountIdsForQuery(explicitAccountIds)
+  }
+
+  if (context.organizationId) {
+    const accounts = await Account.find({ organizationId: context.organizationId })
+      .select('accountId')
+      .lean()
+    return getAccountIdsForQuery(accounts.map((account: any) => account.accountId).filter(Boolean))
+  }
+
+  return null
+}
+
+const isAccountAllowed = (scopedAccountIds: string[] | null, accountId: string): boolean => {
+  if (scopedAccountIds === null) return true
+  const requested = normalizeForStorage(accountId)
+  return scopedAccountIds.some(id => normalizeForStorage(id) === requested)
+}
+
+const emptyScopedResult = (metadata: Record<string, any> = {}): ToolResult => ({
+  success: true,
+  data: [],
+  metadata: { ...metadata, scopedOut: true },
+})
+
+const aggregateScopedDashboard = async (startDate: string, endDate: string, accountIds: string[]) => {
+  const rows = await AggAccount.aggregate([
+    { $match: { date: { $gte: startDate, $lte: endDate }, accountId: { $in: accountIds } } },
+    {
+      $group: {
+        _id: '$date',
+        spend: { $sum: '$spend' },
+        revenue: { $sum: '$revenue' },
+        impressions: { $sum: '$impressions' },
+        clicks: { $sum: '$clicks' },
+        installs: { $sum: '$installs' },
+      },
+    },
+    {
+      $project: {
+        _id: 0,
+        date: '$_id',
+        spend: 1,
+        revenue: 1,
+        impressions: 1,
+        clicks: 1,
+        installs: 1,
+      },
+    },
+    { $sort: { date: -1 } },
+  ])
+
+  const totals = rows.reduce(
+    (acc: any, row: any) => ({
+      spend: acc.spend + (row.spend || 0),
+      revenue: acc.revenue + (row.revenue || 0),
+      impressions: acc.impressions + (row.impressions || 0),
+      clicks: acc.clicks + (row.clicks || 0),
+      installs: acc.installs + (row.installs || 0),
+    }),
+    { spend: 0, revenue: 0, impressions: 0, clicks: 0, installs: 0 }
+  )
+
+  return { rows, totals }
+}
 
 const queryAccountsTool: ToolDefinition = {
   name: 'query_accounts',
@@ -32,8 +102,9 @@ const queryAccountsTool: ToolDefinition = {
   },
   handler: async (args: any, context: AgentContext): Promise<ToolResult> => {
     const query: any = {}
-    if (context.scope.adAccountIds.length > 0) {
-      query.accountId = { $in: context.scope.adAccountIds }
+    const scopedAccountIds = await resolveScopedAccountIds(context)
+    if (scopedAccountIds !== null) {
+      query.accountId = { $in: scopedAccountIds }
     }
     if (context.organizationId) {
       query.organizationId = context.organizationId
@@ -75,11 +146,22 @@ const queryDailyMetricsTool: ToolDefinition = {
     },
     required: ['level'],
   },
-  handler: async (args: any, _context: AgentContext): Promise<ToolResult> => {
+  handler: async (args: any, context: AgentContext): Promise<ToolResult> => {
     const query: any = { level: args.level }
+    const scopedAccountIds = await resolveScopedAccountIds(context)
 
     if (args.entityId) query.entityId = args.entityId
-    if (args.accountId) query.accountId = args.accountId
+    if (args.level === 'account' && args.entityId && !isAccountAllowed(scopedAccountIds, args.entityId)) {
+      return emptyScopedResult({ rows: 0 })
+    }
+    if (args.accountId) {
+      if (!isAccountAllowed(scopedAccountIds, args.accountId)) {
+        return emptyScopedResult({ rows: 0 })
+      }
+      query.accountId = { $in: getAccountIdsForQuery([args.accountId]) }
+    } else if (scopedAccountIds !== null) {
+      query.accountId = { $in: scopedAccountIds }
+    }
     if (args.country) query.country = args.country
 
     const startDate = args.startDate || dayjs().subtract(7, 'day').format('YYYY-MM-DD')
@@ -123,20 +205,27 @@ const queryDashboardSummaryTool: ToolDefinition = {
     const endDate = args.endDate || dayjs().format('YYYY-MM-DD')
 
     const query: any = { date: { $gte: startDate, $lte: endDate } }
+    const scopedAccountIds = await resolveScopedAccountIds(context)
 
-    const dailyData = await AggDaily.find(query).sort({ date: -1 }).lean()
-
-    // Aggregate totals
-    const totals = dailyData.reduce(
-      (acc: any, d: any) => ({
-        spend: acc.spend + (d.spend || 0),
-        revenue: acc.revenue + (d.revenue || 0),
-        impressions: acc.impressions + (d.impressions || 0),
-        clicks: acc.clicks + (d.clicks || 0),
-        installs: acc.installs + (d.installs || 0),
-      }),
-      { spend: 0, revenue: 0, impressions: 0, clicks: 0, installs: 0 }
-    )
+    let dailyData: any[]
+    let totals: any
+    if (scopedAccountIds === null) {
+      dailyData = await AggDaily.find(query).sort({ date: -1 }).lean()
+      totals = dailyData.reduce(
+        (acc: any, d: any) => ({
+          spend: acc.spend + (d.spend || 0),
+          revenue: acc.revenue + (d.revenue || 0),
+          impressions: acc.impressions + (d.impressions || 0),
+          clicks: acc.clicks + (d.clicks || 0),
+          installs: acc.installs + (d.installs || 0),
+        }),
+        { spend: 0, revenue: 0, impressions: 0, clicks: 0, installs: 0 }
+      )
+    } else {
+      const scopedDashboard = await aggregateScopedDashboard(startDate, endDate, scopedAccountIds)
+      dailyData = scopedDashboard.rows
+      totals = scopedDashboard.totals
+    }
 
     return {
       success: true,
@@ -169,8 +258,9 @@ const queryAccountPerformanceTool: ToolDefinition = {
     const endDate = args.endDate || dayjs().format('YYYY-MM-DD')
 
     const query: any = { date: { $gte: startDate, $lte: endDate } }
-    if (context.scope.adAccountIds.length > 0) {
-      query.accountId = { $in: context.scope.adAccountIds }
+    const scopedAccountIds = await resolveScopedAccountIds(context)
+    if (scopedAccountIds !== null) {
+      query.accountId = { $in: scopedAccountIds }
     }
 
     const accountData = await AggAccount.find(query).sort({ spend: -1 }).lean()
@@ -202,9 +292,14 @@ const queryCampaignPerformanceTool: ToolDefinition = {
     const endDate = args.endDate || dayjs().format('YYYY-MM-DD')
 
     const query: any = { date: { $gte: startDate, $lte: endDate } }
-    if (args.accountId) query.accountId = args.accountId
-    if (context.scope.adAccountIds.length > 0 && !args.accountId) {
-      query.accountId = { $in: context.scope.adAccountIds }
+    const scopedAccountIds = await resolveScopedAccountIds(context)
+    if (args.accountId) {
+      if (!isAccountAllowed(scopedAccountIds, args.accountId)) {
+        return emptyScopedResult({ count: 0 })
+      }
+      query.accountId = { $in: getAccountIdsForQuery([args.accountId]) }
+    } else if (scopedAccountIds !== null) {
+      query.accountId = { $in: scopedAccountIds }
     }
 
     const sortField = args.sortBy || 'spend'
@@ -232,15 +327,45 @@ const queryCountryPerformanceTool: ToolDefinition = {
       endDate: { type: 'STRING', description: 'End date (YYYY-MM-DD)' },
     },
   },
-  handler: async (args: any, _context: AgentContext): Promise<ToolResult> => {
+  handler: async (args: any, context: AgentContext): Promise<ToolResult> => {
     const startDate = args.startDate || dayjs().subtract(7, 'day').format('YYYY-MM-DD')
     const endDate = args.endDate || dayjs().format('YYYY-MM-DD')
+    const scopedAccountIds = await resolveScopedAccountIds(context)
 
-    const countryData = await AggCountry.find({
-      date: { $gte: startDate, $lte: endDate },
-    })
-      .sort({ spend: -1 })
-      .lean()
+    const countryData = scopedAccountIds === null
+      ? await AggCountry.find({
+          date: { $gte: startDate, $lte: endDate },
+        })
+          .sort({ spend: -1 })
+          .lean()
+      : await MetricsDaily.aggregate([
+          {
+            $match: {
+              level: 'campaign',
+              date: { $gte: startDate, $lte: endDate },
+              accountId: { $in: scopedAccountIds },
+              country: { $nin: [null, '', 'ALL'] },
+            },
+          },
+          {
+            $group: {
+              _id: '$country',
+              country: { $first: '$country' },
+              spend: { $sum: '$spendUsd' },
+              impressions: { $sum: '$impressions' },
+              clicks: { $sum: '$clicks' },
+              installs: { $sum: '$installs' },
+              revenue: { $sum: '$purchase_value' },
+            },
+          },
+          {
+            $addFields: {
+              roas: { $cond: [{ $gt: ['$spend', 0] }, { $divide: ['$revenue', '$spend'] }, 0] },
+              ctr: { $cond: [{ $gt: ['$impressions', 0] }, { $divide: ['$clicks', '$impressions'] }, 0] },
+            },
+          },
+          { $sort: { spend: -1 } },
+        ])
 
     return {
       success: true,
@@ -261,15 +386,21 @@ const getCampaignDetailsTool: ToolDefinition = {
     },
     required: ['campaignId'],
   },
-  handler: async (args: any, _context: AgentContext): Promise<ToolResult> => {
-    const campaign = await Campaign.findOne({ campaignId: args.campaignId }).lean()
+  handler: async (args: any, context: AgentContext): Promise<ToolResult> => {
+    const scopedAccountIds = await resolveScopedAccountIds(context)
+    const campaignQuery: any = { channel: 'facebook', campaignId: args.campaignId }
+    if (scopedAccountIds !== null) campaignQuery.accountId = { $in: scopedAccountIds }
+
+    const campaign = await Campaign.findOne(campaignQuery).lean()
     if (!campaign) return { success: false, error: `Campaign ${args.campaignId} not found` }
 
-    const adSets = await AdSet.find({ campaignId: args.campaignId })
+    const childQuery = { channel: 'facebook', campaignId: args.campaignId, accountId: campaign.accountId }
+
+    const adSets = await AdSet.find(childQuery)
       .select('adsetId name status optimizationGoal')
       .lean()
 
-    const ads = await Ad.find({ campaignId: args.campaignId })
+    const ads = await Ad.find(childQuery)
       .select('adId adsetId name effectiveStatus creativeId materialId')
       .lean()
 

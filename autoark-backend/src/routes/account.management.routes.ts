@@ -24,18 +24,21 @@ router.get(
 // 添加账户标签
 router.post(
   '/accounts/:accountId/tags',
+  authorize(UserRole.SUPER_ADMIN, UserRole.ORG_ADMIN),
   accountManagementController.addTags.bind(accountManagementController)
 )
 
 // 移除账户标签
 router.delete(
   '/accounts/:accountId/tags',
+  authorize(UserRole.SUPER_ADMIN, UserRole.ORG_ADMIN),
   accountManagementController.removeTags.bind(accountManagementController)
 )
 
 // 更新账户备注
 router.put(
   '/accounts/:accountId/notes',
+  authorize(UserRole.SUPER_ADMIN, UserRole.ORG_ADMIN),
   accountManagementController.updateNotes.bind(accountManagementController)
 )
 
@@ -56,6 +59,7 @@ router.post(
 // 创建账户分组
 router.post(
   '/groups',
+  authorize(UserRole.SUPER_ADMIN, UserRole.ORG_ADMIN),
   accountManagementController.createGroup.bind(accountManagementController)
 )
 

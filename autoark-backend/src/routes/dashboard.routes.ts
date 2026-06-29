@@ -1,11 +1,13 @@
 import { Router } from 'express'
 import * as dashboardController from '../controllers/dashboard.controller'
-import { authenticate } from '../middlewares/auth'
+import { authenticate, authorize } from '../middlewares/auth'
+import { UserRole } from '../models/User'
 
 const router = Router()
 
 // 所有路由都需要认证
 router.use(authenticate)
+router.use(authorize(UserRole.SUPER_ADMIN))
 
 // Analytics
 router.get('/daily', dashboardController.getDaily)

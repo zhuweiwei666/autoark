@@ -104,6 +104,10 @@ else
   git checkout --detach "$REF"
 fi
 DEPLOY_COMMIT="$(git rev-parse HEAD)"
+DEPLOYED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+export AUTOARK_DEPLOY_REF="$REF"
+export AUTOARK_DEPLOY_COMMIT="$DEPLOY_COMMIT"
+export AUTOARK_DEPLOYED_AT="$DEPLOYED_AT"
 log "Deploying ref=$REF commit=$DEPLOY_COMMIT"
 
 if [ ! -f deploy/.env ]; then
@@ -112,7 +116,14 @@ if [ ! -f deploy/.env ]; then
 fi
 chmod 600 deploy/.env || true
 
-COMPOSE=(docker compose -f deploy/docker-compose.prod.yml)
+cat > deploy/.deploy-metadata.env <<EOF_METADATA
+AUTOARK_DEPLOY_REF=$REF
+AUTOARK_DEPLOY_COMMIT=$DEPLOY_COMMIT
+AUTOARK_DEPLOYED_AT=$DEPLOYED_AT
+EOF_METADATA
+chmod 600 deploy/.deploy-metadata.env || true
+
+COMPOSE=(docker compose --env-file deploy/.env --env-file deploy/.deploy-metadata.env -f deploy/docker-compose.prod.yml)
 TLS_DIR="deploy/tls/live"
 TLS_FULLCHAIN="$TLS_DIR/fullchain.pem"
 TLS_PRIVKEY="$TLS_DIR/privkey.pem"
@@ -179,7 +190,7 @@ verify_internal
 cat > deploy/.last-deploy <<EOF_DEPLOY
 ref=$REF
 commit=$DEPLOY_COMMIT
-deployed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+deployed_at=$DEPLOYED_AT
 EOF_DEPLOY
 
 log "Current production containers"

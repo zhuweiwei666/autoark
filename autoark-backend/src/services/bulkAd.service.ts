@@ -1,10 +1,13 @@
+import mongoose from 'mongoose'
 import AdDraft from '../models/AdDraft'
 import AdTask from '../models/AdTask'
 import TargetingPackage from '../models/TargetingPackage'
 import CopywritingPackage from '../models/CopywritingPackage'
 import CreativeGroup from '../models/CreativeGroup'
 import FbToken from '../models/FbToken'
+import FacebookUser from '../models/FacebookUser'
 import AdMaterialMapping from '../models/AdMaterialMapping'
+import OpsLog from '../models/OpsLog'
 import logger from '../utils/logger'
 import User from '../models/User'
 import Account from '../models/Account'
@@ -18,6 +21,17 @@ import {
   uploadVideoFromUrl,
 } from '../integration/facebook/bulkCreate.api'
 import { facebookClient } from '../integration/facebook/facebookClient'
+import { combineFilters } from '../utils/accessControl'
+import { getAccountIdsForQuery, normalizeForStorage } from '../utils/accountId'
+import { getBuildInfo } from '../utils/buildInfo'
+import { parseLimitedNumber, parsePagination, pickAllowedString } from '../utils/pagination'
+import {
+  buildTaskOperationalDiagnostics,
+  diagnoseBulkAdError,
+  enrichTaskDiagnostics,
+  normalizeTaskErrors,
+} from './bulkAd.diagnostics'
+import { assertBulkAdPublishAllowed } from './commercial.service'
 
 /**
  * 批量广告创建服务
@@ -26,14 +40,283 @@ import { facebookClient } from '../integration/facebook/facebookClient'
 
 // ==================== 草稿管理 ====================
 
+const MIN_BUDGET = 1
+const DEFAULT_DIAGNOSTIC_TASK_SCAN_LIMIT = 1000
+const MAX_DIAGNOSTIC_TASK_SCAN_LIMIT = 5000
+const CLICK_ATTRIBUTION_WINDOWS = [1, 7, 28]
+const OPTIONAL_ATTRIBUTION_WINDOWS = [0, 1]
+const DRAFT_LIST_STATUSES = ['draft', 'ready', 'published', 'failed'] as const
+const TASK_LIST_STATUSES = ['pending', 'queued', 'processing', 'success', 'partial_success', 'failed', 'cancelled'] as const
+const TASK_LIST_TYPES = ['BULK_AD_CREATE', 'BULK_AD_UPDATE', 'BULK_AD_DELETE', 'MATERIAL_UPLOAD'] as const
+const TASK_LIST_PLATFORMS = ['facebook', 'tiktok', 'google'] as const
+
+const normalizeObjectIdList = (values: any[] = []) => {
+  const unique = Array.from(new Set(values.map(value => value?.toString()).filter(Boolean)))
+  return {
+    valid: unique.filter(value => mongoose.Types.ObjectId.isValid(value)),
+    invalid: unique.filter(value => !mongoose.Types.ObjectId.isValid(value)),
+  }
+}
+
+const hasUsableMaterial = (material: any) => {
+  if (!material) return false
+  if (material.type === 'image') {
+    return Boolean(material.facebookImageHash || material.url)
+  }
+  if (material.type === 'video') {
+    return Boolean(material.facebookVideoId || material.url)
+  }
+  return false
+}
+
+const isAllowedAttributionWindow = (value: any, allowedValues: number[]) => {
+  const next = Number(value)
+  return Number.isInteger(next) && allowedValues.includes(next)
+}
+
+const normalizeAdsetMultiplierInput = (value: any) => (
+  value === undefined || value === null || value === '' ? 1 : value
+)
+
+const isAllowedAdsetMultiplier = (value: any) => {
+  const next = Number(normalizeAdsetMultiplierInput(value))
+  return Number.isInteger(next) && next >= 1 && next <= 10
+}
+
+const normalizeAdsetMultiplier = (value: any) => (
+  parseLimitedNumber(normalizeAdsetMultiplierInput(value), 1, 10)
+)
+
+const normalizeRerunMultiplier = (value: any) => parseLimitedNumber(value, 1, 20)
+
+const normalizeAttributionWindow = (value: any, fallback: number, allowedValues: number[]) => {
+  const next = Number(value)
+  return Number.isInteger(next) && allowedValues.includes(next) ? next : fallback
+}
+
+const buildAttributionSpec = (attributionCfg: any) => {
+  if (!attributionCfg) return undefined
+
+  const clickWindow = normalizeAttributionWindow(attributionCfg.clickWindow, 1, CLICK_ATTRIBUTION_WINDOWS)
+  const viewWindow = normalizeAttributionWindow(attributionCfg.viewWindow, 0, OPTIONAL_ATTRIBUTION_WINDOWS)
+  const engagedViewWindow = normalizeAttributionWindow(
+    attributionCfg.engagedViewWindow,
+    0,
+    OPTIONAL_ATTRIBUTION_WINDOWS,
+  )
+
+  return [
+    {
+      event_type: 'CLICK_THROUGH',
+      window_days: clickWindow,
+    },
+    ...(viewWindow > 0
+      ? [
+          {
+            event_type: 'VIEW_THROUGH',
+            window_days: viewWindow,
+          },
+        ]
+      : []),
+    ...(engagedViewWindow > 0
+      ? [
+          {
+            event_type: 'ENGAGED_VIDEO_VIEW',
+            window_days: engagedViewWindow,
+          },
+        ]
+      : []),
+  ]
+}
+
+const buildDraftValidationFailureDetails = (validation: any) => {
+  const errors = Array.isArray(validation?.errors) ? validation.errors : []
+  const warnings = Array.isArray(validation?.warnings) ? validation.warnings : []
+  return {
+    errorCount: errors.length,
+    warningCount: warnings.length,
+    firstError: errors[0]
+      ? {
+        field: errors[0].field,
+        message: errors[0].message,
+      }
+      : undefined,
+    errorFields: errors.map((error: any) => error.field).filter(Boolean).slice(0, 20),
+    errors: errors.slice(0, 10).map((error: any) => ({
+      field: error.field,
+      message: error.message,
+      severity: error.severity || 'error',
+    })),
+    warnings: warnings.slice(0, 10).map((warning: any) => ({
+      field: warning.field,
+      message: warning.message,
+      severity: warning.severity || 'warning',
+    })),
+  }
+}
+
+const createDraftValidationFailure = (validation: any) => {
+  const details = buildDraftValidationFailureDetails(validation)
+  const firstMessage = details.firstError?.message || '请按预检结果修正草稿配置'
+  const error: any = new Error(`草稿预检未通过：${firstMessage}`)
+  error.code = 'DRAFT_VALIDATION_FAILED'
+  error.statusCode = 422
+  error.details = details
+  return error
+}
+
+const FACEBOOK_STEP_ENTITY_TYPES: Record<string, string> = {
+  campaign: 'campaign',
+  adset: 'adset',
+  creative: 'creative',
+  ad: 'ad',
+  image_upload: 'creative',
+  video_upload: 'creative',
+}
+
+const createFacebookStepError = (step: string, errorPayload: any, fallbackMessage: string) => {
+  const payload = errorPayload && typeof errorPayload === 'object'
+    ? errorPayload
+    : { message: errorPayload ? String(errorPayload) : fallbackMessage }
+  const message = payload.userMsg || payload.userTitle || payload.message || fallbackMessage
+  const rawMessage = payload.message && payload.message !== message ? ` (${payload.message})` : ''
+  const error: any = new Error(`${step} failed: ${message}${rawMessage}`)
+  error.entityType = FACEBOOK_STEP_ENTITY_TYPES[step] || 'general'
+  error.code = payload.code
+  error.subcode = payload.subcode
+  error.userMessage = payload.userMsg || payload.userTitle
+  error.operatorMessage = [
+    payload.message ? `原始错误：${payload.message}` : undefined,
+    payload.userMsg || payload.userTitle ? `用户提示：${payload.userMsg || payload.userTitle}` : undefined,
+  ].filter(Boolean).join('；') || undefined
+  error.response = {
+    error: {
+      code: payload.code,
+      error_subcode: payload.subcode,
+      message: payload.message || message,
+      error_user_msg: payload.userMsg,
+      error_user_title: payload.userTitle,
+      type: payload.type,
+    },
+  }
+  error.details = {
+    step,
+    error: error.response.error,
+  }
+  return error
+}
+
+const diagnoseFacebookStepError = (step: string, errorPayload: any, fallbackMessage: string) => diagnoseBulkAdError(
+  createFacebookStepError(step, errorPayload, fallbackMessage),
+  { entityType: FACEBOOK_STEP_ENTITY_TYPES[step] || 'general' },
+)
+
+const buildFacebookAssetSnapshot = async (draft: any) => {
+  const tokenAccessFilter = draft.organizationId
+    ? { organizationId: draft.organizationId }
+    : draft.createdBy
+      ? { userId: draft.createdBy }
+      : null
+
+  if (!tokenAccessFilter) {
+    return {
+      tokenCount: 0,
+      hasCachedAssets: false,
+      pageAccountPairs: new Set<string>(),
+      pixelAccountPairs: new Set<string>(),
+      adAccountStatuses: new Map<string, number>(),
+    }
+  }
+
+  const tokens: any[] = await FbToken.find({ status: 'active', ...tokenAccessFilter })
+    .select('_id fbUserId')
+    .lean()
+
+  if (tokens.length === 0) {
+    return {
+      tokenCount: 0,
+      hasCachedAssets: false,
+      pageAccountPairs: new Set<string>(),
+      pixelAccountPairs: new Set<string>(),
+      adAccountStatuses: new Map<string, number>(),
+    }
+  }
+
+  const tokenIds = tokens.map(token => token._id).filter(Boolean)
+  const fbUserIds = tokens.map(token => token.fbUserId).filter(Boolean)
+  const userFilters: any[] = [{ tokenId: { $in: tokenIds } }]
+  if (fbUserIds.length > 0) {
+    userFilters.push({
+      fbUserId: { $in: fbUserIds },
+      ...(draft.organizationId && { organizationId: draft.organizationId }),
+    })
+  }
+  const users: any[] = await FacebookUser.find({ $or: userFilters }).lean()
+
+  const pageAccountPairs = new Set<string>()
+  const pixelAccountPairs = new Set<string>()
+  const adAccountStatuses = new Map<string, number>()
+
+  for (const user of users) {
+    for (const account of user.adAccounts || []) {
+      const accountId = normalizeForStorage(account.accountId)
+      if (accountId && account.status !== undefined) {
+        adAccountStatuses.set(accountId, account.status)
+      }
+    }
+
+    for (const page of user.pages || []) {
+      for (const account of page.accounts || []) {
+        const accountId = normalizeForStorage(account.accountId)
+        if (page.pageId && accountId) {
+          pageAccountPairs.add(`${page.pageId}:${accountId}`)
+        }
+      }
+    }
+
+    for (const pixel of user.pixels || []) {
+      for (const account of pixel.accounts || []) {
+        const accountId = normalizeForStorage(account.accountId)
+        if (pixel.pixelId && accountId) {
+          pixelAccountPairs.add(`${pixel.pixelId}:${accountId}`)
+        }
+      }
+    }
+  }
+
+  return {
+    tokenCount: tokens.length,
+    hasCachedAssets: users.some(user => user.syncStatus === 'completed'),
+    pageAccountPairs,
+    pixelAccountPairs,
+    adAccountStatuses,
+  }
+}
+
+const findScopedDraftAccountAsset = async (accountId: string, draft: any) => {
+  if (!draft.organizationId) {
+    return null
+  }
+
+  return Account.findOne(combineFilters(
+    {
+      channel: 'facebook',
+      accountId: { $in: getAccountIdsForQuery([accountId]) },
+    },
+    { organizationId: draft.organizationId },
+  ))
+    .select('_id accountId accountStatus status')
+    .lean()
+}
+
 /**
  * 创建广告草稿
  */
 export const createDraft = async (data: any, userId?: string) => {
   const draft: any = new AdDraft({
     ...data,
-    createdBy: userId,
-    lastModifiedBy: userId,
+    createdBy: userId || data.createdBy,
+    lastModifiedBy: userId || data.lastModifiedBy || data.createdBy,
   })
   
   // 计算预估数据
@@ -49,8 +332,13 @@ export const createDraft = async (data: any, userId?: string) => {
 /**
  * 更新广告草稿
  */
-export const updateDraft = async (draftId: string, data: any, userId?: string) => {
-  const draft: any = await AdDraft.findById(draftId)
+export const updateDraft = async (
+  draftId: string,
+  data: any,
+  userId?: string,
+  accessFilter: any = {},
+) => {
+  const draft: any = await AdDraft.findOne(combineFilters({ _id: draftId }, accessFilter))
   if (!draft) {
     throw new Error('Draft not found')
   }
@@ -78,8 +366,8 @@ export const updateDraft = async (draftId: string, data: any, userId?: string) =
 /**
  * 获取草稿详情
  */
-export const getDraft = async (draftId: string) => {
-  const draft = await AdDraft.findById(draftId)
+export const getDraft = async (draftId: string, accessFilter: any = {}) => {
+  const draft = await AdDraft.findOne(combineFilters({ _id: draftId }, accessFilter))
     .populate('adset.targetingPackageId')
     .populate('ad.creativeGroupIds')
     .populate('ad.copywritingPackageIds')
@@ -96,7 +384,8 @@ export const getDraft = async (draftId: string) => {
  * @param userFilter 用户过滤条件（来自 getAssetFilter）
  */
 export const getDraftList = async (query: any = {}, userFilter: any = {}) => {
-  const { status, page = 1, pageSize = 20 } = query
+  const status = pickAllowedString(query.status, DRAFT_LIST_STATUSES, '')
+  const { page, pageSize, skip } = parsePagination(query)
   
   // 合并用户过滤条件
   const filter: any = { ...userFilter }
@@ -105,7 +394,7 @@ export const getDraftList = async (query: any = {}, userFilter: any = {}) => {
   const [list, total] = await Promise.all([
     AdDraft.find(filter)
       .sort({ createdAt: -1 })
-      .skip((page - 1) * pageSize)
+      .skip(skip)
       .limit(pageSize)
       .lean(),
     AdDraft.countDocuments(filter),
@@ -117,8 +406,8 @@ export const getDraftList = async (query: any = {}, userFilter: any = {}) => {
 /**
  * 删除草稿
  */
-export const deleteDraft = async (draftId: string) => {
-  const draft = await AdDraft.findById(draftId)
+export const deleteDraft = async (draftId: string, accessFilter: any = {}) => {
+  const draft = await AdDraft.findOne(combineFilters({ _id: draftId }, accessFilter))
   if (!draft) {
     throw new Error('Draft not found')
   }
@@ -127,7 +416,7 @@ export const deleteDraft = async (draftId: string) => {
     throw new Error('Cannot delete published draft')
   }
   
-  await AdDraft.deleteOne({ _id: draftId })
+  await AdDraft.deleteOne(combineFilters({ _id: draftId }, accessFilter))
   logger.info(`[BulkAd] Draft deleted: ${draftId}`)
   return { success: true }
 }
@@ -135,8 +424,8 @@ export const deleteDraft = async (draftId: string) => {
 /**
  * 验证草稿
  */
-export const validateDraft = async (draftId: string) => {
-  const draft: any = await AdDraft.findById(draftId)
+export const validateDraft = async (draftId: string, accessFilter: any = {}) => {
+  const draft: any = await AdDraft.findOne(combineFilters({ _id: draftId }, accessFilter))
   if (!draft) {
     throw new Error('Draft not found')
   }
@@ -149,24 +438,183 @@ export const validateDraft = async (draftId: string) => {
   // 简化验证逻辑
   const errors: any[] = []
   const warnings: any[] = []
+  const addError = (field: string, message: string) => errors.push({ field, message, severity: 'error' })
+  const addWarning = (field: string, message: string) => warnings.push({ field, message, severity: 'warning' })
   
   if (!draft.accounts || draft.accounts.length === 0) {
-    errors.push({ field: 'accounts', message: '请至少选择一个广告账户', severity: 'error' })
+    addError('accounts', '请至少选择一个广告账户')
+  } else {
+    const seenAccounts = new Set<string>()
+    const assetSnapshot = await buildFacebookAssetSnapshot(draft)
+
+    if (assetSnapshot.tokenCount === 0) {
+      addError('facebookAuthorization', '当前组织没有活跃 Facebook 授权，请先完成 Facebook Login for Business 授权')
+    }
+
+    for (const account of draft.accounts) {
+      const accountId = normalizeForStorage(account.accountId)
+      const accountLabel = account.accountName || account.accountId || '未知账户'
+      if (!accountId) {
+        addError('accounts.accountId', '存在未填写广告账户 ID 的账户配置')
+        continue
+      }
+
+      if (seenAccounts.has(accountId)) {
+        addError(`accounts.${account.accountId}`, `广告账户 ${accountLabel} 被重复选择`)
+      }
+      seenAccounts.add(accountId)
+
+      const hasCachedAccountAccess = assetSnapshot.adAccountStatuses.has(accountId)
+      if (assetSnapshot.hasCachedAssets && !hasCachedAccountAccess) {
+        addError(`accounts.${account.accountId}.access`, `当前 Facebook 授权未同步到账户 ${accountLabel} 的访问权限，请重新授权或更换可访问账户`)
+      } else if (!hasCachedAccountAccess && assetSnapshot.tokenCount > 0) {
+        const accountAsset = await findScopedDraftAccountAsset(accountId, draft)
+        if (!accountAsset) {
+          addError(`accounts.${account.accountId}.access`, `广告账户 ${accountLabel} 未分配到当前组织或账户资产尚未同步完成，请先同步账户资产后重新选择`)
+        }
+      }
+
+      const cachedStatus = assetSnapshot.adAccountStatuses.get(accountId)
+      if (cachedStatus !== undefined && cachedStatus !== 1) {
+        addError(`accounts.${account.accountId}.status`, `广告账户 ${accountLabel} 当前状态不可投放，请更换活跃账户`)
+      }
+
+      if (!account.pageId) {
+        addError(`accounts.${account.accountId}.pageId`, `账户 ${accountLabel} 未选择 Facebook 主页`)
+      } else if (
+        assetSnapshot.hasCachedAssets &&
+        !assetSnapshot.pageAccountPairs.has(`${account.pageId}:${accountId}`)
+      ) {
+        addError(`accounts.${account.accountId}.pageId`, `账户 ${accountLabel} 未同步到所选主页权限，请重新同步 Page 或更换主页`)
+      }
+
+      const requiresPixel = draft.campaign?.objective === 'OUTCOME_SALES' || draft.adset?.optimizationGoal === 'OFFSITE_CONVERSIONS'
+      if (requiresPixel && !account.pixelId) {
+        addError(`accounts.${account.accountId}.pixelId`, `账户 ${accountLabel} 使用转化目标时必须选择 Pixel`)
+      } else if (
+        account.pixelId &&
+        assetSnapshot.hasCachedAssets &&
+        !assetSnapshot.pixelAccountPairs.has(`${account.pixelId}:${accountId}`)
+      ) {
+        addError(`accounts.${account.accountId}.pixelId`, `账户 ${accountLabel} 未同步到所选 Pixel 权限，请重新同步 Pixel 或更换账户`)
+      }
+
+      if (account.pixelId && !account.conversionEvent) {
+        addWarning(`accounts.${account.accountId}.conversionEvent`, `账户 ${accountLabel} 未选择转化事件，将默认使用 PURCHASE`)
+      }
+    }
   }
   if (!draft.campaign?.nameTemplate) {
-    errors.push({ field: 'campaign.nameTemplate', message: '请填写广告系列名称', severity: 'error' })
+    addError('campaign.nameTemplate', '请填写广告系列名称')
   }
-  if (!draft.campaign?.budget || draft.campaign.budget <= 0) {
-    errors.push({ field: 'campaign.budget', message: '请填写有效的预算金额', severity: 'error' })
+  const campaignUsesCbo = draft.campaign?.budgetOptimization !== false
+  if (campaignUsesCbo && (!draft.campaign?.budget || draft.campaign.budget < MIN_BUDGET)) {
+    addError('campaign.budget', `CBO 模式下广告系列预算不能低于 ${MIN_BUDGET}`)
+  }
+  if (!campaignUsesCbo) {
+    const adsetBudget = draft.adset?.budget || draft.campaign?.budget
+    if (!adsetBudget || adsetBudget < MIN_BUDGET) {
+      addError('adset.budget', `非 CBO 模式下广告组预算不能低于 ${MIN_BUDGET}`)
+    }
   }
   if (!draft.adset?.targetingPackageId && !draft.adset?.inlineTargeting) {
-    errors.push({ field: 'adset.targeting', message: '请选择定向包或配置定向条件', severity: 'error' })
+    addError('adset.targeting', '请选择定向包或配置定向条件')
+  }
+  if (!isAllowedAdsetMultiplier(draft.adset?.multiplier)) {
+    addError('adset.multiplier', '广告组倍率必须是 1 到 10 之间的整数')
+  }
+  const attributionCfg = draft.adset?.attribution || draft.adset?.attributionSpec
+  if (attributionCfg) {
+    if (!isAllowedAttributionWindow(attributionCfg.clickWindow ?? 1, CLICK_ATTRIBUTION_WINDOWS)) {
+      addError('adset.attribution.clickWindow', '点击归因窗口必须是 1、7 或 28 天')
+    }
+    if (!isAllowedAttributionWindow(attributionCfg.viewWindow ?? 0, OPTIONAL_ATTRIBUTION_WINDOWS)) {
+      addError('adset.attribution.viewWindow', '浏览归因窗口只能为 0 或 1 天')
+    }
+    if (
+      attributionCfg.engagedViewWindow !== undefined &&
+      !isAllowedAttributionWindow(attributionCfg.engagedViewWindow, OPTIONAL_ATTRIBUTION_WINDOWS)
+    ) {
+      addError('adset.attribution.engagedViewWindow', '互动观看归因窗口只能为 0 或 1 天')
+    }
+  }
+  if (draft.adset?.startTime && draft.adset?.endTime && new Date(draft.adset.endTime) <= new Date(draft.adset.startTime)) {
+    addError('adset.endTime', '广告组结束时间必须晚于开始时间')
+  }
+  if (draft.publishStrategy?.schedule === 'SCHEDULED') {
+    if (!draft.publishStrategy?.scheduledTime) {
+      addError('publishStrategy.scheduledTime', '定时发布必须设置发布时间')
+    } else if (new Date(draft.publishStrategy.scheduledTime).getTime() <= Date.now() + 5 * 60 * 1000) {
+      addError('publishStrategy.scheduledTime', '定时发布时间至少需要晚于当前时间 5 分钟')
+    }
+  }
+
+  if (draft.adset?.targetingPackageId) {
+    const targetingPackageId = draft.adset.targetingPackageId.toString()
+    if (!mongoose.Types.ObjectId.isValid(targetingPackageId)) {
+      addError('adset.targetingPackageId', '定向包 ID 无效')
+    } else {
+      const targetingPackage: any = await TargetingPackage.findOne(
+        combineFilters({ _id: targetingPackageId }, accessFilter),
+      )
+      if (!targetingPackage) {
+        addError('adset.targetingPackageId', '所选定向包不存在或无权访问')
+      } else if (
+        !targetingPackage.geoLocations?.countries?.length &&
+        !targetingPackage.geoLocations?.regions?.length &&
+        !targetingPackage.geoLocations?.cities?.length &&
+        !targetingPackage.customAudiences?.length
+      ) {
+        addWarning('adset.targetingPackageId', '所选定向包没有国家、地区、城市或自定义受众，可能导致 Meta 拒绝或受众过宽')
+      }
+    }
   }
   if (!draft.ad?.creativeGroupIds || draft.ad.creativeGroupIds.length === 0) {
-    errors.push({ field: 'ad.creativeGroupIds', message: '请至少选择一个创意组', severity: 'error' })
+    addError('ad.creativeGroupIds', '请至少选择一个创意组')
+  } else {
+    const { valid, invalid } = normalizeObjectIdList(draft.ad.creativeGroupIds)
+    for (const invalidId of invalid) {
+      addError('ad.creativeGroupIds', `创意组 ID 无效：${invalidId}`)
+    }
+    const creativeGroups: any[] = valid.length
+      ? await CreativeGroup.find(combineFilters({ _id: { $in: valid } }, accessFilter)).lean()
+      : []
+    if (creativeGroups.length !== valid.length) {
+      addError('ad.creativeGroupIds', '部分创意组不存在或无权访问')
+    }
+    for (const group of creativeGroups) {
+      const validMaterialCount = (group.materials || []).filter(hasUsableMaterial).length
+      if (validMaterialCount === 0) {
+        addError('ad.creativeGroupIds', `创意组「${group.name}」没有可用图片或视频素材`)
+      } else if ((group.materials || []).some((material: any) => material.status === 'failed')) {
+        addWarning('ad.creativeGroupIds', `创意组「${group.name}」包含上传失败素材，发布时会自动跳过`)
+      }
+    }
   }
   if (!draft.ad?.copywritingPackageIds || draft.ad.copywritingPackageIds.length === 0) {
-    errors.push({ field: 'ad.copywritingPackageIds', message: '请至少选择一个文案包', severity: 'error' })
+    addError('ad.copywritingPackageIds', '请至少选择一个文案包')
+  } else {
+    const { valid, invalid } = normalizeObjectIdList(draft.ad.copywritingPackageIds)
+    for (const invalidId of invalid) {
+      addError('ad.copywritingPackageIds', `文案包 ID 无效：${invalidId}`)
+    }
+    const copywritingPackages: any[] = valid.length
+      ? await CopywritingPackage.find(combineFilters({ _id: { $in: valid } }, accessFilter)).lean()
+      : []
+    if (copywritingPackages.length !== valid.length) {
+      addError('ad.copywritingPackageIds', '部分文案包不存在或无权访问')
+    }
+    for (const pkg of copywritingPackages) {
+      if (!pkg.links?.websiteUrl) {
+        addError('ad.copywritingPackageIds', `文案包「${pkg.name}」缺少落地页链接`)
+      }
+      if (!pkg.content?.primaryTexts?.length) {
+        addWarning('ad.copywritingPackageIds', `文案包「${pkg.name}」缺少正文文案`)
+      }
+      if (!pkg.content?.headlines?.length) {
+        addWarning('ad.copywritingPackageIds', `文案包「${pkg.name}」缺少标题文案`)
+      }
+    }
   }
   
   const validation = {
@@ -187,20 +635,24 @@ export const validateDraft = async (draftId: string) => {
 /**
  * 发布草稿（创建任务）
  */
-export const publishDraft = async (draftId: string, userId?: string) => {
-  const draft: any = await getDraft(draftId)
+export const publishDraft = async (draftId: string, userId?: string, accessFilter: any = {}) => {
+  const draft: any = await getDraft(draftId, accessFilter)
   
   // 验证草稿
-  const validation = await validateDraft(draftId)
+  const validation = await validateDraft(draftId, accessFilter)
   if (!validation.isValid) {
-    throw new Error(`Draft validation failed: ${validation.errors.map((e: any) => e.message).join(', ')}`)
+    throw createDraftValidationFailure(validation)
   }
   
   // 计算预估
   const accountCount = draft.accounts?.length || 0
+  await assertBulkAdPublishAllowed({
+    organizationId: draft.organizationId?.toString(),
+    requestedAccounts: accountCount,
+  })
   const creativeGroupCount = draft.ad?.creativeGroupIds?.length || 1
   const copywritingCount = draft.ad?.copywritingPackageIds?.length || 1
-  const adsetMultiplier = Math.min(10, Math.max(1, Number(draft.adset?.multiplier || 1)))
+  const adsetMultiplier = normalizeAdsetMultiplier(draft.adset?.multiplier)
   const estimatedTotalAdsets = accountCount * adsetMultiplier
   
   // 估算广告数量（与前端预览一致：按创意组数估算；实际创建会按素材数生成更多广告）
@@ -228,7 +680,9 @@ export const publishDraft = async (draftId: string, userId?: string) => {
   let packageName = ''
   if (draft.ad?.copywritingPackageIds?.length > 0) {
     try {
-      const pkg = await CopywritingPackage.findById(draft.ad.copywritingPackageIds[0])
+      const pkg = await CopywritingPackage.findOne(
+        combineFilters({ _id: draft.ad.copywritingPackageIds[0] }, accessFilter),
+      )
       packageName = pkg?.name?.replace(/[^a-zA-Z0-9\u4e00-\u9fa5-]/g, '') || ''
     } catch (e) {
       logger.warn('[BulkAd] Failed to get copywriting package name')
@@ -246,6 +700,7 @@ export const publishDraft = async (draftId: string, userId?: string) => {
     status: 'pending',
     platform: 'facebook',
     draftId: draft._id,
+    organizationId: draft.organizationId,
     
     // 初始化任务项
     items: draft.accounts.map((account: any) => ({
@@ -357,6 +812,7 @@ const executeTaskSynchronously = async (taskId: string) => {
     } catch (error: any) {
       item.status = 'failed'
       item.error = error.message
+      item.errors = [diagnoseBulkAdError(error, { fallbackCode: 'EXECUTION_ERROR', entityType: 'general' })]
       failCount++
       logger.error(`[BulkAd] Account ${item.accountId} failed:`, error)
     }
@@ -443,19 +899,32 @@ export const executeTaskForAccount = async (
   }
   
   // 获取 Token - 根据账户 ID 找到正确的 token
+  const taskAccessFilter = task.organizationId
+    ? { organizationId: task.organizationId }
+    : task.createdBy
+      ? { createdBy: task.createdBy }
+      : {}
+  const tokenAccessFilter = task.organizationId
+    ? { organizationId: task.organizationId }
+    : task.createdBy
+      ? { userId: task.createdBy }
+      : {}
+
   // 1. 优先查找明确绑定了该账户的 token
   let fbToken: any = await FbToken.findOne({ 
     status: 'active',
+    ...tokenAccessFilter,
     'accounts.accountId': accountId 
   })
   
   // 2. 如果没有绑定关系，尝试从 Account 模型获取 fbUserId
   // 注意：Account 模型可能不包含 fbUserId 字段，这是历史兼容代码
   if (!fbToken) {
-    const account: any = await Account.findOne({ accountId }).lean()
+    const account: any = await Account.findOne(combineFilters({ accountId }, task.organizationId ? { organizationId: task.organizationId } : {})).lean()
     if (account?.fbUserId) {
       fbToken = await FbToken.findOne({ 
         status: 'active', 
+        ...tokenAccessFilter,
         fbUserId: account.fbUserId 
       })
     }
@@ -463,7 +932,7 @@ export const executeTaskForAccount = async (
   
   // 3. 如果还没找到，查找所有 active token 并验证权限
   if (!fbToken) {
-    const allTokens = await FbToken.find({ status: 'active' })
+    const allTokens = await FbToken.find({ status: 'active', ...tokenAccessFilter })
     for (const t of allTokens) {
       try {
         // 验证此 token 是否有权访问该账户
@@ -474,12 +943,12 @@ export const executeTaskForAccount = async (
         if (res && res.id) {
           fbToken = t
           // 可选：缓存这个绑定关系
-          logger.info(`[BulkAd] Found token for account ${accountId}: ${t.fbUserName}`)
+          logger.info(`[BulkAd] Found scoped token for account ${accountId}`)
           break
         }
       } catch (e: any) {
         // 这个 token 没有权限，继续尝试下一个
-        logger.debug(`[BulkAd] Token ${t.fbUserName} has no access to account ${accountId}`)
+        logger.debug(`[BulkAd] Scoped token candidate has no access to account ${accountId}`)
       }
     }
   }
@@ -511,7 +980,9 @@ export const executeTaskForAccount = async (
     let targeting: any = {}
     let targetingName = ''  // 定向包名称，用于名称模板
     if (config.adset.targetingPackageId) {
-      const targetingPackage: any = await TargetingPackage.findById(config.adset.targetingPackageId)
+      const targetingPackage: any = await TargetingPackage.findOne(
+        combineFilters({ _id: config.adset.targetingPackageId }, taskAccessFilter),
+      )
       if (targetingPackage) {
         targetingName = targetingPackage.name || ''
         if (targetingPackage.toFacebookTargeting) {
@@ -544,7 +1015,7 @@ export const executeTaskForAccount = async (
     })
     
     if (!campaignResult.success) {
-      throw new Error(`Campaign creation failed: ${campaignResult.error?.message}`)
+      throw createFacebookStepError('campaign', campaignResult.error, 'Campaign creation failed')
     }
     
     const campaignId = campaignResult.id
@@ -559,7 +1030,7 @@ export const executeTaskForAccount = async (
     
     // ==================== 3. 创建 AdSet（支持倍率） ====================
     // 广告组倍率：在一个 campaign 下创建多个 adset
-    const adsetMultiplier = Math.min(10, Math.max(1, Number(config.adset.multiplier || 1)))
+    const adsetMultiplier = normalizeAdsetMultiplier(config.adset.multiplier)
     const allAdsetIds: string[] = []
     const allAdsetNames: string[] = []
     
@@ -585,33 +1056,7 @@ export const executeTaskForAccount = async (
     
     // 构建归因设置（兼容 attribution / attributionSpec）
     const attributionCfg = config.adset.attribution || config.adset.attributionSpec
-    const clickWindow = Number(attributionCfg?.clickWindow ?? 1)
-    const viewWindow = Number(attributionCfg?.viewWindow ?? 0)
-    const engagedViewWindow = Number((attributionCfg as any)?.engagedViewWindow ?? 0)
-    const attributionSpec = attributionCfg
-      ? [
-          {
-      event_type: 'CLICK_THROUGH',
-            window_days: clickWindow,
-          },
-          ...(viewWindow > 0
-            ? [
-                {
-      event_type: 'VIEW_THROUGH',
-                  window_days: viewWindow,
-                },
-              ]
-            : []),
-          ...(engagedViewWindow > 0
-            ? [
-                {
-      event_type: 'ENGAGED_VIDEO_VIEW',
-                  window_days: engagedViewWindow,
-                },
-              ]
-            : []),
-        ]
-      : undefined
+    const attributionSpec = buildAttributionSpec(attributionCfg)
 
     logger.info(`[BulkAd] Creating ${adsetMultiplier} adset(s) for campaign ${campaignId}`)
     
@@ -651,7 +1096,7 @@ export const executeTaskForAccount = async (
       })
       
       if (!adsetResult.success) {
-        throw new Error(`AdSet ${adsetIndex + 1} creation failed: ${adsetResult.error?.message}`)
+        throw createFacebookStepError('adset', adsetResult.error, `AdSet ${adsetIndex + 1} creation failed`)
       }
       
       allAdsetIds.push(adsetResult.id)
@@ -665,13 +1110,13 @@ export const executeTaskForAccount = async (
     })
     
     // ==================== 4. 获取创意组和文案包 ====================
-    const creativeGroups: any[] = await CreativeGroup.find({
-      _id: { $in: config.ad.creativeGroupIds || [] },
-    })
+    const creativeGroups: any[] = await CreativeGroup.find(
+      combineFilters({ _id: { $in: config.ad.creativeGroupIds || [] } }, taskAccessFilter),
+    )
     
-    const copywritingPackages: any[] = await CopywritingPackage.find({
-      _id: { $in: config.ad.copywritingPackageIds || [] },
-    })
+    const copywritingPackages: any[] = await CopywritingPackage.find(
+      combineFilters({ _id: { $in: config.ad.copywritingPackageIds || [] } }, taskAccessFilter),
+    )
     
     if (creativeGroups.length === 0) {
       throw new Error('No creative groups found')
@@ -692,6 +1137,7 @@ export const executeTaskForAccount = async (
       materialId?: string
       effectiveStatus?: string
     }> = []
+    const stepDiagnostics: any[] = []
     let globalAdIndex = 0
     
     const adsetsToUse = allAdsetIds.map((id, idx) => ({
@@ -734,9 +1180,11 @@ export const executeTaskForAccount = async (
               return { url: material.url, video_id: result.id, thumbnail_url: result.thumbnailUrl }
             }
             logger.error(`[BulkAd] Video upload failed: ${result.error?.message}`)
+            stepDiagnostics.push(diagnoseFacebookStepError('video_upload', result.error, `Video upload failed: ${material.name || material.url}`))
             return { url: material.url }
           } catch (err: any) {
             logger.error(`[BulkAd] Video upload error: ${err.message}`)
+            stepDiagnostics.push(diagnoseBulkAdError(err, { fallbackCode: 'CREATIVE_OR_MATERIAL_FAILED', entityType: 'creative' }))
             return { url: material.url }
           }
         })
@@ -869,6 +1317,7 @@ export const executeTaskForAccount = async (
         
         if (!creativeResult.success) {
           logger.error(`[BulkAd] Failed to create creative for material ${matIndex + 1}:`, creativeResult.error)
+          stepDiagnostics.push(diagnoseFacebookStepError('creative', creativeResult.error, `Creative creation failed for material ${material.name || matIndex + 1}`))
           continue
         }
         
@@ -917,6 +1366,7 @@ export const executeTaskForAccount = async (
         
         if (!adResult.success) {
           logger.error(`[BulkAd] Failed to create ad for material ${entry.matIndex + 1}:`, adResult.error)
+          stepDiagnostics.push(diagnoseFacebookStepError('ad', adResult.error, `Ad creation failed for material ${material.name || entry.matIndex + 1}`))
           continue
         }
         
@@ -940,12 +1390,19 @@ export const executeTaskForAccount = async (
     // ==================== 6. 完成任务 ====================
     // 如果没有创建任何广告，标记为失败
     const finalStatus = adIds.length > 0 ? 'success' : 'failed'
-    const errorInfo = adIds.length === 0 ? [{
-      entityType: 'ad',
-      errorCode: 'NO_ADS_CREATED',
-      errorMessage: '素材创建失败，未能创建任何广告',
-      timestamp: new Date(),
-    }] : undefined
+    const errorInfo = adIds.length === 0
+      ? [
+        ...stepDiagnostics,
+        diagnoseBulkAdError({
+          entityType: 'ad',
+          errorCode: 'NO_ADS_CREATED',
+          errorMessage: stepDiagnostics.length > 0
+            ? '所有素材、创意或广告创建步骤均失败，未能创建任何广告'
+            : '素材创建失败，未能创建任何广告',
+          timestamp: new Date(),
+        }),
+      ]
+      : undefined
     
     // 原子更新状态
     const updateData: any = {
@@ -974,6 +1431,7 @@ export const executeTaskForAccount = async (
               campaignId,
               campaignName,
               accountId,
+              organizationId: task.organizationId,
               creativeId: adDetail.creativeId,
               materialId: adDetail.materialId,
               taskId,
@@ -990,6 +1448,7 @@ export const executeTaskForAccount = async (
             await (AdMaterialMapping as any).recordMapping({
               adId: adDetail.adId,
               materialId: adDetail.materialId,
+              organizationId: task.organizationId?.toString(),
               accountId,
               campaignId,
               adsetId: adDetail.adsetId,
@@ -997,7 +1456,13 @@ export const executeTaskForAccount = async (
               publishedBy: task.createdBy?.toString(),
               taskId,
             })
-            logger.info(`[BulkAd] Recorded ad-material mapping: ${adDetail.adId} -> ${adDetail.materialId}`)
+            logger.info('[BulkAd] Recorded ad-material mapping', {
+              materialId: adDetail.materialId,
+              hasAdId: Boolean(adDetail.adId),
+              hasAccountId: Boolean(accountId),
+              hasCampaignId: Boolean(campaignId),
+              hasTaskId: Boolean(taskId),
+            })
           } catch (mappingErr: any) {
             logger.warn(`[BulkAd] Failed to record ad-material mapping:`, mappingErr.message)
           }
@@ -1027,12 +1492,7 @@ export const executeTaskForAccount = async (
     await updateTaskItemAtomic(taskId, accountId, {
       'items.$.status': 'failed',
       'items.$.completedAt': new Date(),
-      'items.$.errors': [{
-        entityType: 'general',
-        errorCode: 'EXECUTION_ERROR',
-        errorMessage: error.message,
-        timestamp: new Date(),
-      }],
+      'items.$.errors': [diagnoseBulkAdError(error, { fallbackCode: 'EXECUTION_ERROR', entityType: 'general' })],
     })
     
     // 更新总体进度（原子操作）
@@ -1083,12 +1543,190 @@ function updateTaskProgress(task: any) {
 /**
  * 获取任务详情
  */
-export const getTask = async (taskId: string) => {
-  const task = await AdTask.findById(taskId).populate('draftId')
+export const getTask = async (taskId: string, accessFilter: any = {}) => {
+  const task = await AdTask.findOne(combineFilters({ _id: taskId }, accessFilter)).populate('draftId')
   if (!task) {
     throw new Error('Task not found')
   }
-  return task
+  return enrichTaskDiagnostics(task)
+}
+
+export const getTaskDiagnostics = async (taskId: string, accessFilter: any = {}) => {
+  const task = await AdTask.findOne(combineFilters({ _id: taskId }, accessFilter)).lean()
+  if (!task) {
+    throw new Error('Task not found')
+  }
+  return buildTaskOperationalDiagnostics(task)
+}
+
+const buildTaskSupportId = (taskId: string, generatedAt: Date) => {
+  const timestamp = generatedAt.toISOString().replace(/\D/g, '').slice(0, 14)
+  const suffix = String(taskId || 'task').slice(-6)
+  return `AUTOARK-TASK-${timestamp}-${suffix}`
+}
+
+const redactSensitiveText = (value: any) => {
+  if (typeof value !== 'string') return value
+  return value
+    .replace(/(access[_-]?token|token|secret|password)(\s*[=:]\s*)[^&\s,;]+/gi, '$1$2[REDACTED]')
+    .replace(/\bEAA[A-Za-z0-9_-]{20,}\b/g, '[REDACTED_TOKEN]')
+}
+
+const safeDiagnosticError = (error: any) => ({
+  entityType: error.entityType,
+  errorCode: error.errorCode,
+  customerMessage: error.customerMessage,
+  operatorMessage: redactSensitiveText(error.operatorMessage),
+  retryable: error.retryable,
+  nextActions: error.nextActions,
+  source: error.source,
+  rawCode: error.rawCode,
+  rawSubcode: error.rawSubcode,
+  timestamp: error.timestamp,
+})
+
+const TASK_SUPPORT_FAILED_ITEM_LIMIT = 20
+const TASK_SUPPORT_ITEM_ERROR_LIMIT = 5
+
+export const getTaskSupportPackage = async (taskId: string, accessFilter: any = {}) => {
+  const task: any = await AdTask.findOne(combineFilters({ _id: taskId }, accessFilter))
+    .populate('draftId')
+    .lean()
+  if (!task) {
+    throw new Error('Task not found')
+  }
+
+  const generatedAt = new Date()
+  const diagnostics = buildTaskOperationalDiagnostics(task)
+  const allFailedItems = (task.items || [])
+    .filter((item: any) => item.status === 'failed' || (Array.isArray(item.errors) && item.errors.length > 0))
+  const failedItems = allFailedItems
+    .slice(0, TASK_SUPPORT_FAILED_ITEM_LIMIT)
+    .map((item: any) => {
+      const itemErrors = Array.isArray(item.errors) && item.errors.length > 0
+        ? item.errors
+        : item.error || 'Task item failed without structured error'
+      const normalizedErrors = normalizeTaskErrors(itemErrors, {
+        entityType: item.status === 'failed' ? 'general' : undefined,
+      })
+      const errorTotal = normalizedErrors.length
+
+      return {
+        accountId: item.accountId,
+        accountName: item.accountName,
+        status: item.status,
+        createdCount: item.result?.createdCount || 0,
+        startedAt: item.startedAt,
+        completedAt: item.completedAt,
+        duration: item.duration,
+        errorTotal,
+        errorsTruncated: errorTotal > TASK_SUPPORT_ITEM_ERROR_LIMIT,
+        errors: normalizedErrors
+          .slice(0, TASK_SUPPORT_ITEM_ERROR_LIMIT)
+          .map(safeDiagnosticError),
+      }
+    })
+
+  const auditQuery: any = {
+    $or: [
+      { targetType: 'ad_task', targetId: taskId },
+      { 'related.newTaskIds': taskId },
+    ],
+  }
+  if (task.organizationId) {
+    auditQuery.organizationId = task.organizationId
+  }
+  const recentAuditLogs = await OpsLog.find(auditQuery)
+    .sort({ createdAt: -1 })
+    .limit(12)
+    .select('category action status targetType targetId summary reason related requestId createdAt')
+    .lean()
+  const safeRecentAuditLogs = recentAuditLogs.map((log: any) => ({
+    category: log.category,
+    action: log.action,
+    status: log.status,
+    targetType: log.targetType,
+    targetId: log.targetId,
+    summary: redactSensitiveText(log.summary),
+    reason: redactSensitiveText(log.reason),
+    related: log.related,
+    requestId: log.requestId,
+    createdAt: log.createdAt,
+  }))
+
+  return {
+    supportId: buildTaskSupportId(taskId, generatedAt),
+    generatedAt: generatedAt.toISOString(),
+    system: {
+      build: getBuildInfo(),
+    },
+    task: {
+      id: String(task._id),
+      name: task.name,
+      status: task.status,
+      platform: task.platform,
+      taskType: task.taskType,
+      organizationId: task.organizationId ? String(task.organizationId) : undefined,
+      createdBy: task.createdBy,
+      draftId: task.draftId?._id ? String(task.draftId._id) : task.draftId ? String(task.draftId) : undefined,
+      createdAt: task.createdAt,
+      queuedAt: task.queuedAt,
+      startedAt: task.startedAt,
+      completedAt: task.completedAt,
+      duration: task.duration,
+      reviewStatus: task.reviewStatus,
+      progress: task.progress,
+    },
+    diagnostics: {
+      ...diagnostics,
+      buckets: diagnostics.buckets.slice(0, 8).map(bucket => ({
+        ...bucket,
+        accounts: bucket.accounts.slice(0, 10),
+        nextActions: bucket.nextActions.slice(0, 4),
+      })),
+      topNextActions: diagnostics.topNextActions.slice(0, 6),
+    },
+    failedItems,
+    limits: {
+      failedItems: {
+        total: allFailedItems.length,
+        returned: failedItems.length,
+        maxReturned: TASK_SUPPORT_FAILED_ITEM_LIMIT,
+        truncated: allFailedItems.length > failedItems.length,
+      },
+      itemErrors: {
+        maxReturned: TASK_SUPPORT_ITEM_ERROR_LIMIT,
+      },
+    },
+    recentAuditLogs: safeRecentAuditLogs,
+  }
+}
+
+const buildTaskListDiagnostics = (task: any) => {
+  const diagnostics = buildTaskOperationalDiagnostics(task)
+  return {
+    ...diagnostics,
+    buckets: diagnostics.buckets.slice(0, 3).map(bucket => ({
+      ...bucket,
+      accounts: bucket.accounts.slice(0, 3),
+      nextActions: bucket.nextActions.slice(0, 2),
+    })),
+    topNextActions: diagnostics.topNextActions.slice(0, 3),
+  }
+}
+
+const normalizeDiagnosticFilter = (value: any) => {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  return trimmed && trimmed !== 'all' ? trimmed : undefined
+}
+
+const toTaskListItem = (task: any) => {
+  const enriched = enrichTaskDiagnostics(task)
+  return {
+    ...enriched,
+    operationalDiagnostics: buildTaskListDiagnostics(enriched),
+  }
 }
 
 /**
@@ -1097,31 +1735,76 @@ export const getTask = async (taskId: string) => {
  * @param userFilter 用户过滤条件（来自 getAssetFilter）
  */
 export const getTaskList = async (query: any = {}, userFilter: any = {}) => {
-  const { status, taskType, platform, page = 1, pageSize = 20 } = query
+  const status = pickAllowedString(query.status, TASK_LIST_STATUSES, '')
+  const taskType = pickAllowedString(query.taskType, TASK_LIST_TYPES, '')
+  const platform = pickAllowedString(query.platform, TASK_LIST_PLATFORMS, '')
+  const { page, pageSize, skip } = parsePagination(query)
+  const diagnosticHealth = normalizeDiagnosticFilter(query.diagnosticHealth || query.health)
+  const diagnosticErrorCode = normalizeDiagnosticFilter(query.errorCode)?.toUpperCase()
   
   // 合并用户过滤条件
   const filter: any = { ...userFilter }
   if (status) filter.status = status
   if (taskType) filter.taskType = taskType
   if (platform) filter.platform = platform
+
+  if (diagnosticHealth || diagnosticErrorCode) {
+    const scanLimit = parseLimitedNumber(
+      query.diagnosticScanLimit ?? query.scanLimit,
+      DEFAULT_DIAGNOSTIC_TASK_SCAN_LIMIT,
+      MAX_DIAGNOSTIC_TASK_SCAN_LIMIT,
+    )
+    const tasks = await AdTask.find(filter)
+      .sort({ createdAt: -1 })
+      .limit(scanLimit + 1)
+      .lean()
+    const scanTruncated = tasks.length > scanLimit
+    const scannedTasks = scanTruncated ? tasks.slice(0, scanLimit) : tasks
+    const filtered = scannedTasks.map(toTaskListItem).filter(task => {
+      const diagnostics = task.operationalDiagnostics
+      if (diagnosticHealth && diagnostics.health !== diagnosticHealth) return false
+      if (diagnosticErrorCode && !diagnostics.buckets.some((bucket: any) => bucket.errorCode === diagnosticErrorCode)) return false
+      return true
+    })
+    return {
+      list: filtered.slice(skip, skip + pageSize),
+      total: filtered.length,
+      page,
+      pageSize,
+      meta: {
+        diagnosticScan: {
+          enabled: true,
+          scanLimit,
+          scannedCount: scannedTasks.length,
+          matchedCount: filtered.length,
+          truncated: scanTruncated,
+        },
+      },
+    }
+  }
   
   const [list, total] = await Promise.all([
     AdTask.find(filter)
       .sort({ createdAt: -1 })
-      .skip((page - 1) * pageSize)
+      .skip(skip)
       .limit(pageSize)
       .lean(),
     AdTask.countDocuments(filter),
   ])
   
-  return { list, total, page, pageSize }
+  return {
+    list: list.map(toTaskListItem),
+    total,
+    page,
+    pageSize,
+  }
 }
 
 /**
  * 取消任务
  */
-export const cancelTask = async (taskId: string) => {
-  const task: any = await AdTask.findById(taskId)
+export const cancelTask = async (taskId: string, accessFilter: any = {}) => {
+  const task: any = await AdTask.findOne(combineFilters({ _id: taskId }, accessFilter))
   if (!task) {
     throw new Error('Task not found')
   }
@@ -1141,8 +1824,8 @@ export const cancelTask = async (taskId: string) => {
 /**
  * 重试失败的任务项
  */
-export const retryFailedItems = async (taskId: string) => {
-  const task: any = await AdTask.findById(taskId)
+export const retryFailedItems = async (taskId: string, accessFilter: any = {}) => {
+  const task: any = await AdTask.findOne(combineFilters({ _id: taskId }, accessFilter))
   if (!task) {
     throw new Error('Task not found')
   }
@@ -1151,23 +1834,88 @@ export const retryFailedItems = async (taskId: string) => {
   if (failedItems.length === 0) {
     throw new Error('No failed items to retry')
   }
+
+  const isRetryableItem = (item: any) => {
+    const itemErrors = normalizeTaskErrors(
+      Array.isArray(item.errors) && item.errors.length > 0
+        ? item.errors
+        : item.error || 'Task item failed without structured error',
+      { entityType: 'general' },
+    )
+    return itemErrors.some(error => error.retryable)
+  }
+
+  const retryableItems = failedItems.filter(isRetryableItem)
+  const blockedItems = failedItems.filter((item: any) => !isRetryableItem(item))
+  if (retryableItems.length === 0) {
+    const diagnostics = buildTaskOperationalDiagnostics(task)
+    const blockedReasons = diagnostics.buckets
+      .filter(bucket => !bucket.retryable)
+      .slice(0, 3)
+      .map(bucket => `${bucket.errorCode}：${bucket.customerMessage}`)
+      .join('；')
+    throw new Error(blockedReasons
+      ? `没有可重试的失败项。请先处理：${blockedReasons}`
+      : '没有可重试的失败项。请先修复权限、账户、Page、Pixel 或素材配置后重新发布任务')
+  }
   
-  // 重置失败项状态
-  for (const item of failedItems) {
+  // 只重置可重试项；权限、账户、Pixel 等阻断型失败保留失败状态，避免反复空跑。
+  for (const item of retryableItems) {
     item.status = 'pending'
     item.errors = []
     item.startedAt = undefined
     item.completedAt = undefined
   }
   
-  task.status = 'pending'
+  const retryCount = (task.retryInfo?.retryCount || 0) + 1
+  const successCount = task.items.filter((item: any) => ['success', 'completed'].includes(item.status)).length
+  const blockedCount = blockedItems.length
+  const completedCount = successCount + blockedCount
+  const totalCount = task.items.length || 1
+
+  task.status = blockedCount > 0 ? 'partial_success' : 'pending'
+  task.progress = {
+    ...(task.progress?.toObject?.() || task.progress || {}),
+    successAccounts: successCount,
+    failedAccounts: blockedCount,
+    completedAccounts: completedCount,
+    percentage: Math.round((completedCount / totalCount) * 100),
+  }
   task.retryInfo = {
-    retryCount: (task.retryInfo?.retryCount || 0) + 1,
+    retryCount,
     lastRetryAt: new Date(),
   }
-  
-  await task.save()
-  logger.info(`[BulkAd] Task retry initiated: ${taskId}`)
+
+  const accountIds = retryableItems.map((item: any) => item.accountId)
+  const { getRedisClient } = await import('../config/redis')
+  const redisAvailable = (() => {
+    try {
+      return getRedisClient() !== null
+    } catch {
+      return false
+    }
+  })()
+
+  if (redisAvailable) {
+    const { addBulkAdJobsBatch } = await import('../queue/bulkAd.queue')
+    task.status = 'queued'
+    task.queuedAt = new Date()
+    await task.save()
+
+    await addBulkAdJobsBatch(task._id.toString(), accountIds, 1, `retry-${retryCount}-${Date.now()}`)
+    logger.info(`[BulkAd] Task retry queued: ${taskId}, ${accountIds.length} account(s)`)
+  } else {
+    task.status = 'processing'
+    task.startedAt = new Date()
+    await task.save()
+
+    for (const accountId of accountIds) {
+      executeTaskForAccount(task._id.toString(), accountId).catch(err => {
+        logger.error(`[BulkAd] Retry failed for account ${accountId}:`, err)
+      })
+    }
+    logger.info(`[BulkAd] Task retry started synchronously: ${taskId}, ${accountIds.length} account(s)`)
+  }
   
   return task
 }
@@ -1178,8 +1926,13 @@ export const retryFailedItems = async (taskId: string) => {
  * @param multiplier 执行倍率（创建多少个新任务）
  * @param userId 当前用户ID（用于任务命名）
  */
-export const rerunTask = async (taskId: string, multiplier: number = 1, userId?: string) => {
-  const originalTask: any = await AdTask.findById(taskId)
+export const rerunTask = async (
+  taskId: string,
+  multiplier: number = 1,
+  userId?: string,
+  accessFilter: any = {},
+) => {
+  const originalTask: any = await AdTask.findOne(combineFilters({ _id: taskId }, accessFilter))
   if (!originalTask) {
     throw new Error('Task not found')
   }
@@ -1189,7 +1942,12 @@ export const rerunTask = async (taskId: string, multiplier: number = 1, userId?:
   }
   
   const config = originalTask.configSnapshot
-  const safeMultiplier = Math.min(20, Math.max(1, multiplier))  // 限制 1-20
+  const safeMultiplier = normalizeRerunMultiplier(multiplier)  // 限制 1-20
+  await assertBulkAdPublishAllowed({
+    organizationId: originalTask.organizationId?.toString(),
+    requestedAccounts: config.accounts.length,
+    requestedTasks: safeMultiplier,
+  })
   
   // 获取用户名
   let userName = 'unknown'
@@ -1225,6 +1983,7 @@ export const rerunTask = async (taskId: string, multiplier: number = 1, userId?:
       status: 'pending',
       platform: originalTask.platform,
       draftId: originalTask.draftId,
+      organizationId: originalTask.organizationId,
       configSnapshot: config,
       publishSettings: originalTask.publishSettings,
       notes: `重新执行自任务 ${taskId}${safeMultiplier > 1 ? ` (${i + 1}/${safeMultiplier})` : ''}`,
@@ -1241,6 +2000,7 @@ export const rerunTask = async (taskId: string, multiplier: number = 1, userId?:
         failedAccounts: 0,
         percentage: 0,
       },
+      createdBy: userId || originalTask.createdBy,
     })
     
     await newTask.save()
@@ -1319,6 +2079,8 @@ export default {
   publishDraft,
   executeTaskForAccount,
   getTask,
+  getTaskDiagnostics,
+  getTaskSupportPackage,
   getTaskList,
   cancelTask,
   retryFailedItems,

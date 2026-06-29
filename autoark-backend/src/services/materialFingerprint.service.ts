@@ -65,6 +65,11 @@ function calculateMD5(buffer: Buffer): string {
   return crypto.createHash('md5').update(buffer).digest('hex')
 }
 
+const hashForLog = (value: unknown): string | undefined => {
+  if (!value) return undefined
+  return crypto.createHash('sha256').update(String(value)).digest('hex').slice(0, 12)
+}
+
 // 比较两个 pHash 的相似度（汉明距离）
 export function comparePHash(hash1: string, hash2: string): number {
   if (!hash1 || !hash2 || hash1.length !== hash2.length) return 0
@@ -99,7 +104,7 @@ export async function generateFingerprintFromUrl(imageUrl: string): Promise<{
   error?: string
 }> {
   try {
-    logger.info(`[Fingerprint] Downloading image from: ${imageUrl.substring(0, 100)}...`)
+    logger.info('[Fingerprint] Downloading image', { urlHash: hashForLog(imageUrl) })
     
     // 下载图片
     const response = await fetch(imageUrl, {
@@ -125,7 +130,13 @@ export async function generateFingerprintFromUrl(imageUrl: string): Promise<{
     const pHash = await calculatePHash(buffer)
     const md5 = calculateMD5(buffer)
     
-    logger.info(`[Fingerprint] Generated: pHash=${pHash}, md5=${md5.substring(0, 8)}..., size=${buffer.length}`)
+    logger.info('[Fingerprint] Generated', {
+      hasPHash: Boolean(pHash),
+      hasMd5: Boolean(md5),
+      size: buffer.length,
+      width: metadata.width || 0,
+      height: metadata.height || 0,
+    })
     
     return {
       success: true,
@@ -170,7 +181,11 @@ export async function downloadAndStoreMaterial(params: {
   const { sourceUrl, creativeId, type } = params
   
   try {
-    logger.info(`[MaterialDownload] Starting download for creative ${creativeId}`)
+    logger.info('[MaterialDownload] Starting download', {
+      creativeHash: hashForLog(creativeId),
+      sourceUrlHash: hashForLog(sourceUrl),
+      type,
+    })
     
     // 1. 下载文件
     const response = await fetch(sourceUrl, {
@@ -223,7 +238,12 @@ export async function downloadAndStoreMaterial(params: {
       throw new Error(uploadResult.error || 'Upload failed')
     }
     
-    logger.info(`[MaterialDownload] Success: ${creativeId} -> ${uploadResult.url}`)
+    logger.info('[MaterialDownload] Success', {
+      creativeHash: hashForLog(creativeId),
+      hasLocalStorageUrl: Boolean(uploadResult.url),
+      hasLocalStorageKey: Boolean(uploadResult.key),
+      type,
+    })
     
     return {
       success: true,
@@ -232,7 +252,11 @@ export async function downloadAndStoreMaterial(params: {
       fingerprint,
     }
   } catch (error: any) {
-    logger.error(`[MaterialDownload] Failed for ${creativeId}: ${error.message}`)
+    logger.error('[MaterialDownload] Failed', {
+      creativeHash: hashForLog(creativeId),
+      message: error.message,
+      type,
+    })
     return {
       success: false,
       error: error.message,
@@ -338,4 +362,3 @@ export default {
   comparePHash,
   findSimilarByFingerprint,
 }
-

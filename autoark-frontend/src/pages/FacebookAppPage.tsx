@@ -25,6 +25,21 @@ interface FacebookApp {
     lastCheckedAt?: string
   }
   isPublicOauthReady?: boolean
+  publicOauthDiagnostics?: {
+    ready: boolean
+    complianceReady: boolean
+    runtimeReady: boolean
+    permissionsReady: boolean
+    businessLoginConfigured: boolean
+    requiredPermissions: string[]
+    missingPermissions: string[]
+    gaps: Array<{
+      code: string
+      label: string
+      detail: string
+      severity: 'critical' | 'warning'
+    }>
+  }
   stats?: {
     totalRequests?: number
     successRequests?: number
@@ -38,6 +53,7 @@ interface FacebookApp {
     requestsPerMinute?: number
     priority?: number
     enabledForBulkAds?: boolean
+    businessLoginConfigId?: string
   }
   currentLoad?: {
     activeTasks?: number
@@ -64,6 +80,15 @@ interface AppStats {
   avgHealthScore: number
 }
 
+interface OAuthConfigStatus {
+  configured: boolean
+  businessLoginConfigIdConfigured?: boolean
+  businessLoginConfigIdSource?: 'env' | 'database' | 'env_and_database' | 'none'
+  businessLoginEnvConfigured?: boolean
+  activeDbBusinessLoginConfigAppCount?: number
+  oauthStateSecretConfigured?: boolean
+}
+
 export default function FacebookAppPage() {
   const [apps, setApps] = useState<FacebookApp[]>([])
   const [stats, setStats] = useState<AppStats | null>(null)
@@ -74,6 +99,7 @@ export default function FacebookAppPage() {
   const [complianceApp, setComplianceApp] = useState<FacebookApp | null>(null)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [publicOAuthRequirements, setPublicOAuthRequirements] = useState<string[]>([])
+  const [oauthConfig, setOauthConfig] = useState<OAuthConfigStatus | null>(null)
 
   // 表单状态
   const [formData, setFormData] = useState({
@@ -84,6 +110,7 @@ export default function FacebookAppPage() {
     maxConcurrentTasks: 5,
     requestsPerMinute: 200,
     priority: 1,
+    businessLoginConfigId: '',
   })
 
   const [complianceForm, setComplianceForm] = useState<{
@@ -134,12 +161,52 @@ export default function FacebookAppPage() {
     }
   }
 
+  const refreshAppsReadiness = async (showSuccess = true) => {
+    setLoading(true)
+    try {
+      const response = await authFetch(`${API_BASE}/facebook-apps/refresh-readiness`, {
+        method: 'POST',
+      })
+      const data = await response.json()
+      if (!data.success) throw new Error(data.error || '实时刷新失败')
+
+      setApps(data.data?.apps || [])
+      await loadStats()
+      if (showSuccess) {
+        const refreshed = data.data?.refreshed ?? 0
+        const failed = data.data?.failed ?? 0
+        setMessage({
+          type: failed > 0 ? 'error' : 'success',
+          text: `实时状态已刷新：成功 ${refreshed} 个${failed > 0 ? `，失败 ${failed} 个` : ''}`,
+        })
+      }
+    } catch (error: any) {
+      setMessage({ type: 'error', text: error.message || '实时刷新失败，已保留上次状态' })
+      await loadApps()
+      await loadStats()
+    } finally {
+      setLoading(false)
+    }
+  }
+
   // 初始加载
   useEffect(() => {
-    loadApps()
-    loadStats()
+    refreshAppsReadiness(false)
     loadPublicOAuthRequirements()
+    loadOAuthConfig()
   }, [])
+
+  const loadOAuthConfig = async () => {
+    try {
+      const response = await authFetch(`${API_BASE}/facebook/oauth/config`)
+      const data = await response.json()
+      if (data.success) {
+        setOauthConfig(data.data)
+      }
+    } catch (e) {
+      // ignore
+    }
+  }
 
   const loadPublicOAuthRequirements = async () => {
     try {
@@ -174,6 +241,7 @@ export default function FacebookAppPage() {
             maxConcurrentTasks: formData.maxConcurrentTasks,
             requestsPerMinute: formData.requestsPerMinute,
             priority: formData.priority,
+            businessLoginConfigId: formData.businessLoginConfigId.trim() || undefined,
           },
         }),
       })
@@ -183,8 +251,7 @@ export default function FacebookAppPage() {
         setMessage({ type: 'success', text: 'App 创建成功！' })
         setShowAddModal(false)
         resetForm()
-        await loadApps()
-        await loadStats()
+        await refreshAppsReadiness(false)
       } else {
         throw new Error(data.error)
       }
@@ -212,6 +279,7 @@ export default function FacebookAppPage() {
             maxConcurrentTasks: formData.maxConcurrentTasks,
             requestsPerMinute: formData.requestsPerMinute,
             priority: formData.priority,
+            businessLoginConfigId: formData.businessLoginConfigId.trim() || undefined,
           },
         }),
       })
@@ -221,7 +289,7 @@ export default function FacebookAppPage() {
         setMessage({ type: 'success', text: 'App 更新成功！' })
         setEditingApp(null)
         resetForm()
-        await loadApps()
+        await refreshAppsReadiness(false)
       } else {
         throw new Error(data.error)
       }
@@ -256,24 +324,38 @@ export default function FacebookAppPage() {
 
   // 验证 App
   const handleValidate = async (app: FacebookApp) => {
+    setLoading(true)
     try {
-      const response = await authFetch(`${API_BASE}/facebook-apps/${app._id}/validate`, {
+      const response = await authFetch(`${API_BASE}/facebook-apps/${app._id}/refresh-readiness`, {
         method: 'POST',
       })
       const data = await response.json()
       
       if (data.success) {
-        if (data.data.isValid) {
-          setMessage({ type: 'success', text: `✅ ${app.appName} 验证成功！` })
-        } else {
-          setMessage({ type: 'error', text: `❌ ${app.appName} 验证失败: ${data.data.error}` })
+        const refreshedApp = data.data?.app
+        const readiness = data.data?.readiness
+        if (refreshedApp) {
+          setApps((current) => current.map((item) => item._id === refreshedApp._id ? refreshedApp : item))
         }
-        await loadApps()
+        if (data.data.isValid) {
+          const gapCount = readiness?.gaps?.length || 0
+          setMessage({
+            type: gapCount > 0 ? 'error' : 'success',
+            text: gapCount > 0
+              ? `${app.appName} 实时验证完成：App 凭证有效，Public OAuth 仍有 ${gapCount} 项缺口`
+              : `${app.appName} 实时验证通过，Public OAuth 已就绪`,
+          })
+        } else {
+          setMessage({ type: 'error', text: `${app.appName} 实时验证失败: ${data.data.error}` })
+        }
+        await loadStats()
       } else {
         throw new Error(data.error)
       }
     } catch (error: any) {
       setMessage({ type: 'error', text: error.message || '验证失败' })
+    } finally {
+      setLoading(false)
     }
   }
 
@@ -333,6 +415,7 @@ export default function FacebookAppPage() {
       maxConcurrentTasks: app.config?.maxConcurrentTasks || 5,
       requestsPerMinute: app.config?.requestsPerMinute || 200,
       priority: app.config?.priority || 1,
+      businessLoginConfigId: app.config?.businessLoginConfigId || '',
     })
   }
 
@@ -346,6 +429,7 @@ export default function FacebookAppPage() {
       maxConcurrentTasks: 5,
       requestsPerMinute: 200,
       priority: 1,
+      businessLoginConfigId: '',
     })
   }
 
@@ -441,10 +525,105 @@ export default function FacebookAppPage() {
   }
 
   const getPublicOauthBadge = (app: FacebookApp) => {
-    const ok = Boolean(app.isPublicOauthReady || app.compliance?.publicOauthReady)
+    const ok = Boolean(app.publicOauthDiagnostics?.ready ?? app.isPublicOauthReady)
     return ok
       ? { text: 'Public OAuth 就绪', cls: 'bg-emerald-50 border-emerald-200 text-emerald-700' }
       : { text: 'Public OAuth 未就绪', cls: 'bg-amber-50 border-amber-200 text-amber-700' }
+  }
+
+  const getPublicOauthGaps = (app: FacebookApp) => {
+    if (app.publicOauthDiagnostics?.gaps?.length) {
+      return app.publicOauthDiagnostics.gaps.map((gap) => gap.label)
+    }
+    const gaps: string[] = []
+    if (app.status !== 'active') gaps.push('App 未启用')
+    if (!app.validation?.isValid) gaps.push('App Secret 未验证')
+    if (app.config?.enabledForBulkAds === false) gaps.push('批量广告未启用')
+    if (app.compliance?.appMode !== 'live') gaps.push('App Mode 非 Live')
+    if (app.compliance?.businessVerification !== 'verified') gaps.push('Business 未验证')
+    if (app.compliance?.appReview !== 'approved') gaps.push('App Review 未通过')
+    if (!app.config?.businessLoginConfigId && !oauthConfig?.businessLoginConfigIdConfigured) gaps.push('缺少 config_id')
+    const permissions = app.compliance?.permissions || []
+    const map = new Map(permissions.map((permission) => [permission.name, permission]))
+    const missingPermissions = publicOAuthRequirements.filter((name) => {
+      const permission = map.get(name)
+      return !(permission?.access === 'advanced' && permission.status === 'approved')
+    })
+    return [...gaps, ...missingPermissions]
+  }
+
+  const getPublicOauthPrimaryAction = (app: FacebookApp) => {
+    if (app.publicOauthDiagnostics?.runtimeReady && !app.publicOauthDiagnostics?.complianceReady) {
+      return '运行配置已通过；请登记 App Mode、Business Verification、App Review 和权限审核结果。'
+    }
+    const diagnosticGap = app.publicOauthDiagnostics?.gaps?.[0]
+    if (diagnosticGap?.detail) return diagnosticGap.detail
+    const fallbackGap = getPublicOauthGaps(app)[0]
+    if (!fallbackGap) return ''
+    return `请先处理：${fallbackGap}`
+  }
+
+  const getBusinessLoginLabel = (app: FacebookApp) => {
+    if (app.config?.businessLoginConfigId) {
+      return { text: 'App 专属 config_id', cls: 'text-emerald-600' }
+    }
+    if (oauthConfig?.businessLoginConfigIdConfigured) {
+      return { text: '使用全局 config_id', cls: 'text-emerald-600' }
+    }
+    return { text: '待配置 config_id', cls: 'text-amber-600' }
+  }
+
+  const getReadinessParts = (app: FacebookApp) => {
+    const diagnostics = app.publicOauthDiagnostics
+    return [
+      {
+        label: '运行配置',
+        ready: Boolean(diagnostics?.runtimeReady ?? (app.status === 'active' && app.validation?.isValid && app.config?.enabledForBulkAds !== false)),
+      },
+      {
+        label: '合规登记',
+        ready: Boolean(diagnostics?.complianceReady),
+      },
+      {
+        label: '权限登记',
+        ready: Boolean(diagnostics?.permissionsReady),
+      },
+      {
+        label: 'Business Login',
+        ready: Boolean(diagnostics?.businessLoginConfigured ?? app.config?.businessLoginConfigId ?? oauthConfig?.businessLoginConfigIdConfigured),
+      },
+    ]
+  }
+
+  const readinessPartClass = (ready: boolean) => (
+    ready
+      ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
+      : 'bg-amber-50 border-amber-200 text-amber-700'
+  )
+
+  const oauthConfigSourceText = () => {
+    switch (oauthConfig?.businessLoginConfigIdSource) {
+      case 'env_and_database': return '全局 + App'
+      case 'database': return 'App'
+      case 'env': return '全局'
+      default: return oauthConfig?.businessLoginConfigIdConfigured ? '已配置' : '待配置'
+    }
+  }
+
+  const applyApprovedCompliancePreset = () => {
+    const existing = new Map(complianceForm.permissions.map((permission) => [permission.name, permission]))
+    const names = Array.from(new Set([...publicOAuthRequirements, ...complianceForm.permissions.map((permission) => permission.name)]))
+    setComplianceForm({
+      appMode: 'live',
+      businessVerification: 'verified',
+      appReview: 'approved',
+      permissions: names.map((name) => ({
+        ...existing.get(name),
+        name,
+        access: 'advanced',
+        status: 'approved',
+      })),
+    })
   }
 
   return (
@@ -465,13 +644,18 @@ export default function FacebookAppPage() {
           </div>
           <div className="flex gap-3">
             <button
-              onClick={() => { loadApps(); loadStats() }}
+              onClick={() => refreshAppsReadiness(true)}
+              disabled={loading}
               className="group px-6 py-3 bg-blue-600 hover:bg-blue-700 rounded-2xl text-sm font-semibold text-white shadow-md hover:shadow-lg transition-all duration-200 flex items-center gap-2 active:scale-95"
             >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-              </svg>
-              刷新
+              {loading ? (
+                <Loading.Spinner size="sm" color="white" />
+              ) : (
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+              )}
+              实时刷新
             </button>
             <button
               onClick={() => {
@@ -627,9 +811,34 @@ export default function FacebookAppPage() {
                     <div className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold border ${getPublicOauthBadge(app).cls}`}>
                       {getPublicOauthBadge(app).text}
                     </div>
-                    {publicOAuthRequirements.length > 0 && !(app.isPublicOauthReady || app.compliance?.publicOauthReady) && (
-                      <div className="text-xs text-slate-500 mt-2">
-                        公开授权需要：{publicOAuthRequirements.join(', ')}（需 Advanced + Approved）
+                    <div className="grid grid-cols-2 gap-2 mt-3">
+                      {getReadinessParts(app).map((part) => (
+                        <div
+                          key={part.label}
+                          className={`rounded-lg border px-2.5 py-2 text-[11px] font-semibold flex items-center justify-between gap-2 ${readinessPartClass(part.ready)}`}
+                        >
+                          <span>{part.label}</span>
+                          <span>{part.ready ? '已过' : '待处理'}</span>
+                        </div>
+                      ))}
+                    </div>
+                    {publicOAuthRequirements.length > 0 && !(app.publicOauthDiagnostics?.ready ?? app.isPublicOauthReady) && (
+                      <div className="text-xs text-slate-500 mt-2 leading-5">
+                        待处理：{getPublicOauthGaps(app).slice(0, 4).join(', ') || '无'}
+                        {getPublicOauthGaps(app).length > 4 ? ` 等 ${getPublicOauthGaps(app).length} 项` : ''}
+                      </div>
+                    )}
+                    {!(app.publicOauthDiagnostics?.ready ?? app.isPublicOauthReady) && getPublicOauthPrimaryAction(app) && (
+                      <div className="text-xs text-amber-700 mt-2 leading-5">
+                        {getPublicOauthPrimaryAction(app)}
+                      </div>
+                    )}
+                    <div className="text-[11px] text-slate-400 mt-2">
+                      最后实时刷新：{formatDate(app.compliance?.lastCheckedAt || app.validation?.validatedAt)}
+                    </div>
+                    {app.compliance?.publicOauthReady && !(app.publicOauthDiagnostics?.ready ?? app.isPublicOauthReady) && (
+                      <div className="text-xs text-amber-700 mt-2 leading-5">
+                        Meta 合规记录已通过，仍需补齐运行条件后才能给客户公开授权。
                       </div>
                     )}
                   </div>
@@ -648,6 +857,12 @@ export default function FacebookAppPage() {
                       <span>验证状态：</span>
                       <span className={`font-medium ${app.validation?.isValid ? 'text-emerald-600' : 'text-red-600'}`}>
                         {app.validation?.isValid ? '✓ 已验证' : '✗ 未验证'}
+                      </span>
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <span>Business Login：</span>
+                      <span className={`font-medium text-right ${getBusinessLoginLabel(app).cls}`}>
+                        {getBusinessLoginLabel(app).text} · {oauthConfigSourceText()}
                       </span>
                     </div>
                     {app.stats?.lastUsedAt && (
@@ -676,9 +891,10 @@ export default function FacebookAppPage() {
                   <div className="flex flex-wrap gap-2">
                     <button
                       onClick={() => handleValidate(app)}
+                      disabled={loading}
                       className="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg text-xs font-medium transition-all"
                     >
-                      验证
+                      实时验证
                     </button>
                     <button
                       onClick={() => handleToggleStatus(app)}
@@ -854,6 +1070,20 @@ export default function FacebookAppPage() {
                   />
                 </div>
               </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">
+                  Business Login Configuration ID
+                  <span className="text-slate-400 text-xs ml-2">可选，留空则使用全局配置</span>
+                </label>
+                <input
+                  type="text"
+                  value={formData.businessLoginConfigId}
+                  onChange={(e) => setFormData({ ...formData, businessLoginConfigId: e.target.value })}
+                  placeholder="1544502593866149"
+                  className="w-full px-4 py-3 bg-white border border-slate-300 rounded-2xl text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400 transition-all font-mono"
+                />
+              </div>
               
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-2">
@@ -919,6 +1149,27 @@ export default function FacebookAppPage() {
             </div>
 
             <div className="mt-6 grid grid-cols-3 gap-4">
+              {complianceApp.publicOauthDiagnostics && (
+                <div className="col-span-3 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                    {getReadinessParts(complianceApp).map((part) => (
+                      <div
+                        key={part.label}
+                        className={`rounded-lg border px-3 py-2 text-xs font-semibold flex items-center justify-between gap-2 ${readinessPartClass(part.ready)}`}
+                      >
+                        <span>{part.label}</span>
+                        <span>{part.ready ? '已过' : '待处理'}</span>
+                      </div>
+                    ))}
+                  </div>
+                  {complianceApp.publicOauthDiagnostics.gaps.length > 0 && (
+                    <div className="mt-3 text-xs text-slate-600 leading-5">
+                      当前缺口：{complianceApp.publicOauthDiagnostics.gaps.slice(0, 5).map((gap) => gap.label).join('、')}
+                      {complianceApp.publicOauthDiagnostics.gaps.length > 5 ? ` 等 ${complianceApp.publicOauthDiagnostics.gaps.length} 项` : ''}
+                    </div>
+                  )}
+                </div>
+              )}
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-2">App Mode</label>
                 <select
@@ -964,11 +1215,20 @@ export default function FacebookAppPage() {
             <div className="mt-6">
               <div className="flex items-center justify-between">
                 <h3 className="font-semibold text-slate-900">Permissions</h3>
-                {publicOAuthRequirements.length > 0 && (
-                  <div className="text-xs text-slate-500">
-                    Public OAuth 必需：{publicOAuthRequirements.join(', ')}
-                  </div>
-                )}
+                <div className="flex items-center gap-3">
+                  {publicOAuthRequirements.length > 0 && (
+                    <div className="text-xs text-slate-500">
+                      Public OAuth 必需：{publicOAuthRequirements.join(', ')}
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={applyApprovedCompliancePreset}
+                    className="px-3 py-1.5 rounded-lg border border-indigo-200 bg-indigo-50 text-xs font-semibold text-indigo-700 hover:bg-indigo-100"
+                  >
+                    填充已通过
+                  </button>
+                </div>
               </div>
 
               <div className="mt-3 border border-slate-200 rounded-2xl overflow-hidden">
@@ -1064,4 +1324,3 @@ export default function FacebookAppPage() {
     </div>
   )
 }
-

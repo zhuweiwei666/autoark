@@ -19,7 +19,7 @@
  */
 export function normalizeForStorage(accountId: string | null | undefined): string {
   if (!accountId) return ''
-  return accountId.replace(/^act_/, '')
+  return String(accountId).trim().replace(/^act_/i, '')
 }
 
 /**
@@ -75,4 +75,3 @@ export function getAccountIdsForQuery(accountIds: string[]): string[] {
 export function normalizeFromQuery(accountId: string | null | undefined): string {
   return normalizeForStorage(accountId)
 }
-

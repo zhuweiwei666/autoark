@@ -37,12 +37,40 @@ const FbTokenSchema = new mongoose.Schema(
   },
   {
     timestamps: true, // 自动管理 createdAt 和 updatedAt
+    toJSON: {
+      virtuals: true,
+      transform: (_doc, ret: any) => {
+        delete ret.token
+        return ret
+      },
+    },
+    toObject: {
+      virtuals: true,
+      transform: (_doc, ret: any) => {
+        delete ret.token
+        return ret
+      },
+    },
   },
 )
 
 // 索引：优化师 + 创建日期，用于筛选
 FbTokenSchema.index({ optimizer: 1, createdAt: -1 })
+// 索引：租户 Token 列表按创建时间分页
+FbTokenSchema.index({ organizationId: 1, createdAt: -1 })
+FbTokenSchema.index({ userId: 1, createdAt: -1 })
 // 索引：状态 + 最后检查时间
 FbTokenSchema.index({ status: 1, lastCheckedAt: -1 })
+// 同一组织内同一个 Facebook 用户只保留一个活跃授权，避免并发 OAuth 产生重复记录
+FbTokenSchema.index(
+  { fbUserId: 1, organizationId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      fbUserId: { $exists: true },
+      organizationId: { $exists: true },
+    },
+  },
+)
 
 export default mongoose.model<IFbToken>('FbToken', FbTokenSchema)

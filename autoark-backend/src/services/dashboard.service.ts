@@ -5,6 +5,7 @@ import mongoose from 'mongoose'
 import { fetchInsights } from './facebook.api'
 import { normalizeForApi } from '../utils/accountId'
 import logger from '../utils/logger'
+import { pickAllowedString, pickSafeQueryString } from '../utils/pagination'
 
 // --- Existing Dashboard Service Logic ---
 
@@ -16,17 +17,31 @@ interface DashboardFilters {
   country?: string
 }
 
+export const DASHBOARD_CHANNEL_FILTERS = ['facebook', 'tiktok'] as const
+
+const sanitizeDashboardFilters = (filters: DashboardFilters): DashboardFilters => {
+  const channel = pickAllowedString(filters.channel, DASHBOARD_CHANNEL_FILTERS, '')
+  const country = pickSafeQueryString(filters.country, 32)
+
+  return {
+    ...filters,
+    channel: channel || undefined,
+    country,
+  }
+}
+
 const buildMatchStage = (filters: DashboardFilters) => {
+  const safeFilters = sanitizeDashboardFilters(filters)
   const match: any = {
-    date: { $gte: filters.startDate, $lte: filters.endDate },
+    date: { $gte: safeFilters.startDate, $lte: safeFilters.endDate },
   }
 
-  if (filters.channel) {
-    match.channel = filters.channel
+  if (safeFilters.channel) {
+    match.channel = safeFilters.channel
   }
 
-  if (filters.country) {
-    match.country = filters.country
+  if (safeFilters.country) {
+    match.country = safeFilters.country
   }
 
   return match
