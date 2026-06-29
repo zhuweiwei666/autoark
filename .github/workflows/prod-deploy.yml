@@ -1,0 +1,50 @@
+name: AutoArk Production Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref to deploy
+        required: true
+        default: main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: autoark-production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Install production SSH key
+        env:
+          AUTOARK_PROD_SSH_KEY: ${{ secrets.AUTOARK_PROD_SSH_KEY }}
+        run: |
+          test -n "$AUTOARK_PROD_SSH_KEY"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$AUTOARK_PROD_SSH_KEY" > ~/.ssh/autoark_prod_key
+          chmod 600 ~/.ssh/autoark_prod_key
+          cat > ~/.ssh/config <<'EOF'
+          Host autoark-prod
+            HostName 45.33.103.31
+            User root
+            IdentityFile ~/.ssh/autoark_prod_key
+            IdentitiesOnly yes
+            StrictHostKeyChecking accept-new
+            ServerAliveInterval 10
+          EOF
+          chmod 600 ~/.ssh/config
+
+      - name: Deploy to production
+        env:
+          AUTOARK_REF: ${{ inputs.ref }}
+          PROD_HOST: autoark-prod
+        run: bash deploy/prod-deploy.sh
