@@ -50,6 +50,7 @@ describe('commercial publish limits', () => {
 
   afterEach(() => {
     jest.restoreAllMocks()
+    jest.useRealTimers()
     for (const [key, value] of Object.entries({
       FACEBOOK_BUSINESS_LOGIN_CONFIG_ID: originalBusinessLoginConfigId,
       OAUTH_STATE_SECRET: originalOauthStateSecret,
@@ -653,6 +654,7 @@ describe('commercial publish limits', () => {
   })
 
   it('returns a commercial usage ledger with daily task counts and quota events', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-06-14T12:00:00.000Z'))
     jest.spyOn(Organization, 'findById').mockResolvedValue(mockOrganization({ name: 'Acme Team' }) as any)
     jest.spyOn(User, 'countDocuments').mockResolvedValue(3 as any)
     jest.spyOn(Account, 'countDocuments').mockResolvedValue(5 as any)
