@@ -10,10 +10,16 @@ jest.mock('../src/services/auditLog.service', () => ({
   writeAuditLog: jest.fn().mockResolvedValue(undefined),
 }))
 
+jest.mock('axios', () => ({
+  get: jest.fn(),
+}))
+
+import axios from 'axios'
 import FacebookApp from '../src/models/FacebookApp'
-import { getAvailableApps, updateApp, updateCompliance } from '../src/controllers/facebookApp.controller'
+import { getAvailableApps, refreshAppReadiness, refreshAppsReadiness, updateApp, updateCompliance } from '../src/controllers/facebookApp.controller'
 
 const mockFacebookApp = FacebookApp as jest.Mocked<typeof FacebookApp>
+const mockAxios = axios as jest.Mocked<typeof axios>
 
 const createFindChain = (apps: any[] = []) => {
   const limit = jest.fn().mockResolvedValue(apps)
@@ -195,5 +201,90 @@ describe('Facebook App controller', () => {
     expect(app.compliance.publicOauthReady).toBe(true)
     expect(app.save).toHaveBeenCalled()
     expect(res.json).toHaveBeenCalledWith({ success: true, data: app })
+  })
+
+  it('refreshes one app readiness by validating against Meta in real time', async () => {
+    const app: any = {
+      _id: 'app_doc_3',
+      appId: '2165550037551429',
+      appSecret: 'secret',
+      appName: 'Realtime app',
+      status: 'inactive',
+      validation: { isValid: false },
+      config: { enabledForBulkAds: true, businessLoginConfigId: '1544502593866149' },
+      compliance: {
+        appMode: 'live',
+        businessVerification: 'verified',
+        appReview: 'approved',
+        permissions: approvedPermissions(),
+        publicOauthReady: false,
+      },
+      save: jest.fn().mockResolvedValue(undefined),
+    }
+    ;(mockFacebookApp.findById as jest.Mock).mockResolvedValue(app)
+    mockAxios.get
+      .mockResolvedValueOnce({ data: { access_token: 'app_access_token' } })
+      .mockResolvedValueOnce({ data: { data: { app_id: '2165550037551429', is_valid: true } } })
+    const res = responseMock()
+
+    await refreshAppReadiness({
+      params: { id: 'app_doc_3' },
+      user: { userId: 'admin_1' },
+    } as any, res as any)
+
+    expect(mockAxios.get).toHaveBeenCalledTimes(2)
+    expect(app.validation).toEqual(expect.objectContaining({ isValid: true }))
+    expect(app.status).toBe('active')
+    expect(app.compliance.publicOauthReady).toBe(true)
+    expect(app.compliance.lastCheckedAt).toBeInstanceOf(Date)
+    expect(app.save).toHaveBeenCalled()
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      data: expect.objectContaining({
+        isValid: true,
+        app,
+        readiness: expect.objectContaining({ ready: true }),
+      }),
+    })
+  })
+
+  it('refreshes all app readiness records for the app management page', async () => {
+    const apps: any[] = [
+      {
+        _id: 'app_doc_4',
+        appId: '2165550037551429',
+        appSecret: 'secret',
+        appName: 'Realtime app',
+        status: 'active',
+        validation: { isValid: true },
+        config: { enabledForBulkAds: true, businessLoginConfigId: '1544502593866149' },
+        compliance: {
+          appMode: 'live',
+          businessVerification: 'verified',
+          appReview: 'approved',
+          permissions: approvedPermissions(),
+          publicOauthReady: false,
+        },
+        save: jest.fn().mockResolvedValue(undefined),
+      },
+    ]
+    ;(mockFacebookApp.find as jest.Mock).mockResolvedValue(apps)
+    mockAxios.get
+      .mockResolvedValueOnce({ data: { access_token: 'app_access_token' } })
+      .mockResolvedValueOnce({ data: { data: { app_id: '2165550037551429', is_valid: true } } })
+    const res = responseMock()
+
+    await refreshAppsReadiness({ user: { userId: 'admin_1' } } as any, res as any)
+
+    expect(apps[0].compliance.publicOauthReady).toBe(true)
+    expect(apps[0].save).toHaveBeenCalled()
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      data: expect.objectContaining({
+        apps,
+        refreshed: 1,
+        failed: 0,
+      }),
+    })
   })
 })

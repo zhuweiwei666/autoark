@@ -161,10 +161,37 @@ export default function FacebookAppPage() {
     }
   }
 
+  const refreshAppsReadiness = async (showSuccess = true) => {
+    setLoading(true)
+    try {
+      const response = await authFetch(`${API_BASE}/facebook-apps/refresh-readiness`, {
+        method: 'POST',
+      })
+      const data = await response.json()
+      if (!data.success) throw new Error(data.error || '实时刷新失败')
+
+      setApps(data.data?.apps || [])
+      await loadStats()
+      if (showSuccess) {
+        const refreshed = data.data?.refreshed ?? 0
+        const failed = data.data?.failed ?? 0
+        setMessage({
+          type: failed > 0 ? 'error' : 'success',
+          text: `实时状态已刷新：成功 ${refreshed} 个${failed > 0 ? `，失败 ${failed} 个` : ''}`,
+        })
+      }
+    } catch (error: any) {
+      setMessage({ type: 'error', text: error.message || '实时刷新失败，已保留上次状态' })
+      await loadApps()
+      await loadStats()
+    } finally {
+      setLoading(false)
+    }
+  }
+
   // 初始加载
   useEffect(() => {
-    loadApps()
-    loadStats()
+    refreshAppsReadiness(false)
     loadPublicOAuthRequirements()
     loadOAuthConfig()
   }, [])
@@ -224,8 +251,7 @@ export default function FacebookAppPage() {
         setMessage({ type: 'success', text: 'App 创建成功！' })
         setShowAddModal(false)
         resetForm()
-        await loadApps()
-        await loadStats()
+        await refreshAppsReadiness(false)
       } else {
         throw new Error(data.error)
       }
@@ -263,7 +289,7 @@ export default function FacebookAppPage() {
         setMessage({ type: 'success', text: 'App 更新成功！' })
         setEditingApp(null)
         resetForm()
-        await loadApps()
+        await refreshAppsReadiness(false)
       } else {
         throw new Error(data.error)
       }
@@ -298,24 +324,38 @@ export default function FacebookAppPage() {
 
   // 验证 App
   const handleValidate = async (app: FacebookApp) => {
+    setLoading(true)
     try {
-      const response = await authFetch(`${API_BASE}/facebook-apps/${app._id}/validate`, {
+      const response = await authFetch(`${API_BASE}/facebook-apps/${app._id}/refresh-readiness`, {
         method: 'POST',
       })
       const data = await response.json()
       
       if (data.success) {
-        if (data.data.isValid) {
-          setMessage({ type: 'success', text: `✅ ${app.appName} 验证成功！` })
-        } else {
-          setMessage({ type: 'error', text: `❌ ${app.appName} 验证失败: ${data.data.error}` })
+        const refreshedApp = data.data?.app
+        const readiness = data.data?.readiness
+        if (refreshedApp) {
+          setApps((current) => current.map((item) => item._id === refreshedApp._id ? refreshedApp : item))
         }
-        await loadApps()
+        if (data.data.isValid) {
+          const gapCount = readiness?.gaps?.length || 0
+          setMessage({
+            type: gapCount > 0 ? 'error' : 'success',
+            text: gapCount > 0
+              ? `${app.appName} 实时验证完成：App 凭证有效，Public OAuth 仍有 ${gapCount} 项缺口`
+              : `${app.appName} 实时验证通过，Public OAuth 已就绪`,
+          })
+        } else {
+          setMessage({ type: 'error', text: `${app.appName} 实时验证失败: ${data.data.error}` })
+        }
+        await loadStats()
       } else {
         throw new Error(data.error)
       }
     } catch (error: any) {
       setMessage({ type: 'error', text: error.message || '验证失败' })
+    } finally {
+      setLoading(false)
     }
   }
 
@@ -541,11 +581,11 @@ export default function FacebookAppPage() {
         ready: Boolean(diagnostics?.runtimeReady ?? (app.status === 'active' && app.validation?.isValid && app.config?.enabledForBulkAds !== false)),
       },
       {
-        label: 'Meta 合规',
+        label: '合规登记',
         ready: Boolean(diagnostics?.complianceReady),
       },
       {
-        label: '权限',
+        label: '权限登记',
         ready: Boolean(diagnostics?.permissionsReady),
       },
       {
@@ -604,13 +644,18 @@ export default function FacebookAppPage() {
           </div>
           <div className="flex gap-3">
             <button
-              onClick={() => { loadApps(); loadStats() }}
+              onClick={() => refreshAppsReadiness(true)}
+              disabled={loading}
               className="group px-6 py-3 bg-blue-600 hover:bg-blue-700 rounded-2xl text-sm font-semibold text-white shadow-md hover:shadow-lg transition-all duration-200 flex items-center gap-2 active:scale-95"
             >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-              </svg>
-              刷新
+              {loading ? (
+                <Loading.Spinner size="sm" color="white" />
+              ) : (
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+              )}
+              实时刷新
             </button>
             <button
               onClick={() => {
@@ -788,6 +833,9 @@ export default function FacebookAppPage() {
                         {getPublicOauthPrimaryAction(app)}
                       </div>
                     )}
+                    <div className="text-[11px] text-slate-400 mt-2">
+                      最后实时刷新：{formatDate(app.compliance?.lastCheckedAt || app.validation?.validatedAt)}
+                    </div>
                     {app.compliance?.publicOauthReady && !(app.publicOauthDiagnostics?.ready ?? app.isPublicOauthReady) && (
                       <div className="text-xs text-amber-700 mt-2 leading-5">
                         Meta 合规记录已通过，仍需补齐运行条件后才能给客户公开授权。
@@ -843,9 +891,10 @@ export default function FacebookAppPage() {
                   <div className="flex flex-wrap gap-2">
                     <button
                       onClick={() => handleValidate(app)}
+                      disabled={loading}
                       className="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg text-xs font-medium transition-all"
                     >
-                      验证
+                      实时验证
                     </button>
                     <button
                       onClick={() => handleToggleStatus(app)}

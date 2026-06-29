@@ -405,6 +405,134 @@ export const updateCompliance = async (req: Request, res: Response) => {
   }
 }
 
+const refreshReadinessForApp = async (app: any) => {
+  const result = await validateAppCredentials(String(app.appId), String(app.appSecret))
+  const checkedAt = new Date()
+
+  app.validation = {
+    isValid: result.isValid,
+    validatedAt: checkedAt,
+    validationError: result.error,
+  }
+
+  if (result.isValid && app.status === 'inactive') {
+    app.status = 'active'
+  } else if (!result.isValid) {
+    app.status = 'inactive'
+  }
+
+  app.compliance = {
+    ...(app.compliance || {}),
+    publicOauthReady: computePublicOauthComplianceReady(app),
+    lastCheckedAt: checkedAt,
+  }
+
+  const readiness = buildPublicOAuthReadiness(app)
+  await app.save()
+
+  return { ...result, app, readiness }
+}
+
+/**
+ * 实时刷新所有 App 的公开授权就绪度
+ * POST /api/facebook-apps/refresh-readiness
+ */
+export const refreshAppsReadiness = async (req: Request, res: Response) => {
+  try {
+    const apps: any[] = await FacebookApp.find()
+    const results = await Promise.all(apps.map(async (app) => {
+      try {
+        const result = await refreshReadinessForApp(app)
+        return {
+          app,
+          isValid: result.isValid,
+          readiness: result.readiness,
+          error: result.error,
+        }
+      } catch (error: any) {
+        return {
+          app,
+          isValid: false,
+          readiness: buildPublicOAuthReadiness(app),
+          error: error.message,
+        }
+      }
+    }))
+    const failed = results.filter((result) => result.error).length
+
+    await writeFacebookAppAudit(req, {
+      action: 'facebook_app.validate',
+      status: failed > 0 ? 'warning' : 'success',
+      summary: `实时刷新 Facebook App 就绪度：${apps.length - failed}/${apps.length} 成功`,
+      metadata: {
+        appCount: apps.length,
+        refreshed: apps.length - failed,
+        failed,
+      },
+    })
+
+    res.json({
+      success: true,
+      data: {
+        apps,
+        results,
+        refreshed: apps.length - failed,
+        failed,
+      },
+    })
+  } catch (error: any) {
+    logger.error('实时刷新 Facebook App 就绪度失败:', error)
+    await writeFacebookAppAudit(req, {
+      action: 'facebook_app.validate',
+      status: 'failed',
+      summary: '实时刷新 Facebook App 就绪度失败',
+      reason: error.message,
+    })
+    res.status(500).json({ success: false, error: error.message })
+  }
+}
+
+/**
+ * 实时刷新单个 App 的公开授权就绪度
+ * POST /api/facebook-apps/:id/refresh-readiness
+ */
+export const refreshAppReadiness = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params
+    const app: any = await FacebookApp.findById(id)
+    if (!app) {
+      return res.status(404).json({ success: false, error: 'App 不存在' })
+    }
+
+    const result = await refreshReadinessForApp(app)
+    await writeFacebookAppAudit(req, {
+      action: 'facebook_app.validate',
+      status: result.isValid ? 'success' : 'failed',
+      targetId: String(app._id),
+      summary: result.isValid ? `实时刷新 Facebook App 就绪度成功：${app.appName}` : `实时刷新 Facebook App 就绪度失败：${app.appName}`,
+      reason: result.error,
+      metadata: {
+        appId: app.appId,
+        validationIsValid: result.isValid,
+        publicOauthReady: result.readiness.ready,
+        publicOauthGapCodes: result.readiness.gaps.map((gap) => gap.code),
+      },
+    })
+
+    res.json({ success: true, data: result })
+  } catch (error: any) {
+    logger.error('实时刷新 Facebook App 就绪度失败:', error)
+    await writeFacebookAppAudit(req, {
+      action: 'facebook_app.validate',
+      status: 'failed',
+      targetId: req.params.id,
+      summary: '实时刷新 Facebook App 就绪度失败',
+      reason: error.message,
+    })
+    res.status(500).json({ success: false, error: error.message })
+  }
+}
+
 /**
  * 删除 App
  */
