@@ -838,7 +838,7 @@ export default function FacebookAppPage() {
                     </div>
                     {app.compliance?.publicOauthReady && !(app.publicOauthDiagnostics?.ready ?? app.isPublicOauthReady) && (
                       <div className="text-xs text-amber-700 mt-2 leading-5">
-                        Meta 合规记录已通过，仍需补齐运行条件后才能给客户公开授权。
+                        合规登记记录已通过，仍需补齐运行条件后才能给客户公开授权。
                       </div>
                     )}
                   </div>
