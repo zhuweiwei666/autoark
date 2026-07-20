@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express'
 import * as oauthService from '../services/facebook.oauth.service'
 import logger from '../utils/logger'
 import { pickSafeQueryString } from '../utils/pagination'
+import { UserRole } from '../models/User'
 
 const OAUTH_STATE_MAX_LENGTH = 4096
 const OAUTH_CODE_MAX_LENGTH = 4096
@@ -48,7 +49,29 @@ export const getLoginUrl = async (req: Request, res: Response, next: NextFunctio
 
     const state = pickSafeQueryString(req.query.state, OAUTH_STATE_MAX_LENGTH)
     const appId = pickSafeQueryString(req.query.appId, OAUTH_APP_ID_MAX_LENGTH)
-    const loginUrl = await oauthService.getFacebookLoginUrl(state, appId)
+    const adminTest = pickSafeQueryString(req.query.adminTest, 10) === 'true'
+    const businessLogin = pickSafeQueryString(req.query.businessLogin, 10) === 'true'
+
+    if (adminTest && req.user?.role !== UserRole.SUPER_ADMIN) {
+      return res.status(403).json({
+        success: false,
+        message: '仅超级管理员可绕过公开 OAuth 准入进行 App 验证',
+      })
+    }
+
+    if (adminTest && !appId) {
+      return res.status(400).json({
+        success: false,
+        message: '管理员 OAuth 验证必须指定 appId',
+      })
+    }
+
+    const loginUrl = adminTest
+      ? await oauthService.getFacebookLoginUrl(state, appId, {
+          businessLogin,
+          requirePublicOauthReady: false,
+        })
+      : await oauthService.getFacebookLoginUrl(state, appId)
 
     res.json({
       success: true,

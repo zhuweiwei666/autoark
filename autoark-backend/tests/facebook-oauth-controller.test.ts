@@ -61,6 +61,44 @@ describe('Facebook OAuth controller', () => {
     })
   })
 
+  it('allows a super admin to generate a Business Login URL for an explicit app validation', async () => {
+    mockOAuthService.getFacebookLoginUrl.mockResolvedValue('https://facebook.example/oauth')
+    const res = responseMock()
+
+    await getLoginUrl({
+      user: { role: 'super_admin' },
+      query: {
+        appId: '1688691382308509',
+        adminTest: 'true',
+        businessLogin: 'true',
+      },
+    } as any, res as any, nextMock as any)
+
+    expect(mockOAuthService.getFacebookLoginUrl).toHaveBeenCalledWith(
+      undefined,
+      '1688691382308509',
+      {
+        businessLogin: true,
+        requirePublicOauthReady: false,
+      },
+    )
+  })
+
+  it('rejects the administrator validation bypass for non-super-admin users', async () => {
+    const res = responseMock()
+
+    await getLoginUrl({
+      user: { role: 'org_admin' },
+      query: {
+        appId: '1688691382308509',
+        adminTest: 'true',
+      },
+    } as any, res as any, nextMock as any)
+
+    expect(res.status).toHaveBeenCalledWith(403)
+    expect(mockOAuthService.getFacebookLoginUrl).not.toHaveBeenCalled()
+  })
+
   it('passes sanitized OAuth callback code and state to the OAuth service', async () => {
     mockOAuthService.handleOAuthCallback.mockResolvedValue({
       tokenId: 'token_1',

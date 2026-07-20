@@ -101,6 +101,25 @@ describe('Facebook OAuth login URL generation', () => {
     }))
   })
 
+  it('allows an active explicit app for an administrator OAuth validation flow', async () => {
+    const oauthApi = await loadOauthApi({
+      appId: '1688691382308509',
+      appSecret: 'secret',
+      config: { businessLoginConfigId: '1530627468815046' },
+    })
+
+    const loginUrl = await oauthApi.getFacebookLoginUrl('state', '1688691382308509', {
+      businessLogin: true,
+      requirePublicOauthReady: false,
+    })
+
+    expect((oauthApi as any).__findOne).toHaveBeenCalledWith({
+      appId: '1688691382308509',
+      status: 'active',
+    })
+    expect(new URL(loginUrl).searchParams.get('config_id')).toBe('1530627468815046')
+  })
+
   it('keeps OAuth callbacks compatible with the original active app from signed state', async () => {
     const oauthApi = await loadOauthApi({
       appId: '2165550037551429',

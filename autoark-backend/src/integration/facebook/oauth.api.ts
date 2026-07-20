@@ -69,6 +69,7 @@ export const getFacebookBulkAdRedirectUri = (): string => getBulkAdRedirectUri()
 export interface FacebookLoginUrlOptions {
   businessLogin?: boolean
   redirectUri?: string
+  requirePublicOauthReady?: boolean
 }
 
 export type BusinessLoginConfigSource = 'env' | 'database' | 'env_and_database' | 'none'
@@ -281,7 +282,9 @@ export const getFacebookLoginUrl = async (
   appId?: string,
   options: FacebookLoginUrlOptions = {},
 ): Promise<string> => {
-  const config = await getActiveAppConfigWithOptions(appId, { requirePublicOauthReady: true })
+  const config = await getActiveAppConfigWithOptions(appId, {
+    requirePublicOauthReady: options.requirePublicOauthReady !== false,
+  })
   const redirectUri = options.redirectUri || FB_REDIRECT_URI
   const businessLoginConfigId = config.businessLoginConfigId || ENV_FB_BUSINESS_LOGIN_CONFIG_ID
   
