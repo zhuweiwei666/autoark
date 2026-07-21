@@ -16,6 +16,7 @@ import { ingestCreativeAssets } from '../services/facebookMaterialIngestion.serv
 import { fetchFacebookEdgePages } from '../integration/facebook/pagination'
 import { parseFacebookPurchaseRoas } from '../utils/facebookMetrics'
 import { quarantineTerminalFacebookAccount } from '../services/facebookAccountAuthFailure.service'
+import { canProcessFacebookOriginalImageJob } from '../services/facebookMaterialEligibility.service'
 
 // Worker 实例（延迟初始化）
 let accountWorker: Worker | null = null
@@ -394,6 +395,17 @@ export const initWorkers = async (): Promise<void> => {
   materialWorker = new Worker(
     'facebook.material.sync',
     async (job) => {
+      if (
+        job.name === 'sync-material-original-image'
+        && !await canProcessFacebookOriginalImageJob(job.data?.accountId)
+      ) {
+        return {
+          success: true,
+          skipped: true,
+          reason: 'account_reauthorization_required',
+        }
+      }
+
       const result = await ingestCreativeAssets(job.data)
       if (!result.success) {
         throw new Error(result.errors.join('; ') || 'Facebook material ingestion failed')
