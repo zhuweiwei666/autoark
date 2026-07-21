@@ -18,6 +18,7 @@ import {
   AggOptimizer,
 } from '../models/Aggregation'
 import MaterialMetrics from '../models/MaterialMetrics'
+import Account from '../models/Account'
 import { refreshRecentDays } from '../services/aggregation.service'
 import { UserRole } from '../models/User'
 import { getUserAccountIds, authenticate } from '../middlewares/auth'
@@ -85,11 +86,14 @@ const SUMMARY_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/
 const ACCOUNT_SORT_FIELDS = [
   'accountId',
   'accountName',
+  'calculatedBalance',
   'campaigns',
   'clicks',
   'ctr',
   'impressions',
   'installs',
+  'name',
+  'operator',
   'periodSpend',
   'purchase_value',
   'revenue',
@@ -415,7 +419,6 @@ router.get('/accounts', async (req: Request, res: Response) => {
       match.accountId = { $in: scopedAccountIds }
     }
 
-    if (status) match.status = status
     if (accountId) {
       const requestedAccountId = normalizeForStorage(accountId)
       if (userAccountIds !== null && !userAccountIds.some(id => normalizeForStorage(id).includes(requestedAccountId))) {
@@ -430,7 +433,35 @@ router.get('/accounts', async (req: Request, res: Response) => {
         ? { $regex: accountId, $options: 'i' }
         : { $in: scopedAccountIds.filter(id => normalizeForStorage(id).includes(requestedAccountId)) }
     }
-    if (name) match.accountName = { $regex: name, $options: 'i' }
+    const accountCatalogMatch: any = { channel: 'facebook' }
+    if (scopedAccountIds !== null) {
+      accountCatalogMatch.accountId = {
+        $in: scopedAccountIds.map(id => normalizeForStorage(id)),
+      }
+    }
+    if (accountId) {
+      const requestedAccountId = normalizeForStorage(accountId)
+      accountCatalogMatch.accountId = scopedAccountIds === null
+        ? { $regex: requestedAccountId, $options: 'i' }
+        : {
+            $in: scopedAccountIds
+              .map(id => normalizeForStorage(id))
+              .filter(id => id.includes(requestedAccountId)),
+          }
+    }
+
+    // 名称、状态和优化师必须在目录与指标合并后过滤，否则两边元数据稍有延迟
+    // 就会丢掉指标行，并把已有消耗错误显示为 0。
+    const mergedMatch: any = {}
+    if (status) mergedMatch.status = status
+    if (accountId) {
+      mergedMatch.accountId = {
+        $regex: normalizeForStorage(accountId),
+        $options: 'i',
+      }
+    }
+    if (name) mergedMatch.name = { $regex: name, $options: 'i' }
+    if (optimizer) mergedMatch.operator = { $regex: optimizer, $options: 'i' }
 
     // 多日聚合
     const aggregated = await AggAccount.aggregate([
@@ -451,6 +482,11 @@ router.get('/accounts', async (req: Request, res: Response) => {
       },
       {
         $addFields: {
+          normalizedAccountId: {
+            $replaceOne: { input: '$accountId', find: 'act_', replacement: '' },
+          },
+          metricAccountName: '$accountName',
+          metricStatus: '$status',
           roas: { $cond: [{ $gt: ['$spend', 0] }, { $divide: ['$revenue', '$spend'] }, 0] },
           // 返回小数形式（0.0237），前端 formatPercent 会乘以 100
           ctr: { $cond: [{ $gt: ['$impressions', 0] }, { $divide: ['$clicks', '$impressions'] }, 0] },
@@ -460,6 +496,83 @@ router.get('/accounts', async (req: Request, res: Response) => {
           purchase_value: '$revenue',  // 兼容前端字段名
         }
       },
+      {
+        $unionWith: {
+          coll: Account.collection.name,
+          pipeline: [
+            { $match: accountCatalogMatch },
+            {
+              $project: {
+                normalizedAccountId: '$accountId',
+                catalogId: { $toString: '$_id' },
+                catalogName: '$name',
+                catalogStatus: '$status',
+                accountStatus: 1,
+                currency: 1,
+                balance: 1,
+                spendCap: 1,
+                amountSpent: 1,
+                operator: 1,
+                createdAt: 1,
+                updatedAt: 1,
+                spend: { $literal: 0 },
+                revenue: { $literal: 0 },
+                impressions: { $literal: 0 },
+                clicks: { $literal: 0 },
+                installs: { $literal: 0 },
+                campaigns: { $literal: 0 },
+              },
+            },
+          ],
+        },
+      },
+      {
+        $group: {
+          _id: '$normalizedAccountId',
+          accountId: { $first: '$normalizedAccountId' },
+          catalogId: { $max: '$catalogId' },
+          catalogName: { $max: '$catalogName' },
+          metricAccountName: { $max: '$metricAccountName' },
+          catalogStatus: { $max: '$catalogStatus' },
+          metricStatus: { $max: '$metricStatus' },
+          accountStatus: { $max: '$accountStatus' },
+          currency: { $max: '$currency' },
+          balance: { $max: '$balance' },
+          spendCap: { $max: '$spendCap' },
+          amountSpent: { $max: '$amountSpent' },
+          operator: { $max: '$operator' },
+          createdAt: { $max: '$createdAt' },
+          updatedAt: { $max: '$updatedAt' },
+          spend: { $sum: '$spend' },
+          revenue: { $sum: '$revenue' },
+          impressions: { $sum: '$impressions' },
+          clicks: { $sum: '$clicks' },
+          installs: { $sum: '$installs' },
+          campaigns: { $max: '$campaigns' },
+        },
+      },
+      {
+        $addFields: {
+          id: { $ifNull: ['$catalogId', '$accountId'] },
+          name: { $ifNull: ['$catalogName', '$metricAccountName'] },
+          accountName: { $ifNull: ['$catalogName', '$metricAccountName'] },
+          status: { $ifNull: ['$catalogStatus', '$metricStatus'] },
+          periodSpend: '$spend',
+          purchase_value: '$revenue',
+          calculatedBalance: {
+            $divide: [{ $ifNull: ['$balance', 0] }, 100],
+          },
+          totalSpend: {
+            $divide: [
+              { $convert: { input: '$amountSpent', to: 'double', onError: 0, onNull: 0 } },
+              100,
+            ],
+          },
+          roas: { $cond: [{ $gt: ['$spend', 0] }, { $divide: ['$revenue', '$spend'] }, 0] },
+          ctr: { $cond: [{ $gt: ['$impressions', 0] }, { $divide: ['$clicks', '$impressions'] }, 0] },
+        },
+      },
+      { $match: mergedMatch },
       { $sort: { [sortBy === 'periodSpend' ? 'spend' : sortBy]: sortOrder } },
       {
         $facet: {

@@ -9,12 +9,29 @@ const FACEBOOK_USER_SYNC_PAGE_SIZE = 100
 const FACEBOOK_GRAPH_REQUEST_TIMEOUT_MS = 30 * 1000
 const FACEBOOK_USER_SYNC_LEASE_MS = 30 * 60 * 1000
 const FACEBOOK_USER_SYNC_HEARTBEAT_MS = 5 * 60 * 1000
-const inFlightFacebookUserSyncs = new Map<string, Promise<any>>()
 
 type FacebookUserScope = {
   tokenId?: string
   organizationId?: any
 }
+
+type SyncedAdAccount = {
+  accountId?: string
+  name?: string
+  status?: number
+  currency?: string
+  timezone?: string
+}
+
+type AdAccountsSyncedHandler = (accounts: SyncedAdAccount[]) => Promise<void>
+
+type InFlightFacebookUserSync = {
+  promise: Promise<any>
+  handlers: Set<AdAccountsSyncedHandler>
+  adAccounts?: SyncedAdAccount[]
+}
+
+const inFlightFacebookUserSyncs = new Map<string, InFlightFacebookUserSync>()
 
 const buildFacebookUserFilter = (fbUserId: string, scope: FacebookUserScope = {}) => {
   const filter: any = { fbUserId }
@@ -40,6 +57,7 @@ const runFacebookUserAssetSync = async (
   accessToken: string,
   tokenId?: string,
   organizationId?: any,
+  onAdAccountsSynced?: AdAccountsSyncedHandler,
 ) => {
   logger.info(`[FacebookUser] Starting sync for user ${fbUserId}`)
   const userFilter = buildFacebookUserFilter(fbUserId, { tokenId, organizationId })
@@ -99,6 +117,15 @@ const runFacebookUserAssetSync = async (
       },
       { upsert: true, new: true },
     )
+
+    // 账户目录不需要等待逐账户的 Pixel/Page 扫描。回调失败只记录，不阻断其他资产同步。
+    if (onAdAccountsSynced) {
+      try {
+        await onAdAccountsSynced(adAccounts)
+      } catch (error: any) {
+        logger.error(`[FacebookUser] Failed to import account catalog for ${fbUserId}:`, error)
+      }
+    }
     
     // 2. 获取所有 Pixels（汇总所有账户的）
     const pixelMap = new Map<string, any>()
@@ -239,12 +266,39 @@ export const syncFacebookUserAssets = (
   accessToken: string,
   tokenId?: string,
   organizationId?: any,
+  onAdAccountsSynced?: AdAccountsSyncedHandler,
 ) => {
   const syncKey = buildFacebookUserSyncKey(fbUserId, tokenId, organizationId)
   const existingSync = inFlightFacebookUserSyncs.get(syncKey)
   if (existingSync) {
+    if (onAdAccountsSynced) {
+      if (existingSync.adAccounts) {
+        void onAdAccountsSynced(existingSync.adAccounts).catch((error: any) => {
+          logger.error(`[FacebookUser] Failed to import account catalog for ${fbUserId}:`, error)
+        })
+      } else {
+        existingSync.handlers.add(onAdAccountsSynced)
+      }
+    }
     logger.info(`[FacebookUser] Reusing in-flight sync for user ${fbUserId}`)
-    return existingSync
+    return existingSync.promise
+  }
+
+  const syncEntry: InFlightFacebookUserSync = {
+    promise: undefined as any,
+    handlers: new Set(onAdAccountsSynced ? [onAdAccountsSynced] : []),
+  }
+  const notifyAdAccountsSynced: AdAccountsSyncedHandler = async (adAccounts) => {
+    syncEntry.adAccounts = adAccounts
+    const handlers = Array.from(syncEntry.handlers)
+    syncEntry.handlers.clear()
+    for (const handler of handlers) {
+      try {
+        await handler(adAccounts)
+      } catch (error: any) {
+        logger.error(`[FacebookUser] Failed to import account catalog for ${fbUserId}:`, error)
+      }
+    }
   }
 
   const sync = runFacebookUserAssetSync(
@@ -252,12 +306,14 @@ export const syncFacebookUserAssets = (
     accessToken,
     tokenId,
     organizationId,
+    notifyAdAccountsSynced,
   ).finally(() => {
-    if (inFlightFacebookUserSyncs.get(syncKey) === sync) {
+    if (inFlightFacebookUserSyncs.get(syncKey)?.promise === sync) {
       inFlightFacebookUserSyncs.delete(syncKey)
     }
   })
-  inFlightFacebookUserSyncs.set(syncKey, sync)
+  syncEntry.promise = sync
+  inFlightFacebookUserSyncs.set(syncKey, syncEntry)
   return sync
 }
 

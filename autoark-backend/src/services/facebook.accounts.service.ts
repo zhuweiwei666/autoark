@@ -1,16 +1,187 @@
 import Account from '../models/Account'
 import FbToken from '../models/FbToken'
+import FacebookUser from '../models/FacebookUser'
 import MetricsDaily from '../models/MetricsDaily'
 import { fetchUserAdAccounts, fetchInsights } from './facebook.api'
 import logger from '../utils/logger'
 import { normalizeForStorage, getAccountIdsForQuery, normalizeFromQuery, normalizeForApi } from '../utils/accountId'
 import { buildInsightsDateRequest } from '../utils/insightsDateRange'
 
+type FacebookAccountSource = {
+  id?: string
+  account_id?: string
+  accountId?: string
+  name?: string
+  account_status?: number
+  status?: number
+  currency?: string
+  timezone_name?: string
+  timezone?: string
+  balance?: number
+  spend_cap?: string
+  amount_spent?: string
+  disable_reason?: number
+}
+
+type FacebookAccountToken = {
+  _id: any
+  token: string
+  optimizer?: string
+  organizationId?: any
+}
+
+export const syncCachedAccountsForToken = async (
+  tokenDoc: FacebookAccountToken,
+  accounts: FacebookAccountSource[],
+) => {
+  const accountDataById = new Map<string, any>()
+
+  for (const account of accounts) {
+    const accountId = normalizeForStorage(
+      account.accountId || account.account_id || account.id || '',
+    )
+    if (!accountId) continue
+
+    const accountStatus = account.account_status ?? account.status
+    const timezone = account.timezone_name ?? account.timezone
+    const accountData: any = {
+      channel: 'facebook',
+      accountId,
+      token: tokenDoc.token,
+      ...(tokenDoc.organizationId && { organizationId: tokenDoc.organizationId }),
+    }
+    if (account.name !== undefined) accountData.name = account.name
+    if (account.currency !== undefined) accountData.currency = account.currency
+    if (timezone !== undefined) accountData.timezone = timezone
+    if (accountStatus !== undefined) {
+      accountData.status = mapAccountStatus(accountStatus)
+      accountData.accountStatus = accountStatus
+    }
+    if (account.disable_reason !== undefined) accountData.disableReason = account.disable_reason
+    if (account.balance !== undefined) accountData.balance = account.balance
+    if (account.spend_cap !== undefined) accountData.spendCap = account.spend_cap
+    if (account.amount_spent !== undefined) accountData.amountSpent = account.amount_spent
+    if (tokenDoc.optimizer !== undefined) accountData.operator = tokenDoc.optimizer
+
+    accountDataById.set(accountId, accountData)
+  }
+
+  const accountData = Array.from(accountDataById.values())
+  if (accountData.length === 0) {
+    return { syncedCount: 0, skippedCount: 0, errors: [] as Array<{ tokenId: string; optimizer?: string; error: string }> }
+  }
+
+  const existingAccounts = await Account.find({
+    channel: 'facebook',
+    accountId: { $in: accountData.map(account => account.accountId) },
+  }).select('accountId organizationId').lean()
+  const existingById = new Map(existingAccounts.map((account: any) => [account.accountId, account]))
+  const tokenOrgId = tokenDoc.organizationId?.toString?.()
+  const errors: Array<{ tokenId: string; optimizer?: string; error: string }> = []
+  const operations: any[] = []
+
+  for (const data of accountData) {
+    const existingAccount = existingById.get(data.accountId)
+    const existingOrgId = existingAccount?.organizationId?.toString?.()
+    if (existingOrgId && (!tokenOrgId || existingOrgId !== tokenOrgId)) {
+      const error = `广告账户 ${data.accountId} 已归属其他组织，跳过同步`
+      errors.push({
+        tokenId: String(tokenDoc._id),
+        optimizer: tokenDoc.optimizer,
+        error,
+      })
+      logger.warn(`[AccountSync] ${error}`)
+      continue
+    }
+
+    // 把组织归属约束放进写入条件，避免两个组织并发授权时通过预检查后互相覆盖。
+    const ownershipFilter = tokenDoc.organizationId
+      ? {
+          $or: [
+            { organizationId: tokenDoc.organizationId },
+            { organizationId: { $exists: false } },
+            { organizationId: null },
+          ],
+        }
+      : {
+          $or: [
+            { organizationId: { $exists: false } },
+            { organizationId: null },
+          ],
+        }
+
+    operations.push({
+      updateOne: {
+        filter: {
+          channel: 'facebook',
+          accountId: data.accountId,
+          ...ownershipFilter,
+        },
+        update: { $set: data },
+        // 若归属在预检查后被并发修改，唯一索引会把这次 upsert 变成可识别的冲突，
+        // 而不是静默覆盖另一个组织的数据。
+        upsert: true,
+      },
+    })
+  }
+
+  if (operations.length > 0) {
+    try {
+      await Account.bulkWrite(operations, { ordered: false })
+    } catch (error: any) {
+      const writeErrors = Array.isArray(error?.writeErrors) ? error.writeErrors : []
+      const duplicateErrors = writeErrors.filter((writeError: any) => writeError?.code === 11000)
+      const hasOnlyDuplicateErrors = writeErrors.length > 0 && duplicateErrors.length === writeErrors.length
+
+      if (
+        (writeErrors.length > 0 && !hasOnlyDuplicateErrors)
+        || (writeErrors.length === 0 && error?.code !== 11000)
+      ) {
+        throw error
+      }
+
+      const conflictingIds = new Set<string>()
+      for (const writeError of duplicateErrors) {
+        const accountId = operations[writeError.index]?.updateOne?.filter?.accountId
+        if (accountId) conflictingIds.add(accountId)
+      }
+      if (conflictingIds.size === 0 && error?.keyValue?.accountId) {
+        conflictingIds.add(normalizeForStorage(error.keyValue.accountId))
+      }
+      if (conflictingIds.size === 0) throw error
+
+      for (const accountId of conflictingIds) {
+        const conflictError = `广告账户 ${accountId} 并发归属冲突，跳过同步`
+        errors.push({
+          tokenId: String(tokenDoc._id),
+          optimizer: tokenDoc.optimizer,
+          error: conflictError,
+        })
+        logger.warn(`[AccountSync] ${conflictError}`)
+      }
+
+      return {
+        syncedCount: operations.length - conflictingIds.size,
+        skippedCount: errors.length,
+        errors,
+      }
+    }
+  }
+
+  return {
+    syncedCount: operations.length,
+    skippedCount: errors.length,
+    errors,
+  }
+}
+
 export const syncAccountsFromTokens = async () => {
   const startTime = Date.now()
   let syncedCount = 0
   let errorCount = 0
   let skippedCount = 0
+  let cacheTokenCount = 0
+  let liveTokenCount = 0
   const errors: Array<{ tokenId: string; optimizer?: string; error: string }> = []
 
   try {
@@ -20,60 +191,24 @@ export const syncAccountsFromTokens = async () => {
 
     for (const tokenDoc of tokens) {
       try {
-        // 2. 拉取该 Token 下的广告账户
-        const accounts = await fetchUserAdAccounts(tokenDoc.token)
-        
-        // 3. 更新数据库
-        for (const acc of accounts) {
-          const accountData: any = {
-            channel: 'facebook',
-            accountId: normalizeForStorage(acc.id), // 统一格式：数据库存储时去掉前缀
-            name: acc.name,
-            currency: acc.currency,
-            status: mapAccountStatus(acc.account_status),
-            accountStatus: acc.account_status,
-            disableReason: acc.disable_reason,
-            balance: acc.balance, // 注意：FB 返回的 balance 通常是分，需要确认单位
-            spendCap: acc.spend_cap,
-            amountSpent: acc.amount_spent,
-            token: tokenDoc.token, // 关联的 Token
-            operator: tokenDoc.optimizer, // 关联的优化师
-          }
-          
-          // 从 Token 继承 organizationId（组织隔离）
-          if (tokenDoc.organizationId) {
-            accountData.organizationId = tokenDoc.organizationId
-          }
-
-          const existingAccount = await Account.findOne({
-            channel: 'facebook',
-            accountId: accountData.accountId,
-          }).select('organizationId').lean()
-          const existingOrgId = (existingAccount as any)?.organizationId?.toString?.()
-          const tokenOrgId = tokenDoc.organizationId?.toString?.()
-
-          if (existingOrgId && (!tokenOrgId || existingOrgId !== tokenOrgId)) {
-            skippedCount++
-            const error = `广告账户 ${accountData.accountId} 已归属其他组织，跳过同步`
-            errors.push({
-              tokenId: String(tokenDoc._id),
-              optimizer: tokenDoc.optimizer,
-              error,
-            })
-            logger.warn(`[AccountSync] ${error}`)
-            continue
-          }
-
-          await Account.findOneAndUpdate(
-            { channel: 'facebook', accountId: accountData.accountId },
-            accountData,
-            { upsert: true, new: true }
-          )
-          syncedCount++
+        // 优先复用 OAuth 资产同步已经落库的账户，避免重复请求 Meta。
+        const cachedUser: any = await FacebookUser.findOne({ tokenId: tokenDoc._id })
+          .select('adAccounts')
+          .lean()
+        let accounts: FacebookAccountSource[] = cachedUser?.adAccounts || []
+        if (accounts.length > 0) {
+          cacheTokenCount++
+        } else {
+          accounts = await fetchUserAdAccounts(tokenDoc.token)
+          liveTokenCount++
         }
-        
-        // 更新 Token 的最后检查时间
-        await FbToken.findByIdAndUpdate(tokenDoc._id, { lastCheckedAt: new Date() })
+
+        const result = await syncCachedAccountsForToken(tokenDoc, accounts)
+        syncedCount += result.syncedCount
+        skippedCount += result.skippedCount
+        errors.push(...result.errors)
+
+        await FbToken.findByIdAndUpdate(tokenDoc._id, { lastAccountSyncedAt: new Date() })
 
       } catch (error: any) {
         errorCount++
@@ -92,7 +227,7 @@ export const syncAccountsFromTokens = async () => {
     }
 
     logger.info(`Account sync completed. Synced: ${syncedCount}, Skipped: ${skippedCount}, Errors: ${errorCount}, Duration: ${Date.now() - startTime}ms`)
-    return { syncedCount, skippedCount, errorCount, errors }
+    return { syncedCount, skippedCount, errorCount, cacheTokenCount, liveTokenCount, errors }
 
   } catch (error: any) {
     logger.error('Account sync failed:', error)
@@ -227,9 +362,10 @@ export const getAccounts = async (filters: any = {}, pagination: { page: number,
         const balanceUsd = balanceRaw / 100 // 转换为美元
         
         const accountObj = account.toObject ? account.toObject() : account
+        const { token: _internalToken, ...publicAccount } = accountObj
         
         return {
-            ...accountObj,
+            ...publicAccount,
             periodSpend: periodSpend, // 日期范围/当日消耗（来自 Facebook Insights API）
             calculatedBalance: balanceUsd, // 账户余额（美元）
             totalSpend: amountSpentUsd, // 账户历史总消耗（来自 Facebook API amount_spent）

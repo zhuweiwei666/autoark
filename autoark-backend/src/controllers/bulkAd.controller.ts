@@ -22,6 +22,7 @@ import FacebookApp from '../models/FacebookApp'
 import Account from '../models/Account'
 import FacebookUser from '../models/FacebookUser'
 import * as facebookUserService from '../services/facebookUser.service'
+import * as facebookAccountsService from '../services/facebook.accounts.service'
 import { buildFacebookAssetDiagnostics } from '../services/facebookAssets.diagnostics.service'
 import { writeAuditLog } from '../services/auditLog.service'
 import { buildPublicOAuthReadiness } from '../utils/facebookAppReadiness'
@@ -2140,6 +2141,35 @@ export const handleAuthCallback = async (req: Request, res: Response) => {
       result.accessToken,
       result.tokenId,
       organizationId,
+      async (adAccounts) => {
+        try {
+          await facebookAccountsService.syncCachedAccountsForToken(
+            {
+              _id: result.tokenId,
+              token: result.accessToken,
+              organizationId,
+            },
+            adAccounts,
+          )
+          await FbToken.findByIdAndUpdate(result.tokenId, { lastAccountSyncedAt: new Date() })
+        } catch (err: any) {
+          logger.error('[BulkAd OAuth] Failed to import Facebook account catalog:', err)
+          await writeBulkAdAudit(req, {
+            action: 'bulk_ad.facebook_account_catalog_sync',
+            status: 'failed',
+            userId: autoarkUserId,
+            organizationId,
+            targetType: 'facebook_token',
+            targetId: result.tokenId,
+            summary: `Facebook 授权后账户目录导入失败：${result.fbUserName || result.fbUserId}`,
+            reason: err.message,
+            metadata: {
+              tokenId: result.tokenId,
+              fbUserId: result.fbUserId,
+            },
+          })
+        }
+      },
     ).catch(async (err: any) => {
       logger.error('[BulkAd OAuth] Failed to sync Facebook user assets:', err)
       await writeBulkAdAudit(req, {
@@ -2156,6 +2186,8 @@ export const handleAuthCallback = async (req: Request, res: Response) => {
           fbUserId: result.fbUserId,
         },
       })
+    }).catch(async (err: any) => {
+      logger.error('[BulkAd OAuth] Failed to write Facebook asset sync audit:', err)
     })
     
     // 重定向到专门的 OAuth 回调页面

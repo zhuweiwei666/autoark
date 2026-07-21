@@ -23,6 +23,13 @@ jest.mock('../src/models/MaterialMetrics', () => ({
   },
 }))
 
+jest.mock('../src/models/Account', () => ({
+  __esModule: true,
+  default: {
+    collection: { name: 'accounts' },
+  },
+}))
+
 jest.mock('../src/models/Aggregation', () => ({
   AggDaily: {
     find: jest.fn(),
@@ -124,6 +131,57 @@ describe('summary route data scoping', () => {
     })
   })
 
+  it('unions the account catalog so accounts without insight rows remain visible', async () => {
+    mockAuthState.user = {
+      role: UserRole.SUPER_ADMIN,
+      userId: '665000000000000000000003',
+    }
+    ;(getUserAccountIds as jest.Mock).mockResolvedValue(null)
+    ;(AggAccount.aggregate as jest.Mock).mockResolvedValue([{
+      data: [{ accountId: '123', name: 'Catalog account', spend: 0 }],
+      total: [{ count: 1 }],
+    }])
+
+    const response = await request(createApp()).get('/api/summary/accounts?limit=10')
+
+    expect(response.status).toBe(200)
+    const pipeline = (AggAccount.aggregate as jest.Mock).mock.calls[0][0]
+    expect(pipeline).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        $unionWith: expect.objectContaining({ coll: 'accounts' }),
+      }),
+    ]))
+  })
+
+  it('filters account metadata after catalog and metrics are merged', async () => {
+    mockAuthState.user = {
+      role: UserRole.SUPER_ADMIN,
+      userId: '665000000000000000000003',
+    }
+    ;(getUserAccountIds as jest.Mock).mockResolvedValue(null)
+    ;(AggAccount.aggregate as jest.Mock).mockResolvedValue([{ data: [], total: [] }])
+
+    const response = await request(createApp())
+      .get('/api/summary/accounts?status=active&name=Catalog&optimizer=Alice')
+
+    expect(response.status).toBe(200)
+    const pipeline = (AggAccount.aggregate as jest.Mock).mock.calls[0][0]
+    expect(pipeline[0].$match).not.toHaveProperty('status')
+    expect(pipeline[0].$match).not.toHaveProperty('accountName')
+
+    const unionStage = pipeline.find((stage: any) => stage.$unionWith)
+    expect(unionStage.$unionWith.pipeline[0].$match).toEqual({ channel: 'facebook' })
+    expect(pipeline).toEqual(expect.arrayContaining([
+      {
+        $match: {
+          status: 'active',
+          name: { $regex: 'Catalog', $options: 'i' },
+          operator: { $regex: 'Alice', $options: 'i' },
+        },
+      },
+    ]))
+  })
+
   it('caps large summary limits and falls back to safe sort fields', async () => {
     mockAuthState.user = {
       role: UserRole.SUPER_ADMIN,
@@ -167,10 +225,13 @@ describe('summary route data scoping', () => {
       .get('/api/summary/accounts?status[$ne]=active&accountId[$ne]=123&name=a.b%2B[x]&limit=10')
 
     expect(response.status).toBe(200)
-    const match = (AggAccount.aggregate as jest.Mock).mock.calls[0][0][0].$match
-    expect(match.status).toBeUndefined()
-    expect(match.accountId).toBeUndefined()
-    expect(match.accountName).toEqual({ $regex: 'a\\.b\\+\\[x\\]', $options: 'i' })
+    const pipeline = (AggAccount.aggregate as jest.Mock).mock.calls[0][0]
+    const sourceMatch = pipeline[0].$match
+    expect(sourceMatch.status).toBeUndefined()
+    expect(sourceMatch.accountId).toBeUndefined()
+    expect(sourceMatch.accountName).toBeUndefined()
+    const mergedMatch = pipeline.find((stage: any) => stage.$match?.name)?.$match
+    expect(mergedMatch.name).toEqual({ $regex: 'a\\.b\\+\\[x\\]', $options: 'i' })
   })
 
   it('caps dashboard trend day windows before building the response', async () => {

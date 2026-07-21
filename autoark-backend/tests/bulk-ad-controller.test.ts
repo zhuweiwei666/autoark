@@ -30,6 +30,10 @@ jest.mock('../src/services/facebookUser.service', () => ({
   getSyncStatus: jest.fn(),
 }))
 
+jest.mock('../src/services/facebook.accounts.service', () => ({
+  syncCachedAccountsForToken: jest.fn(),
+}))
+
 jest.mock('../src/models/FacebookApp', () => ({
   __esModule: true,
   default: {
@@ -47,6 +51,7 @@ import bulkAdService from '../src/services/bulkAd.service'
 import { writeAuditLog } from '../src/services/auditLog.service'
 import * as oauthService from '../src/services/facebook.oauth.service'
 import * as facebookUserService from '../src/services/facebookUser.service'
+import * as facebookAccountsService from '../src/services/facebook.accounts.service'
 import FacebookApp from '../src/models/FacebookApp'
 import Account from '../src/models/Account'
 import FbToken from '../src/models/FbToken'
@@ -91,6 +96,7 @@ const mockBulkAdService = bulkAdService as jest.Mocked<typeof bulkAdService>
 const mockWriteAuditLog = writeAuditLog as jest.Mock
 const mockOauthService = oauthService as jest.Mocked<typeof oauthService>
 const mockFacebookUserService = facebookUserService as jest.Mocked<typeof facebookUserService>
+const mockFacebookAccountsService = facebookAccountsService as jest.Mocked<typeof facebookAccountsService>
 const mockFacebookApp = FacebookApp as jest.Mocked<typeof FacebookApp>
 const mockFacebookClient = facebookClient as jest.Mocked<typeof facebookClient>
 
@@ -668,6 +674,7 @@ describe('bulk ad controller', () => {
       'EAA123456789012345678901234567890',
       '665000000000000000000901',
       '665000000000000000000001',
+      expect.any(Function),
     )
     expect(mockWriteAuditLog).toHaveBeenCalledWith(req, expect.objectContaining({
       category: 'bulk_ad',
@@ -691,6 +698,51 @@ describe('bulk ad controller', () => {
     expect(res.redirect).toHaveBeenCalledWith(expect.stringContaining('/oauth/callback?oauth_success=true'))
     expect(res.redirect).toHaveBeenCalledWith(expect.stringContaining('token_id=665000000000000000000901'))
     expect(res.redirect).toHaveBeenCalledWith(expect.stringContaining('fb_user_id=fb_1'))
+  })
+
+  it('imports cached accounts into account management immediately after OAuth asset sync', async () => {
+    mockWriteAuditLog.mockResolvedValue(undefined)
+    mockOauthService.parseStateParamWithOptions.mockReturnValue({
+      originalState: 'bulk-ad|665000000000000000000002|665000000000000000000001',
+    } as any)
+    mockOauthService.handleOAuthCallback.mockResolvedValue({
+      tokenId: '665000000000000000000901',
+      fbUserId: 'fb_1',
+      fbUserName: 'FB User',
+      accessToken: 'EAA123456789012345678901234567890',
+    } as any)
+    jest.spyOn(FbToken, 'findByIdAndUpdate').mockResolvedValue({} as any)
+    mockFacebookUserService.syncFacebookUserAssets.mockImplementation(async (...args: any[]) => {
+      await args[4]([{ accountId: '123', name: 'Cached Account 123', status: 1 }])
+      return { adAccounts: [] } as any
+    })
+    mockFacebookAccountsService.syncCachedAccountsForToken.mockResolvedValue({
+      syncedCount: 1,
+      skippedCount: 0,
+    } as any)
+
+    const req: any = {
+      query: { code: 'oauth-code', state: 'signed-state' },
+      get: jest.fn(),
+    }
+    const res: any = { redirect: jest.fn() }
+
+    await handleAuthCallback(req, res)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(mockFacebookAccountsService.syncCachedAccountsForToken).toHaveBeenCalledWith(
+      expect.objectContaining({
+        _id: '665000000000000000000901',
+        token: 'EAA123456789012345678901234567890',
+        organizationId: '665000000000000000000001',
+      }),
+      [expect.objectContaining({ accountId: '123' })],
+    )
+    expect(FbToken.findByIdAndUpdate).toHaveBeenCalledWith(
+      '665000000000000000000901',
+      { lastAccountSyncedAt: expect.any(Date) },
+    )
   })
 
   it('paginates and deduplicates authorized ad accounts across Meta pages', async () => {

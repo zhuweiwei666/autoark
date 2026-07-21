@@ -175,22 +175,29 @@ describe('facebook user asset cache scoping', () => {
       const url = String(input)
       if (url.includes('/me/adaccounts')) {
         await accountsGate
+        return response({
+          data: [{ id: 'act_100', account_id: '100', name: 'Account 100', account_status: 1 }],
+        })
       }
       return response({ data: [] })
     })
     global.fetch = fetchMock as any
+    const firstHandler = jest.fn().mockResolvedValue(undefined)
+    const secondHandler = jest.fn().mockResolvedValue(undefined)
 
     const firstSync = syncFacebookUserAssets(
       'fb_1',
       'TOKEN_A',
       '665000000000000000000901',
       '665000000000000000000001',
+      firstHandler,
     )
     const secondSync = syncFacebookUserAssets(
       'fb_1',
-      'TOKEN_A',
+      'TOKEN_B',
       '665000000000000000000901',
       '665000000000000000000001',
+      secondHandler,
     )
 
     releaseAccounts?.()
@@ -198,6 +205,9 @@ describe('facebook user asset cache scoping', () => {
 
     const accountFetches = fetchMock.mock.calls.filter(([input]) => String(input).includes('/me/adaccounts'))
     expect(accountFetches).toHaveLength(1)
+    const expectedAccounts = [expect.objectContaining({ accountId: '100', name: 'Account 100' })]
+    expect(firstHandler).toHaveBeenCalledWith(expectedAccounts)
+    expect(secondHandler).toHaveBeenCalledWith(expectedAccounts)
   })
 
   it('checkpoints ad accounts before scanning their pixels and pages', async () => {
@@ -232,12 +242,14 @@ describe('facebook user asset cache scoping', () => {
       return response({ data: [] })
     })
     global.fetch = fetchMock as any
+    const onAdAccountsSynced = jest.fn().mockResolvedValue(undefined)
 
     const sync = syncFacebookUserAssets(
       'fb_1',
       'TOKEN_A',
       '665000000000000000000901',
       '665000000000000000000001',
+      onAdAccountsSynced,
     )
     await pixelsStarted
 
@@ -245,6 +257,9 @@ describe('facebook user asset cache scoping', () => {
       syncStatus: 'syncing',
       adAccounts: [expect.objectContaining({ accountId: '100', name: 'Account 100' })],
     }))
+    expect(onAdAccountsSynced).toHaveBeenCalledWith([
+      expect.objectContaining({ accountId: '100', name: 'Account 100' }),
+    ])
 
     releasePixels?.()
     await sync

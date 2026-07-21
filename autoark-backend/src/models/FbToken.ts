@@ -10,6 +10,7 @@ export interface IFbToken extends mongoose.Document {
   lastValidationAttemptAt?: Date // 最后一次验证尝试时间（包括限流/网络失败）
   lastValidationError?: string // 最近一次瞬态验证失败
   lastValidationErrorCode?: number // 最近一次 Meta 错误码
+  lastAccountSyncedAt?: Date // 最后一次账户目录同步完成时间
   expiresAt?: Date // token 过期时间（如果 Facebook API 返回）
   fbUserId?: string // Facebook 用户 ID
   fbUserName?: string // Facebook 用户名称
@@ -34,6 +35,7 @@ const FbTokenSchema = new mongoose.Schema(
     lastValidationAttemptAt: { type: Date }, // 最后一次验证尝试时间
     lastValidationError: { type: String },
     lastValidationErrorCode: { type: Number },
+    lastAccountSyncedAt: { type: Date },
     expiresAt: { type: Date }, // token 过期时间
     fbUserId: { type: String }, // Facebook 用户 ID
     fbUserName: { type: String }, // Facebook 用户名称

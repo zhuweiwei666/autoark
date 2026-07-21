@@ -65,6 +65,7 @@ describe('facebook account insights date ranges', () => {
       { since: '2026-03-05', until: '2026-06-02' },
     )
     expect(result.data[0].periodSpend).toBe(42)
+    expect(result.data[0]).not.toHaveProperty('token')
   })
 
   it('caps overly large account spend ranges before calling Facebook Insights', async () => {
