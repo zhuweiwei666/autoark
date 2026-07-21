@@ -53,7 +53,7 @@ async function bootstrap() {
 
   // 4) Queues & Workers (only if Redis is configured)
   initQueues()
-  initWorkers()
+  await initWorkers()
   initBulkAdWorker()
   initAutomationWorker()
 

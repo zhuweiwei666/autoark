@@ -1,16 +1,20 @@
 import Account from '../models/Account'
-import { accountQueue, campaignQueue, adQueue } from '../queue/facebook.queue'
+import { accountQueue, campaignQueue, adQueue, materialQueue } from '../queue/facebook.queue'
 import logger from '../utils/logger'
+import { normalizeForStorage } from '../utils/accountId'
 
 // 检查队列是否可用
 const isQueueAvailable = (): boolean => {
-  return accountQueue !== null && campaignQueue !== null && adQueue !== null
+  return accountQueue !== null && campaignQueue !== null && adQueue !== null && materialQueue !== null
 }
 
 /**
  * 调度器：扫描账户并推送到队列
  */
-export const syncCampaignsFromAdAccountsV2 = async () => {
+export const syncCampaignsFromAdAccountsV2 = async (options?: {
+  accountIds?: string[]
+  limit?: number
+}) => {
   if (!isQueueAvailable()) {
     throw new Error('Queue system not available. Please configure REDIS_URL environment variable.')
   }
@@ -21,8 +25,32 @@ export const syncCampaignsFromAdAccountsV2 = async () => {
   const slot = Math.floor(Date.now() / (intervalMinutes * 60 * 1000))
   
   try {
+    const workerCount = await accountQueue!.getWorkersCount()
+    if (workerCount < 1) {
+      throw new Error('No live facebook.account.sync workers; refusing to enqueue account jobs')
+    }
+
+    const pendingJobs = await accountQueue!.getJobs(
+      ['active', 'waiting', 'prioritized', 'delayed'],
+      0,
+      9999,
+    )
+    const pendingAccountIds = new Set(
+      pendingJobs
+        .map((job) => normalizeForStorage(job.data?.accountId))
+        .filter(Boolean),
+    )
+
     // 1. 获取所有有效的广告账户
-    const accounts = await Account.find({ status: 'active' })
+    let accounts = await Account.find({ status: 'active' })
+    if (options?.accountIds?.length) {
+      const requested = new Set(options.accountIds.map(normalizeForStorage).filter(Boolean))
+      accounts = accounts.filter((account) => requested.has(normalizeForStorage(account.accountId)))
+    }
+    if (options?.limit !== undefined) {
+      const limit = Math.min(100, Math.max(1, Math.floor(Number(options.limit) || 1)))
+      accounts = accounts.slice(0, limit)
+    }
     logger.info(`[Scheduler] Starting sync for ${accounts.length} active ad accounts`)
 
     if (accounts.length === 0) {
@@ -32,9 +60,15 @@ export const syncCampaignsFromAdAccountsV2 = async () => {
 
     // 2. 为每个账户推送同步任务到 accountQueue
     const jobs = []
+    let jobsSkippedPending = 0
     for (const account of accounts) {
       if (!account.token) {
         logger.warn(`[Scheduler] Account ${account.accountId} has no token, skipping`)
+        continue
+      }
+
+      if (pendingAccountIds.has(normalizeForStorage(account.accountId))) {
+        jobsSkippedPending += 1
         continue
       }
 
@@ -45,6 +79,7 @@ export const syncCampaignsFromAdAccountsV2 = async () => {
           {
             accountId: account.accountId,
             token: account.token,
+            organizationId: account.organizationId?.toString(),
           },
           {
             priority: 1,
@@ -65,7 +100,11 @@ export const syncCampaignsFromAdAccountsV2 = async () => {
     }
 
     logger.info(`[Scheduler] Queued ${jobs.length} account sync jobs in ${Date.now() - startTime}ms`)
-    return { syncedAccounts: accounts.length, jobsQueued: jobs.length }
+    return {
+      syncedAccounts: accounts.length,
+      jobsQueued: jobs.length,
+      jobsSkippedPending,
+    }
   } catch (error: any) {
     logger.error('[Scheduler] Failed to queue account sync jobs:', error)
     throw error
@@ -81,6 +120,83 @@ export const addAccountSyncJob = async (accountId: string, token: string) => {
   return false
 }
 
+const RECOVERY_CONFIRMATION = 'RECOVER_FACEBOOK_ACCOUNT_QUEUE'
+const RECOVERY_STATES = ['prioritized', 'waiting', 'delayed', 'failed'] as const
+
+export const recoverFacebookAccountQueue = async (options?: {
+  dryRun?: boolean
+  confirmation?: string
+  maxJobs?: number
+}) => {
+  if (!accountQueue) throw new Error('Queue system not available')
+
+  const dryRun = options?.dryRun !== false
+  if (!dryRun && options?.confirmation !== RECOVERY_CONFIRMATION) {
+    throw new Error(`Queue recovery requires confirmation: ${RECOVERY_CONFIRMATION}`)
+  }
+
+  const requestedMax = Number(options?.maxJobs || 10000)
+  const maxJobs = Math.min(10000, Math.max(1, Number.isFinite(requestedMax) ? Math.floor(requestedMax) : 10000))
+  const jobsByState: Record<string, any[]> = {}
+  let remaining = maxJobs
+
+  for (const state of RECOVERY_STATES) {
+    if (remaining <= 0) {
+      jobsByState[state] = []
+      continue
+    }
+    const jobs = await accountQueue.getJobs(state, 0, remaining - 1, true)
+    jobsByState[state] = jobs
+    remaining -= jobs.length
+  }
+
+  const candidates = RECOVERY_STATES.reduce((sum, state) => sum + jobsByState[state].length, 0)
+  let removed = 0
+
+  if (!dryRun) {
+    const jobs = RECOVERY_STATES.flatMap((state) => jobsByState[state])
+    for (let start = 0; start < jobs.length; start += 50) {
+      const batch = jobs.slice(start, start + 50)
+      await Promise.all(batch.map(async (job) => {
+        await job.remove()
+        removed += 1
+      }))
+    }
+  }
+
+  return {
+    dryRun,
+    maxJobs,
+    candidates,
+    byState: Object.fromEntries(
+      RECOVERY_STATES.map((state) => [state, jobsByState[state].length]),
+    ),
+    removed,
+    truncated: candidates >= maxJobs,
+  }
+}
+
+const getDetailedQueueStatus = async (queue: NonNullable<typeof accountQueue>) => {
+  const [counts, workers, failedJobs] = await Promise.all([
+    queue.getJobCounts(),
+    queue.getWorkersCount(),
+    queue.getJobs('failed', 0, 4, false),
+  ])
+
+  return {
+    ...counts,
+    workers,
+    failedSamples: failedJobs.map((job: any) => ({
+      id: job.id,
+      name: job.name,
+      attemptsMade: job.attemptsMade,
+      failedReason: String(job.failedReason || '').slice(0, 500),
+      timestamp: job.timestamp,
+      finishedOn: job.finishedOn,
+    })),
+  }
+}
+
 // 获取队列状态
 export const getQueueStatus = async () => {
   if (!isQueueAvailable()) {
@@ -90,18 +206,20 @@ export const getQueueStatus = async () => {
     }
   }
 
-  const [accountCounts, campaignCounts, adCounts] = await Promise.all([
-    accountQueue!.getJobCounts(),
-    campaignQueue!.getJobCounts(),
-    adQueue!.getJobCounts(),
+  const [accountStatus, campaignStatus, adStatus, materialStatus] = await Promise.all([
+    getDetailedQueueStatus(accountQueue!),
+    getDetailedQueueStatus(campaignQueue!),
+    getDetailedQueueStatus(adQueue!),
+    getDetailedQueueStatus(materialQueue!),
   ])
 
   return {
     available: true,
     queues: {
-      account: accountCounts,
-      campaign: campaignCounts,
-      ad: adCounts,
+      account: accountStatus,
+      campaign: campaignStatus,
+      ad: adStatus,
+      material: materialStatus,
     }
   }
 }

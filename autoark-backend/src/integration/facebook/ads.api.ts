@@ -1,26 +1,26 @@
 import { facebookClient } from './facebookClient'
+import { fetchFacebookEdgePages } from './pagination'
+import { normalizeForApi } from '../../utils/accountId'
 
 export const fetchAdSets = async (accountId: string) => {
-  const res = await facebookClient.get(`/${accountId}/adsets`, {
+  return fetchFacebookEdgePages(`/${normalizeForApi(accountId)}/adsets`, {
     fields:
       'id,name,status,campaign_id,optimization_goal,billing_event,bid_amount,daily_budget,created_time,updated_time',
     limit: 1000,
   })
-  return res.data || []
 }
 
 export const fetchAds = async (accountId: string, token?: string) => {
   const params: any = {
     // 增强 creative 字段，获取 image_hash, video_id 等素材标识
     fields:
-      'id,name,status,adset_id,campaign_id,creative{id,name,image_hash,image_url,thumbnail_url,video_id,object_story_spec},created_time,updated_time',
+      'id,name,status,adset_id,campaign_id,creative{id,name,image_hash,image_url,thumbnail_url,video_id,object_story_spec,asset_feed_spec},created_time,updated_time',
     limit: 1000,
   }
   if (token) {
     params.access_token = token
   }
-  const res = await facebookClient.get(`/${accountId}/ads`, params)
-  return res.data || []
+  return fetchFacebookEdgePages(`/${normalizeForApi(accountId)}/ads`, params)
 }
 
 export const fetchCreatives = async (accountId: string, token?: string) => {
@@ -32,8 +32,7 @@ export const fetchCreatives = async (accountId: string, token?: string) => {
   if (token) {
     params.access_token = token
   }
-  const res = await facebookClient.get(`/${accountId}/adcreatives`, params)
-  return res.data || []
+  return fetchFacebookEdgePages(`/${normalizeForApi(accountId)}/adcreatives`, params)
 }
 
 /**
@@ -72,7 +71,7 @@ export const fetchImageByHash = async (accountId: string, imageHash: string, tok
     params.access_token = token
   }
   try {
-    const res = await facebookClient.get(`/${accountId}/adimages`, params)
+    const res = await facebookClient.get(`/${normalizeForApi(accountId)}/adimages`, params)
     const images = res.data?.data || res.data || {}
     // 返回第一个匹配的图片
     const imageData = images[imageHash] || Object.values(images)[0]
@@ -91,4 +90,3 @@ export const fetchImageByHash = async (accountId: string, imageHash: string, tok
     return { success: false, error: error.message }
   }
 }
-

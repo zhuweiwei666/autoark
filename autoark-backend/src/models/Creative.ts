@@ -57,6 +57,7 @@ const creativeSchema = new mongoose.Schema(
     
     // 关联信息
     accountId: String,
+    organizationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Organization', index: true },
     
     // 标签和分类
     tags: [String],
@@ -64,6 +65,17 @@ const creativeSchema = new mongoose.Schema(
     
     // 关联的 Material（上传的素材）
     materialId: { type: mongoose.Schema.Types.ObjectId, ref: 'Material' },
+    materialIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Material' }],
+
+    ingestionStatus: {
+      type: String,
+      enum: ['pending', 'processing', 'completed', 'partial', 'failed'],
+      default: 'pending',
+      index: true,
+    },
+    ingestionAttempts: { type: Number, default: 0 },
+    ingestionError: String,
+    ingestedAt: Date,
     
     // 原始数据
     raw: Object,
@@ -77,6 +89,8 @@ creativeSchema.index({ imageHash: 1 })
 creativeSchema.index({ videoId: 1 })
 creativeSchema.index({ accountId: 1 })
 creativeSchema.index({ materialId: 1 })
+creativeSchema.index({ materialIds: 1 })
+creativeSchema.index({ organizationId: 1, ingestionStatus: 1 })
 creativeSchema.index({ 'fingerprint.pHash': 1 })
 creativeSchema.index({ 'fingerprint.md5': 1 })
 creativeSchema.index({ downloaded: 1 })

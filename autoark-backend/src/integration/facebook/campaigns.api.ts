@@ -1,5 +1,5 @@
-import { facebookClient } from './facebookClient'
 import { normalizeForApi } from '../../utils/accountId'
+import { fetchFacebookEdgePages } from './pagination'
 
 export const fetchCampaigns = async (accountId: string, token?: string) => {
   // 确保 accountId 格式正确（添加 act_ 前缀）
@@ -13,7 +13,5 @@ export const fetchCampaigns = async (accountId: string, token?: string) => {
   if (token) {
     params.access_token = token
   }
-  const res = await facebookClient.get(`/${apiAccountId}/campaigns`, params)
-  return res.data || []
+  return fetchFacebookEdgePages(`/${apiAccountId}/campaigns`, params)
 }
-
