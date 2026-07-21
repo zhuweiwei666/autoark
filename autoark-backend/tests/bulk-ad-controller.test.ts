@@ -24,6 +24,8 @@ jest.mock('../src/services/facebook.oauth.service', () => ({
 jest.mock('../src/services/facebookUser.service', () => ({
   syncFacebookUserAssets: jest.fn(),
   getCachedPixels: jest.fn(),
+  getCachedAccounts: jest.fn(),
+  getCachedAccountsWithMeta: jest.fn(),
   getCachedCatalogs: jest.fn(),
   getSyncStatus: jest.fn(),
 }))
@@ -131,6 +133,12 @@ describe('bulk ad controller', () => {
   beforeEach(() => {
     jest.clearAllMocks()
     mockFacebookClient.get.mockReset()
+    mockFacebookUserService.getCachedAccounts.mockResolvedValue([] as any)
+    mockFacebookUserService.getCachedAccountsWithMeta.mockResolvedValue({
+      accounts: [],
+      fetchedPageCount: 0,
+      paginationTruncated: false,
+    } as any)
   })
 
   afterEach(() => {
@@ -741,6 +749,62 @@ describe('bulk ad controller', () => {
         fetchedPageCount: 2,
         pageLimitPerToken: 10,
         paginationTruncated: false,
+      }),
+    })
+  })
+
+  it('serves cached authorized ad accounts without another Meta Graph read', async () => {
+    jest.spyOn(FbToken, 'find').mockReturnValue({
+      sort: jest.fn().mockResolvedValue([{
+        _id: '665000000000000000000901',
+        token: 'TOKEN_A',
+        fbUserId: 'fb_1',
+        fbUserName: 'Operator A',
+        organizationId: '665000000000000000000001',
+      }]),
+    } as any)
+    mockFacebookUserService.getCachedAccountsWithMeta.mockResolvedValue({
+      accounts: [{
+        accountId: '100',
+        name: 'Cached Account 100',
+        status: 1,
+        currency: 'USD',
+        timezone: 'America/Los_Angeles',
+      }],
+      fetchedPageCount: 10,
+      paginationTruncated: true,
+    } as any)
+
+    const req: any = {
+      user: {
+        role: UserRole.SUPER_ADMIN,
+        userId: '665000000000000000000002',
+      },
+      query: {},
+    }
+    const res = resMock()
+
+    await getAuthAdAccounts(req, res as any)
+
+    expect(mockFacebookUserService.getCachedAccountsWithMeta).toHaveBeenCalledWith('fb_1', {
+      tokenId: '665000000000000000000901',
+      organizationId: '665000000000000000000001',
+    })
+    expect(mockFacebookClient.get).not.toHaveBeenCalled()
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      data: [expect.objectContaining({
+        id: 'act_100',
+        account_id: '100',
+        name: 'Cached Account 100',
+        account_status: 1,
+      })],
+      meta: expect.objectContaining({
+        accountCount: 1,
+        cacheTokenCount: 1,
+        liveTokenCount: 0,
+        fetchedPageCount: 10,
+        paginationTruncated: true,
       }),
     })
   })

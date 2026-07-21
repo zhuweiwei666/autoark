@@ -2349,35 +2349,71 @@ export const getAuthAdAccounts = async (req: Request, res: Response) => {
     const seenAccountIds = new Set<string>()
     let fetchedPageCount = 0
     let failedTokenCount = 0
+    let cacheTokenCount = 0
+    let liveTokenCount = 0
     let paginationTruncated = false
+
+    const addAccount = (account: any, tokenOwner: string, cached = false) => {
+      const accountId = String(cached ? account.accountId : account.account_id)
+      if (!accountId || accountId === 'undefined' || seenAccountIds.has(accountId)) {
+        return
+      }
+
+      seenAccountIds.add(accountId)
+      allAccounts.push({
+        id: cached ? `act_${accountId}` : account.id,
+        account_id: accountId,
+        name: account.name,
+        account_status: cached ? account.status : account.account_status,
+        currency: account.currency,
+        timezone_name: cached ? account.timezone : account.timezone_name,
+        amount_spent: cached ? undefined : account.amount_spent,
+        balance: cached ? undefined : account.balance,
+        _tokenOwner: tokenOwner,
+      })
+    }
     
     for (const fbToken of fbTokens) {
+      const tokenOwner = fbToken.fbUserName || fbToken.optimizer || 'unknown'
       try {
+        if (fbToken.fbUserId) {
+          try {
+            const cachedSnapshot = await facebookUserService.getCachedAccountsWithMeta(
+              fbToken.fbUserId,
+              {
+                tokenId: String(fbToken._id),
+                organizationId: fbToken.organizationId
+                  ? String(fbToken.organizationId)
+                  : undefined,
+              },
+            )
+            const cachedAccounts = cachedSnapshot.accounts
+
+            if (cachedAccounts.length > 0) {
+              cacheTokenCount += 1
+              fetchedPageCount += cachedSnapshot.fetchedPageCount
+              paginationTruncated = paginationTruncated || cachedSnapshot.paginationTruncated
+              cachedAccounts.forEach((account: any) => addAccount(account, tokenOwner, true))
+              continue
+            }
+          } catch (cacheError: any) {
+            logger.warn(
+              `[BulkAd] Failed to read cached accounts for ${tokenOwner}; falling back to Meta: ${cacheError.message}`,
+            )
+          }
+        }
+
+        liveTokenCount += 1
         const result = await fetchAuthAdAccountsPages(fbToken.token)
         fetchedPageCount += result.pageCount
         paginationTruncated = paginationTruncated || result.truncated
         
         for (const acc of result.accounts) {
-          // 避免重复账户
-          if (!seenAccountIds.has(acc.account_id)) {
-            seenAccountIds.add(acc.account_id)
-            allAccounts.push({
-              id: acc.id,
-              account_id: acc.account_id,
-              name: acc.name,
-              account_status: acc.account_status,
-              currency: acc.currency,
-              timezone_name: acc.timezone_name,
-              amount_spent: acc.amount_spent,
-              balance: acc.balance,
-              // 额外信息：标记来源 token
-              _tokenOwner: fbToken.fbUserName || fbToken.optimizer || 'unknown',
-            })
-          }
+          addAccount(acc, tokenOwner)
         }
       } catch (tokenError: any) {
         failedTokenCount += 1
-        logger.warn(`[BulkAd] Failed to get accounts for token ${fbToken.fbUserName}: ${tokenError.message}`)
+        logger.warn(`[BulkAd] Failed to get accounts for ${tokenOwner}: ${tokenError.message}`)
         // 继续处理其他 token
       }
     }
@@ -2402,6 +2438,8 @@ export const getAuthAdAccounts = async (req: Request, res: Response) => {
         accountCount: filteredAccounts.length,
         sourceAccountCount: allAccounts.length,
         fetchedPageCount,
+        cacheTokenCount,
+        liveTokenCount,
         pageSize: AUTH_FACEBOOK_ASSET_PAGE_SIZE,
         pageLimitPerToken: AUTH_FACEBOOK_ASSET_PAGE_LIMIT,
         paginationTruncated,

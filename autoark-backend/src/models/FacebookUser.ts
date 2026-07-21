@@ -49,6 +49,8 @@ const facebookUserSchema = new mongoose.Schema(
       currency: { type: String },
       timezone: { type: String },
     }],
+    adAccountsFetchedPageCount: { type: Number, default: 0 },
+    adAccountsPaginationTruncated: { type: Boolean, default: false },
     
     // 该用户拥有的所有粉丝页
     pages: [{

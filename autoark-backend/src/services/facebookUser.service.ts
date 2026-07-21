@@ -73,7 +73,8 @@ const runFacebookUserAssetSync = async (
     )
     
     // 1. 获取所有广告账户
-    const accounts = await fetchAdAccounts(accessToken)
+    const accountResult = await fetchAdAccounts(accessToken)
+    const accounts = accountResult.items
     logger.info(`[FacebookUser] Found ${accounts.length} ad accounts`)
     const adAccounts = accounts.map(acc => ({
       accountId: acc.account_id || acc.id?.replace('act_', ''),
@@ -91,6 +92,8 @@ const runFacebookUserAssetSync = async (
         tokenId,
         ...(organizationId && { organizationId }),
         adAccounts,
+        adAccountsFetchedPageCount: accountResult.pageCount,
+        adAccountsPaginationTruncated: accountResult.truncated,
         syncStatus: 'syncing',
         $unset: { syncError: 1 },
       },
@@ -201,6 +204,8 @@ const runFacebookUserAssetSync = async (
         ...(organizationId && { organizationId }),
         pixels: Array.from(pixelMap.values()),
         adAccounts,
+        adAccountsFetchedPageCount: accountResult.pageCount,
+        adAccountsPaginationTruncated: accountResult.truncated,
         pages: Array.from(pagesMap.values()),
         productCatalogs: Array.from(catalogsMap.values()),
         lastSyncedAt: new Date(),
@@ -268,8 +273,17 @@ export const getCachedPixels = async (fbUserId: string, scope: FacebookUserScope
  * 获取缓存的账户
  */
 export const getCachedAccounts = async (fbUserId: string, scope: FacebookUserScope = {}) => {
+  const snapshot = await getCachedAccountsWithMeta(fbUserId, scope)
+  return snapshot.accounts
+}
+
+export const getCachedAccountsWithMeta = async (fbUserId: string, scope: FacebookUserScope = {}) => {
   const user = await FacebookUser.findOne(buildFacebookUserFilter(fbUserId, scope))
-  return user?.adAccounts || []
+  return {
+    accounts: user?.adAccounts || [],
+    fetchedPageCount: user?.adAccountsFetchedPageCount || 0,
+    paginationTruncated: Boolean(user?.adAccountsPaginationTruncated),
+  }
 }
 
 /**
@@ -329,11 +343,17 @@ export const getSyncStatus = async (fbUserId: string, scope: FacebookUserScope =
 
 // ============ Helper Functions ============
 
-async function fetchGraphCollection(
+type GraphCollectionResult = {
+  items: any[]
+  pageCount: number
+  truncated: boolean
+}
+
+async function fetchGraphCollectionWithMeta(
   path: string,
   accessToken: string,
   params: Record<string, string | number> = {},
-): Promise<any[]> {
+): Promise<GraphCollectionResult> {
   const items: any[] = []
   const url = new URL(`${FB_BASE_URL}${path}`)
   const initialParams = {
@@ -376,11 +396,24 @@ async function fetchGraphCollection(
     }
   }
 
-  return items
+  return {
+    items,
+    pageCount,
+    truncated: Boolean(nextUrl),
+  }
 }
 
-async function fetchAdAccounts(accessToken: string): Promise<any[]> {
-  return fetchGraphCollection('/me/adaccounts', accessToken, {
+async function fetchGraphCollection(
+  path: string,
+  accessToken: string,
+  params: Record<string, string | number> = {},
+): Promise<any[]> {
+  const result = await fetchGraphCollectionWithMeta(path, accessToken, params)
+  return result.items
+}
+
+async function fetchAdAccounts(accessToken: string): Promise<GraphCollectionResult> {
+  return fetchGraphCollectionWithMeta('/me/adaccounts', accessToken, {
     fields: 'id,account_id,name,account_status,currency,timezone_name',
   })
 }
@@ -430,6 +463,7 @@ export default {
   syncFacebookUserAssets,
   getCachedPixels,
   getCachedAccounts,
+  getCachedAccountsWithMeta,
   getCachedPages,
   getCachedCatalogs,
   getSyncStatus,

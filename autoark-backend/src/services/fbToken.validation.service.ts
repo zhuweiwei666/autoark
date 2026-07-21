@@ -17,8 +17,25 @@ export type TokenValidationBatchSummary = {
   checked: number
   succeeded: number
   failed: number
+  valid: number
+  invalid: number
+  transient: number
   limit: number
   concurrency: number
+}
+
+export type TokenValidationResult = {
+  isValid: boolean
+  fbUser?: any
+  expiresAt?: Date
+  error?: string
+  errorCode?: number
+  failureKind?: 'invalid' | 'transient'
+}
+
+export type TokenStatusCheckResult = {
+  status: 'active' | 'expired' | 'invalid'
+  outcome: 'valid' | 'invalid' | 'transient'
 }
 
 const parseBoundedPositiveInt = (value: any, fallback: number, max: number): number => {
@@ -64,12 +81,7 @@ const runWithConcurrency = async <Input, Output>(
  */
 export async function validateToken(
   token: string,
-): Promise<{
-  isValid: boolean
-  fbUser?: any
-  expiresAt?: Date
-  error?: string
-}> {
+): Promise<TokenValidationResult> {
   try {
     // 检查 token 基本信息
     const userResponse = await axios.get(
@@ -84,7 +96,11 @@ export async function validateToken(
     )
 
     if (!userResponse.data || !userResponse.data.id) {
-      return { isValid: false, error: 'Invalid token response' }
+      return {
+        isValid: false,
+        error: 'Invalid token response',
+        failureKind: 'transient',
+      }
     }
 
     // 检查 token 的权限和过期时间
@@ -108,9 +124,15 @@ export async function validateToken(
           expiresAt = new Date(data.expires_at * 1000)
         }
       }
-    } catch (debugErr) {
+    } catch (debugErr: any) {
       // debug_token 可能失败，但不影响基本验证
-      logger.warn('Failed to get token debug info:', debugErr)
+      const debugCode = debugErr.response?.data?.error?.code ?? 'unknown'
+      const debugStatus = debugErr.response?.status ?? 'unknown'
+      const debugMessage =
+        debugErr.response?.data?.error?.message || debugErr.message || 'Unknown error'
+      logger.warn(
+        `[Token Validation] Token debug info unavailable: code=${debugCode}, status=${debugStatus}, message=${debugMessage}`,
+      )
     }
 
     return {
@@ -121,18 +143,34 @@ export async function validateToken(
   } catch (error: any) {
     const errorMessage =
       error.response?.data?.error?.message || error.message || 'Unknown error'
-    const errorCode = error.response?.data?.error?.code
+    const rawErrorCode = error.response?.data?.error?.code
+    const errorCode = Number.isFinite(Number(rawErrorCode))
+      ? Number(rawErrorCode)
+      : undefined
 
     // Facebook API 错误码：
     // 190: Invalid OAuth 2.0 Access Token
     // 102: Session key invalid or no longer valid
     if (errorCode === 190 || errorCode === 102) {
-      return { isValid: false, error: errorMessage }
+      return {
+        isValid: false,
+        error: errorMessage,
+        errorCode,
+        failureKind: 'invalid',
+      }
     }
 
-    // 网络错误或其他错误
-    logger.error('Token validation error:', error)
-    return { isValid: false, error: errorMessage }
+    // 限流、超时、网络或 Meta 服务异常都不能证明 token 已失效。
+    // 保留原状态，避免一次瞬时故障污染授权池。
+    logger.warn(
+      `[Token Validation] Transient validation failure: code=${errorCode ?? 'unknown'}, status=${error.response?.status ?? 'unknown'}, message=${errorMessage}`,
+    )
+    return {
+      isValid: false,
+      error: errorMessage,
+      errorCode,
+      failureKind: 'transient',
+    }
   }
 }
 
@@ -144,19 +182,30 @@ export async function validateToken(
 export async function checkAndUpdateTokenStatus(
   tokenDoc: IFbToken,
 ): Promise<'active' | 'expired' | 'invalid'> {
+  const result = await checkAndUpdateTokenStatusDetailed(tokenDoc)
+  return result.status
+}
+
+export async function checkAndUpdateTokenStatusDetailed(
+  tokenDoc: IFbToken,
+): Promise<TokenStatusCheckResult> {
   const startTime = Date.now()
   logger.info(`[Token Validation] Checking token for user: ${tokenDoc.userId}`)
 
   try {
     const validation = await validateToken(tokenDoc.token)
 
-    let newStatus: 'active' | 'expired' | 'invalid' = 'active'
+    let newStatus: 'active' | 'expired' | 'invalid' = tokenDoc.status || 'active'
+    let outcome: TokenStatusCheckResult['outcome'] = 'transient'
+    const checkedAt = new Date()
     const updateData: any = {
-      lastCheckedAt: new Date(),
+      lastValidationAttemptAt: checkedAt,
     }
 
     if (validation.isValid) {
+      outcome = 'valid'
       newStatus = 'active'
+      updateData.lastCheckedAt = checkedAt
       if (validation.fbUser) {
         updateData.fbUserId = validation.fbUser.id
         updateData.fbUserName = validation.fbUser.name
@@ -171,14 +220,34 @@ export async function checkAndUpdateTokenStatus(
       logger.info(
         `[Token Validation] Token is valid for user: ${tokenDoc.userId}`,
       )
-    } else {
+      updateData.status = newStatus
+      updateData.$unset = {
+        lastValidationError: 1,
+        lastValidationErrorCode: 1,
+      }
+    } else if (validation.failureKind === 'invalid') {
+      outcome = 'invalid'
       newStatus = 'invalid'
+      updateData.status = newStatus
+      updateData.lastCheckedAt = checkedAt
+      updateData.lastValidationError = validation.error
+      if (validation.errorCode !== undefined) {
+        updateData.lastValidationErrorCode = validation.errorCode
+      }
       logger.warn(
         `[Token Validation] Token is invalid for user: ${tokenDoc.userId}, error: ${validation.error}`,
       )
+    } else {
+      updateData.lastValidationError = validation.error || 'Transient validation failure'
+      if (validation.errorCode !== undefined) {
+        updateData.lastValidationErrorCode = validation.errorCode
+      } else {
+        updateData.$unset = { lastValidationErrorCode: 1 }
+      }
+      logger.warn(
+        `[Token Validation] Preserving ${newStatus} status after transient validation failure for user: ${tokenDoc.userId}, code=${validation.errorCode ?? 'unknown'}, error=${validation.error}`,
+      )
     }
-
-    updateData.status = newStatus
 
     // 更新数据库
     await FbToken.findByIdAndUpdate(tokenDoc._id, updateData)
@@ -188,18 +257,29 @@ export async function checkAndUpdateTokenStatus(
       startTime,
     )
 
-    return newStatus
+    return { status: newStatus, outcome }
   } catch (error: any) {
     logger.error(
       `[Token Validation] Failed to check token for user: ${tokenDoc.userId}`,
       error,
     )
-    // 标记为 invalid
-    await FbToken.findByIdAndUpdate(tokenDoc._id, {
-      status: 'invalid',
-      lastCheckedAt: new Date(),
-    })
-    return 'invalid'
+    // 本地异常同样不能证明 Meta token 已失效，只记录尝试并保留原状态。
+    try {
+      await FbToken.findByIdAndUpdate(tokenDoc._id, {
+        lastValidationAttemptAt: new Date(),
+        lastValidationError: error.message || 'Unexpected validation failure',
+        $unset: { lastValidationErrorCode: 1 },
+      })
+    } catch (updateError) {
+      logger.error(
+        `[Token Validation] Failed to record validation attempt for user: ${tokenDoc.userId}`,
+        updateError,
+      )
+    }
+    return {
+      status: tokenDoc.status || 'active',
+      outcome: 'transient',
+    }
   }
 }
 
@@ -227,7 +307,7 @@ export async function checkAllTokensStatus(options: {
     const [totalFound, tokens] = await Promise.all([
       FbToken.countDocuments({}),
       FbToken.find({})
-        .sort({ lastCheckedAt: 1, updatedAt: 1, _id: 1 })
+        .sort({ lastValidationAttemptAt: 1, lastCheckedAt: 1, updatedAt: 1, _id: 1 })
         .limit(limit),
     ])
     logger.info(`[Token Validation] Checking ${tokens.length}/${totalFound} tokens with concurrency=${concurrency}`)
@@ -235,11 +315,20 @@ export async function checkAllTokensStatus(options: {
     const results = await runWithConcurrency(
       tokens,
       concurrency,
-      (token) => checkAndUpdateTokenStatus(token),
+      (token) => checkAndUpdateTokenStatusDetailed(token),
     )
 
-    const successCount = results.filter((r) => r.status === 'fulfilled').length
-    const failedCount = results.filter((r) => r.status === 'rejected').length
+    const fulfilledResults = results
+      .filter((result): result is { status: 'fulfilled'; value: TokenStatusCheckResult } => (
+        result.status === 'fulfilled'
+      ))
+      .map((result) => result.value)
+    const validCount = fulfilledResults.filter((result) => result.outcome === 'valid').length
+    const invalidCount = fulfilledResults.filter((result) => result.outcome === 'invalid').length
+    const transientCount = fulfilledResults.filter((result) => result.outcome === 'transient').length
+    const rejectedCount = results.filter((result) => result.status === 'rejected').length
+    const successCount = validCount + invalidCount
+    const failedCount = transientCount + rejectedCount
 
     logger.info(
       `[Token Validation] Batch validation completed: checked=${tokens.length}, total=${totalFound}, ${successCount} succeeded, ${failedCount} failed`,
@@ -250,6 +339,9 @@ export async function checkAllTokensStatus(options: {
       checked: tokens.length,
       succeeded: successCount,
       failed: failedCount,
+      valid: validCount,
+      invalid: invalidCount,
+      transient: transientCount + rejectedCount,
       limit,
       concurrency,
     }
@@ -260,6 +352,9 @@ export async function checkAllTokensStatus(options: {
       checked: 0,
       succeeded: 0,
       failed: 1,
+      valid: 0,
+      invalid: 0,
+      transient: 1,
       limit,
       concurrency,
     }
