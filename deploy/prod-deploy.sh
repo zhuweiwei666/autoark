@@ -21,6 +21,16 @@ require_command() {
 require_command ssh
 require_command git
 
+if [[ "$AUTOARK_REF" == codex/emergency-pause-facebook-sync-* ]]; then
+  log "Running Facebook sync emergency pause only"
+  ssh "$PROD_HOST" "set -euo pipefail
+    cd '$APP_DIR'
+    docker compose -f deploy/docker-compose.prod.yml exec -T backend node
+  " < "$(dirname "$0")/pause-facebook-sync.js"
+  log "Facebook sync emergency pause complete"
+  exit 0
+fi
+
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   echo "Run this script from the AutoArk git checkout."
   exit 1
