@@ -65,16 +65,17 @@ export const fetchVideoSource = async (videoId: string, token?: string) => {
  */
 export const fetchImageByHash = async (accountId: string, imageHash: string, token?: string) => {
   const params: any = {
-    hashes: [imageHash],
+    fields: 'hash,url,url_128,permalink_url,width,height',
+    hashes: JSON.stringify([imageHash]),
   }
   if (token) {
     params.access_token = token
   }
   try {
     const res = await facebookClient.get(`/${normalizeForApi(accountId)}/adimages`, params)
-    const images = res.data?.data || res.data || {}
-    // 返回第一个匹配的图片
-    const imageData = images[imageHash] || Object.values(images)[0]
+    const images = res.data?.data || res.data || []
+    const imageList: any[] = Array.isArray(images) ? images : Object.values(images)
+    const imageData = imageList.find((image) => image?.hash === imageHash) || imageList[0]
     if (imageData) {
       return {
         success: true,
