@@ -42,8 +42,10 @@ const main = async () => {
   const redisUrl = process.env.REDIS_URL
   if (!redisUrl) throw new Error('REDIS_URL is not configured')
 
+  const connections = []
   const queues = QUEUE_NAMES.map((name) => {
     const connection = new IORedis(redisUrl, { maxRetriesPerRequest: null })
+    connections.push(connection)
     return new Queue(name, { connection })
   })
 
@@ -84,6 +86,8 @@ const main = async () => {
     process.stdout.write(`${JSON.stringify({ before, after }, null, 2)}\n`)
   } finally {
     await Promise.allSettled(queues.map((queue) => queue.close()))
+    await Promise.allSettled(connections.map((connection) => connection.quit()))
+    connections.forEach((connection) => connection.disconnect())
   }
 }
 
