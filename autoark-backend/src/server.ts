@@ -6,6 +6,7 @@ import connectDB from './config/db'
 import { initRedis } from './config/redis'
 import logger from './utils/logger'
 import { tokenPool } from './services/facebook.token.pool'
+import { ensureMetricsDailyIndexCompatibility } from './services/facebook.upsert.service'
 
 // Queues & Workers
 import { initQueues } from './queue/facebook.queue'
@@ -42,6 +43,7 @@ process.on('unhandledRejection', (err: any) => {
 async function bootstrap() {
   // 1) DB
   await connectDB()
+  await ensureMetricsDailyIndexCompatibility()
 
   // 2) Redis (optional)
   initRedis()
