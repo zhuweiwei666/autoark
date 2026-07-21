@@ -1000,50 +1000,112 @@ export interface AccountRankingData {
   purchase_value: number
 }
 
+const DASHBOARD_SUMMARY_NUMERIC_FIELDS = [
+  'totalSpend',
+  'totalImpressions',
+  'totalClicks',
+  'totalInstalls',
+  'ctr',
+  'cpm',
+  'cpc',
+  'cpi',
+  'roas',
+] as const
+
+const DASHBOARD_TREND_NUMERIC_FIELDS = [
+  'totalSpend',
+  'totalRevenue',
+  'totalImpressions',
+  'totalClicks',
+  'totalInstalls',
+  'roas',
+] as const
+
+const hasFiniteNumericFields = (value: any, fields: readonly string[]) => (
+  value !== null
+  && typeof value === 'object'
+  && fields.every(field => typeof value[field] === 'number' && Number.isFinite(value[field]))
+)
+
+const isCompleteDashboardSummary = (value: any) => (
+  typeof value?.date === 'string'
+  && /^\d{4}-\d{2}-\d{2}$/.test(value.date)
+  && hasFiniteNumericFields(value, DASHBOARD_SUMMARY_NUMERIC_FIELDS)
+)
+
+const isCompleteDashboardTrendRow = (value: any) => (
+  typeof value?.date === 'string'
+  && /^\d{4}-\d{2}-\d{2}$/.test(value.date)
+  && hasFiniteNumericFields(value, DASHBOARD_TREND_NUMERIC_FIELDS)
+)
+
 // 获取核心指标 (使用 Summary API)
 export async function getCoreMetrics(_startDate?: string, endDate?: string): Promise<{ success: boolean; data: CoreMetrics }> {
-  // 获取今天、昨天、最近7天的汇总数据
-  const today = endDate || new Date().toISOString().split('T')[0]
+  // 默认日期由服务端决定，确保“今天”与聚合任务使用同一个时区。
+  const todayUrl = endDate
+    ? `${API_BASE_URL}/api/summary/dashboard?date=${endDate}`
+    : `${API_BASE_URL}/api/summary/dashboard`
+
+  const [todayRes, trendRes] = await Promise.all([
+    authFetch(todayUrl),
+    authFetch(`${API_BASE_URL}/api/summary/dashboard/trend?days=7`),
+  ])
+
+  if (!todayRes.ok || !trendRes.ok) {
+    throw new Error(`Failed to fetch dashboard metrics (today: ${todayRes.status}, trend: ${trendRes.status})`)
+  }
+
+  const todayData = await todayRes.json()
+  const trendData = await trendRes.json()
+  const today = endDate || todayData?.data?.date
+  if (
+    todayData?.success !== true
+    || trendData?.success !== true
+    || !today
+    || !isCompleteDashboardSummary(todayData.data)
+    || !Array.isArray(trendData.data)
+    || trendData.data.length !== 7
+    || !trendData.data.every(isCompleteDashboardTrendRow)
+  ) {
+    throw new Error('Dashboard metrics response is incomplete')
+  }
+
   // 安全计算昨天日期，避免时区问题
   const todayParts = today.split('-').map(Number)
   const todayDate = new Date(todayParts[0], todayParts[1] - 1, todayParts[2])
   todayDate.setDate(todayDate.getDate() - 1)
   const yesterday = `${todayDate.getFullYear()}-${String(todayDate.getMonth() + 1).padStart(2, '0')}-${String(todayDate.getDate()).padStart(2, '0')}`
-  
-  const [todayRes, yesterdayRes, trendRes] = await Promise.all([
-    fetch(`${API_BASE_URL}/api/summary/dashboard?date=${today}`),
-    fetch(`${API_BASE_URL}/api/summary/dashboard?date=${yesterday}`),
-    fetch(`${API_BASE_URL}/api/summary/dashboard/trend?days=7`)
-  ])
 
-  if (!todayRes.ok) {
-    throw new Error('Failed to fetch today metrics')
+  const yesterdayRes = await authFetch(`${API_BASE_URL}/api/summary/dashboard?date=${yesterday}`)
+  if (!yesterdayRes.ok) {
+    throw new Error(`Failed to fetch yesterday metrics (${yesterdayRes.status})`)
   }
 
-  const todayData = await todayRes.json()
-  const yesterdayData = yesterdayRes.ok ? await yesterdayRes.json() : { data: {} }
-  const trendData = trendRes.ok ? await trendRes.json() : { data: [] }
+  const yesterdayData = await yesterdayRes.json()
+  if (yesterdayData?.success !== true || !isCompleteDashboardSummary(yesterdayData.data)) {
+    throw new Error('Yesterday metrics response is incomplete')
+  }
   
   // 转换为前端期望的格式
   const mapData = (summary: any) => ({
-    spend: summary?.totalSpend || 0,
-    impressions: summary?.totalImpressions || 0,
-    clicks: summary?.totalClicks || 0,
-    installs: summary?.totalInstalls || 0,
-    ctr: (summary?.ctr || 0) / 100,
-    cpm: summary?.cpm || 0,
-    cpc: summary?.cpc || 0,
-    cpi: summary?.cpi || 0,
-    roas: summary?.roas || 0,
+    spend: summary.totalSpend,
+    impressions: summary.totalImpressions,
+    clicks: summary.totalClicks,
+    installs: summary.totalInstalls,
+    ctr: summary.ctr / 100,
+    cpm: summary.cpm,
+    cpc: summary.cpc,
+    cpi: summary.cpi,
+    roas: summary.roas,
   })
   
   // 计算7天总计
-  const trendDataArray = trendData.data || []
+  const trendDataArray = trendData.data
   const sevenDaysSummary = trendDataArray.reduce((acc: any, day: any) => ({
-    spend: acc.spend + (day.totalSpend || 0),
-    impressions: acc.impressions + (day.totalImpressions || 0),
-    clicks: acc.clicks + (day.totalClicks || 0),
-    installs: acc.installs + (day.totalInstalls || 0),
+    spend: acc.spend + day.totalSpend,
+    impressions: acc.impressions + day.totalImpressions,
+    clicks: acc.clicks + day.totalClicks,
+    installs: acc.installs + day.totalInstalls,
   }), { spend: 0, impressions: 0, clicks: 0, installs: 0 })
   
   // 计算日均
@@ -1894,89 +1956,29 @@ export async function getAggDaily(startDate?: string, endDate?: string): Promise
  * 获取核心指标（使用预聚合表，最近3天实时更新）
  */
 export async function getAggCoreMetrics(): Promise<{ success: boolean; data: CoreMetrics }> {
-  const today = new Date().toISOString().split('T')[0]
-  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
-  
-  // 并行获取今日、昨日和7天数据
-  const [todayRes, dailyRes] = await Promise.all([
-    fetch(`${API_BASE_URL}/api/agg/today`),
-    fetch(`${API_BASE_URL}/api/agg/daily?startDate=${sevenDaysAgo}&endDate=${today}`)
-  ])
-  
-  const todayData = await todayRes.json()
-  const dailyData = await dailyRes.json()
-  
-  // 找出昨日数据
-  const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().split('T')[0]
-  const yesterdayData = (dailyData.data || []).find((d: any) => d.date === yesterday) || {}
-  
-  // 计算7天总计
-  const sevenDaysSummary = (dailyData.data || []).reduce((acc: any, day: any) => ({
-    spend: acc.spend + (day.spend || 0),
-    impressions: acc.impressions + (day.impressions || 0),
-    clicks: acc.clicks + (day.clicks || 0),
-    installs: acc.installs + (day.installs || 0),
-  }), { spend: 0, impressions: 0, clicks: 0, installs: 0 })
-  
-  const dayCount = (dailyData.data || []).length || 1
-  sevenDaysSummary.avgDailySpend = sevenDaysSummary.spend / dayCount
-  
-  const mapData = (d: any) => ({
-    spend: d?.spend || 0,
-    impressions: d?.impressions || 0,
-    clicks: d?.clicks || 0,
-    installs: d?.installs || 0,
-    ctr: (d?.ctr || 0) / 100,
-    cpm: d?.cpm || 0,
-    cpc: d?.cpc || 0,
-    cpi: d?.cpi || 0,
-    roas: d?.roas || 0,
-  })
-  
-  return {
-    success: true,
-    data: {
-      today: mapData(todayData.data),
-      yesterday: mapData(yesterdayData),
-      sevenDays: sevenDaysSummary,
-    }
-  }
+  return getCoreMetrics()
 }
 
 /**
  * 获取消耗和 ROAS 趋势（预聚合表）
  */
 export async function getAggTrend(days: number = 7): Promise<{ success: boolean; data: any[] }> {
-  const today = new Date().toISOString().split('T')[0]
-  const startDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
-  
-  const response = await authFetch(`${API_BASE_URL}/api/agg/daily?startDate=${startDate}&endDate=${today}`)
-  const result = await response.json()
-  
-  // 转换为趋势格式
-  const data = (result.data || []).map((d: any) => ({
-    date: d.date,
-    totalSpend: d.spend,
-    totalRevenue: d.revenue,
-    roas: d.roas,
-    impressions: d.impressions,
-    clicks: d.clicks,
-  })).sort((a: any, b: any) => a.date.localeCompare(b.date))
-  
-  return { success: true, data }
+  return getDashboardTrend(days)
 }
 
 /**
  * 获取广告系列排行（预聚合表）
  */
 export async function getAggCampaignRanking(limit: number = 10): Promise<{ success: boolean; data: any[] }> {
-  const today = new Date().toISOString().split('T')[0]
-  
-  const response = await authFetch(`${API_BASE_URL}/api/agg/campaigns?date=${today}`)
+  const response = await authFetch(`${API_BASE_URL}/api/agg/campaigns?limit=${limit}`)
+  if (!response.ok) throw new Error(`Failed to fetch campaign ranking (${response.status})`)
   const result = await response.json()
+  if (result?.success !== true || !Array.isArray(result.data)) {
+    throw new Error('Campaign ranking response is incomplete')
+  }
   
   // 取 Top N 并转换格式
-  const data = (result.data || [])
+  const data = result.data
     .slice(0, limit)
     .map((c: any) => ({
       campaignId: c.campaignId,
@@ -1994,13 +1996,15 @@ export async function getAggCampaignRanking(limit: number = 10): Promise<{ succe
  * 获取账户排行（预聚合表）
  */
 export async function getAggAccountRanking(limit: number = 10): Promise<{ success: boolean; data: any[] }> {
-  const today = new Date().toISOString().split('T')[0]
-  
-  const response = await authFetch(`${API_BASE_URL}/api/agg/accounts?date=${today}`)
+  const response = await authFetch(`${API_BASE_URL}/api/agg/accounts?limit=${limit}`)
+  if (!response.ok) throw new Error(`Failed to fetch account ranking (${response.status})`)
   const result = await response.json()
+  if (result?.success !== true || !Array.isArray(result.data)) {
+    throw new Error('Account ranking response is incomplete')
+  }
   
   // 取 Top N
-  const data = (result.data || [])
+  const data = result.data
     .slice(0, limit)
     .map((a: any) => ({
       accountId: a.accountId,

@@ -27,6 +27,12 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined)
 const clearStoredAuth = () => {
   localStorage.removeItem('auth_token')
   localStorage.removeItem('auth_user')
+  for (let index = localStorage.length - 1; index >= 0; index -= 1) {
+    const key = localStorage.key(index)
+    if (key === 'dashboard_7days' || key?.startsWith('dashboard_7days_')) {
+      localStorage.removeItem(key)
+    }
+  }
 }
 
 const parseStoredUser = (storedUser: string | null): User | null => {

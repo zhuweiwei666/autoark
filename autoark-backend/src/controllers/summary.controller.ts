@@ -338,8 +338,8 @@ router.get('/dashboard/trend', async (req: Request, res: Response) => {
         }).sort({ date: 1 }).lean()
       : await AggAccount.aggregate([
           { $match: { date: { $gte: startDate, $lte: endDate }, accountId: { $in: scopedAccountIds } } },
-          { $group: { _id: '$date', spend: { $sum: '$spend' }, revenue: { $sum: '$revenue' }, impressions: { $sum: '$impressions' }, clicks: { $sum: '$clicks' } } },
-          { $project: { date: '$_id', spend: 1, revenue: 1, impressions: 1, clicks: 1, roas: { $cond: [{ $gt: ['$spend', 0] }, { $divide: ['$revenue', '$spend'] }, 0] } } },
+          { $group: { _id: '$date', spend: { $sum: '$spend' }, revenue: { $sum: '$revenue' }, impressions: { $sum: '$impressions' }, clicks: { $sum: '$clicks' }, installs: { $sum: '$installs' } } },
+          { $project: { date: '$_id', spend: 1, revenue: 1, impressions: 1, clicks: 1, installs: 1, roas: { $cond: [{ $gt: ['$spend', 0] }, { $divide: ['$revenue', '$spend'] }, 0] } } },
           { $sort: { date: 1 } },
         ])
 
@@ -359,6 +359,7 @@ router.get('/dashboard/trend', async (req: Request, res: Response) => {
         totalRevenue: data?.revenue || 0,
         totalImpressions: data?.impressions || 0,
         totalClicks: data?.clicks || 0,
+        totalInstalls: data?.installs || 0,
         roas: data?.roas || 0,
       })
     }

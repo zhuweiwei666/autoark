@@ -1,5 +1,6 @@
 import express from 'express'
 import request from 'supertest'
+import dayjs from 'dayjs'
 import { UserRole } from '../src/models/User'
 
 const mockAuthState: { user: any } = { user: null }
@@ -252,6 +253,54 @@ describe('summary route data scoping', () => {
     expect(response.body.data).toHaveLength(90)
     expect(AggDaily.find).toHaveBeenCalledTimes(1)
     expect(findQuery.sort).toHaveBeenCalledWith({ date: 1 })
+  })
+
+  it('includes installs in every dashboard trend row', async () => {
+    mockAuthState.user = {
+      role: UserRole.SUPER_ADMIN,
+      userId: '665000000000000000000003',
+    }
+    ;(getUserAccountIds as jest.Mock).mockResolvedValue(null)
+    const findQuery = {
+      sort: jest.fn().mockReturnThis(),
+      lean: jest.fn().mockResolvedValue([{
+        date: dayjs().format('YYYY-MM-DD'),
+        spend: 25,
+        installs: 17,
+      }]),
+    }
+    ;(AggDaily.find as jest.Mock).mockReturnValue(findQuery)
+
+    const response = await request(createApp()).get('/api/summary/dashboard/trend?days=7')
+
+    expect(response.status).toBe(200)
+    expect(response.body.data).toHaveLength(7)
+    expect(response.body.data.at(-1)).toMatchObject({
+      totalSpend: 25,
+      totalInstalls: 17,
+    })
+  })
+
+  it('sums installs in scoped dashboard trend rows', async () => {
+    mockAuthState.user = {
+      role: UserRole.ORG_ADMIN,
+      organizationId: '665000000000000000000001',
+      userId: '665000000000000000000002',
+    }
+    ;(getUserAccountIds as jest.Mock).mockResolvedValue(['act_123'])
+    ;(AggAccount.aggregate as jest.Mock).mockResolvedValue([{
+      date: dayjs().format('YYYY-MM-DD'),
+      spend: 25,
+      installs: 17,
+    }])
+
+    const response = await request(createApp()).get('/api/summary/dashboard/trend?days=7')
+
+    expect(response.status).toBe(200)
+    expect(response.body.data.at(-1)).toMatchObject({ totalInstalls: 17 })
+    const pipeline = (AggAccount.aggregate as jest.Mock).mock.calls[0][0]
+    expect(pipeline[1].$group.installs).toEqual({ $sum: '$installs' })
+    expect(pipeline[2].$project.installs).toBe(1)
   })
 
   it('caps summary aggregation date ranges before querying account rows', async () => {

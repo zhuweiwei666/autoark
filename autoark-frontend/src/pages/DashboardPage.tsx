@@ -15,7 +15,20 @@ import {
   getAggTrend,
 } from "../services/api";
 
-const getCacheKey = () => "dashboard_7days";
+const getSessionCacheScope = () => {
+  const token = localStorage.getItem("auth_token");
+  if (!token) return "anonymous";
+
+  // 缓存键不能暴露 token 本身，同时必须隔离不同登录会话。
+  let hash = 2166136261;
+  for (let index = 0; index < token.length; index += 1) {
+    hash ^= token.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+};
+
+const getCacheKey = () => `dashboard_7days_${getSessionCacheScope()}`;
 
 const loadFromCache = () => {
   try {
@@ -106,9 +119,7 @@ function MiniLineChart({
   valueKey: string;
   color: string;
 }) {
-  const values = data.map((item) =>
-    Number(item[valueKey] || item.totalSpend || item.spend || 0),
-  );
+  const values = data.map((item) => Number(item[valueKey] ?? 0));
   const max = Math.max(...values, 1);
   const min = Math.min(...values, 0);
   const range = Math.max(max - min, 1);
@@ -118,7 +129,7 @@ function MiniLineChart({
       const y = 100 - ((value - min) / range) * 84 - 8;
       return `${x},${y}`;
     })
-    .join("");
+    .join(" ");
 
   if (!data.length) {
     return (
@@ -133,7 +144,7 @@ function MiniLineChart({
       <svg
         viewBox="0 0 100 100"
         preserveAspectRatio="none"
-        className="h-48 w-full overflow-visible"
+        className="h-48 w-full overflow-hidden"
       >
         <line
           x1="0"

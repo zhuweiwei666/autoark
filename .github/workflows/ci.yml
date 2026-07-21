@@ -32,6 +32,10 @@ jobs:
       working-directory: ./autoark-frontend
       run: npm audit --omit=dev --audit-level=moderate
 
+    - name: Test Frontend
+      working-directory: ./autoark-frontend
+      run: npm test
+
     - name: Build Frontend
       working-directory: ./autoark-frontend
       run: npm run build
