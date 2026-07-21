@@ -15,6 +15,7 @@ import dayjs from 'dayjs'
 import { ingestCreativeAssets } from '../services/facebookMaterialIngestion.service'
 import { fetchFacebookEdgePages } from '../integration/facebook/pagination'
 import { parseFacebookPurchaseRoas } from '../utils/facebookMetrics'
+import { quarantineTerminalFacebookAccount } from '../services/facebookAccountAuthFailure.service'
 
 // Worker 实例（延迟初始化）
 let accountWorker: Worker | null = null
@@ -128,6 +129,14 @@ export const initWorkers = async (): Promise<void> => {
         await Promise.all(jobs)
         return { campaignsCount: campaigns.length }
       } catch (error: any) {
+        try {
+          const quarantined = await quarantineTerminalFacebookAccount(accountId, error)
+          if (quarantined) {
+            logger.warn(`[AccountWorker] Account ${accountId} requires Facebook reauthorization; future scheduled syncs disabled`)
+          }
+        } catch (quarantineError) {
+          logger.error(`[AccountWorker] Failed to record terminal authorization failure for ${accountId}:`, quarantineError)
+        }
         logger.error(`[AccountWorker] Failed for account ${accountId}:`, error)
         throw error
       }

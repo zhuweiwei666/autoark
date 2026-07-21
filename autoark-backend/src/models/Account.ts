@@ -13,6 +13,8 @@ export interface IAccount extends mongoose.Document {
   amountSpent?: string
   accountStatus?: number
   disableReason?: number
+  syncBlockedAt?: Date
+  syncBlockedReason?: string
   // 新增：组织和权限相关
   organizationId?: mongoose.Types.ObjectId
   tags?: string[]
@@ -37,6 +39,8 @@ const accountSchema = new mongoose.Schema(
     amountSpent: String,
     accountStatus: Number,
     disableReason: Number,
+    syncBlockedAt: Date,
+    syncBlockedReason: String,
     
     // ==================== 权限和组织管理 ====================
     organizationId: {
