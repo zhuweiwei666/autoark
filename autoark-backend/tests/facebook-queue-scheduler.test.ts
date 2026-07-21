@@ -13,9 +13,9 @@ jest.mock('../src/queue/facebook.queue', () => ({
     isPaused: mockIsPaused,
     resume: mockResume,
   },
-  campaignQueue: { isPaused: mockIsPaused, getWorkersCount: mockGetWorkersCount, resume: mockResume },
-  adQueue: { isPaused: mockIsPaused, getWorkersCount: mockGetWorkersCount, resume: mockResume },
-  materialQueue: { isPaused: mockIsPaused, getWorkersCount: mockGetWorkersCount, resume: mockResume },
+  campaignQueue: { getJobs: mockGetJobs, isPaused: mockIsPaused, getWorkersCount: mockGetWorkersCount, resume: mockResume },
+  adQueue: { getJobs: mockGetJobs, isPaused: mockIsPaused, getWorkersCount: mockGetWorkersCount, resume: mockResume },
+  materialQueue: { getJobs: mockGetJobs, isPaused: mockIsPaused, getWorkersCount: mockGetWorkersCount, resume: mockResume },
 }))
 
 jest.mock('../src/models/Account', () => ({
@@ -27,6 +27,7 @@ jest.mock('../src/models/Account', () => ({
 
 import {
   recoverFacebookAccountQueue,
+  retryFacebookQueueFailures,
   syncCampaignsFromAdAccountsV2,
 } from '../src/services/facebook.campaigns.v2.service'
 
@@ -175,5 +176,35 @@ describe('facebook queue scheduler safety', () => {
     expect(mockResume).toHaveBeenCalledTimes(4)
     expect(jobs.every((job) => job.remove.mock.calls.length === 1)).toBe(true)
     expect(mockGetJobs).not.toHaveBeenCalledWith(expect.arrayContaining(['active']), expect.anything(), expect.anything())
+  })
+
+  it('previews and then retries bounded failed jobs for one selected queue', async () => {
+    const failedJobs = [
+      { id: 'ad-f1', retry: jest.fn().mockResolvedValue(undefined) },
+      { id: 'ad-f2', retry: jest.fn().mockResolvedValue(undefined) },
+    ]
+    mockGetJobs.mockResolvedValue(failedJobs)
+
+    const preview = await retryFacebookQueueFailures({ queue: 'ad', dryRun: true, maxJobs: 10 })
+
+    expect(preview).toMatchObject({ queue: 'ad', dryRun: true, candidates: 2, retried: 0 })
+    expect(mockGetJobs).toHaveBeenCalledWith('failed', 0, 9, true)
+    expect(failedJobs.every((job) => job.retry.mock.calls.length === 0)).toBe(true)
+
+    await expect(retryFacebookQueueFailures({
+      queue: 'ad',
+      dryRun: false,
+      confirmation: 'wrong',
+    })).rejects.toThrow('RETRY_FACEBOOK_QUEUE_FAILURES')
+
+    const result = await retryFacebookQueueFailures({
+      queue: 'ad',
+      dryRun: false,
+      confirmation: 'RETRY_FACEBOOK_QUEUE_FAILURES',
+      maxJobs: 10,
+    })
+
+    expect(result).toMatchObject({ queue: 'ad', dryRun: false, candidates: 2, retried: 2 })
+    expect(failedJobs.every((job) => job.retry.mock.calls.length === 1)).toBe(true)
   })
 })

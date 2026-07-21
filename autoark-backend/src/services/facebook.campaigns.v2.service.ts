@@ -137,6 +137,10 @@ export const addAccountSyncJob = async (accountId: string, token: string) => {
 
 const RECOVERY_CONFIRMATION = 'RECOVER_FACEBOOK_ACCOUNT_QUEUE'
 const RECOVERY_STATES = ['prioritized', 'waiting', 'delayed', 'failed'] as const
+const RETRY_CONFIRMATION = 'RETRY_FACEBOOK_QUEUE_FAILURES'
+const RETRYABLE_QUEUE_NAMES = ['account', 'campaign', 'ad', 'material'] as const
+
+type RetryableFacebookQueueName = typeof RETRYABLE_QUEUE_NAMES[number]
 
 export const recoverFacebookAccountQueue = async (options?: {
   dryRun?: boolean
@@ -201,6 +205,56 @@ export const recoverFacebookAccountQueue = async (options?: {
       'facebook.material.sync',
     ],
     truncated: candidates >= maxJobs,
+  }
+}
+
+export const retryFacebookQueueFailures = async (options: {
+  queue: RetryableFacebookQueueName
+  dryRun?: boolean
+  confirmation?: string
+  maxJobs?: number
+}) => {
+  const queueName = options?.queue
+  if (!RETRYABLE_QUEUE_NAMES.includes(queueName)) {
+    throw new Error(`Unsupported Facebook queue: ${String(queueName || '')}`)
+  }
+
+  const queues = {
+    account: accountQueue,
+    campaign: campaignQueue,
+    ad: adQueue,
+    material: materialQueue,
+  }
+  const queue = queues[queueName]
+  if (!queue) throw new Error('Queue system not available')
+
+  const dryRun = options?.dryRun !== false
+  if (!dryRun && options?.confirmation !== RETRY_CONFIRMATION) {
+    throw new Error(`Queue retry requires confirmation: ${RETRY_CONFIRMATION}`)
+  }
+
+  const requestedMax = Number(options?.maxJobs || 1000)
+  const maxJobs = Math.min(10000, Math.max(1, Number.isFinite(requestedMax) ? Math.floor(requestedMax) : 1000))
+  const jobs = await queue.getJobs('failed', 0, maxJobs - 1, true)
+  let retried = 0
+
+  if (!dryRun) {
+    for (let start = 0; start < jobs.length; start += 50) {
+      const batch = jobs.slice(start, start + 50)
+      await Promise.all(batch.map(async (job) => {
+        await job.retry('failed')
+        retried += 1
+      }))
+    }
+  }
+
+  return {
+    queue: queueName,
+    dryRun,
+    maxJobs,
+    candidates: jobs.length,
+    retried,
+    truncated: jobs.length >= maxJobs,
   }
 }
 

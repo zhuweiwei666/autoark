@@ -295,6 +295,54 @@ export const recoverQueue = async (
   }
 }
 
+export const retryFailedQueueJobs = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
+  if (!requireSuperAdmin(req, res)) return
+
+  const dryRun = req.body?.dryRun !== false
+  const queue = req.body?.queue
+  try {
+    const result = await facebookCampaignsV2Service.retryFacebookQueueFailures({
+      queue,
+      dryRun,
+      confirmation: typeof req.body?.confirmation === 'string'
+        ? req.body.confirmation
+        : undefined,
+      maxJobs: typeof req.body?.maxJobs === 'number'
+        ? req.body.maxJobs
+        : undefined,
+    })
+
+    await writeAuditLog(req, {
+      category: 'facebook',
+      action: dryRun ? 'facebook.queue.retry_failed.preview' : 'facebook.queue.retry_failed.apply',
+      status: 'success',
+      targetType: 'bullmq_queue',
+      targetId: `facebook.${result.queue}.sync`,
+      summary: dryRun
+        ? `预览 Facebook ${result.queue} 队列失败任务重试：${result.candidates} 个候选任务`
+        : `执行 Facebook ${result.queue} 队列失败任务重试：重试 ${result.retried} 个任务`,
+      metadata: result,
+    })
+
+    res.json({ success: true, data: result })
+  } catch (error: any) {
+    await writeAuditLog(req, {
+      category: 'facebook',
+      action: dryRun ? 'facebook.queue.retry_failed.preview' : 'facebook.queue.retry_failed.apply',
+      status: 'failed',
+      targetType: 'bullmq_queue',
+      targetId: `facebook.${String(queue || 'unknown')}.sync`,
+      summary: 'Facebook 队列失败任务重试失败',
+      reason: error.message,
+    })
+    next(error)
+  }
+}
+
 // 诊断 Token 权限
 export const diagnoseTokens = async (
   req: Request,
