@@ -73,8 +73,11 @@ const materialSchema = new mongoose.Schema(
     // 同一个素材可能被上传到多个 Facebook 账户
     facebookMappings: [{
       accountId: { type: String, required: true },  // Facebook 账户 ID
+      creativeId: { type: String },
       imageHash: { type: String },     // 图片上传后的 hash（图片素材）
       videoId: { type: String },       // 视频上传后的 ID（视频素材）
+      sourceKind: { type: String },
+      isOriginal: { type: Boolean },
       uploadedAt: { type: Date },
       status: { type: String, enum: ['pending', 'uploaded', 'failed'], default: 'pending' },
     }],
@@ -89,6 +92,11 @@ const materialSchema = new mongoose.Schema(
     // 素材来源
     source: {
       type: { type: String, enum: ['upload', 'import'], default: 'upload' },
+      platform: { type: String },
+      externalCreativeId: { type: String },
+      externalAccountId: { type: String },
+      assetKind: { type: String },
+      isOriginal: { type: Boolean },
       importedAt: { type: Date },
       importedBy: { type: String },
     },
@@ -192,4 +200,3 @@ materialSchema.virtual('durationFormatted').get(function() {
 })
 
 export default mongoose.model('Material', materialSchema)
-

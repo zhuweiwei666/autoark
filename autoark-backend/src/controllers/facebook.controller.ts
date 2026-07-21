@@ -25,6 +25,7 @@ import {
   pickSafeRegexLiteral,
 } from '../utils/pagination'
 import logger from '../utils/logger'
+import { writeAuditLog } from '../services/auditLog.service'
 
 const FACEBOOK_LIST_MAX_LIMIT = 100
 const FACEBOOK_DIAGNOSE_DEFAULT_LIMIT = 20
@@ -200,7 +201,17 @@ export const syncCampaigns = async (
     const useV2 = req.query.v2 === 'true' || process.env.USE_QUEUE_SYNC === 'true'
     
     if (useV2) {
-      const result = await facebookCampaignsV2Service.syncCampaignsFromAdAccountsV2()
+      const accountIds = Array.isArray(req.body?.accountIds)
+        ? req.body.accountIds
+            .filter((id: unknown): id is string => typeof id === 'string')
+            .map((id: string) => normalizeForStorage(id))
+            .filter(Boolean)
+            .slice(0, 100)
+        : undefined
+      const result = await facebookCampaignsV2Service.syncCampaignsFromAdAccountsV2({
+        accountIds,
+        limit: typeof req.body?.limit === 'number' ? req.body.limit : undefined,
+      })
       res.json({
         success: true,
         message: 'Campaigns sync queued (using BullMQ)',
@@ -234,6 +245,100 @@ export const getQueueStatus = async (
       data: status,
     })
   } catch (error) {
+    next(error)
+  }
+}
+
+export const recoverQueue = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
+  if (!requireSuperAdmin(req, res)) return
+
+  const dryRun = req.body?.dryRun !== false
+  try {
+    const result = await facebookCampaignsV2Service.recoverFacebookAccountQueue({
+      dryRun,
+      confirmation: typeof req.body?.confirmation === 'string'
+        ? req.body.confirmation
+        : undefined,
+      maxJobs: typeof req.body?.maxJobs === 'number'
+        ? req.body.maxJobs
+        : undefined,
+    })
+
+    await writeAuditLog(req, {
+      category: 'facebook',
+      action: dryRun ? 'facebook.queue.recover.preview' : 'facebook.queue.recover.apply',
+      status: 'success',
+      targetType: 'bullmq_queue',
+      targetId: 'facebook.account.sync',
+      summary: dryRun
+        ? `预览 Facebook 账户队列恢复：${result.candidates} 个候选任务`
+        : `执行 Facebook 账户队列恢复：移除 ${result.removed} 个任务`,
+      metadata: result,
+    })
+
+    res.json({ success: true, data: result })
+  } catch (error: any) {
+    await writeAuditLog(req, {
+      category: 'facebook',
+      action: dryRun ? 'facebook.queue.recover.preview' : 'facebook.queue.recover.apply',
+      status: 'failed',
+      targetType: 'bullmq_queue',
+      targetId: 'facebook.account.sync',
+      summary: 'Facebook 账户队列恢复失败',
+      reason: error.message,
+    })
+    next(error)
+  }
+}
+
+export const retryFailedQueueJobs = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
+  if (!requireSuperAdmin(req, res)) return
+
+  const dryRun = req.body?.dryRun !== false
+  const queue = req.body?.queue
+  try {
+    const result = await facebookCampaignsV2Service.retryFacebookQueueFailures({
+      queue,
+      dryRun,
+      confirmation: typeof req.body?.confirmation === 'string'
+        ? req.body.confirmation
+        : undefined,
+      maxJobs: typeof req.body?.maxJobs === 'number'
+        ? req.body.maxJobs
+        : undefined,
+    })
+
+    await writeAuditLog(req, {
+      category: 'facebook',
+      action: dryRun ? 'facebook.queue.retry_failed.preview' : 'facebook.queue.retry_failed.apply',
+      status: 'success',
+      targetType: 'bullmq_queue',
+      targetId: `facebook.${result.queue}.sync`,
+      summary: dryRun
+        ? `预览 Facebook ${result.queue} 队列失败任务重试：${result.candidates} 个候选任务`
+        : `执行 Facebook ${result.queue} 队列失败任务重试：重试 ${result.retried} 个任务`,
+      metadata: result,
+    })
+
+    res.json({ success: true, data: result })
+  } catch (error: any) {
+    await writeAuditLog(req, {
+      category: 'facebook',
+      action: dryRun ? 'facebook.queue.retry_failed.preview' : 'facebook.queue.retry_failed.apply',
+      status: 'failed',
+      targetType: 'bullmq_queue',
+      targetId: `facebook.${String(queue || 'unknown')}.sync`,
+      summary: 'Facebook 队列失败任务重试失败',
+      reason: error.message,
+    })
     next(error)
   }
 }

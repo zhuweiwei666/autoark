@@ -5,6 +5,7 @@ import logger from '../utils/logger'
 import { getEffectiveAdAccounts } from './facebook.sync.service' // Import from sync service
 import { getFacebookAccessToken } from '../utils/fbToken'
 import { FB_API_VERSION, FB_BASE_URL } from '../config/facebook.config'
+import { normalizeForApi } from '../utils/accountId'
 
 dotenv.config()
 
@@ -23,7 +24,7 @@ export const getAccountInfo = async (accountId: string, accessToken?: string) =>
   logger.info(`[Facebook API] getAccountInfo started for ${accountId}`)
   try {
     const token = accessToken || await getFacebookAccessToken()
-    const url = `${FB_BASE_URL}/${FB_API_VERSION}/${accountId}`
+    const url = `${FB_BASE_URL}/${FB_API_VERSION}/${normalizeForApi(accountId)}`
     const res = await axios.get(url, {
       params: {
         access_token: token,
@@ -42,7 +43,7 @@ export const getCampaigns = async (accountId: string, accessToken?: string) => {
   logger.info(`[Facebook API] getCampaigns started for ${accountId}`)
   try {
     const token = accessToken || await getFacebookAccessToken()
-    const url = `${FB_BASE_URL}/${FB_API_VERSION}/${accountId}/campaigns`
+    const url = `${FB_BASE_URL}/${FB_API_VERSION}/${normalizeForApi(accountId)}/campaigns`
     const res = await axios.get(url, {
       params: {
         access_token: token,
@@ -62,7 +63,7 @@ export const getAdSets = async (accountId: string, accessToken?: string) => {
   logger.info(`[Facebook API] getAdSets started for ${accountId}`)
   try {
     const token = accessToken || await getFacebookAccessToken()
-    const url = `${FB_BASE_URL}/${FB_API_VERSION}/${accountId}/adsets`
+    const url = `${FB_BASE_URL}/${FB_API_VERSION}/${normalizeForApi(accountId)}/adsets`
     const res = await axios.get(url, {
       params: {
         access_token: token,
@@ -83,7 +84,7 @@ export const getAds = async (accountId: string, accessToken?: string) => {
   logger.info(`[Facebook API] getAds started for ${accountId}`)
   try {
     const token = accessToken || await getFacebookAccessToken()
-    const url = `${FB_BASE_URL}/${FB_API_VERSION}/${accountId}/ads`
+    const url = `${FB_BASE_URL}/${FB_API_VERSION}/${normalizeForApi(accountId)}/ads`
     const res = await axios.get(url, {
       params: {
         access_token: token,

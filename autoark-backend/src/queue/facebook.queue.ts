@@ -17,6 +17,7 @@ let queueOptions: QueueOptions | null = null
 let accountQueue: Queue | null = null
 let campaignQueue: Queue | null = null
 let adQueue: Queue | null = null
+let materialQueue: Queue | null = null
 
 if (isRedisAvailable()) {
   try {
@@ -50,18 +51,22 @@ if (isRedisAvailable()) {
     // 任务：{ accountId, campaignId, adId, token }
     adQueue = new Queue('facebook.ad.sync', queueOptions)
 
+    // 4. 原始广告素材下载与素材库入库队列
+    materialQueue = new Queue('facebook.material.sync', queueOptions)
+
   } catch (error) {
     logger.warn('[Queue] Failed to initialize queues, Redis may not be configured:', error)
   }
 }
 
 export const initQueues = () => {
-  if (!accountQueue || !campaignQueue || !adQueue) return
+  if (!accountQueue || !campaignQueue || !adQueue || !materialQueue) return
 
   const queues = [
     { name: 'facebook.account.sync', queue: accountQueue },
     { name: 'facebook.campaign.sync', queue: campaignQueue },
     { name: 'facebook.ad.sync', queue: adQueue },
+    { name: 'facebook.material.sync', queue: materialQueue },
   ]
 
   queues.forEach(({ name, queue }) => {
@@ -74,4 +79,4 @@ export const initQueues = () => {
   logger.info('[Queue] Facebook sync queues initialized')
 }
 
-export { accountQueue, campaignQueue, adQueue, queueOptions }
+export { accountQueue, campaignQueue, adQueue, materialQueue, queueOptions }

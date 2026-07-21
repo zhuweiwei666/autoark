@@ -2,7 +2,33 @@ import MetricsDaily from '../models/MetricsDaily'
 import RawInsights from '../models/RawInsights'
 import OptimizationState from '../models/OptimizationState'
 import logger from '../utils/logger'
-import mongoose from 'mongoose'
+
+export const ensureMetricsDailyIndexCompatibility = async () => {
+  const indexes = await MetricsDaily.collection.indexes()
+  const legacyUniqueIndex = indexes.find((index) => {
+    const key = index.key as Record<string, unknown>
+
+    return index.name === 'adId_1_date_1'
+      && index.unique === true
+      && key?.adId === 1
+      && key?.date === 1
+      && Object.keys(key).length === 2
+  })
+
+  if (!legacyUniqueIndex?.name) {
+    return { replacedLegacyUniqueIndex: false }
+  }
+
+  logger.warn('[MetricsDaily] Replacing legacy unique ad/date index with a non-unique lookup index')
+  await MetricsDaily.collection.dropIndex(legacyUniqueIndex.name)
+  await MetricsDaily.collection.createIndex(
+    { adId: 1, date: 1 },
+    { name: 'adId_1_date_1', unique: false, background: true },
+  )
+  logger.info('[MetricsDaily] Legacy ad/date index compatibility migration completed')
+
+  return { replacedLegacyUniqueIndex: true }
+}
 
 /**
  * 统一写入服务 (Upsert Service)
@@ -224,4 +250,3 @@ class UpsertService {
 }
 
 export const upsertService = new UpsertService()
-

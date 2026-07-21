@@ -1,7 +1,7 @@
 import { Worker, WorkerOptions } from 'bullmq'
 import { getRedisClient } from '../config/redis'
 import logger from '../utils/logger'
-import { accountQueue, campaignQueue, adQueue } from './facebook.queue'
+import { accountQueue, campaignQueue, adQueue, materialQueue } from './facebook.queue'
 import { fetchCampaigns } from '../integration/facebook/campaigns.api'
 import { fetchInsights } from '../integration/facebook/insights.api'
 import { normalizeForStorage } from '../utils/accountId'
@@ -12,11 +12,14 @@ import Ad from '../models/Ad'
 import AdSet from '../models/AdSet'
 import Creative from '../models/Creative'
 import dayjs from 'dayjs'
+import { ingestCreativeAssets } from '../services/facebookMaterialIngestion.service'
+import { fetchFacebookEdgePages } from '../integration/facebook/pagination'
 
 // Worker 实例（延迟初始化）
 let accountWorker: Worker | null = null
 let campaignWorker: Worker | null = null
 let adWorker: Worker | null = null
+let materialWorker: Worker | null = null
 
 // 辅助函数：从 actions 数组中获取特定 action_type 的 value
 const getActionValue = (actions: any[], actionType: string): number | undefined => {
@@ -50,7 +53,7 @@ const extractVideoIdFromSpec = (spec: any): string | undefined => {
 }
 
 // 初始化 Workers（延迟调用，确保 Redis 已连接）
-export const initWorkers = () => {
+export const initWorkers = async (): Promise<void> => {
   const client = getRedisClient()
   if (!client) {
     logger.warn('[Worker] Workers not initialized (Redis not configured)')
@@ -73,7 +76,7 @@ export const initWorkers = () => {
   }
 
   // 检查队列是否已初始化
-  if (!accountQueue || !campaignQueue || !adQueue) {
+  if (!accountQueue || !campaignQueue || !adQueue || !materialQueue) {
     logger.warn('[Worker] Workers not initialized (Queues not available)')
     return
   }
@@ -82,7 +85,7 @@ export const initWorkers = () => {
   accountWorker = new Worker(
     'facebook.account.sync',
     async (job) => {
-      const { accountId, token } = job.data
+      const { accountId, token, organizationId } = job.data
       logger.info(`[AccountWorker] Processing account: ${accountId}`)
 
       try {
@@ -112,7 +115,7 @@ export const initWorkers = () => {
           if (campaignQueue) {
             jobs.push(campaignQueue.add(
               'sync-campaign',
-              { accountId, campaignId: camp.id, token },
+              { accountId, campaignId: camp.id, token, organizationId },
               {
                 jobId: `campaign-sync-${camp.id}-${dayjs().format('YYYY-MM-DD-HH')}`,
                 priority: 2,
@@ -135,19 +138,16 @@ export const initWorkers = () => {
   campaignWorker = new Worker(
     'facebook.campaign.sync',
     async (job) => {
-      const { accountId, campaignId, token } = job.data
+      const { accountId, campaignId, token, organizationId } = job.data
 
       try {
-        const { facebookClient } = require('../integration/facebook/facebookClient')
-        
         // 2.1 同步该 Campaign 下的 AdSets
         try {
-          const adsetsRes = await facebookClient.get(`/${campaignId}/adsets`, {
+          const adsets = await fetchFacebookEdgePages(`/${campaignId}/adsets`, {
             access_token: token,
             fields: 'id,name,status,optimization_goal,daily_budget,lifetime_budget,bid_amount,billing_event,targeting,created_time,updated_time',
             limit: 500,
           })
-          const adsets = adsetsRes.data || []
           logger.info(`[CampaignWorker] Syncing ${adsets.length} adsets for campaign ${campaignId}`)
           
           for (const adset of adsets) {
@@ -176,12 +176,11 @@ export const initWorkers = () => {
         }
         
         // 2.2 同步该 Campaign 下的 Ads
-        const res = await facebookClient.get(`/${campaignId}/ads`, {
+        const campaignAds = await fetchFacebookEdgePages(`/${campaignId}/ads`, {
           access_token: token,
-          fields: 'id,name,status,adset_id,campaign_id,creative{id,name,status,image_hash,video_id,image_url,thumbnail_url,object_story_spec},created_time,updated_time',
+          fields: 'id,name,status,adset_id,campaign_id,creative{id,name,status,image_hash,video_id,image_url,thumbnail_url,object_story_spec,asset_feed_spec},created_time,updated_time',
           limit: 500,
         })
-        const campaignAds = res.data || []
 
         const jobs = []
         for (const ad of campaignAds) {
@@ -224,6 +223,7 @@ export const initWorkers = () => {
                   creativeId: creativeId,
                   channel: 'facebook',
                   accountId: normalizeForStorage(accountId),
+                  organizationId,
                   name: creative.name,
                   status: creative.status,
                   type: creativeType,
@@ -236,6 +236,27 @@ export const initWorkers = () => {
                   raw: creative,
                 },
                 { upsert: true }
+              )
+
+              await materialQueue.add(
+                'sync-material',
+                {
+                  creative: {
+                    ...creative,
+                    creativeId,
+                    imageHash,
+                    videoId,
+                    imageUrl: creative.image_url,
+                    thumbnailUrl: creative.thumbnail_url,
+                  },
+                  accountId,
+                  organizationId,
+                  token,
+                },
+                {
+                  jobId: `material-sync-${creativeId}-${dayjs().format('YYYY-MM-DD')}`,
+                  priority: 4,
+                },
               )
             } catch (creativeError: any) {
               logger.warn(`[CampaignWorker] Failed to sync creative ${creativeId}: ${creativeError.message}`)
@@ -359,11 +380,25 @@ export const initWorkers = () => {
     createWorkerOptions(20)
   )
 
+  // ==================== 4. Material Ingestion Worker ====================
+  materialWorker = new Worker(
+    'facebook.material.sync',
+    async (job) => {
+      const result = await ingestCreativeAssets(job.data)
+      if (!result.success) {
+        throw new Error(result.errors.join('; ') || 'Facebook material ingestion failed')
+      }
+      return result
+    },
+    createWorkerOptions(2),
+  )
+
   // 设置错误处理
   const workers = [
     { name: 'AccountWorker', worker: accountWorker },
     { name: 'CampaignWorker', worker: campaignWorker },
     { name: 'AdWorker', worker: adWorker },
+    { name: 'MaterialWorker', worker: materialWorker },
   ]
 
   workers.forEach(({ name, worker }) => {
@@ -375,8 +410,10 @@ export const initWorkers = () => {
     })
   })
 
-  logger.info('[Worker] Facebook sync workers initialized (Pipeline V2)')
+  await Promise.all(workers.map(({ worker }) => worker.waitUntilReady()))
+
+  logger.info('[Worker] Facebook sync workers ready (Pipeline V2)')
 }
 
 // 导出 workers（供其他模块使用）
-export { accountWorker, campaignWorker, adWorker }
+export { accountWorker, campaignWorker, adWorker, materialWorker }
