@@ -14,6 +14,7 @@ import Creative from '../models/Creative'
 import dayjs from 'dayjs'
 import { ingestCreativeAssets } from '../services/facebookMaterialIngestion.service'
 import { fetchFacebookEdgePages } from '../integration/facebook/pagination'
+import { parseFacebookPurchaseRoas } from '../utils/facebookMetrics'
 
 // Worker 实例（延迟初始化）
 let accountWorker: Worker | null = null
@@ -358,7 +359,7 @@ export const initWorkers = async (): Promise<void> => {
                 impressions: insight.impressions || 0,
                 clicks: insight.clicks || 0,
                 purchase_value: purchaseValue || 0,
-                roas: insight.purchase_roas ? parseFloat(insight.purchase_roas) : 0,
+                roas: parseFacebookPurchaseRoas(insight.purchase_roas),
                 cpc: insight.cpc ? parseFloat(insight.cpc) : undefined,
                 cpm: insight.cpm ? parseFloat(insight.cpm) : undefined,
                 actions: insight.actions,
