@@ -25,6 +25,9 @@ export const syncCampaignsFromAdAccountsV2 = async (options?: {
   const slot = Math.floor(Date.now() / (intervalMinutes * 60 * 1000))
   
   try {
+    if (await accountQueue!.isPaused()) {
+      throw new Error('facebook.account.sync queue is paused; refusing to enqueue account jobs')
+    }
     const workerCount = await accountQueue!.getWorkersCount()
     if (workerCount < 1) {
       throw new Error('No live facebook.account.sync workers; refusing to enqueue account jobs')
@@ -162,6 +165,7 @@ export const recoverFacebookAccountQueue = async (options?: {
         removed += 1
       }))
     }
+    await accountQueue.resume()
   }
 
   return {
@@ -172,20 +176,23 @@ export const recoverFacebookAccountQueue = async (options?: {
       RECOVERY_STATES.map((state) => [state, jobsByState[state].length]),
     ),
     removed,
+    resumed: !dryRun,
     truncated: candidates >= maxJobs,
   }
 }
 
 const getDetailedQueueStatus = async (queue: NonNullable<typeof accountQueue>) => {
-  const [counts, workers, failedJobs] = await Promise.all([
+  const [counts, workers, isPaused, failedJobs] = await Promise.all([
     queue.getJobCounts(),
     queue.getWorkersCount(),
+    queue.isPaused(),
     queue.getJobs('failed', 0, 4, false),
   ])
 
   return {
     ...counts,
     workers,
+    isPaused,
     failedSamples: failedJobs.map((job: any) => ({
       id: job.id,
       name: job.name,

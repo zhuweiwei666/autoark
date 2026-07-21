@@ -1,6 +1,8 @@
 const mockAdd = jest.fn()
 const mockGetWorkersCount = jest.fn()
 const mockGetJobs = jest.fn()
+const mockIsPaused = jest.fn()
+const mockResume = jest.fn()
 const mockAccountFind = jest.fn()
 
 jest.mock('../src/queue/facebook.queue', () => ({
@@ -8,6 +10,8 @@ jest.mock('../src/queue/facebook.queue', () => ({
     add: mockAdd,
     getWorkersCount: mockGetWorkersCount,
     getJobs: mockGetJobs,
+    isPaused: mockIsPaused,
+    resume: mockResume,
   },
   campaignQueue: {},
   adQueue: {},
@@ -47,6 +51,8 @@ describe('facebook queue scheduler safety', () => {
     mockAccountFind.mockResolvedValue(accounts)
     mockGetWorkersCount.mockResolvedValue(1)
     mockGetJobs.mockResolvedValue([])
+    mockIsPaused.mockResolvedValue(false)
+    mockResume.mockResolvedValue(undefined)
     mockAdd.mockImplementation(async (_name, data, options) => ({ data, opts: options }))
   })
 
@@ -55,6 +61,16 @@ describe('facebook queue scheduler safety', () => {
 
     await expect(syncCampaignsFromAdAccountsV2()).rejects.toThrow(
       'No live facebook.account.sync workers',
+    )
+
+    expect(mockAdd).not.toHaveBeenCalled()
+  })
+
+  it('fails closed when the account queue is paused', async () => {
+    mockIsPaused.mockResolvedValue(true)
+
+    await expect(syncCampaignsFromAdAccountsV2()).rejects.toThrow(
+      'facebook.account.sync queue is paused',
     )
 
     expect(mockAdd).not.toHaveBeenCalled()
@@ -142,6 +158,7 @@ describe('facebook queue scheduler safety', () => {
     })
 
     expect(result).toMatchObject({ dryRun: false, candidates: 4, removed: 4 })
+    expect(mockResume).toHaveBeenCalledTimes(1)
     expect(jobs.every((job) => job.remove.mock.calls.length === 1)).toBe(true)
     expect(mockGetJobs).not.toHaveBeenCalledWith(expect.arrayContaining(['active']), expect.anything(), expect.anything())
   })
