@@ -25,12 +25,24 @@ export const syncCampaignsFromAdAccountsV2 = async (options?: {
   const slot = Math.floor(Date.now() / (intervalMinutes * 60 * 1000))
   
   try {
-    if (await accountQueue!.isPaused()) {
-      throw new Error('facebook.account.sync queue is paused; refusing to enqueue account jobs')
+    const pipelineQueues = [
+      { name: 'facebook.account.sync', queue: accountQueue! },
+      { name: 'facebook.campaign.sync', queue: campaignQueue! },
+      { name: 'facebook.ad.sync', queue: adQueue! },
+      { name: 'facebook.material.sync', queue: materialQueue! },
+    ]
+    const readiness = await Promise.all(pipelineQueues.map(async ({ name, queue }) => ({
+      name,
+      isPaused: await queue.isPaused(),
+      workers: await queue.getWorkersCount(),
+    })))
+    const pausedQueue = readiness.find((queue) => queue.isPaused)
+    if (pausedQueue) {
+      throw new Error(`${pausedQueue.name} queue is paused; refusing to enqueue account jobs`)
     }
-    const workerCount = await accountQueue!.getWorkersCount()
-    if (workerCount < 1) {
-      throw new Error('No live facebook.account.sync workers; refusing to enqueue account jobs')
+    const queueWithoutWorkers = readiness.find((queue) => queue.workers < 1)
+    if (queueWithoutWorkers) {
+      throw new Error(`No live ${queueWithoutWorkers.name} workers; refusing to enqueue account jobs`)
     }
 
     const pendingJobs = await accountQueue!.getJobs(
@@ -165,7 +177,12 @@ export const recoverFacebookAccountQueue = async (options?: {
         removed += 1
       }))
     }
-    await accountQueue.resume()
+    await Promise.all([
+      accountQueue.resume(),
+      campaignQueue!.resume(),
+      adQueue!.resume(),
+      materialQueue!.resume(),
+    ])
   }
 
   return {
@@ -177,6 +194,12 @@ export const recoverFacebookAccountQueue = async (options?: {
     ),
     removed,
     resumed: !dryRun,
+    resumedQueues: dryRun ? [] : [
+      'facebook.account.sync',
+      'facebook.campaign.sync',
+      'facebook.ad.sync',
+      'facebook.material.sync',
+    ],
     truncated: candidates >= maxJobs,
   }
 }
