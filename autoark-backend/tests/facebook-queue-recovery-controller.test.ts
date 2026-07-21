@@ -1,5 +1,6 @@
 const mockRecover = jest.fn()
 const mockRetryFailures = jest.fn()
+const mockOriginalImageBackfill = jest.fn()
 const mockWriteAuditLog = jest.fn()
 
 jest.mock('../src/services/facebook.campaigns.v2.service', () => ({
@@ -7,12 +8,20 @@ jest.mock('../src/services/facebook.campaigns.v2.service', () => ({
   retryFacebookQueueFailures: mockRetryFailures,
 }))
 
+jest.mock('../src/services/facebookMaterialBackfill.service', () => ({
+  backfillFacebookOriginalImages: mockOriginalImageBackfill,
+}))
+
 jest.mock('../src/services/auditLog.service', () => ({
   writeAuditLog: mockWriteAuditLog,
 }))
 
 import { UserRole } from '../src/models/User'
-import { recoverQueue, retryFailedQueueJobs } from '../src/controllers/facebook.controller'
+import {
+  backfillOriginalImages,
+  recoverQueue,
+  retryFailedQueueJobs,
+} from '../src/controllers/facebook.controller'
 
 const response = () => ({
   status: jest.fn().mockReturnThis(),
@@ -33,6 +42,14 @@ describe('facebook queue recovery controller', () => {
       dryRun: true,
       candidates: 83,
       retried: 0,
+    })
+    mockOriginalImageBackfill.mockResolvedValue({
+      dryRun: true,
+      totalCandidates: 671,
+      selected: 671,
+      eligible: 650,
+      skippedNoToken: 21,
+      queued: 0,
     })
   })
 
@@ -97,6 +114,30 @@ describe('facebook queue recovery controller', () => {
       action: 'facebook.queue.retry_failed.preview',
       status: 'success',
       targetId: 'facebook.ad.sync',
+    }))
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }))
+    expect(next).not.toHaveBeenCalled()
+  })
+
+  it('previews original image backfill and records an audit event', async () => {
+    const req: any = {
+      user: { role: UserRole.SUPER_ADMIN, userId: '665000000000000000000001' },
+      body: { maxJobs: 1000 },
+      get: jest.fn(),
+    }
+    const res: any = response()
+    const next = jest.fn()
+
+    await backfillOriginalImages(req, res, next)
+
+    expect(mockOriginalImageBackfill).toHaveBeenCalledWith({
+      dryRun: true,
+      confirmation: undefined,
+      maxJobs: 1000,
+    })
+    expect(mockWriteAuditLog).toHaveBeenCalledWith(req, expect.objectContaining({
+      action: 'facebook.material.original_image_backfill.preview',
+      status: 'success',
     }))
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }))
     expect(next).not.toHaveBeenCalled()

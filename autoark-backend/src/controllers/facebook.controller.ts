@@ -26,6 +26,7 @@ import {
 } from '../utils/pagination'
 import logger from '../utils/logger'
 import { writeAuditLog } from '../services/auditLog.service'
+import { backfillFacebookOriginalImages } from '../services/facebookMaterialBackfill.service'
 
 const FACEBOOK_LIST_MAX_LIMIT = 100
 const FACEBOOK_DIAGNOSE_DEFAULT_LIMIT = 20
@@ -337,6 +338,56 @@ export const retryFailedQueueJobs = async (
       targetType: 'bullmq_queue',
       targetId: `facebook.${String(queue || 'unknown')}.sync`,
       summary: 'Facebook 队列失败任务重试失败',
+      reason: error.message,
+    })
+    next(error)
+  }
+}
+
+export const backfillOriginalImages = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
+  if (!requireSuperAdmin(req, res)) return
+
+  const dryRun = req.body?.dryRun !== false
+  try {
+    const result = await backfillFacebookOriginalImages({
+      dryRun,
+      confirmation: typeof req.body?.confirmation === 'string'
+        ? req.body.confirmation
+        : undefined,
+      maxJobs: typeof req.body?.maxJobs === 'number'
+        ? req.body.maxJobs
+        : undefined,
+    })
+
+    await writeAuditLog(req, {
+      category: 'facebook',
+      action: dryRun
+        ? 'facebook.material.original_image_backfill.preview'
+        : 'facebook.material.original_image_backfill.apply',
+      status: 'success',
+      targetType: 'bullmq_queue',
+      targetId: 'facebook.material.sync',
+      summary: dryRun
+        ? `预览 Facebook 原图回填：${result.eligible} 个可执行任务`
+        : `执行 Facebook 原图回填：入队 ${result.queued} 个任务`,
+      metadata: result,
+    })
+
+    res.json({ success: true, data: result })
+  } catch (error: any) {
+    await writeAuditLog(req, {
+      category: 'facebook',
+      action: dryRun
+        ? 'facebook.material.original_image_backfill.preview'
+        : 'facebook.material.original_image_backfill.apply',
+      status: 'failed',
+      targetType: 'bullmq_queue',
+      targetId: 'facebook.material.sync',
+      summary: 'Facebook 原图回填失败',
       reason: error.message,
     })
     next(error)

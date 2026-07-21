@@ -29,6 +29,7 @@ router.get('/countries-list', facebookController.getCountriesList) // New: Count
 router.get('/queue/status', facebookController.getQueueStatus) // New: Get queue status
 router.post('/queue/recover', facebookController.recoverQueue)
 router.post('/queue/retry-failed', facebookController.retryFailedQueueJobs)
+router.post('/materials/backfill-original-images', facebookController.backfillOriginalImages)
 router.get('/diagnose', facebookController.diagnoseTokens) // New: Diagnose token permissions
 router.get('/token-pool/status', facebookController.getTokenPoolStatus) // New: Get token pool status
 router.get('/purchase-value-info', facebookController.getPurchaseValueInfo) // New: Get purchase value info for tooltip
