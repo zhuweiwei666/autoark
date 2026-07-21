@@ -46,7 +46,7 @@ test('settings page saves a trimmed optimizer and can clear it', () => {
   const saveSource = sourceBetween(
     pageSource,
     'const handleSaveOptimizer',
-    '// Pixel 操作',
+    '// 绑定 Token',
   )
 
   assert.match(pageSource, /updateToken/)

@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { getTokens, getPixels, getPixelDetails, getPixelEvents, checkTokenStatus, deleteToken, authFetch, type FbToken, type FbPixel, type PixelDetails, type PixelEvent } from '../services/api'
+import { getTokens, getPixels, getPixelDetails, getPixelEvents, checkTokenStatus, updateToken, deleteToken, authFetch, type FbToken, type FbPixel, type PixelDetails, type PixelEvent } from '../services/api'
 import { useAuth } from '../contexts/AuthContext'
 
 type TabType = 'tokens' | 'pixels'
@@ -15,6 +15,10 @@ export default function FacebookSettingsPage() {
   const [showBindModal, setShowBindModal] = useState(false)
   const [bindingToken, setBindingToken] = useState(false)
   const [bindForm, setBindForm] = useState({ token: '', optimizer: '' })
+  const [editingTokenId, setEditingTokenId] = useState<string | null>(null)
+  const [editOptimizer, setEditOptimizer] = useState('')
+  const [savingTokenId, setSavingTokenId] = useState<string | null>(null)
+  const optimizerInputRef = useRef<HTMLInputElement>(null)
   
   // Pixel 状态
   const [allTokens, setAllTokens] = useState(false)
@@ -73,6 +77,44 @@ export default function FacebookSettingsPage() {
       refetchTokens()
     } catch (error: any) {
       setMessage({ type: 'error', text: error.message || '删除失败' })
+    }
+  }
+
+  const handleStartOptimizerEdit = (token: FbToken) => {
+    if (savingTokenId) return
+    setEditingTokenId(token.id)
+    setEditOptimizer(token.optimizer || '')
+    setMessage(null)
+  }
+
+  const handleCancelOptimizerEdit = () => {
+    if (savingTokenId) return
+    setEditingTokenId(null)
+    setEditOptimizer('')
+  }
+
+  const handleSaveOptimizer = async (token: FbToken) => {
+    if (savingTokenId) return
+    let updateSucceeded = false
+    setSavingTokenId(token.id)
+    setMessage(null)
+    try {
+      await updateToken(token.id, { optimizer: editOptimizer.trim() })
+      updateSucceeded = true
+      await refetchTokens({ throwOnError: true })
+      setEditingTokenId(null)
+      setEditOptimizer('')
+      setMessage({ type: 'success', text: '优化师已更新' })
+    } catch (error: any) {
+      setMessage({
+        type: 'error',
+        text: updateSucceeded
+          ? '优化师已保存，但列表刷新失败；请点击刷新后确认'
+          : error.message || '优化师更新失败',
+      })
+      requestAnimationFrame(() => optimizerInputRef.current?.focus())
+    } finally {
+      setSavingTokenId(null)
     }
   }
 
@@ -203,11 +245,11 @@ export default function FacebookSettingsPage() {
 
         {/* 消息提示 */}
         {message && (
-          <div className={`p-4 rounded-2xl border flex items-center justify-between ${
+          <div role={message.type === 'error' ? 'alert' : 'status'} className={`p-4 rounded-2xl border flex items-center justify-between ${
             message.type === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-red-50 border-red-200 text-red-800'
           }`}>
             <span>{message.text}</span>
-            <button onClick={() => setMessage(null)} className="opacity-60 hover:opacity-100 p-2">
+            <button onClick={() => setMessage(null)} aria-label="关闭提示" className="opacity-60 hover:opacity-100 p-2">
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
               </svg>
@@ -268,7 +310,28 @@ export default function FacebookSettingsPage() {
                 <tbody>
                   {tokens.map((token: FbToken) => (
                     <tr key={token.id} className="border-b border-slate-100 hover:bg-slate-50">
-                      <td className="px-6 py-4 font-medium">{token.optimizer || '-'}</td>
+                      <td className="px-6 py-4 font-medium">
+                        {editingTokenId === token.id ? (
+                          <input
+                            ref={optimizerInputRef}
+                            type="text"
+                            value={editOptimizer}
+                            onChange={(e) => setEditOptimizer(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.nativeEvent.isComposing) return
+                              if (e.key === 'Enter') handleSaveOptimizer(token)
+                              if (e.key === 'Escape') handleCancelOptimizerEdit()
+                            }}
+                            maxLength={80}
+                            disabled={savingTokenId === token.id}
+                            aria-label={`编辑 ${token.fbUserName || token.fbUserId || 'Token'} 的优化师`}
+                            className="w-36 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60"
+                            autoFocus
+                          />
+                        ) : (
+                          token.optimizer || '-'
+                        )}
+                      </td>
                       <td className="px-6 py-4">{token.fbUserName || token.fbUserId || '-'}</td>
                       <td className="px-6 py-4">
                         <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium border ${getStatusColor(token.status)}`}>
@@ -279,19 +342,50 @@ export default function FacebookSettingsPage() {
                       <td className="px-6 py-4 text-slate-500">{formatDate(token.lastCheckedAt)}</td>
                       <td className="px-6 py-4 text-right">
                         <div className="flex justify-end gap-2">
-                          <button
-                            onClick={() => handleCheckToken(token)}
-                            disabled={checkingToken === token.id}
-                            className="px-3 py-1.5 text-xs font-medium text-blue-600 hover:bg-blue-50 rounded-lg transition-colors disabled:opacity-50"
-                          >
-                            {checkingToken === token.id ? '检查中...' : '检查'}
-                          </button>
-                          <button
-                            onClick={() => handleDeleteToken(token)}
-                            className="px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                          >
-                            删除
-                          </button>
+                          {editingTokenId === token.id ? (
+                            <>
+                              <button
+                                onClick={() => handleSaveOptimizer(token)}
+                                disabled={savingTokenId === token.id}
+                                aria-label="保存优化师"
+                                className="px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors disabled:opacity-50"
+                              >
+                                {savingTokenId === token.id ? '保存中...' : '保存'}
+                              </button>
+                              <button
+                                onClick={handleCancelOptimizerEdit}
+                                disabled={savingTokenId === token.id}
+                                aria-label="取消编辑优化师"
+                                className="px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-lg transition-colors disabled:opacity-50"
+                              >
+                                取消
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <button
+                                onClick={() => handleStartOptimizerEdit(token)}
+                                disabled={Boolean(savingTokenId)}
+                                className="px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-lg transition-colors disabled:opacity-50"
+                              >
+                                编辑
+                              </button>
+                              <button
+                                onClick={() => handleCheckToken(token)}
+                                disabled={checkingToken === token.id || Boolean(savingTokenId)}
+                                className="px-3 py-1.5 text-xs font-medium text-blue-600 hover:bg-blue-50 rounded-lg transition-colors disabled:opacity-50"
+                              >
+                                {checkingToken === token.id ? '检查中...' : '检查'}
+                              </button>
+                              <button
+                                onClick={() => handleDeleteToken(token)}
+                                disabled={Boolean(savingTokenId)}
+                                className="px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50"
+                              >
+                                删除
+                              </button>
+                            </>
+                          )}
                         </div>
                       </td>
                     </tr>
