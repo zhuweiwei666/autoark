@@ -71,6 +71,8 @@ const facebookUserSchema = new mongoose.Schema(
       enum: ['pending', 'syncing', 'completed', 'failed'], 
       default: 'pending' 
     },
+    syncStartedAt: { type: Date },
+    syncLeaseExpiresAt: { type: Date },
     syncError: { type: String },
   },
   {

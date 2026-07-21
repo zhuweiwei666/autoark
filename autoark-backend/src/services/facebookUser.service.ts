@@ -6,6 +6,10 @@ import { sanitizeFacebookPages } from '../utils/facebookAssetSanitizer'
 const FB_BASE_URL = FB_VERSIONED_URL
 const FACEBOOK_USER_SYNC_PAGE_LIMIT = 10
 const FACEBOOK_USER_SYNC_PAGE_SIZE = 100
+const FACEBOOK_GRAPH_REQUEST_TIMEOUT_MS = 30 * 1000
+const FACEBOOK_USER_SYNC_LEASE_MS = 30 * 60 * 1000
+const FACEBOOK_USER_SYNC_HEARTBEAT_MS = 5 * 60 * 1000
+const inFlightFacebookUserSyncs = new Map<string, Promise<any>>()
 
 type FacebookUserScope = {
   tokenId?: string
@@ -22,10 +26,16 @@ const buildFacebookUserFilter = (fbUserId: string, scope: FacebookUserScope = {}
   return filter
 }
 
+const buildFacebookUserSyncKey = (
+  fbUserId: string,
+  tokenId?: string,
+  organizationId?: any,
+) => `${organizationId?.toString?.() || 'global'}:${tokenId || fbUserId}`
+
 /**
  * 同步 Facebook 用户的所有资产（Pixels、账户、粉丝页、Catalog）
  */
-export const syncFacebookUserAssets = async (
+const runFacebookUserAssetSync = async (
   fbUserId: string,
   accessToken: string,
   tokenId?: string,
@@ -33,6 +43,18 @@ export const syncFacebookUserAssets = async (
 ) => {
   logger.info(`[FacebookUser] Starting sync for user ${fbUserId}`)
   const userFilter = buildFacebookUserFilter(fbUserId, { tokenId, organizationId })
+  const syncStartedAt = new Date()
+  let lastLeaseRenewedAt = syncStartedAt.getTime()
+
+  const renewSyncLease = async () => {
+    const now = Date.now()
+    if (now - lastLeaseRenewedAt < FACEBOOK_USER_SYNC_HEARTBEAT_MS) return
+    await FacebookUser.findOneAndUpdate(
+      userFilter,
+      { syncLeaseExpiresAt: new Date(now + FACEBOOK_USER_SYNC_LEASE_MS) },
+    )
+    lastLeaseRenewedAt = now
+  }
   
   try {
     // 更新同步状态
@@ -43,6 +65,8 @@ export const syncFacebookUserAssets = async (
         tokenId,
         ...(organizationId && { organizationId }),
         syncStatus: 'syncing',
+        syncStartedAt,
+        syncLeaseExpiresAt: new Date(syncStartedAt.getTime() + FACEBOOK_USER_SYNC_LEASE_MS),
         $unset: { syncError: 1 }
       },
       { upsert: true, new: true }
@@ -51,6 +75,27 @@ export const syncFacebookUserAssets = async (
     // 1. 获取所有广告账户
     const accounts = await fetchAdAccounts(accessToken)
     logger.info(`[FacebookUser] Found ${accounts.length} ad accounts`)
+    const adAccounts = accounts.map(acc => ({
+      accountId: acc.account_id || acc.id?.replace('act_', ''),
+      name: acc.name,
+      status: acc.account_status,
+      currency: acc.currency,
+      timezone: acc.timezone_name,
+    }))
+
+    // 广告账户是后续所有资产扫描的基础，先落库，避免 Page/Pixel 扫描期间前端继续显示旧数据。
+    await FacebookUser.findOneAndUpdate(
+      userFilter,
+      {
+        fbUserId,
+        tokenId,
+        ...(organizationId && { organizationId }),
+        adAccounts,
+        syncStatus: 'syncing',
+        $unset: { syncError: 1 },
+      },
+      { upsert: true, new: true },
+    )
     
     // 2. 获取所有 Pixels（汇总所有账户的）
     const pixelMap = new Map<string, any>()
@@ -77,16 +122,26 @@ export const syncFacebookUserAssets = async (
         }
       } catch (err) {
         logger.warn(`[FacebookUser] Failed to fetch pixels for account ${accountId}:`, err)
+      } finally {
+        await renewSyncLease()
       }
     }
     
     // 3. 获取所有粉丝页
     const pagesMap = new Map<string, any>()
     
+    let fallbackUserPagesPromise: Promise<any[]> | undefined
+    const getFallbackUserPages = () => {
+      if (!fallbackUserPagesPromise) {
+        fallbackUserPagesPromise = fetchUserPages(accessToken)
+      }
+      return fallbackUserPagesPromise
+    }
+
     for (const account of accounts) {
       const accountId = account.account_id || account.id?.replace('act_', '')
       try {
-        const pages = await fetchAccountPages(accountId, accessToken)
+        const pages = await fetchAccountPages(accountId, accessToken, getFallbackUserPages)
         for (const page of pages) {
           if (!pagesMap.has(page.id)) {
             pagesMap.set(page.id, {
@@ -103,6 +158,8 @@ export const syncFacebookUserAssets = async (
         }
       } catch (err) {
         logger.warn(`[FacebookUser] Failed to fetch pages for account ${accountId}:`, err)
+      } finally {
+        await renewSyncLease()
       }
     }
     
@@ -125,6 +182,8 @@ export const syncFacebookUserAssets = async (
           }
         } catch (e) {
           // 继续下一个 business
+        } finally {
+          await renewSyncLease()
         }
       }
       logger.info(`[FacebookUser] Found ${catalogsMap.size} catalogs across ${businesses.length} businesses`)
@@ -141,17 +200,12 @@ export const syncFacebookUserAssets = async (
         tokenId,
         ...(organizationId && { organizationId }),
         pixels: Array.from(pixelMap.values()),
-        adAccounts: accounts.map(acc => ({
-          accountId: acc.account_id || acc.id?.replace('act_', ''),
-          name: acc.name,
-          status: acc.account_status,
-          currency: acc.currency,
-          timezone: acc.timezone_name,
-        })),
+        adAccounts,
         pages: Array.from(pagesMap.values()),
         productCatalogs: Array.from(catalogsMap.values()),
         lastSyncedAt: new Date(),
         syncStatus: 'completed',
+        $unset: { syncError: 1, syncLeaseExpiresAt: 1 },
       },
       { upsert: true, new: true }
     )
@@ -167,11 +221,39 @@ export const syncFacebookUserAssets = async (
       { 
         syncStatus: 'failed',
         syncError: error.message,
+        $unset: { syncLeaseExpiresAt: 1 },
       }
     )
     
     throw error
   }
+}
+
+export const syncFacebookUserAssets = (
+  fbUserId: string,
+  accessToken: string,
+  tokenId?: string,
+  organizationId?: any,
+) => {
+  const syncKey = buildFacebookUserSyncKey(fbUserId, tokenId, organizationId)
+  const existingSync = inFlightFacebookUserSyncs.get(syncKey)
+  if (existingSync) {
+    logger.info(`[FacebookUser] Reusing in-flight sync for user ${fbUserId}`)
+    return existingSync
+  }
+
+  const sync = runFacebookUserAssetSync(
+    fbUserId,
+    accessToken,
+    tokenId,
+    organizationId,
+  ).finally(() => {
+    if (inFlightFacebookUserSyncs.get(syncKey) === sync) {
+      inFlightFacebookUserSyncs.delete(syncKey)
+    }
+  })
+  inFlightFacebookUserSyncs.set(syncKey, sync)
+  return sync
 }
 
 /**
@@ -220,10 +302,24 @@ export const getCachedCatalogs = async (fbUserId: string, scope: FacebookUserSco
  */
 export const getSyncStatus = async (fbUserId: string, scope: FacebookUserScope = {}) => {
   const user = await FacebookUser.findOne(buildFacebookUserFilter(fbUserId, scope))
+  const rawStatus = user?.syncStatus || 'pending'
+  const explicitLeaseExpiry = user?.syncLeaseExpiresAt
+    ? new Date(user.syncLeaseExpiresAt).getTime()
+    : undefined
+  const legacyLeaseExpiry = user?.updatedAt
+    ? new Date(user.updatedAt).getTime() + FACEBOOK_USER_SYNC_LEASE_MS
+    : undefined
+  const leaseExpiry = explicitLeaseExpiry || legacyLeaseExpiry
+  const stale = rawStatus === 'syncing' && (!leaseExpiry || leaseExpiry <= Date.now())
+  const status = stale ? 'failed' : rawStatus
   return {
-    status: user?.syncStatus || 'pending',
+    status,
+    stale,
+    retryable: status === 'failed',
+    syncStartedAt: user?.syncStartedAt,
+    syncLeaseExpiresAt: user?.syncLeaseExpiresAt,
     lastSyncedAt: user?.lastSyncedAt,
-    error: user?.syncError,
+    error: stale ? '上次 Facebook 资产同步已中断或超时，可以重新同步。' : user?.syncError,
     pixelCount: user?.pixels?.length || 0,
     accountCount: user?.adAccounts?.length || 0,
     pageCount: user?.pages?.length || 0,
@@ -253,8 +349,15 @@ async function fetchGraphCollection(
   let nextUrl: string | undefined = url.toString()
   let pageCount = 0
   while (nextUrl && pageCount < FACEBOOK_USER_SYNC_PAGE_LIMIT) {
-    const response = await fetch(nextUrl)
-    const data = await response.json()
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), FACEBOOK_GRAPH_REQUEST_TIMEOUT_MS)
+    let data: any
+    try {
+      const response = await fetch(nextUrl, { signal: controller.signal })
+      data = await response.json()
+    } finally {
+      clearTimeout(timeoutId)
+    }
     
     if (data.error) {
       throw new Error(data.error.message)
@@ -288,7 +391,11 @@ async function fetchAccountPixels(accountId: string, accessToken: string): Promi
   })
 }
 
-async function fetchAccountPages(accountId: string, accessToken: string): Promise<any[]> {
+async function fetchAccountPages(
+  accountId: string,
+  accessToken: string,
+  getFallbackUserPages: () => Promise<any[]>,
+): Promise<any[]> {
   const pages = await fetchGraphCollection(`/act_${accountId}/promote_pages`, accessToken, {
     fields: 'id,name,access_token',
   })
@@ -297,6 +404,10 @@ async function fetchAccountPages(accountId: string, accessToken: string): Promis
     return pages
   }
 
+  return getFallbackUserPages()
+}
+
+async function fetchUserPages(accessToken: string): Promise<any[]> {
   return fetchGraphCollection('/me/accounts', accessToken, {
     fields: 'id,name,access_token',
   })

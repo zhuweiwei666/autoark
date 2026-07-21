@@ -7,6 +7,9 @@ import { authFetch } from '../services/api'
 const API_BASE = '/api'
 const FACEBOOK_LOGIN_URL_TIMEOUT_MS = 15000
 const FACEBOOK_LOGIN_POPUP_TIMEOUT_MS = 120000
+const FACEBOOK_SYNC_FAST_POLL_MS = 2000
+const FACEBOOK_SYNC_SLOW_POLL_MS = 10000
+const FACEBOOK_SYNC_FAST_POLL_WINDOW_MS = 30000
 
 const STEPS = [
   { id: 1, title: '选择产品', description: '选择文案包(产品)' },
@@ -300,6 +303,10 @@ export default function BulkAdCreatePage() {
   const [searchParams] = useSearchParams()
   const { user, token } = useAuth()  // 获取当前用户信息和认证状态
   const facebookLoginCleanupRef = useRef<((options?: { closePopup?: boolean }) => void) | null>(null)
+  const syncStatusPollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const syncStatusPollGenerationRef = useRef(0)
+  const authStatusCheckGenerationRef = useRef(0)
+  const isMountedRef = useRef(true)
   const [currentStep, setCurrentStep] = useState(1)
   
   const [loading, setLoading] = useState(false)
@@ -348,8 +355,16 @@ export default function BulkAdCreatePage() {
   }
 
   useEffect(() => {
+    isMountedRef.current = true
     return () => {
+      isMountedRef.current = false
+      syncStatusPollGenerationRef.current += 1
+      authStatusCheckGenerationRef.current += 1
       clearFacebookLoginWait()
+      if (syncStatusPollTimeoutRef.current) {
+        clearTimeout(syncStatusPollTimeoutRef.current)
+        syncStatusPollTimeoutRef.current = null
+      }
     }
   }, [])
   
@@ -463,9 +478,16 @@ export default function BulkAdCreatePage() {
   
   // 检查授权状态
   const checkAuthStatus = async () => {
+    const checkGeneration = authStatusCheckGenerationRef.current + 1
+    authStatusCheckGenerationRef.current = checkGeneration
+    stopSyncStatusPolling()
+
     if (!token) {
-      setAuthLoading(false)
-      setAuthStatus({ authorized: false })
+      if (isMountedRef.current && authStatusCheckGenerationRef.current === checkGeneration) {
+        setAuthLoading(false)
+        setAuthStatus({ authorized: false })
+        setResyncing(false)
+      }
       return
     }
     
@@ -473,19 +495,43 @@ export default function BulkAdCreatePage() {
     try {
       const res = await authFetch(`${API_BASE}/bulk-ad/auth/status`)
       const data = await res.json()
+      if (!isMountedRef.current || authStatusCheckGenerationRef.current !== checkGeneration) return
       if (data.success) {
         setAuthStatus(data.data)
         // 如果已授权，自动加载账户
         if (data.data.authorized) {
           loadAdAccounts()
           loadAuthDiagnostics()
+          const syncStatus = await fetchSyncStatus()
+          if (!isMountedRef.current || authStatusCheckGenerationRef.current !== checkGeneration) return
+          if (syncStatus) {
+            setSyncStatus(syncStatus)
+            setResyncing(syncStatus.status === 'syncing')
+          }
+          if (!syncStatus) {
+            setResyncing(true)
+            setResyncMessage('暂时无法读取同步状态，系统会继续自动重试。')
+            startSyncStatusPolling()
+          } else if (syncStatus.status === 'syncing') {
+            setResyncMessage('Facebook 资产仍在后台同步，完成前不会重复启动。')
+            startSyncStatusPolling()
+          } else if (syncStatus.stale) {
+            setResyncMessage(syncStatus.error || '上次同步已中断，可以重新同步。')
+          }
+        } else {
+          setResyncing(false)
         }
       }
     } catch (err) {
       console.error('Failed to check auth status:', err)
-      setAuthStatus({ authorized: false })
+      if (isMountedRef.current && authStatusCheckGenerationRef.current === checkGeneration) {
+        setAuthStatus({ authorized: false })
+        setResyncing(false)
+      }
     } finally {
-      setAuthLoading(false)
+      if (isMountedRef.current && authStatusCheckGenerationRef.current === checkGeneration) {
+        setAuthLoading(false)
+      }
     }
   }
 
@@ -709,13 +755,12 @@ export default function BulkAdCreatePage() {
     }
   }
   
-  // 检查同步状态
-  const checkSyncStatus = async () => {
+  // 只读取同步状态；调用方确认请求仍属于当前轮询代次后再写入 React 状态。
+  const fetchSyncStatus = async () => {
     try {
       const res = await authFetch(`${API_BASE}/bulk-ad/auth/sync-status`)
       const data = await res.json()
       if (data.success) {
-        setSyncStatus(data.data)
         return data.data
       }
     } catch (err) {
@@ -723,49 +768,96 @@ export default function BulkAdCreatePage() {
     }
     return null
   }
+
+  const refreshFacebookAssets = () => {
+    loadCachedPixels()
+    loadAdAccounts()
+    loadAuthDiagnostics()
+  }
+
+  const stopSyncStatusPolling = () => {
+    syncStatusPollGenerationRef.current += 1
+    if (syncStatusPollTimeoutRef.current) {
+      clearTimeout(syncStatusPollTimeoutRef.current)
+      syncStatusPollTimeoutRef.current = null
+    }
+  }
+
+  const startSyncStatusPolling = (startedAt = Date.now()) => {
+    stopSyncStatusPolling()
+    const pollGeneration = syncStatusPollGenerationRef.current
+
+    const poll = async () => {
+      syncStatusPollTimeoutRef.current = null
+      const status = await fetchSyncStatus()
+      if (
+        !isMountedRef.current ||
+        syncStatusPollGenerationRef.current !== pollGeneration
+      ) return
+      if (status) {
+        setSyncStatus(status)
+        setResyncing(status.status === 'syncing')
+      }
+      if (status?.status === 'completed') {
+        authStatusCheckGenerationRef.current += 1
+        syncStatusPollGenerationRef.current += 1
+        setResyncing(false)
+        setResyncMessage('资产同步完成，已刷新账户和 Pixel。')
+        refreshFacebookAssets()
+        return
+      }
+      if (status?.status === 'failed') {
+        authStatusCheckGenerationRef.current += 1
+        syncStatusPollGenerationRef.current += 1
+        setResyncing(false)
+        setResyncMessage(status.error || '资产同步失败，请检查 Facebook 授权后重试。')
+        return
+      }
+
+      setResyncing(true)
+      setResyncMessage(status
+        ? '资产仍在后台同步；为避免触发 Meta 限流，完成前不会再次启动同步。'
+        : '暂时无法读取同步状态，系统会继续自动重试。')
+      const elapsed = Date.now() - startedAt
+      const delay = elapsed < FACEBOOK_SYNC_FAST_POLL_WINDOW_MS
+        ? FACEBOOK_SYNC_FAST_POLL_MS
+        : FACEBOOK_SYNC_SLOW_POLL_MS
+      if (syncStatusPollGenerationRef.current === pollGeneration) {
+        syncStatusPollTimeoutRef.current = setTimeout(poll, delay)
+      }
+    }
+
+    syncStatusPollTimeoutRef.current = setTimeout(poll, FACEBOOK_SYNC_FAST_POLL_MS)
+  }
   
   // 手动触发重新同步
   const triggerResync = async () => {
     if (resyncing) return
+    authStatusCheckGenerationRef.current += 1
+    stopSyncStatusPolling()
+    const resyncGeneration = syncStatusPollGenerationRef.current
     setResyncing(true)
     setResyncMessage('正在重新同步 Facebook 资产...')
     try {
       const res = await authFetch(`${API_BASE}/bulk-ad/auth/resync`, { method: 'POST' })
       const data = await res.json().catch(() => ({}))
+      if (
+        !isMountedRef.current ||
+        syncStatusPollGenerationRef.current !== resyncGeneration
+      ) return
       if (!res.ok || data.success === false) {
         throw new Error(data.error || '触发同步失败')
       }
-      // 开始轮询状态
-      let finished = false
-      const pollInterval = setInterval(async () => {
-        const status = await checkSyncStatus()
-        if (status?.status === 'completed') {
-          finished = true
-          clearInterval(pollInterval)
-          setResyncing(false)
-          setResyncMessage('资产同步完成，已刷新账户和 Pixel。')
-          loadCachedPixels()
-          loadAdAccounts()
-          loadAuthDiagnostics()
-        } else if (status?.status === 'failed') {
-          finished = true
-          clearInterval(pollInterval)
-          setResyncing(false)
-          setResyncMessage('资产同步失败，请检查 Facebook 授权后重试。')
-        }
-      }, 2000)
-      // 30秒后停止轮询
-      setTimeout(() => {
-        clearInterval(pollInterval)
-        if (!finished) {
-          setResyncing(false)
-          setResyncMessage('资产仍在后台同步，稍后可刷新页面查看最新状态。')
-        }
-      }, 30000)
+      startSyncStatusPolling()
     } catch (err: any) {
       console.error('Failed to trigger resync:', err)
-      setResyncing(false)
-      setResyncMessage(err.message || '触发同步失败，请稍后重试。')
+      if (
+        isMountedRef.current &&
+        syncStatusPollGenerationRef.current === resyncGeneration
+      ) {
+        setResyncing(false)
+        setResyncMessage(err.message || '触发同步失败，请稍后重试。')
+      }
     }
   }
   
@@ -1306,7 +1398,11 @@ export default function BulkAdCreatePage() {
                   )}
                   {authDiagnostics && (
                     <div className="mt-3 border-t border-green-200 pt-3">
-                      <div className="grid grid-cols-4 gap-2 text-center">
+                      <div className="grid grid-cols-5 gap-2 text-center">
+                        <div className="rounded-lg bg-white/70 px-2 py-2">
+                          <div className="text-lg font-bold text-green-800">{authDiagnostics.summary.accountCount}</div>
+                          <div className="text-[11px] text-green-700">已拉取账户</div>
+                        </div>
                         <div className="rounded-lg bg-white/70 px-2 py-2">
                           <div className="text-lg font-bold text-green-800">{authDiagnostics.summary.readyAccountCount}</div>
                           <div className="text-[11px] text-green-700">就绪账户</div>
@@ -1366,7 +1462,7 @@ export default function BulkAdCreatePage() {
                       {authDiagnostics.accounts.length > 0 && (
                         <div className="mt-3 space-y-2">
                           <div className="flex items-center justify-between gap-2 text-xs font-semibold text-green-800">
-                            <span>账户诊断</span>
+                            <span>账户诊断（下方仅预览前 3 条，不代表拉取总数）</span>
                             <span className="font-normal text-green-700">
                               展示 {authDiagnosticAccountReturned}/{authDiagnosticAccountTotal}
                             </span>
@@ -1699,12 +1795,13 @@ export default function BulkAdCreatePage() {
                   <h3 className="text-lg font-semibold">选择投放账户</h3>
                   <p className="text-slate-500 text-sm">以下账户已绑定所选 Pixel，可以投放该产品</p>
                 </div>
-                {filteredAccounts.length > 0 && (
-                  <div className="flex items-center gap-3">
-                    <span className="text-sm text-slate-500">
-                      活跃: {filteredAccounts.filter(a => a.account_status === 1).length} / 
-                      已选: {selectedAccounts.length}
-                    </span>
+                <div className="flex items-center gap-3">
+                  <span className="text-sm text-slate-500">
+                    已拉取总数: {accounts.length} / 当前 Pixel: {filteredAccounts.length} /
+                    活跃: {filteredAccounts.filter(a => a.account_status === 1).length} /
+                    已选: {selectedAccounts.length}
+                  </span>
+                  {filteredAccounts.length > 0 && (
                     <button
                       onClick={toggleSelectAllActive}
                       className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium"
@@ -1714,8 +1811,8 @@ export default function BulkAdCreatePage() {
                         return selectedAccounts.find(a => a.accountId === accId)
                       }) ? '取消全选' : '全选活跃账户'}
                     </button>
-                  </div>
-                )}
+                  )}
+                </div>
               </div>
               
               {filteredAccounts.length === 0 ? (
