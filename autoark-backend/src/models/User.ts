@@ -7,6 +7,11 @@ export enum UserRole {
   MEMBER = 'member',
 }
 
+export enum UserPermission {
+  MATERIALS_EXTERNAL_READ = 'materials:external:read',
+  MATERIALS_EXTERNAL_MANAGE = 'materials:external:manage',
+}
+
 export enum UserStatus {
   ACTIVE = 'active',
   INACTIVE = 'inactive',
@@ -18,6 +23,7 @@ export interface IUser extends mongoose.Document {
   password: string
   email: string
   role: UserRole
+  permissions?: UserPermission[]
   organizationId?: mongoose.Types.ObjectId
   status: UserStatus
   lastLoginAt?: Date
@@ -55,6 +61,10 @@ const userSchema = new mongoose.Schema(
       enum: Object.values(UserRole),
       default: UserRole.MEMBER,
       required: true,
+    },
+    permissions: {
+      type: [{ type: String, enum: Object.values(UserPermission) }],
+      default: [],
     },
     organizationId: {
       type: mongoose.Schema.Types.ObjectId,

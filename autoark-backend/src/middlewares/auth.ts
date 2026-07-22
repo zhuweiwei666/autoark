@@ -46,8 +46,11 @@ export const authenticate = async (
       return
     }
 
-    // 将解码后的用户信息附加到请求对象
-    req.user = decoded
+    // 身份来自已验证的 token，但权限必须以当前数据库状态为准。
+    req.user = {
+      ...decoded,
+      permissions: user.permissions || [],
+    }
 
     next()
   } catch (error: any) {

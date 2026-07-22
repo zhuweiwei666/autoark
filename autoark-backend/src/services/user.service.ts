@@ -1,4 +1,4 @@
-import User, { IUser, UserRole, UserStatus } from '../models/User'
+import User, { IUser, UserPermission, UserRole, UserStatus } from '../models/User'
 import { JwtPayload } from '../utils/jwt'
 import logger from '../utils/logger'
 import authService from './auth.service'
@@ -27,6 +27,7 @@ class UserService {
     if (currentUser.role !== UserRole.SUPER_ADMIN) {
       delete sanitized.organizationId
       delete sanitized.status
+      delete sanitized.permissions
     }
 
     return sanitized
@@ -126,6 +127,7 @@ class UserService {
       email: string
       role?: UserRole
       organizationId?: string
+      permissions?: UserPermission[]
     },
     currentUser: JwtPayload
   ): Promise<IUser> {
@@ -137,7 +139,12 @@ class UserService {
     // 权限检查
     if (currentUser.role === UserRole.SUPER_ADMIN) {
       // 超级管理员可以创建任何角色的用户
-      return authService.createUser(sanitizedData, currentUser.userId)
+      const user = await authService.createUser(sanitizedData, currentUser.userId)
+      if (sanitizedData.permissions !== undefined) {
+        user.permissions = sanitizedData.permissions
+        await user.save()
+      }
+      return user
     } else if (currentUser.role === UserRole.ORG_ADMIN) {
       // 组织管理员只能在自己的组织内创建普通成员
       const requestedRole = sanitizedData.role || UserRole.MEMBER
@@ -150,8 +157,14 @@ class UserService {
       if (sanitizedData.organizationId && sanitizedData.organizationId !== currentUser.organizationId) {
         throw new Error('只能在自己的组织内创建用户')
       }
+      const memberData = {
+        ...sanitizedData,
+        role: UserRole.MEMBER,
+        organizationId: currentUser.organizationId,
+      }
+      delete memberData.permissions
       return authService.createUser(
-        { ...sanitizedData, role: UserRole.MEMBER, organizationId: currentUser.organizationId },
+        memberData,
         currentUser.userId,
       )
     } else {

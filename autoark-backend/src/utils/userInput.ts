@@ -1,10 +1,11 @@
-import { UserRole, UserStatus } from '../models/User'
+import { UserPermission, UserRole, UserStatus } from '../models/User'
 import { pickSafeQueryString } from './pagination'
 
 export const USER_USERNAME_MAX_LENGTH = 50
 export const USER_EMAIL_MAX_LENGTH = 254
 export const USER_PASSWORD_MAX_LENGTH = 128
 export const USER_ORGANIZATION_ID_MAX_LENGTH = 40
+const USER_PERMISSION_VALUES = Object.values(UserPermission)
 
 export const pickUserRole = (value: any): UserRole | undefined => (
   typeof value === 'string' && Object.values(UserRole).includes(value as UserRole)
@@ -17,6 +18,16 @@ export const pickUserStatus = (value: any): UserStatus | undefined => (
     ? value as UserStatus
     : undefined
 )
+
+export const pickUserPermissions = (value: any): UserPermission[] | undefined => {
+  if (!Array.isArray(value) || value.length > USER_PERMISSION_VALUES.length) return undefined
+  if (!value.every(permission => (
+    typeof permission === 'string'
+    && USER_PERMISSION_VALUES.includes(permission as UserPermission)
+  ))) return undefined
+
+  return Array.from(new Set(value)) as UserPermission[]
+}
 
 export const pickSafeUsername = (value: any): string | undefined => (
   pickSafeQueryString(value, USER_USERNAME_MAX_LENGTH)
@@ -38,13 +49,27 @@ export const pickSafePassword = (value: any): string | undefined => {
   return value
 }
 
-export const sanitizeUserCreateInput = (body: any) => ({
-  username: pickSafeUsername(body?.username),
-  password: pickSafePassword(body?.password),
-  email: pickSafeEmail(body?.email),
-  role: pickUserRole(body?.role),
-  organizationId: pickSafeOrganizationId(body?.organizationId),
-})
+export const sanitizeUserCreateInput = (body: any) => {
+  const input: {
+    username: string | undefined
+    password: string | undefined
+    email: string | undefined
+    role?: UserRole
+    organizationId?: string
+    permissions?: UserPermission[]
+  } = {
+    username: pickSafeUsername(body?.username),
+    password: pickSafePassword(body?.password),
+    email: pickSafeEmail(body?.email),
+    role: pickUserRole(body?.role),
+    organizationId: pickSafeOrganizationId(body?.organizationId),
+  }
+
+  const permissions = pickUserPermissions(body?.permissions)
+  if (permissions !== undefined) input.permissions = permissions
+
+  return input
+}
 
 export const sanitizeUserUpdateInput = (body: any) => {
   const update: Record<string, any> = {}
@@ -63,6 +88,9 @@ export const sanitizeUserUpdateInput = (body: any) => {
 
   const organizationId = pickSafeOrganizationId(body?.organizationId)
   if (organizationId) update.organizationId = organizationId
+
+  const permissions = pickUserPermissions(body?.permissions)
+  if (permissions !== undefined) update.permissions = permissions
 
   return update
 }
