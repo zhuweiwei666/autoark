@@ -22,6 +22,7 @@ import {
   isSuperAdmin,
   objectIdValue,
   sanitizeScopedUpdate,
+  scopedOrgFilter,
   scopedOwnerFilter,
 } from '../utils/accessControl'
 import { normalizeForApi, normalizeForStorage } from '../utils/accountId'
@@ -36,6 +37,10 @@ import {
   MAX_DIRECT_UPLOAD_FILES,
   validateMaterialFileMeta,
 } from '../utils/materialUploadLimits'
+import {
+  buildFacebookSmartGroupFilter,
+  getFacebookMaterialSmartGroups,
+} from '../services/materialSmartGroup.service'
 
 /**
  * 素材管理控制器
@@ -65,6 +70,7 @@ const MATERIAL_TYPE_FILTERS = ['image', 'video'] as const
 const MATERIAL_STATUS_FILTERS = ['uploading', 'uploaded', 'processing', 'ready', 'failed', 'deleted'] as const
 const REUSABLE_MATERIAL_SORT_FIELDS = ['roas', 'spend', 'qualityScore'] as const
 const MATERIAL_TEXT_FILTER_MAX_LENGTH = 80
+const MATERIAL_SMART_GROUP_KEY_MAX_LENGTH = 128
 const MATERIAL_TAG_FILTER_MAX_LENGTH = 200
 const MATERIAL_TAG_FILTER_MAX_COUNT = 20
 const MATERIAL_NAME_MAX_LENGTH = 160
@@ -942,6 +948,8 @@ export const getMaterialList = async (req: Request, res: Response) => {
       tags, 
       status,
       search,
+      smartGroupType,
+      smartGroupKey,
       sortBy = 'createdAt',
       sortOrder = 'desc',
     } = req.query
@@ -955,6 +963,8 @@ export const getMaterialList = async (req: Request, res: Response) => {
     const safeFolder = pickSafeQueryString(folder, MATERIAL_TEXT_FILTER_MAX_LENGTH)
     const safeTags = pickSafeTagList(tags)
     const safeSearch = pickSafeRegexLiteral(search, MATERIAL_TEXT_FILTER_MAX_LENGTH)
+    const safeSmartGroupType = pickAllowedString(smartGroupType, ['facebook-account'] as const, '')
+    const safeSmartGroupKey = pickSafeQueryString(smartGroupKey, MATERIAL_SMART_GROUP_KEY_MAX_LENGTH)
     let filter: any = combineFilters({ status: safeStatus }, getMaterialFilter(req))
 
     if (safeType) filter = combineFilters(filter, { type: safeType })
@@ -969,6 +979,9 @@ export const getMaterialList = async (req: Request, res: Response) => {
           { notes: { $regex: safeSearch, $options: 'i' } },
         ],
       })
+    }
+    if (safeSmartGroupType === 'facebook-account' && safeSmartGroupKey) {
+      filter = combineFilters(filter, buildFacebookSmartGroupFilter(safeSmartGroupKey))
     }
     
     const sort: any = {}
@@ -996,6 +1009,24 @@ export const getMaterialList = async (req: Request, res: Response) => {
     })
   } catch (error: any) {
     logger.error('[Material] Get list failed:', error)
+    res.status(500).json({ success: false, error: error.message })
+  }
+}
+
+/**
+ * 获取只读智能分组树
+ * GET /api/materials/smart-groups
+ */
+export const getMaterialSmartGroups = async (req: Request, res: Response) => {
+  try {
+    const groups = await getFacebookMaterialSmartGroups({
+      materialFilter: getMaterialFilter(req),
+      accountFilter: scopedOrgFilter(req),
+    })
+
+    res.json({ success: true, data: groups })
+  } catch (error: any) {
+    logger.error('[Material] Get smart groups failed:', error)
     res.status(500).json({ success: false, error: error.message })
   }
 }
@@ -1206,7 +1237,10 @@ export const getFolderTree = async (req: Request, res: Response) => {
   try {
     // 添加用户过滤
     const userFilter = getMaterialFilter(req)
-    const baseFilter = { status: 'uploaded', ...userFilter }
+    const baseFilter = combineFilters(
+      { status: { $in: ['uploaded', 'ready'] } },
+      userFilter,
+    )
     
     // 获取用户可见文件夹
     const folders = await Folder.find(getMaterialFilter(req)).sort({ path: 1 }).lean()

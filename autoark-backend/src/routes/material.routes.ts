@@ -86,6 +86,9 @@ router.post('/upload-batch', handleUpload(upload.array('files', MAX_DIRECT_UPLOA
 // 素材列表
 router.get('/', materialController.getMaterialList)
 
+// 只读智能分组树（必须位于动态 /:id 路由之前）
+router.get('/smart-groups', materialController.getMaterialSmartGroups)
+
 // 文件夹列表（旧接口，保留兼容）
 router.get('/folders', materialController.getFolders)
 
