@@ -359,6 +359,56 @@ describe('facebook material ingestion', () => {
     })
   })
 
+  it('merges reuse metadata when another import wins deleted-material rehydration', async () => {
+    mockFetchVideoSource.mockResolvedValue({
+      success: true,
+      source: 'https://video.example/restored-race.mp4',
+      length: 8,
+    })
+    const deleted = {
+      ...materialDocument('material-deleted-race'),
+      status: 'deleted',
+      source: { platform: 'facebook', isOriginal: false },
+    }
+    const winner = {
+      ...materialDocument('material-restored-winner'),
+      source: { platform: 'facebook', isOriginal: false },
+    }
+    mockMaterialFindOne
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(deleted)
+      .mockResolvedValueOnce(winner)
+    mockMaterialFindOneAndUpdate.mockResolvedValueOnce(null)
+
+    const result = await ingestCreativeAssets({
+      creative: { creativeId: 'creative-restored-race', videoId: 'video-restored-race' },
+      accountId: 'account-restored-race',
+      token: 'TOKEN',
+    })
+
+    expect(mockDeleteFromR2).toHaveBeenCalledWith('tenant/facebook/video.mp4')
+    expect(mockMaterialUpdateOne).toHaveBeenCalledWith(
+      { _id: winner._id },
+      {
+        $addToSet: {
+          facebookMappings: expect.objectContaining({
+            accountId: 'account-restored-race',
+            creativeId: 'creative-restored-race',
+            videoId: 'video-restored-race',
+          }),
+          'usage.accounts': 'account-restored-race',
+        },
+        $set: { 'source.isOriginal': true },
+      },
+    )
+    expect(result).toMatchObject({
+      success: true,
+      materialIds: ['material-restored-winner'],
+      reused: 1,
+    })
+  })
+
   it('resolves an image hash to the original image and labels preview fallback honestly', async () => {
     ;(global.fetch as jest.Mock).mockResolvedValue({
       ok: true,
@@ -504,6 +554,19 @@ describe('facebook material ingestion', () => {
     })
 
     expect(mockDeleteFromR2).toHaveBeenCalledWith('tenant/facebook/video.mp4')
+    expect(mockMaterialUpdateOne).toHaveBeenCalledWith(
+      { _id: expect.anything() },
+      expect.objectContaining({
+        $addToSet: expect.objectContaining({
+          facebookMappings: expect.objectContaining({
+            accountId: '123',
+            creativeId: 'creative-race',
+          }),
+          'usage.accounts': '123',
+        }),
+        $set: { 'source.isOriginal': true },
+      }),
+    )
     expect(result).toMatchObject({
       success: true,
       materialIds: ['material-race-winner'],
@@ -511,34 +574,127 @@ describe('facebook material ingestion', () => {
     })
   })
 
-  it('cleans up its R2 upload when a concurrent canonical upsert already won', async () => {
-    mockFetchVideoSource.mockResolvedValue({
-      success: true,
-      source: 'https://video.example/concurrent.mp4',
-      length: 8,
+  it('concurrently retains one canonical R2 object and merges both accounts into the winner', async () => {
+    const retainedKeys = new Set<string>()
+    const winner: any = {
+      ...materialDocument('material-concurrent-winner'),
+      facebookMappings: [],
+      usage: { accounts: [] },
+      source: { platform: 'facebook', isOriginal: false },
+    }
+    const applyAddToSet = (update: any) => {
+      const mapping = update?.$addToSet?.facebookMappings
+      if (mapping && !winner.facebookMappings.some((item: any) =>
+        item.accountId === mapping.accountId && item.creativeId === mapping.creativeId)) {
+        winner.facebookMappings.push(mapping)
+      }
+      const account = update?.$addToSet?.['usage.accounts']
+      if (account && !winner.usage.accounts.includes(account)) winner.usage.accounts.push(account)
+    }
+
+    let releaseOriginalLookup: (() => void) | undefined
+    const previewReachedUpsert = new Promise<void>((resolve) => {
+      releaseOriginalLookup = resolve
     })
-    mockMaterialFindOne
-      .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce(null)
-    mockMaterialFindOneAndUpdate.mockResolvedValueOnce({
-      value: materialDocument('material-concurrent-winner'),
-      lastErrorObject: { updatedExisting: true },
+    mockFetchImageByHash.mockImplementation(async (_accountId: string, imageHash: string) => {
+      if (imageHash === 'hash-original') {
+        await previewReachedUpsert
+        return {
+          success: true,
+          url: 'https://image.example/shared-original.jpg',
+          width: 1200,
+          height: 1200,
+        }
+      }
+      return { success: false, error: 'preview only' }
+    })
+    ;(global as any).fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: { get: (name: string) => name === 'content-type' ? 'image/jpeg' : null },
+      arrayBuffer: async () => Buffer.from('identical-image-bytes'),
+    })
+    mockMaterialFindOne.mockResolvedValue(null)
+    mockUploadToR2.mockImplementation(async ({ originalName }: any) => {
+      const key = `tenant/facebook/${originalName}`
+      retainedKeys.add(key)
+      return { success: true, key, url: `https://r2.example/${key}` }
+    })
+    mockDeleteFromR2.mockImplementation(async (key: string) => {
+      retainedKeys.delete(key)
+      return { success: true }
+    })
+    mockMaterialUpdateOne.mockImplementation(async (_filter: any, update: any) => {
+      applyAddToSet(update)
+      if (update?.$set?.['source.isOriginal']) winner.source.isOriginal = true
+      return { modifiedCount: 1 }
     })
 
-    const result = await ingestCreativeAssets({
-      creative: { creativeId: 'creative-concurrent', videoId: 'video-concurrent' },
-      accountId: '123',
-      organizationId: '665000000000000000000001',
-      token: 'TOKEN',
+    let upsertCalls = 0
+    let resolveWinnerInsert: ((value: any) => void) | undefined
+    mockMaterialFindOneAndUpdate.mockImplementation(async (_filter: any, update: any) => {
+      upsertCalls += 1
+      applyAddToSet(update)
+      if (upsertCalls === 1) {
+        winner.storage = update.$setOnInsert.storage
+        winner.source = { ...update.$setOnInsert.source }
+        releaseOriginalLookup?.()
+        return new Promise((resolve) => {
+          resolveWinnerInsert = resolve
+        })
+      }
+
+      resolveWinnerInsert?.({
+        value: winner,
+        lastErrorObject: { updatedExisting: false },
+      })
+      return {
+        value: winner,
+        lastErrorObject: { updatedExisting: true },
+      }
     })
 
-    expect(mockDeleteFromR2).toHaveBeenCalledWith('tenant/facebook/video.mp4')
-    expect(result).toMatchObject({
+    const [previewResult, originalResult] = await Promise.all([
+      ingestCreativeAssets({
+        creative: {
+          creativeId: 'creative-concurrent-preview',
+          imageHash: 'hash-preview',
+          imageUrl: 'https://image.example/shared-preview.jpg',
+        },
+        accountId: 'account-preview',
+        organizationId: '665000000000000000000001',
+        token: 'TOKEN-PREVIEW',
+      }),
+      ingestCreativeAssets({
+        creative: {
+          creativeId: 'creative-concurrent-original',
+          imageHash: 'hash-original',
+          imageUrl: 'https://image.example/shared-preview-fallback.jpg',
+        },
+        accountId: 'account-original',
+        organizationId: '665000000000000000000001',
+        token: 'TOKEN-ORIGINAL',
+      }),
+    ])
+
+    expect(previewResult).toMatchObject({
       success: true,
       materialIds: ['material-concurrent-winner'],
-      imported: 0,
+      imported: 1,
+    })
+    expect(originalResult).toMatchObject({
+      success: true,
+      materialIds: ['material-concurrent-winner'],
       reused: 1,
     })
+    expect(mockUploadToR2).toHaveBeenCalledTimes(2)
+    expect(mockDeleteFromR2).toHaveBeenCalledTimes(1)
+    expect([...retainedKeys]).toEqual([winner.storage.key])
+    expect(winner.facebookMappings.map((mapping: any) => mapping.accountId).sort()).toEqual([
+      'account-original',
+      'account-preview',
+    ])
+    expect(winner.usage.accounts.sort()).toEqual(['account-original', 'account-preview'])
+    expect(winner.source.isOriginal).toBe(true)
   })
 })

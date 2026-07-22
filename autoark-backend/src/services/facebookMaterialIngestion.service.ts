@@ -480,11 +480,18 @@ export const ingestCreativeAssets = async (params: {
           await deleteFromR2(upload.key)
           if (!material) throw error
           wonInsert = false
-          await Material.updateOne(
-            { _id: material._id },
-            { $addToSet: { facebookMappings: mapping, 'usage.accounts': normalizeForStorage(accountId) } },
-          )
         }
+      }
+
+      if (!wonInsert) {
+        const reuseUpdate: any = {
+          $addToSet: {
+            facebookMappings: mapping,
+            'usage.accounts': normalizeForStorage(accountId),
+          },
+        }
+        if (resolved.isOriginal) reuseUpdate.$set = { 'source.isOriginal': true }
+        await Material.updateOne({ _id: material._id }, reuseUpdate)
       }
 
       const materialId = material._id.toString()
