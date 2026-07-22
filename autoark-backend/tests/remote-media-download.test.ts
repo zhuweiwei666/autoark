@@ -6,8 +6,9 @@ import type { AddressInfo } from 'net'
 import { PassThrough } from 'stream'
 import type { TLSSocket } from 'tls'
 import {
+  createRemoteMediaDownloaderForTesting,
   createSafeMediaFilename,
-  downloadRemoteMedia,
+  downloadRemoteMedia as defaultDownloadRemoteMedia,
   isPublicIpAddress,
   RemoteMediaDownloadError,
   type RemoteMediaDownloadDependencies,
@@ -85,6 +86,78 @@ AfuA8V915fFaCRWQ9bilzCPlzRsbBiKO6z15eno3wCCJhffUSjVYSHjKLnBCAZo4
 DqyyxYilESl1qd8gzbeyhIN89eqvppbFNFRoHqVJQdTWwWXjsoaQsGdbvLj95PDo
 hutJp47alfNpTF3CeoWTIVo=
 -----END CERTIFICATE-----`
+
+const isoBmffPayload = (brand: string) =>
+  Buffer.concat([
+    Buffer.from([0x00, 0x00, 0x00, 0x10]),
+    Buffer.from('ftyp'),
+    Buffer.from(brand, 'ascii'),
+    Buffer.alloc(4),
+  ])
+
+const VALID_MEDIA_PAYLOADS = [
+  { mimeType: 'image/jpeg', bytes: Buffer.from([0xff, 0xd8, 0xff, 0xd9]) },
+  {
+    mimeType: 'image/png',
+    bytes: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+  },
+  { mimeType: 'image/gif', bytes: Buffer.from('GIF89a', 'ascii') },
+  {
+    mimeType: 'image/webp',
+    bytes: Buffer.concat([
+      Buffer.from('RIFF', 'ascii'),
+      Buffer.alloc(4),
+      Buffer.from('WEBP', 'ascii'),
+    ]),
+  },
+  { mimeType: 'image/avif', bytes: isoBmffPayload('avif') },
+  { mimeType: 'image/heic', bytes: isoBmffPayload('heic') },
+  { mimeType: 'image/heif', bytes: isoBmffPayload('mif1') },
+  { mimeType: 'image/bmp', bytes: Buffer.from('BM', 'ascii') },
+  { mimeType: 'image/tiff', bytes: Buffer.from([0x49, 0x49, 0x2a, 0x00]) },
+  { mimeType: 'video/mp4', bytes: isoBmffPayload('isom') },
+  {
+    mimeType: 'video/webm',
+    bytes: Buffer.from([
+      0x1a, 0x45, 0xdf, 0xa3, 0x42, 0x82, 0x84, 0x77, 0x65, 0x62, 0x6d,
+    ]),
+  },
+  { mimeType: 'video/quicktime', bytes: isoBmffPayload('qt  ') },
+  { mimeType: 'video/mpeg', bytes: Buffer.from([0x00, 0x00, 0x01, 0xb3]) },
+  { mimeType: 'video/ogg', bytes: Buffer.from('OggS', 'ascii') },
+  {
+    mimeType: 'video/x-msvideo',
+    bytes: Buffer.concat([
+      Buffer.from('RIFF', 'ascii'),
+      Buffer.alloc(4),
+      Buffer.from('AVI ', 'ascii'),
+    ]),
+  },
+  {
+    mimeType: 'video/x-matroska',
+    bytes: Buffer.concat([
+      Buffer.from([0x1a, 0x45, 0xdf, 0xa3, 0x42, 0x82, 0x88]),
+      Buffer.from('matroska', 'ascii'),
+    ]),
+  },
+] as const
+
+const payloadFor = (mimeType: string): Buffer => {
+  const fixture = VALID_MEDIA_PAYLOADS.find(
+    (entry) => entry.mimeType === mimeType,
+  )
+  if (!fixture) throw new Error(`missing test payload for ${mimeType}`)
+  return fixture.bytes
+}
+
+const downloadRemoteMedia = (
+  input: string,
+  options: Parameters<typeof defaultDownloadRemoteMedia>[1] = {},
+  dependencies?: RemoteMediaDownloadDependencies,
+) =>
+  dependencies
+    ? createRemoteMediaDownloaderForTesting(dependencies)(input, options)
+    : defaultDownloadRemoteMedia(input, options)
 
 type ResponseStep = {
   statusCode?: number
@@ -194,8 +267,25 @@ describe('remote media real TLS pinning', () => {
           response.end()
           return
         }
+        if (request.url?.startsWith('/encoded.png')) {
+          response.writeHead(200, {
+            'content-type': 'image/png',
+            'content-encoding': 'gzip',
+          })
+          response.end('not-actually-compressed')
+          return
+        }
+        if (request.url === '/premature.png') {
+          response.writeHead(200, {
+            'content-type': 'image/png',
+            'content-length': String(payloadFor('image/png').length + 20),
+          })
+          response.write(payloadFor('image/png').subarray(0, 4))
+          response.socket?.destroy()
+          return
+        }
         response.writeHead(200, { 'content-type': 'image/png' })
-        response.end('real-tls-png')
+        response.end(payloadFor('image/png'))
       },
     )
     await new Promise<void>((resolve, reject) => {
@@ -250,7 +340,7 @@ describe('remote media real TLS pinning', () => {
     )
 
     expect(result).toMatchObject({
-      buffer: Buffer.from('real-tls-png'),
+      buffer: payloadFor('image/png'),
       mimeType: 'image/png',
       filename: 'final.png',
       host: secondHostname,
@@ -275,6 +365,34 @@ describe('remote media real TLS pinning', () => {
       wrongHostname,
     )
     expect(received).toEqual([])
+  })
+
+  it('rejects hostile Content-Encoding through the real Node HTTPS stack', async () => {
+    const { dependencies } = createRealTlsDependencies()
+
+    await expectCategory(
+      downloadRemoteMedia(
+        `https://${firstHostname}:${port}/encoded.png?token=QUERY`,
+        {},
+        dependencies,
+      ),
+      'content_encoding',
+      firstHostname,
+    )
+  })
+
+  it('rejects a premature close through the real Node HTTPS stack', async () => {
+    const { dependencies } = createRealTlsDependencies()
+
+    await expectCategory(
+      downloadRemoteMedia(
+        `https://${firstHostname}:${port}/premature.png`,
+        {},
+        dependencies,
+      ),
+      'network',
+      firstHostname,
+    )
   })
 })
 
@@ -376,6 +494,36 @@ describe('remote media address policy', () => {
     )
   })
 
+  it('does not allow the normal downloader entrypoint to accept trusted dependency seams', async () => {
+    const transport = createRequestSequence([
+      {
+        statusCode: 200,
+        headers: { 'content-type': 'image/jpeg' },
+        chunks: [payloadFor('image/jpeg')],
+      },
+    ])
+    const unsafeThirdArgument = {
+      isPublicAddress: () => true,
+      request: transport.request,
+    }
+    const invokeWithExtraArguments = defaultDownloadRemoteMedia as unknown as (
+      input: string,
+      options: Record<string, never>,
+      dependencies: typeof unsafeThirdArgument,
+    ) => Promise<unknown>
+
+    await expectCategory(
+      invokeWithExtraArguments(
+        'https://127.0.0.1/file.jpg',
+        {},
+        unsafeThirdArgument,
+      ),
+      'blocked_address',
+      '127.0.0.1',
+    )
+    expect(transport.request).not.toHaveBeenCalled()
+  })
+
   it('rejects the whole hostname when any A or AAAA result is blocked', async () => {
     const resolver = jest.fn(async () => [
       { address: '93.184.216.34', family: 4 as const },
@@ -400,7 +548,7 @@ describe('remote media address policy', () => {
       {
         statusCode: 200,
         headers: { 'content-type': 'image/jpeg' },
-        chunks: ['jpeg'],
+        chunks: [payloadFor('image/jpeg')],
       },
     ])
     const resolver = jest.fn(async () => [
@@ -447,12 +595,14 @@ describe('remote media redirects', () => {
     const transport = createRequestSequence([
       {
         statusCode: 302,
-        headers: { location: '../assets/final.PNG?token=SECRET' },
+        headers: {
+          location: '../assets/final.PNG?token=SECRET#signed-fragment',
+        },
       },
       {
         statusCode: 200,
         headers: { 'content-type': 'image/png; charset=binary' },
-        chunks: ['png'],
+        chunks: [payloadFor('image/png')],
       },
     ])
 
@@ -471,12 +621,13 @@ describe('remote media redirects', () => {
       transport.request.mock.calls.every((call) => call[0].maxRedirects === 0),
     ).toBe(true)
     expect(result).toMatchObject({
-      buffer: Buffer.from('png'),
+      buffer: payloadFor('image/png'),
       mimeType: 'image/png',
       filename: 'final.png',
       host: 'media.example',
-      finalUrl: 'https://media.example/assets/final.PNG?token=SECRET',
     })
+    expect(result).not.toHaveProperty('finalUrl')
+    expect(JSON.stringify(result)).not.toMatch(/SECRET|signed-fragment/)
   })
 
   it.each([
@@ -566,6 +717,65 @@ describe('remote media redirects', () => {
 describe('remote media response policy', () => {
   beforeEach(() => publicResolver.mockClear())
 
+  it.each([
+    'gzip',
+    'br',
+    'deflate',
+    'GZIP',
+    'gzip, br',
+    'identity, gzip',
+    'identity; q=1',
+  ])(
+    'rejects non-identity Content-Encoding %s before reading the body',
+    async (encoding) => {
+      const transport = createRequestSequence([
+        {
+          statusCode: 200,
+          headers: {
+            'content-type': 'image/jpeg',
+            'content-encoding': encoding,
+          },
+          chunks: [payloadFor('image/jpeg')],
+          end: false,
+        },
+      ])
+      const error = await expectCategory(
+        downloadRemoteMedia(
+          'https://media.example/file.jpg?token=QUERY',
+          { totalTimeoutMs: 30 },
+          { resolve: publicResolver, request: transport.request },
+        ),
+        'content_encoding',
+        'media.example',
+      )
+      expect(transport.responses[0].destroyed).toBe(true)
+      expect(String(error)).not.toMatch(/QUERY|gzip|br|deflate/i)
+    },
+  )
+
+  it.each([undefined, '', '   ', 'identity', 'IDENTITY'])(
+    'allows absent, empty, or identity Content-Encoding %s',
+    async (encoding) => {
+      const transport = createRequestSequence([
+        {
+          statusCode: 200,
+          headers: {
+            'content-type': 'image/jpeg',
+            ...(encoding === undefined ? {} : { 'content-encoding': encoding }),
+          },
+          chunks: [payloadFor('image/jpeg')],
+        },
+      ])
+      await expect(
+        downloadRemoteMedia(
+          'https://media.example/file.jpg',
+          {},
+          { resolve: publicResolver, request: transport.request },
+        ),
+      ).resolves.toMatchObject({ mimeType: 'image/jpeg' })
+    },
+  )
+
   it.each(['text/html', 'image/svg+xml', 'application/octet-stream'])(
     'rejects disallowed MIME type %s',
     async (mimeType) => {
@@ -594,7 +804,7 @@ describe('remote media response policy', () => {
       {
         statusCode: 200,
         headers: { 'content-type': ' IMAGE/WEBP ; charset=binary' },
-        chunks: ['webp'],
+        chunks: [payloadFor('image/webp')],
       },
     ])
     const image = await downloadRemoteMedia(
@@ -611,7 +821,7 @@ describe('remote media response policy', () => {
       {
         statusCode: 200,
         headers: { 'content-type': 'video/mp4; codecs=avc1' },
-        chunks: ['mp4'],
+        chunks: [payloadFor('video/mp4')],
       },
     ])
     const video = await downloadRemoteMedia(
@@ -624,6 +834,69 @@ describe('remote media response policy', () => {
       filename: 'movie.mp4',
     })
   })
+
+  it.each(VALID_MEDIA_PAYLOADS)(
+    'accepts a valid minimal magic signature for $mimeType',
+    async ({ mimeType, bytes }) => {
+      const transport = createRequestSequence([
+        {
+          statusCode: 200,
+          headers: { 'content-type': mimeType },
+          chunks: [bytes],
+        },
+      ])
+
+      await expect(
+        downloadRemoteMedia(
+          'https://media.example/file',
+          {},
+          { resolve: publicResolver, request: transport.request },
+        ),
+      ).resolves.toMatchObject({ buffer: bytes, mimeType })
+    },
+  )
+
+  it.each([
+    {
+      name: 'JPEG prefix followed by non-JPEG bytes',
+      mimeType: 'image/jpeg',
+      bytes: Buffer.concat([
+        Buffer.from([0xff, 0xd8, 0xff, 0xe0]),
+        Buffer.from('not-jpeg'),
+      ]),
+    },
+    {
+      name: 'MIME and signature mismatch',
+      mimeType: 'image/png',
+      bytes: payloadFor('image/jpeg'),
+    },
+    {
+      name: 'truncated signature',
+      mimeType: 'image/png',
+      bytes: payloadFor('image/png').subarray(0, 7),
+    },
+  ])(
+    'rejects $name after fully collecting the body',
+    async ({ mimeType, bytes }) => {
+      const transport = createRequestSequence([
+        {
+          statusCode: 200,
+          headers: { 'content-type': mimeType },
+          chunks: [bytes],
+        },
+      ])
+
+      await expectCategory(
+        downloadRemoteMedia(
+          'https://media.example/file?signature=SECRET',
+          {},
+          { resolve: publicResolver, request: transport.request },
+        ),
+        'media_signature',
+        'media.example',
+      )
+    },
+  )
 
   it('rejects an oversized declared Content-Length before consuming the body', async () => {
     const transport = createRequestSequence([
@@ -671,7 +944,7 @@ describe('remote media response policy', () => {
       {
         statusCode: 200,
         headers: { 'content-type': 'image/png' },
-        chunks: ['partial'],
+        chunks: [payloadFor('image/png').subarray(0, 4)],
         end: false,
       },
     ])
@@ -685,9 +958,9 @@ describe('remote media response policy', () => {
     })
     await new Promise((resolve) => setImmediate(resolve))
     expect(settled).toBe(false)
-    transport.responses[0].end('-complete')
+    transport.responses[0].end(payloadFor('image/png').subarray(4))
     await expect(pending).resolves.toMatchObject({
-      buffer: Buffer.from('partial-complete'),
+      buffer: payloadFor('image/png'),
     })
   })
 
@@ -719,6 +992,40 @@ describe('remote media response policy', () => {
 
 describe('remote media timeouts and cancellation', () => {
   beforeEach(() => publicResolver.mockClear())
+
+  it.each([
+    ['malformed URL', 'https://[::1', 'unknown'],
+    ['HTTP URL', 'http://media.example/file.jpg', 'unknown'],
+    ['valid HTTPS URL', 'https://media.example/file.jpg', 'unknown'],
+  ])(
+    'honors a pre-aborted caller before parsing or I/O for %s',
+    async (_name, url, host) => {
+      const controller = new AbortController()
+      controller.abort()
+      const resolver = jest.fn(async () => [
+        { address: '93.184.216.34', family: 4 as const },
+      ])
+      const transport = createRequestSequence([
+        {
+          statusCode: 200,
+          headers: { 'content-type': 'image/jpeg' },
+          chunks: [payloadFor('image/jpeg')],
+        },
+      ])
+
+      await expectCategory(
+        downloadRemoteMedia(
+          url,
+          { signal: controller.signal },
+          { resolve: resolver, request: transport.request },
+        ),
+        'cancelled',
+        host,
+      )
+      expect(resolver).not.toHaveBeenCalled()
+      expect(transport.request).not.toHaveBeenCalled()
+    },
+  )
 
   it('bounds connection time and destroys the request', async () => {
     const transport = createRequestSequence([{ connect: false }])
@@ -810,7 +1117,7 @@ describe('remote media timeouts and cancellation', () => {
       {
         statusCode: 200,
         headers: { 'content-type': 'image/jpeg' },
-        chunks: ['not-zero'],
+        chunks: [payloadFor('image/jpeg')],
       },
     ])
     await expect(
@@ -819,7 +1126,7 @@ describe('remote media timeouts and cancellation', () => {
         { maxBytes: 0 },
         { resolve: publicResolver, request: bodyTransport.request },
       ),
-    ).resolves.toMatchObject({ buffer: Buffer.from('not-zero') })
+    ).resolves.toMatchObject({ buffer: payloadFor('image/jpeg') })
   })
 })
 
@@ -880,4 +1187,29 @@ describe('safe media filename', () => {
     expect(filename).toMatch(/\.png$/)
     expect(filename).not.toContain('\uFFFD')
   })
+
+  it.each([
+    'CON',
+    'con.jpg',
+    'PrN.tar.gz',
+    'AUX.',
+    'nul.txt',
+    'COM1.png',
+    'com9.any',
+    'COM¹.jpg',
+    'Lpt².mov',
+    'lPt³.foo.bar',
+  ])(
+    'prefixes Windows reserved filename %s regardless of case or extensions',
+    (basename) => {
+      const filename = createSafeMediaFilename(
+        new URL(`https://media.example/${encodeURIComponent(basename)}`),
+        'image/jpeg',
+      )
+      expect(filename).toMatch(/^file_/)
+      expect(filename.split('.')[0]).not.toMatch(
+        /^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])$/iu,
+      )
+    },
+  )
 })

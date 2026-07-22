@@ -14,7 +14,9 @@ export type RemoteMediaDownloadErrorCategory =
   | 'redirect_location'
   | 'redirect_limit'
   | 'http_status'
+  | 'content_encoding'
   | 'mime_type'
+  | 'media_signature'
   | 'invalid_response'
   | 'size_limit'
   | 'empty_body'
@@ -67,9 +69,13 @@ export type RemoteMediaDownloadResult = {
   buffer: Buffer
   mimeType: string
   filename: string
-  finalUrl: string
   host: string
 }
+
+export type RemoteMediaDownloader = (
+  input: string,
+  options?: RemoteMediaDownloadOptions,
+) => Promise<RemoteMediaDownloadResult>
 
 const DEFAULT_MAX_BYTES = 25 * 1024 * 1024
 const ABSOLUTE_MAX_BYTES = 512 * 1024 * 1024
@@ -101,6 +107,126 @@ const MIME_EXTENSIONS = new Map<string, string>([
   ['video/x-msvideo', '.avi'],
   ['video/x-matroska', '.mkv'],
 ])
+
+const bytesStartWith = (
+  buffer: Buffer,
+  signature: ReadonlyArray<number>,
+): boolean =>
+  buffer.length >= signature.length &&
+  signature.every((byte, index) => buffer[index] === byte)
+
+const asciiAt = (buffer: Buffer, offset: number, value: string): boolean =>
+  buffer.length >= offset + value.length &&
+  buffer
+    .subarray(offset, offset + value.length)
+    .equals(Buffer.from(value, 'ascii'))
+
+const isoBmffBrands = (buffer: Buffer): string[] => {
+  if (buffer.length < 16 || !asciiAt(buffer, 4, 'ftyp')) return []
+  const boxSize = buffer.readUInt32BE(0)
+  if (boxSize < 16 || boxSize > buffer.length || boxSize % 4 !== 0) return []
+  const brands = [buffer.toString('ascii', 8, 12)]
+  for (let offset = 16; offset + 4 <= boxSize; offset += 4) {
+    brands.push(buffer.toString('ascii', offset, offset + 4))
+  }
+  return brands
+}
+
+const hasIsoBmffBrand = (
+  buffer: Buffer,
+  allowed: ReadonlySet<string>,
+): boolean => isoBmffBrands(buffer).some((brand) => allowed.has(brand))
+
+const containsEbmlDocType = (buffer: Buffer, docType: string): boolean => {
+  if (!bytesStartWith(buffer, [0x1a, 0x45, 0xdf, 0xa3])) return false
+  const encoded = Buffer.concat([
+    Buffer.from([0x42, 0x82, 0x80 + docType.length]),
+    Buffer.from(docType, 'ascii'),
+  ])
+  return buffer.subarray(4, Math.min(buffer.length, 4096)).indexOf(encoded) >= 0
+}
+
+const MP4_BRANDS = new Set([
+  'isom',
+  'iso2',
+  'iso3',
+  'iso4',
+  'iso5',
+  'iso6',
+  'mp41',
+  'mp42',
+  'avc1',
+  'dash',
+  'M4V ',
+  'MSNV',
+  '3gp4',
+  '3gp5',
+  '3g2a',
+])
+
+const MEDIA_SIGNATURES = new Map<string, (buffer: Buffer) => boolean>([
+  [
+    'image/jpeg',
+    (buffer) =>
+      bytesStartWith(buffer, [0xff, 0xd8, 0xff]) &&
+      buffer.length >= 4 &&
+      buffer[buffer.length - 2] === 0xff &&
+      buffer[buffer.length - 1] === 0xd9,
+  ],
+  [
+    'image/png',
+    (buffer) =>
+      bytesStartWith(buffer, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+  ],
+  [
+    'image/gif',
+    (buffer) => asciiAt(buffer, 0, 'GIF87a') || asciiAt(buffer, 0, 'GIF89a'),
+  ],
+  [
+    'image/webp',
+    (buffer) => asciiAt(buffer, 0, 'RIFF') && asciiAt(buffer, 8, 'WEBP'),
+  ],
+  [
+    'image/avif',
+    (buffer) => hasIsoBmffBrand(buffer, new Set(['avif', 'avis'])),
+  ],
+  [
+    'image/heic',
+    (buffer) =>
+      hasIsoBmffBrand(buffer, new Set(['heic', 'heix', 'hevc', 'hevx'])),
+  ],
+  [
+    'image/heif',
+    (buffer) => hasIsoBmffBrand(buffer, new Set(['mif1', 'msf1'])),
+  ],
+  ['image/bmp', (buffer) => asciiAt(buffer, 0, 'BM')],
+  [
+    'image/tiff',
+    (buffer) =>
+      bytesStartWith(buffer, [0x49, 0x49, 0x2a, 0x00]) ||
+      bytesStartWith(buffer, [0x4d, 0x4d, 0x00, 0x2a]) ||
+      bytesStartWith(buffer, [0x49, 0x49, 0x2b, 0x00]) ||
+      bytesStartWith(buffer, [0x4d, 0x4d, 0x00, 0x2b]),
+  ],
+  ['video/mp4', (buffer) => hasIsoBmffBrand(buffer, MP4_BRANDS)],
+  ['video/webm', (buffer) => containsEbmlDocType(buffer, 'webm')],
+  ['video/quicktime', (buffer) => hasIsoBmffBrand(buffer, new Set(['qt  ']))],
+  [
+    'video/mpeg',
+    (buffer) =>
+      bytesStartWith(buffer, [0x00, 0x00, 0x01, 0xb3]) ||
+      bytesStartWith(buffer, [0x00, 0x00, 0x01, 0xba]),
+  ],
+  ['video/ogg', (buffer) => asciiAt(buffer, 0, 'OggS')],
+  [
+    'video/x-msvideo',
+    (buffer) => asciiAt(buffer, 0, 'RIFF') && asciiAt(buffer, 8, 'AVI '),
+  ],
+  ['video/x-matroska', (buffer) => containsEbmlDocType(buffer, 'matroska')],
+])
+
+const hasValidMediaSignature = (buffer: Buffer, mimeType: string): boolean =>
+  MEDIA_SIGNATURES.get(mimeType)?.(buffer) === true
 
 const BLOCKED_IPV4_CIDRS: Array<[number, number]> = [
   [ipv4ToNumber('0.0.0.0'), 8],
@@ -425,6 +551,8 @@ const removeControlCharacters = (value: string): string =>
     })
     .join('')
 
+const WINDOWS_RESERVED_STEM = /^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])$/iu
+
 export const createSafeMediaFilename = (url: URL, mimeType: string): string => {
   const extension = MIME_EXTENSIONS.get(mimeType)
   if (!extension)
@@ -453,17 +581,20 @@ export const createSafeMediaFilename = (url: URL, mimeType: string): string => {
     .replace(/[^\p{L}\p{N}\p{M}_-]+/gu, '_')
     .replace(/_+/g, '_')
     .replace(/^[_-]+|[_-]+$/g, '')
+  const originalWindowsStem = withoutControls.split('.', 1)[0].trim()
+  const nonReservedStem =
+    WINDOWS_RESERVED_STEM.test(originalWindowsStem) ||
+    WINDOWS_RESERVED_STEM.test(safeStem)
+      ? `file_${safeStem || 'media'}`
+      : safeStem
   const stem = trimToUtf8Bytes(
-    safeStem || 'media',
+    nonReservedStem || 'media',
     MAX_FILENAME_BYTES - Buffer.byteLength(extension),
   )
   return `${stem || 'media'}${extension}`
 }
 
-const headerValue = (
-  response: IncomingMessage,
-  name: string,
-): string | undefined => {
+const headerValues = (response: IncomingMessage, name: string): string[] => {
   const headers = response.headers as Record<
     string,
     string | string[] | undefined
@@ -472,7 +603,16 @@ const headerValue = (
     (candidate) => candidate.toLowerCase() === name,
   )
   const value = key ? headers[key] : undefined
-  return Array.isArray(value) ? value[0] : value
+  if (value === undefined) return []
+  return Array.isArray(value) ? value : [value]
+}
+
+const headerValue = (
+  response: IncomingMessage,
+  name: string,
+): string | undefined => {
+  const values = headerValues(response, name)
+  return values.length === 1 ? values[0] : undefined
 }
 
 type RequestResult =
@@ -612,6 +752,20 @@ const requestPinnedMedia = (
           return
         }
 
+        const contentEncodings = headerValues(incoming, 'content-encoding')
+          .map((value) => value.trim())
+          .filter(Boolean)
+        if (
+          contentEncodings.length > 0 &&
+          (contentEncodings.length !== 1 ||
+            contentEncodings[0].toLowerCase() !== 'identity')
+        ) {
+          finishReject(
+            new RemoteMediaDownloadError('content_encoding', hostname),
+          )
+          return
+        }
+
         const mimeType = normalizeMimeType(
           headerValue(incoming, 'content-type'),
         )
@@ -663,9 +817,17 @@ const requestPinnedMedia = (
             )
             return
           }
+          const buffer = Buffer.concat(chunks, received)
+          if (!hasValidMediaSignature(buffer, mimeType)) {
+            finishReject(
+              new RemoteMediaDownloadError('media_signature', hostname),
+              false,
+            )
+            return
+          }
           finishResolve({
             kind: 'success',
-            buffer: Buffer.concat(chunks, received),
+            buffer,
             mimeType,
           })
         })
@@ -710,11 +872,14 @@ const requestPinnedMedia = (
     req.end()
   })
 
-export const downloadRemoteMedia = async (
+const downloadRemoteMediaWithDependencies = async (
   input: string,
   options: RemoteMediaDownloadOptions = {},
-  dependencies: RemoteMediaDownloadDependencies = {},
+  dependencies: RemoteMediaDownloadDependencies,
 ): Promise<RemoteMediaDownloadResult> => {
+  if (options.signal?.aborted) {
+    throw new RemoteMediaDownloadError('cancelled', 'unknown')
+  }
   const config = normalizeOptions(options)
   const resolve = dependencies.resolve || defaultResolve
   const isPublicAddress = dependencies.isPublicAddress || isPublicIpAddress
@@ -773,7 +938,6 @@ export const downloadRemoteMedia = async (
           buffer: result.buffer,
           mimeType: result.mimeType,
           filename: createSafeMediaFilename(parsed.url, result.mimeType),
-          finalUrl: parsed.url.toString(),
           host: parsed.hostname,
         }
       }
@@ -796,3 +960,12 @@ export const downloadRemoteMedia = async (
       options.signal.removeEventListener('abort', onCallerAbort)
   }
 }
+
+export const downloadRemoteMedia: RemoteMediaDownloader = (input, options) =>
+  downloadRemoteMediaWithDependencies(input, options, {})
+
+/** Trusted test-only entrypoint. Never construct its dependencies from request input. */
+export const createRemoteMediaDownloaderForTesting =
+  (dependencies: RemoteMediaDownloadDependencies): RemoteMediaDownloader =>
+  (input, options) =>
+    downloadRemoteMediaWithDependencies(input, options, dependencies)
