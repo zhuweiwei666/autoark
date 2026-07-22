@@ -229,6 +229,18 @@ const extensionForMime = (mimeType: string, type: 'image' | 'video') => {
 const hash = (algorithm: 'sha256' | 'md5', data: string | Buffer) =>
   createHash(algorithm).update(data).digest('hex')
 
+const cleanupLosingUpload = async (key: string): Promise<void> => {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const result = await deleteFromR2(key)
+      if (result?.success) return
+    } catch {
+      // Retry once before reporting a redacted item-level failure.
+    }
+  }
+  throw new Error('storage_cleanup_failed')
+}
+
 const materialMapping = (
   asset: ResolvedAsset,
   accountId: string,
@@ -374,6 +386,10 @@ export const ingestCreativeAssets = async (params: {
       }
 
       const deleted = await Material.findOne({
+        organizationId: activeShaQuery.organizationId,
+        status: 'deleted',
+        fingerprintKey,
+      }) || await Material.findOne({
         ...activeShaQuery,
         status: 'deleted',
       })
@@ -431,22 +447,41 @@ export const ingestCreativeAssets = async (params: {
 
       let material: any
       let wonInsert = true
+      let primaryMergedReuseMetadata = false
       if (deleted) {
-        material = await Material.findOneAndUpdate(
-          { _id: deleted._id, status: 'deleted' },
-          {
-            $set: materialFields,
-            $addToSet: {
-              facebookMappings: mapping,
-              'usage.accounts': normalizeForStorage(accountId),
+        try {
+          material = await Material.findOneAndUpdate(
+            { _id: deleted._id, status: 'deleted' },
+            {
+              $set: materialFields,
+              $addToSet: {
+                facebookMappings: mapping,
+                'usage.accounts': normalizeForStorage(accountId),
+              },
             },
-          },
-          { new: true },
-        )
+            { new: true },
+          )
+          primaryMergedReuseMetadata = Boolean(material)
+        } catch (error: any) {
+          if (error?.code !== 11000) {
+            await cleanupLosingUpload(upload.key)
+            throw error
+          }
+          try {
+            material = await Material.findOne(activeMaterialQuery)
+          } finally {
+            await cleanupLosingUpload(upload.key)
+          }
+          if (!material) throw new Error('canonical_conflict_unresolved')
+          wonInsert = false
+        }
         if (!material) {
-          material = await Material.findOne(activeMaterialQuery)
-          await deleteFromR2(upload.key)
-          if (!material) throw new Error('Deleted material changed while being restored')
+          try {
+            material = await Material.findOne(activeMaterialQuery)
+          } finally {
+            await cleanupLosingUpload(upload.key)
+          }
+          if (!material) throw new Error('canonical_conflict_unresolved')
           wonInsert = false
         }
       } else {
@@ -469,29 +504,36 @@ export const ingestCreativeAssets = async (params: {
           )
           if (upsertResult && Object.prototype.hasOwnProperty.call(upsertResult, 'value')) {
             material = upsertResult.value
+            primaryMergedReuseMetadata = Boolean(material)
             wonInsert = upsertResult.lastErrorObject?.updatedExisting !== true
-            if (!wonInsert) await deleteFromR2(upload.key)
+            if (!wonInsert) await cleanupLosingUpload(upload.key)
           } else {
             material = upsertResult
           }
         } catch (error: any) {
           if (error?.code !== 11000) throw error
-          material = await Material.findOne(activeShaQuery)
-          await deleteFromR2(upload.key)
+          try {
+            material = await Material.findOne(activeMaterialQuery)
+          } finally {
+            await cleanupLosingUpload(upload.key)
+          }
           if (!material) throw error
           wonInsert = false
         }
       }
 
       if (!wonInsert) {
-        const reuseUpdate: any = {
-          $addToSet: {
+        const reuseUpdate: any = {}
+        if (!primaryMergedReuseMetadata) {
+          reuseUpdate.$addToSet = {
             facebookMappings: mapping,
             'usage.accounts': normalizeForStorage(accountId),
-          },
+          }
         }
         if (resolved.isOriginal) reuseUpdate.$set = { 'source.isOriginal': true }
-        await Material.updateOne({ _id: material._id }, reuseUpdate)
+        if (Object.keys(reuseUpdate).length) {
+          await Material.updateOne({ _id: material._id }, reuseUpdate)
+        }
       }
 
       const materialId = material._id.toString()
