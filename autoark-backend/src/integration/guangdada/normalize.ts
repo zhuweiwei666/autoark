@@ -23,12 +23,14 @@ const pickString = (source: Record<string, unknown>, keys: string[]) => {
 }
 
 const asNumber = (value: unknown): number | undefined => {
-  if (value === null || value === undefined) return undefined
-  if (typeof value === 'string' && !value.trim()) return undefined
-  const parsed = typeof value === 'string'
-    ? Number(value.replace(/,/g, '').trim())
-    : Number(value)
-  return Number.isFinite(parsed) ? parsed : undefined
+  if (typeof value === 'number') {
+    return Number.isFinite(value) && value >= 0 ? value : undefined
+  }
+  if (typeof value !== 'string') return undefined
+  const normalized = value.trim()
+  if (!/^(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/.test(normalized)) return undefined
+  const parsed = Number(normalized)
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined
 }
 
 const pickNumber = (primary: Record<string, unknown>, secondary: Record<string, unknown>, keys: string[]) => {
@@ -42,6 +44,16 @@ const pickNumber = (primary: Record<string, unknown>, secondary: Record<string, 
 }
 
 export const normalizeHttpsMediaUrl = (value: unknown): string | undefined => {
+  const raw = validatedHttpsMediaUrl(value)
+  if (!raw) return undefined
+
+  const url = new URL(raw)
+  url.hash = ''
+  url.searchParams.sort()
+  return url.toString()
+}
+
+const validatedHttpsMediaUrl = (value: unknown): string | undefined => {
   const raw = asTrimmedString(value)
   if (!raw) return undefined
 
@@ -49,9 +61,7 @@ export const normalizeHttpsMediaUrl = (value: unknown): string | undefined => {
     const url = new URL(raw)
     if (url.protocol !== 'https:') return undefined
     if (url.username || url.password) return undefined
-    url.hash = ''
-    url.searchParams.sort()
-    return url.toString()
+    return raw
   } catch {
     return undefined
   }
@@ -63,7 +73,7 @@ const asMediaRecord = (media: unknown): GuangdadaRawMedia | undefined => {
   return media as GuangdadaRawMedia
 }
 
-const mediaUrl = (media: GuangdadaRawMedia) => normalizeHttpsMediaUrl(pickString(media, [
+const mediaUrl = (media: GuangdadaRawMedia) => validatedHttpsMediaUrl(pickString(media, [
   'url',
   'video_url',
   'image_url',
@@ -131,6 +141,14 @@ const providerAssetKey = (options: {
   mediaIndex: number
   mediaUrl: string
 }) => {
+  if (options.mediaId && options.recordId) {
+    return `sha256:${sha256([
+      'native',
+      options.recordId,
+      options.mediaType,
+      options.mediaId,
+    ].join('|'))}`
+  }
   if (options.mediaId) return `${options.mediaType}:${options.mediaId}`
   const input = [
     options.recordId ?? options.fallbackRecordId,
@@ -156,7 +174,9 @@ const normalizeMedia = (
 ): NormalizedGuangdadaAsset | undefined => {
   const media = asMediaRecord(mediaValue)
   if (!media) return undefined
-  const normalizedUrl = mediaUrl(media)
+  const originalUrl = mediaUrl(media)
+  if (!originalUrl) return undefined
+  const normalizedUrl = normalizeHttpsMediaUrl(originalUrl)
   if (!normalizedUrl) return undefined
 
   const labels = {
@@ -183,7 +203,7 @@ const normalizeMedia = (
     mediaType,
     mediaRole: role,
     mediaIndex,
-    mediaUrl: normalizedUrl,
+    mediaUrl: originalUrl,
     ...(context.recordId ? { recordId: context.recordId } : {}),
     ...(context.packageName ? { packageName: context.packageName } : {}),
     ...(context.productName ? { productName: context.productName } : {}),

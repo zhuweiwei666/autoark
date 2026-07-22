@@ -14,12 +14,16 @@ export const GUANGDADA_LIMITS = Object.freeze({
   pageSize: 100,
   recentDays: 365,
   totalItems: 1000,
+  totalPages: 50,
+  timeoutMs: 60_000,
+  retryAfterMs: 60 * 60 * 1000,
 })
 
 const DEFAULTS = Object.freeze({
   page: 1,
   pageSize: 20,
   recentDays: 30,
+  timeoutMs: 15_000,
   sortBy: 'estimated_value' as GuangdadaSortBy,
 })
 
@@ -61,12 +65,19 @@ const validSortBy = (value: unknown): GuangdadaSortBy => {
 
 const parseRetryAfterMs = (value: string | null): number | undefined => {
   if (!value) return undefined
-  const seconds = Number(value)
-  if (Number.isFinite(seconds) && seconds >= 0) return Math.ceil(seconds * 1000)
+  const normalized = value.trim()
+  if (/^\d+$/.test(normalized)) {
+    const seconds = Number(normalized)
+    if (!Number.isFinite(seconds)) return GUANGDADA_LIMITS.retryAfterMs
+    return Math.min(seconds * 1000, GUANGDADA_LIMITS.retryAfterMs)
+  }
 
-  const date = Date.parse(value)
+  const httpDatePattern = /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT$/
+  if (!httpDatePattern.test(normalized)) return undefined
+  const date = Date.parse(normalized)
   if (!Number.isFinite(date)) return undefined
-  return Math.max(0, date - Date.now())
+  if (new Date(date).toUTCString() !== normalized) return undefined
+  return Math.min(Math.max(0, date - Date.now()), GUANGDADA_LIMITS.retryAfterMs)
 }
 
 const classifyHttpError = (response: Response): GuangdadaApiError => {
@@ -107,13 +118,57 @@ const normalizedPageOptions = (options: GuangdadaFetchOptions) => ({
   page: clampInteger(options.page, DEFAULTS.page, 1, Number.MAX_SAFE_INTEGER),
   pageSize: clampInteger(options.pageSize, DEFAULTS.pageSize, 1, GUANGDADA_LIMITS.pageSize),
   recentDays: clampInteger(options.recentDays, DEFAULTS.recentDays, 1, GUANGDADA_LIMITS.recentDays),
+  timeoutMs: clampInteger(options.timeoutMs, DEFAULTS.timeoutMs, 1, GUANGDADA_LIMITS.timeoutMs),
   sortBy: validSortBy(options.sortBy),
   packageName: typeof options.packageName === 'string' ? options.packageName.trim() : '',
 })
 
-const isRecord = (value: unknown): value is Record<string, unknown> => (
-  value !== null && typeof value === 'object' && !Array.isArray(value)
-)
+const isPlainRecord = (value: unknown): value is Record<string, unknown> => {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false
+  const prototype = Object.getPrototypeOf(value)
+  return prototype === Object.prototype || prototype === null
+}
+
+const paginationBooleanFields = ['has_more', 'hasMore']
+const paginationIntegerFields = [
+  'page',
+  'current_page',
+  'currentPage',
+  'page_size',
+  'pageSize',
+  'per_page',
+  'perPage',
+  'total',
+  'total_pages',
+  'totalPages',
+]
+
+const validPagination = (value: unknown): value is GuangdadaPagination => {
+  if (!isPlainRecord(value)) return false
+  for (const field of paginationBooleanFields) {
+    if (Object.prototype.hasOwnProperty.call(value, field) && typeof value[field] !== 'boolean') {
+      return false
+    }
+  }
+  for (const field of paginationIntegerFields) {
+    if (!Object.prototype.hasOwnProperty.call(value, field)) continue
+    const fieldValue = value[field]
+    if (
+      typeof fieldValue !== 'number' ||
+      !Number.isFinite(fieldValue) ||
+      !Number.isInteger(fieldValue) ||
+      fieldValue < 0
+    ) {
+      return false
+    }
+  }
+  return true
+}
+
+const responseError = () => new GuangdadaApiError({
+  message: 'Guangdada returned an invalid response',
+  category: 'response',
+})
 
 export const fetchGuangdadaAdsPage = async (
   options: GuangdadaFetchOptions = {},
@@ -136,48 +191,77 @@ export const fetchGuangdadaAdsPage = async (
   if (request.packageName) url.searchParams.set('package_name', request.packageName)
 
   const fetchImpl = options.fetchImpl ?? globalThis.fetch
-  let response: Response
+  const controller = new AbortController()
+  let abortCategory: 'timeout' | 'cancelled' | undefined
+  let rejectAbort: (error: Error) => void = () => undefined
+  const abortPromise = new Promise<never>((_resolve, reject) => {
+    rejectAbort = reject
+  })
+  const onControlledAbort = () => rejectAbort(new Error('controlled abort'))
+  const abortRequest = (category: 'timeout' | 'cancelled') => {
+    if (controller.signal.aborted) return
+    abortCategory = category
+    controller.abort()
+  }
+  const onExternalAbort = () => abortRequest('cancelled')
+  controller.signal.addEventListener('abort', onControlledAbort, { once: true })
+  if (options.signal) {
+    options.signal.addEventListener('abort', onExternalAbort, { once: true })
+    if (options.signal.aborted) onExternalAbort()
+  }
+  const timeout = setTimeout(() => abortRequest('timeout'), request.timeoutMs)
+  let phase: 'fetch' | 'body' = 'fetch'
+
   try {
-    response = await fetchImpl(url, {
+    const response = await Promise.race([fetchImpl(url, {
       method: 'GET',
       headers: { Authorization: `Bearer ${apiKey}` },
-    })
-  } catch {
+      signal: controller.signal,
+    }), abortPromise])
+
+    if (!response.ok) throw classifyHttpError(response)
+
+    phase = 'body'
+    const body = await Promise.race([response.json(), abortPromise])
+    if (!isPlainRecord(body) || !Array.isArray(body.data)) throw responseError()
+    if (!body.data.every(isPlainRecord)) throw responseError()
+    const pagination = body.pagination === undefined ? {} : body.pagination
+    if (!validPagination(pagination)) throw responseError()
+
+    return {
+      data: body.data as GuangdadaAdRecord[],
+      pagination,
+    }
+  } catch (error) {
+    if (error instanceof GuangdadaApiError) throw error
+    if (abortCategory === 'timeout') {
+      throw new GuangdadaApiError({
+        message: 'Guangdada request timed out',
+        category: 'timeout',
+        retryable: true,
+      })
+    }
+    if (abortCategory === 'cancelled') {
+      throw new GuangdadaApiError({
+        message: 'Guangdada request was cancelled',
+        category: 'cancelled',
+      })
+    }
+    if (phase === 'body') throw responseError()
     throw new GuangdadaApiError({
       message: 'Guangdada network request failed',
       category: 'network',
       retryable: true,
     })
-  }
-
-  if (!response.ok) throw classifyHttpError(response)
-
-  let body: unknown
-  try {
-    body = await response.json()
-  } catch {
-    throw new GuangdadaApiError({
-      message: 'Guangdada returned an invalid response',
-      category: 'response',
-    })
-  }
-
-  if (!isRecord(body) || !Array.isArray(body.data) || !isRecord(body.pagination)) {
-    throw new GuangdadaApiError({
-      message: 'Guangdada returned an invalid response',
-      category: 'response',
-    })
-  }
-
-  return {
-    data: body.data as GuangdadaAdRecord[],
-    pagination: body.pagination as GuangdadaPagination,
+  } finally {
+    clearTimeout(timeout)
+    controller.signal.removeEventListener('abort', onControlledAbort)
+    options.signal?.removeEventListener('abort', onExternalAbort)
   }
 }
 
 const finiteNumber = (value: unknown): number | undefined => {
-  const parsed = typeof value === 'number' ? value : Number(value)
-  return Number.isFinite(parsed) ? parsed : undefined
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
 const hasAnotherPage = (
@@ -208,16 +292,28 @@ export const fetchGuangdadaAds = async (
     1,
     GUANGDADA_LIMITS.totalItems,
   )
+  const calculatedMaxPages = Math.min(
+    Math.ceil(maxItems / request.pageSize),
+    GUANGDADA_LIMITS.totalPages,
+  )
+  const maxPages = clampInteger(
+    options.maxPages,
+    calculatedMaxPages,
+    1,
+    GUANGDADA_LIMITS.totalPages,
+  )
   const data: GuangdadaAdRecord[] = []
   let pagination: GuangdadaPagination = {}
   let page = request.page
+  let pagesFetched = 0
 
-  while (data.length < maxItems) {
+  while (data.length < maxItems && pagesFetched < maxPages) {
     const response = await fetchGuangdadaAdsPage({
       ...options,
       page,
       pageSize: request.pageSize,
     })
+    pagesFetched += 1
     pagination = response.pagination
     data.push(...response.data.slice(0, maxItems - data.length))
 

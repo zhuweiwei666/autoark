@@ -1,4 +1,5 @@
 import {
+  GUANGDADA_LIMITS,
   GuangdadaApiError,
   fetchGuangdadaAds,
   fetchGuangdadaAdsPage,
@@ -17,12 +18,20 @@ const okResponse = (data: unknown[], pagination: Record<string, unknown> = {}) =
   json: async () => ({ data, pagination }),
 })
 
+const bodyResponse = (body: unknown) => ({
+  ok: true,
+  status: 200,
+  headers: headers(),
+  json: async () => body,
+})
+
 describe('Guangdada API client', () => {
   beforeEach(() => {
     process.env.GUANGDADA_API_KEY = 'unit-test-placeholder'
   })
 
   afterEach(() => {
+    jest.useRealTimers()
     jest.restoreAllMocks()
     if (originalApiKey === undefined) delete process.env.GUANGDADA_API_KEY
     else process.env.GUANGDADA_API_KEY = originalApiKey
@@ -75,6 +84,95 @@ describe('Guangdada API client', () => {
     await expect(fetchGuangdadaAdsPage({ fetchImpl })).resolves.toMatchObject({ data: [] })
   })
 
+  it('times out a stalled fetch with a retryable sanitized error', async () => {
+    jest.useFakeTimers()
+    let requestSignal: AbortSignal | undefined
+    const fetchImpl = jest.fn((_input, init) => {
+      requestSignal = init?.signal as AbortSignal
+      return new Promise(() => {})
+    })
+    const request = fetchGuangdadaAdsPage({ timeoutMs: 25, fetchImpl } as any)
+    const observed = Promise.race([
+      request.then(
+        () => ({ state: 'resolved' }),
+        (error) => ({ state: 'rejected', error }),
+      ),
+      new Promise((resolve) => setTimeout(() => resolve({ state: 'stalled' }), 26)),
+    ])
+
+    await jest.advanceTimersByTimeAsync(26)
+
+    await expect(observed).resolves.toMatchObject({
+      state: 'rejected',
+      error: {
+        category: 'timeout',
+        retryable: true,
+        shouldPauseAuthentication: false,
+      },
+    })
+    expect(requestSignal?.aborted).toBe(true)
+    expect(jest.getTimerCount()).toBe(0)
+  })
+
+  it('keeps the timeout active while reading a stalled response body', async () => {
+    jest.useFakeTimers()
+    const fetchImpl = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: headers(),
+      json: () => new Promise(() => {}),
+    })
+    const request = fetchGuangdadaAdsPage({ timeoutMs: 25, fetchImpl } as any)
+    const observed = Promise.race([
+      request.then(
+        () => ({ state: 'resolved' }),
+        (error) => ({ state: 'rejected', error }),
+      ),
+      new Promise((resolve) => setTimeout(() => resolve({ state: 'stalled' }), 26)),
+    ])
+
+    await jest.advanceTimersByTimeAsync(26)
+
+    await expect(observed).resolves.toMatchObject({
+      state: 'rejected',
+      error: { category: 'timeout', retryable: true },
+    })
+    expect(jest.getTimerCount()).toBe(0)
+  })
+
+  it('keeps caller cancellation distinct and removes the external abort listener', async () => {
+    jest.useFakeTimers()
+    const controller = new AbortController()
+    const removeListener = jest.spyOn(controller.signal, 'removeEventListener')
+    const fetchImpl = jest.fn(() => new Promise(() => {}))
+    const request = fetchGuangdadaAdsPage({
+      signal: controller.signal,
+      timeoutMs: 1000,
+      fetchImpl,
+    } as any)
+    const observed = Promise.race([
+      request.then(
+        () => ({ state: 'resolved' }),
+        (error) => ({ state: 'rejected', error }),
+      ),
+      new Promise((resolve) => setTimeout(() => resolve({ state: 'stalled' }), 1)),
+    ])
+
+    controller.abort()
+    await jest.advanceTimersByTimeAsync(1)
+
+    await expect(observed).resolves.toMatchObject({
+      state: 'rejected',
+      error: {
+        category: 'cancelled',
+        retryable: false,
+        shouldPauseAuthentication: false,
+      },
+    })
+    expect(removeListener).toHaveBeenCalledWith('abort', expect.any(Function))
+    expect(jest.getTimerCount()).toBe(0)
+  })
+
   it('clamps page size and recent-day boundaries and omits an empty package filter', async () => {
     const fetchImpl = jest.fn().mockResolvedValue(okResponse([]))
 
@@ -103,6 +201,51 @@ describe('Guangdada API client', () => {
 
     const url = new URL(fetchImpl.mock.calls[0][0])
     expect(url.searchParams.get('recent_days')).toBe('365')
+  })
+
+  it('accepts a minimal successful envelope with plain data records', async () => {
+    const fetchImpl = jest.fn().mockResolvedValue(bodyResponse({ data: [{}] }))
+
+    await expect(fetchGuangdadaAdsPage({ fetchImpl })).resolves.toEqual({
+      data: [{}],
+      pagination: {},
+    })
+  })
+
+  it('rejects non-record data entries with a sanitized schema error', async () => {
+    const fetchImpl = jest.fn().mockResolvedValue(bodyResponse({
+      data: [null, 7, 'bad'],
+      pagination: {},
+      private_url: 'https://private.example/media.mp4',
+    }))
+
+    let received: unknown
+    try {
+      await fetchGuangdadaAdsPage({ fetchImpl })
+    } catch (error) {
+      received = error
+    }
+
+    expect(received).toMatchObject({ category: 'response', retryable: false })
+    expect(String(received)).not.toContain('private.example')
+    expect(String(received)).not.toContain('unit-test-placeholder')
+  })
+
+  it.each([
+    { has_more: 'true' },
+    { hasMore: 1 },
+    { page: -1 },
+    { current_page: 1.5 },
+    { total: Number.NaN },
+    { total_pages: Number.POSITIVE_INFINITY },
+  ])('rejects invalid pagination control fields: %p', async (pagination) => {
+    const fetchImpl = jest.fn().mockResolvedValue(bodyResponse({ data: [], pagination }))
+
+    await expect(fetchGuangdadaAdsPage({ fetchImpl })).rejects.toMatchObject({
+      category: 'response',
+      retryable: false,
+      shouldPauseAuthentication: false,
+    })
   })
 
   it('keeps remote page size fixed while slicing the merged result to maxItems', async () => {
@@ -147,6 +290,22 @@ describe('Guangdada API client', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(10)
   })
 
+  it('stops at a calculated page limit even when every page claims more data', async () => {
+    const fetchImpl = jest.fn().mockImplementation(async () => {
+      if (fetchImpl.mock.calls.length > 10) throw new Error('page limit exceeded')
+      return okResponse([{ id: fetchImpl.mock.calls.length }], { has_more: true })
+    })
+
+    const response = await fetchGuangdadaAds({
+      pageSize: 100,
+      maxItems: 1000,
+      fetchImpl,
+    })
+
+    expect(response.data).toHaveLength(10)
+    expect(fetchImpl).toHaveBeenCalledTimes(10)
+  })
+
   it.each([401, 403])('classifies HTTP %s as an authentication pause', async (status) => {
     const fetchImpl = jest.fn().mockResolvedValue({
       ok: false,
@@ -176,6 +335,53 @@ describe('Guangdada API client', () => {
       retryable: true,
       shouldPauseAuthentication: false,
       retryAfterMs: 7000,
+    })
+  })
+
+  it('parses an HTTP-date Retry-After value', async () => {
+    const now = Date.parse('Wed, 01 Jan 2025 00:00:00 GMT')
+    jest.spyOn(Date, 'now').mockReturnValue(now)
+    const fetchImpl = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      headers: headers({ 'retry-after': new Date(now + 5000).toUTCString() }),
+    })
+
+    await expect(fetchGuangdadaAdsPage({ fetchImpl })).rejects.toMatchObject({
+      category: 'rate_limit',
+      retryAfterMs: 5000,
+    })
+  })
+
+  it.each(['-1', '1.5', '0x10', '1e3', 'invalid'])(
+    'does not interpret invalid Retry-After value %s as delay seconds',
+    async (retryAfter) => {
+      const fetchImpl = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 429,
+        headers: headers({ 'retry-after': retryAfter }),
+      })
+
+      let received: any
+      try {
+        await fetchGuangdadaAdsPage({ fetchImpl })
+      } catch (error) {
+        received = error
+      }
+      expect(received).toMatchObject({ category: 'rate_limit', retryable: true })
+      expect(received.retryAfterMs).toBeUndefined()
+    },
+  )
+
+  it('clamps an excessive Retry-After delay to the operational maximum', async () => {
+    const fetchImpl = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      headers: headers({ 'retry-after': '999999999999999999999999' }),
+    })
+
+    await expect(fetchGuangdadaAdsPage({ fetchImpl })).rejects.toMatchObject({
+      retryAfterMs: GUANGDADA_LIMITS.retryAfterMs,
     })
   })
 
@@ -235,9 +441,10 @@ describe('Guangdada API client', () => {
   })
 })
 
-const canary = originalApiKey ? it : it.skip
+const liveCanaryEnabled = Boolean(originalApiKey) && process.env.GUANGDADA_LIVE_CANARY === '1'
+const canary = liveCanaryEnabled ? it : it.skip
 
-canary('canary: returns the documented Guangdada response shape', async () => {
+canary('live response shape: returns the documented Guangdada envelope', async () => {
   const response = await fetchGuangdadaAdsPage({
     page: 1,
     pageSize: 1,
@@ -248,4 +455,4 @@ canary('canary: returns the documented Guangdada response shape', async () => {
   expect(Array.isArray(response.data)).toBe(true)
   expect(response.pagination).toEqual(expect.any(Object))
   expect(Array.isArray(response.data[0]?.videos)).toBe(true)
-}, 15_000)
+}, 20_000)

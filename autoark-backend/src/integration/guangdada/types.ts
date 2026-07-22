@@ -51,10 +51,17 @@ export interface GuangdadaAdRecord {
 
 export interface GuangdadaPagination {
   page?: number
+  current_page?: number
+  currentPage?: number
   page_size?: number
+  pageSize?: number
+  per_page?: number
+  perPage?: number
   total?: number
   total_pages?: number
+  totalPages?: number
   has_more?: boolean
+  hasMore?: boolean
   [key: string]: unknown
 }
 
@@ -69,11 +76,14 @@ export interface GuangdadaFetchOptions {
   recentDays?: number
   sortBy?: GuangdadaSortBy
   packageName?: string
+  timeoutMs?: number
+  signal?: AbortSignal
   fetchImpl?: typeof fetch
 }
 
 export interface GuangdadaFetchAllOptions extends GuangdadaFetchOptions {
   maxItems?: number
+  maxPages?: number
 }
 
 export type GuangdadaErrorCategory =
@@ -83,6 +93,8 @@ export type GuangdadaErrorCategory =
   | 'server'
   | 'request'
   | 'network'
+  | 'timeout'
+  | 'cancelled'
   | 'response'
 
 export interface NormalizedGuangdadaAsset {

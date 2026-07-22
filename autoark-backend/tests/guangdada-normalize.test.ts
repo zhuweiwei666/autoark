@@ -76,8 +76,24 @@ describe('Guangdada normalization', () => {
     }])[0]
 
     expect(first.providerAssetKey).toBe(refreshed.providerAssetKey)
-    expect(first.providerAssetKey).toBe('video:native-video-1')
     expect(first.providerAssetKey).not.toContain('cdn.example')
+  })
+
+  it('scopes the same native media ID by record identity', () => {
+    const [first, second] = normalizeGuangdadaAds([
+      {
+        id: 'record-1',
+        package_name: 'Package One',
+        videos: [{ id: 'shared-video', url: 'https://cdn.example/one.mp4' }],
+      },
+      {
+        id: 'record-2',
+        package_name: 'Package Two',
+        videos: [{ id: 'shared-video', url: 'https://cdn.example/two.mp4' }],
+      },
+    ])
+
+    expect(first.providerAssetKey).not.toBe(second.providerAssetKey)
   })
 
   it('hashes record identity, media position, and URL when no native media ID exists', () => {
@@ -183,6 +199,54 @@ describe('Guangdada normalization', () => {
       'high-low-heat',
       'low-value',
     ])
+  })
+
+  it('rejects invalid metrics and preserves input order for the resulting full tie', () => {
+    const invalidMetrics = [true, [9], {}, Number.NaN, Number.POSITIVE_INFINITY, -1, '-2']
+    const normalized = normalizeGuangdadaAds(invalidMetrics.map((value, index) => ({
+      id: `record-${index}`,
+      package_name: 'Package',
+      heat: value,
+      estimated_value: value,
+      videos: [{ id: `video-${index}`, url: `https://cdn.example/${index}.mp4` }],
+    })) as any)
+
+    expect(normalized.map((asset) => asset.recordId)).toEqual(
+      invalidMetrics.map((_, index) => `record-${index}`),
+    )
+    expect(normalized.every((asset) => !Object.hasOwn(asset, 'heat'))).toBe(true)
+    expect(normalized.every((asset) => !Object.hasOwn(asset, 'estimatedValue'))).toBe(true)
+  })
+
+  it('preserves input order when estimated value and heat are fully tied', () => {
+    const normalized = normalizeGuangdadaAds(['first', 'second', 'third'].map((id) => ({
+      id,
+      package_name: 'Package',
+      heat: 10,
+      estimated_value: 20,
+      videos: [{ id: `${id}-video`, url: `https://cdn.example/${id}.mp4` }],
+    })))
+
+    expect(normalized.map((asset) => asset.recordId)).toEqual(['first', 'second', 'third'])
+  })
+
+  it('preserves the validated signed media URL while canonicalizing only its identity copy', () => {
+    const originalUrl = 'https://CDN.example/video%2Fclip.mp4?z=last&signature=a%2Bb&first=one%20two'
+    const reorderedUrl = 'https://cdn.example/video%2Fclip.mp4?first=one%20two&signature=a%2Bb&z=last'
+    const first = normalizeGuangdadaAds([{
+      id: 'signed-record',
+      package_name: 'Package',
+      videos: [{ url: originalUrl }],
+    }])[0]
+    const equivalent = normalizeGuangdadaAds([{
+      id: 'signed-record',
+      package_name: 'Package',
+      videos: [{ url: reorderedUrl }],
+    }])[0]
+
+    expect(first.mediaUrl).toBe(originalUrl)
+    expect(equivalent.mediaUrl).toBe(reorderedUrl)
+    expect(first.providerAssetKey).toBe(equivalent.providerAssetKey)
   })
 })
 
