@@ -56,6 +56,7 @@ jest.mock('../src/services/materialTracking.service', () => ({
 }))
 
 import * as materialController from '../src/controllers/material.controller'
+import logger from '../src/utils/logger'
 
 const ORG_ID = '665000000000000000000001'
 
@@ -547,6 +548,28 @@ describe('Facebook material smart groups', () => {
       data: [expect.objectContaining({ key: 'facebook', type: 'facebook-root' })],
     })
     expect(mockMaterialFind).not.toHaveBeenCalled()
+  })
+
+  it('logs smart-group failures without exposing infrastructure details to the caller', async () => {
+    const sentinel = 'mongodb://internal-user:sentinel-secret@private-host/materials'
+    const failure = new Error(sentinel)
+    mockMaterialAggregate.mockRejectedValueOnce(failure)
+    const loggerSpy = jest.spyOn(logger, 'error').mockImplementation(() => logger)
+    const res = createResponse()
+
+    try {
+      await (materialController as any).getMaterialSmartGroups(createRequest(), res as any)
+
+      expect(loggerSpy).toHaveBeenCalledWith('[Material] Get smart groups failed:', failure)
+      expect(res.status).toHaveBeenCalledWith(500)
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        error: '获取素材智能分组失败，请稍后重试',
+      })
+      expect(JSON.stringify((res.json as jest.Mock).mock.calls[0][0])).not.toContain(sentinel)
+    } finally {
+      loggerSpy.mockRestore()
+    }
   })
 
   it('registers /smart-groups before dynamic material routes', () => {
