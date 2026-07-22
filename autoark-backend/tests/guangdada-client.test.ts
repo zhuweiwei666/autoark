@@ -25,6 +25,14 @@ const bodyResponse = (body: unknown) => ({
   json: async () => body,
 })
 
+const resolveLiveCanary = (env: NodeJS.ProcessEnv) => {
+  if (env.GUANGDADA_LIVE_CANARY !== '1') return false
+  if (!env.GUANGDADA_API_KEY?.trim()) {
+    throw new Error('GUANGDADA_API_KEY is required when GUANGDADA_LIVE_CANARY=1')
+  }
+  return true
+}
+
 describe('Guangdada API client', () => {
   beforeEach(() => {
     process.env.GUANGDADA_API_KEY = 'unit-test-placeholder'
@@ -171,6 +179,33 @@ describe('Guangdada API client', () => {
     })
     expect(removeListener).toHaveBeenCalledWith('abort', expect.any(Function))
     expect(jest.getTimerCount()).toBe(0)
+  })
+
+  it('short-circuits an already-aborted caller signal before invoking fetch', async () => {
+    const controller = new AbortController()
+    controller.abort()
+    const fetchImpl = jest.fn(() => new Promise(() => {}))
+
+    await expect(fetchGuangdadaAdsPage({
+      signal: controller.signal,
+      fetchImpl,
+    })).rejects.toMatchObject({
+      category: 'cancelled',
+      retryable: false,
+      shouldPauseAuthentication: false,
+    })
+    expect(fetchImpl).not.toHaveBeenCalled()
+  })
+
+  it('requires an API key whenever the live canary flag is explicit', () => {
+    expect(resolveLiveCanary({})).toBe(false)
+    expect(() => resolveLiveCanary({ GUANGDADA_LIVE_CANARY: '1' })).toThrow(
+      'GUANGDADA_API_KEY is required',
+    )
+    expect(resolveLiveCanary({
+      GUANGDADA_LIVE_CANARY: '1',
+      GUANGDADA_API_KEY: 'unit-test-placeholder',
+    })).toBe(true)
   })
 
   it('clamps page size and recent-day boundaries and omits an empty package filter', async () => {
@@ -441,10 +476,12 @@ describe('Guangdada API client', () => {
   })
 })
 
-const liveCanaryEnabled = Boolean(originalApiKey) && process.env.GUANGDADA_LIVE_CANARY === '1'
-const canary = liveCanaryEnabled ? it : it.skip
+const canary = process.env.GUANGDADA_LIVE_CANARY === '1' ? it : it.skip
 
+// Canonical live invocation (after securely injecting GUANGDADA_API_KEY into the environment):
+// GUANGDADA_LIVE_CANARY=1 npm test -- --runInBand tests/guangdada-client.test.ts -t "live response shape"
 canary('live response shape: returns the documented Guangdada envelope', async () => {
+  resolveLiveCanary(process.env)
   const response = await fetchGuangdadaAdsPage({
     page: 1,
     pageSize: 1,

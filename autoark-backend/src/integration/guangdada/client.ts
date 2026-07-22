@@ -170,9 +170,16 @@ const responseError = () => new GuangdadaApiError({
   category: 'response',
 })
 
+const cancellationError = () => new GuangdadaApiError({
+  message: 'Guangdada request was cancelled',
+  category: 'cancelled',
+})
+
 export const fetchGuangdadaAdsPage = async (
   options: GuangdadaFetchOptions = {},
 ): Promise<GuangdadaAdsPage> => {
+  if (options.signal?.aborted) throw cancellationError()
+
   const apiKey = process.env.GUANGDADA_API_KEY?.trim()
   if (!apiKey) {
     throw new GuangdadaApiError({
@@ -242,10 +249,7 @@ export const fetchGuangdadaAdsPage = async (
       })
     }
     if (abortCategory === 'cancelled') {
-      throw new GuangdadaApiError({
-        message: 'Guangdada request was cancelled',
-        category: 'cancelled',
-      })
+      throw cancellationError()
     }
     if (phase === 'body') throw responseError()
     throw new GuangdadaApiError({
