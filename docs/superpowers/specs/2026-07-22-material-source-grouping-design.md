@@ -1,6 +1,6 @@
 # Material Source Grouping and External Creative Ingestion Design
 
-**Status:** Draft for written review
+**Status:** Approved for implementation
 
 **Date:** 2026-07-22
 
