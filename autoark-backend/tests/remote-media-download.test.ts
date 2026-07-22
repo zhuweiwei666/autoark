@@ -87,12 +87,15 @@ DqyyxYilESl1qd8gzbeyhIN89eqvppbFNFRoHqVJQdTWwWXjsoaQsGdbvLj95PDo
 hutJp47alfNpTF3CeoWTIVo=
 -----END CERTIFICATE-----`
 
-const isoBmffPayload = (brand: string) =>
+const isoBmffPayload = (brand: string, compatibleBrands: string[] = []) =>
   Buffer.concat([
-    Buffer.from([0x00, 0x00, 0x00, 0x10]),
+    Buffer.from([0x00, 0x00, 0x00, 0x10 + compatibleBrands.length * 4]),
     Buffer.from('ftyp'),
     Buffer.from(brand, 'ascii'),
     Buffer.alloc(4),
+    ...compatibleBrands.map((compatibleBrand) =>
+      Buffer.from(compatibleBrand, 'ascii'),
+    ),
   ])
 
 const VALID_MEDIA_PAYLOADS = [
@@ -855,6 +858,101 @@ describe('remote media response policy', () => {
       ).resolves.toMatchObject({ buffer: bytes, mimeType })
     },
   )
+
+  it.each([
+    ['image/heic', 'heic major brand', isoBmffPayload('heic')],
+    ['image/heic', 'heix major brand', isoBmffPayload('heix')],
+    ['image/heic', 'heim major brand', isoBmffPayload('heim')],
+    ['image/heic', 'heis major brand', isoBmffPayload('heis')],
+    ['image/heic', 'heic compatible brand', isoBmffPayload('mif1', ['heic'])],
+    ['image/heic', 'heix compatible brand', isoBmffPayload('mif1', ['heix'])],
+    ['image/heic', 'heim compatible brand', isoBmffPayload('mif1', ['heim'])],
+    ['image/heic', 'heis compatible brand', isoBmffPayload('mif1', ['heis'])],
+    ['image/heif', 'mif1 major brand', isoBmffPayload('mif1')],
+    ['image/heif', 'mif1 compatible brand', isoBmffPayload('zzzz', ['mif1'])],
+    ['image/avif', 'AVIF compatible brand', isoBmffPayload('mif1', ['avif'])],
+    ['video/mp4', 'MP4 compatible brand', isoBmffPayload('zzzz', ['mp42'])],
+  ])('accepts %s: %s', async (mimeType, _brandCase, bytes) => {
+    const transport = createRequestSequence([
+      {
+        statusCode: 200,
+        headers: { 'content-type': mimeType },
+        chunks: [bytes],
+      },
+    ])
+
+    await expect(
+      downloadRemoteMedia(
+        'https://media.example/file',
+        {},
+        { resolve: publicResolver, request: transport.request },
+      ),
+    ).resolves.toMatchObject({ buffer: bytes, mimeType })
+  })
+
+  it.each([
+    ['image/heic', 'hevc major sequence brand', isoBmffPayload('hevc')],
+    ['image/heic', 'hevx major sequence brand', isoBmffPayload('hevx')],
+    [
+      'image/heic',
+      'hevc compatible sequence brand',
+      isoBmffPayload('mif1', ['hevc']),
+    ],
+    [
+      'image/heic',
+      'hevx compatible sequence brand',
+      isoBmffPayload('mif1', ['hevx']),
+    ],
+    ['image/heif', 'msf1 major sequence brand', isoBmffPayload('msf1')],
+    [
+      'image/heif',
+      'msf1 compatible sequence brand',
+      isoBmffPayload('zzzz', ['msf1']),
+    ],
+  ])('rejects %s: %s', async (mimeType, _brandCase, bytes) => {
+    const transport = createRequestSequence([
+      {
+        statusCode: 200,
+        headers: { 'content-type': mimeType },
+        chunks: [bytes],
+      },
+    ])
+
+    await expectCategory(
+      downloadRemoteMedia(
+        'https://media.example/file',
+        {},
+        { resolve: publicResolver, request: transport.request },
+      ),
+      'media_signature',
+      'media.example',
+    )
+  })
+
+  it('ignores compatible brands beyond the documented bounded ftyp scan window', async () => {
+    const oversizedFtyp = Buffer.alloc(2 * 1024 * 1024)
+    oversizedFtyp.writeUInt32BE(oversizedFtyp.length, 0)
+    oversizedFtyp.write('ftyp', 4, 'ascii')
+    oversizedFtyp.write('zzzz', 8, 'ascii')
+    oversizedFtyp.write('avif', oversizedFtyp.length - 4, 'ascii')
+    const transport = createRequestSequence([
+      {
+        statusCode: 200,
+        headers: { 'content-type': 'image/avif' },
+        chunks: [oversizedFtyp],
+      },
+    ])
+
+    await expectCategory(
+      downloadRemoteMedia(
+        'https://media.example/large.avif',
+        {},
+        { resolve: publicResolver, request: transport.request },
+      ),
+      'media_signature',
+      'media.example',
+    )
+  })
 
   it.each([
     {

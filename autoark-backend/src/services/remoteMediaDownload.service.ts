@@ -121,21 +121,38 @@ const asciiAt = (buffer: Buffer, offset: number, value: string): boolean =>
     .subarray(offset, offset + value.length)
     .equals(Buffer.from(value, 'ascii'))
 
-const isoBmffBrands = (buffer: Buffer): string[] => {
-  if (buffer.length < 16 || !asciiAt(buffer, 4, 'ftyp')) return []
-  const boxSize = buffer.readUInt32BE(0)
-  if (boxSize < 16 || boxSize > buffer.length || boxSize % 4 !== 0) return []
-  const brands = [buffer.toString('ascii', 8, 12)]
-  for (let offset = 16; offset + 4 <= boxSize; offset += 4) {
-    brands.push(buffer.toString('ascii', offset, offset + 4))
-  }
-  return brands
-}
+// ftyp boxes are normally tiny. Bound compatible-brand work even if an attacker
+// declares the entire permitted download as one ftyp box.
+const MAX_ISO_BMFF_BRAND_SCAN_BYTES = 4096
+
+const isoBmffBrandCode = (brand: string): number =>
+  Buffer.from(brand, 'ascii').readUInt32BE(0)
+
+const isoBmffBrandSet = (...brands: string[]): ReadonlySet<number> =>
+  new Set(brands.map(isoBmffBrandCode))
 
 const hasIsoBmffBrand = (
   buffer: Buffer,
-  allowed: ReadonlySet<string>,
-): boolean => isoBmffBrands(buffer).some((brand) => allowed.has(brand))
+  allowed: ReadonlySet<number>,
+): boolean => {
+  if (buffer.length < 16 || !asciiAt(buffer, 4, 'ftyp')) return false
+  const boxSize = buffer.readUInt32BE(0)
+  if (
+    !Number.isSafeInteger(boxSize) ||
+    boxSize < 16 ||
+    boxSize > buffer.length ||
+    boxSize % 4 !== 0
+  ) {
+    return false
+  }
+  if (allowed.has(buffer.readUInt32BE(8))) return true
+
+  const scanEnd = Math.min(boxSize, MAX_ISO_BMFF_BRAND_SCAN_BYTES)
+  for (let offset = 16; offset + 4 <= scanEnd; offset += 4) {
+    if (allowed.has(buffer.readUInt32BE(offset))) return true
+  }
+  return false
+}
 
 const containsEbmlDocType = (buffer: Buffer, docType: string): boolean => {
   if (!bytesStartWith(buffer, [0x1a, 0x45, 0xdf, 0xa3])) return false
@@ -146,7 +163,11 @@ const containsEbmlDocType = (buffer: Buffer, docType: string): boolean => {
   return buffer.subarray(4, Math.min(buffer.length, 4096)).indexOf(encoded) >= 0
 }
 
-const MP4_BRANDS = new Set([
+const AVIF_BRANDS = isoBmffBrandSet('avif', 'avis')
+const HEIC_SINGLE_IMAGE_BRANDS = isoBmffBrandSet('heic', 'heix', 'heim', 'heis')
+const HEIF_SINGLE_IMAGE_BRANDS = isoBmffBrandSet('mif1')
+const QUICKTIME_BRANDS = isoBmffBrandSet('qt  ')
+const MP4_BRANDS = isoBmffBrandSet(
   'isom',
   'iso2',
   'iso3',
@@ -162,7 +183,7 @@ const MP4_BRANDS = new Set([
   '3gp4',
   '3gp5',
   '3g2a',
-])
+)
 
 const MEDIA_SIGNATURES = new Map<string, (buffer: Buffer) => boolean>([
   [
@@ -186,19 +207,9 @@ const MEDIA_SIGNATURES = new Map<string, (buffer: Buffer) => boolean>([
     'image/webp',
     (buffer) => asciiAt(buffer, 0, 'RIFF') && asciiAt(buffer, 8, 'WEBP'),
   ],
-  [
-    'image/avif',
-    (buffer) => hasIsoBmffBrand(buffer, new Set(['avif', 'avis'])),
-  ],
-  [
-    'image/heic',
-    (buffer) =>
-      hasIsoBmffBrand(buffer, new Set(['heic', 'heix', 'hevc', 'hevx'])),
-  ],
-  [
-    'image/heif',
-    (buffer) => hasIsoBmffBrand(buffer, new Set(['mif1', 'msf1'])),
-  ],
+  ['image/avif', (buffer) => hasIsoBmffBrand(buffer, AVIF_BRANDS)],
+  ['image/heic', (buffer) => hasIsoBmffBrand(buffer, HEIC_SINGLE_IMAGE_BRANDS)],
+  ['image/heif', (buffer) => hasIsoBmffBrand(buffer, HEIF_SINGLE_IMAGE_BRANDS)],
   ['image/bmp', (buffer) => asciiAt(buffer, 0, 'BM')],
   [
     'image/tiff',
@@ -210,7 +221,7 @@ const MEDIA_SIGNATURES = new Map<string, (buffer: Buffer) => boolean>([
   ],
   ['video/mp4', (buffer) => hasIsoBmffBrand(buffer, MP4_BRANDS)],
   ['video/webm', (buffer) => containsEbmlDocType(buffer, 'webm')],
-  ['video/quicktime', (buffer) => hasIsoBmffBrand(buffer, new Set(['qt  ']))],
+  ['video/quicktime', (buffer) => hasIsoBmffBrand(buffer, QUICKTIME_BRANDS)],
   [
     'video/mpeg',
     (buffer) =>
