@@ -277,7 +277,7 @@ git commit -m "feat: group Facebook materials by account"
 
 - [ ] **Step 1: Add an environment-only response-shape canary**
 
-Write a test skipped unless `GUANGDADA_API_KEY` is present. It requests one record from `GET https://4437799.com/api/v1/ads?page=1&page_size=1&recent_days=3&sort_by=estimated_value`, asserts only the documented envelope (`data`, `pagination`, `videos`), and prints field names/counts only. It must never print headers, values, media URLs, raw records, or the key.
+Write a test skipped unless `GUANGDADA_LIVE_CANARY=1`. Once the live flag is set, a missing `GUANGDADA_API_KEY` must fail the selected test explicitly instead of producing a zero-test green run. It requests one record from `GET https://4437799.com/api/v1/ads?page=1&page_size=1&recent_days=3&sort_by=estimated_value`, asserts only the documented envelope (`data`, `pagination`, `videos`), and prints field names/counts only. It must never print headers, values, media URLs, raw records, or the key.
 
 - [ ] **Step 2: Write mocked failing client/normalizer tests**
 
@@ -333,11 +333,11 @@ Clamp `pageSize`, `recentDays`, and overall records to explicit constants. Norma
 - [ ] **Step 6: Run mocked tests, then the opt-in canary**
 
 ```bash
-npx jest tests/guangdada-client.test.ts tests/guangdada-normalize.test.ts --runInBand
-GUANGDADA_API_KEY="$GUANGDADA_API_KEY" npx jest tests/guangdada-client.test.ts -t "live response shape" --runInBand
+PATH=/Users/zww/.nvm/versions/node/v24.14.1/bin:$PATH npm test -- --runInBand tests/guangdada-client.test.ts tests/guangdada-normalize.test.ts
+GUANGDADA_LIVE_CANARY=1 GUANGDADA_API_KEY="$GUANGDADA_API_KEY" PATH=/Users/zww/.nvm/versions/node/v24.14.1/bin:$PATH npm test -- --runInBand tests/guangdada-client.test.ts -t "live response shape"
 ```
 
-Expected: mocked suites pass; the live canary either passes or remains skipped when the environment variable is absent. No secret or raw provider data appears in output.
+Expected: mocked suites pass and skip the live canary when the flag is absent. With the live flag set, the selected canary passes only when `GUANGDADA_API_KEY` was safely injected beforehand; otherwise it fails explicitly. No secret or raw provider data appears in output.
 
 - [ ] **Step 7: Commit**
 

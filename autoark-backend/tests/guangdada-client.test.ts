@@ -478,8 +478,8 @@ describe('Guangdada API client', () => {
 
 const canary = process.env.GUANGDADA_LIVE_CANARY === '1' ? it : it.skip
 
-// Canonical live invocation (after securely injecting GUANGDADA_API_KEY into the environment):
-// GUANGDADA_LIVE_CANARY=1 npm test -- --runInBand tests/guangdada-client.test.ts -t "live response shape"
+// Canonical live invocation after securely injecting GUANGDADA_API_KEY (never print its value):
+// GUANGDADA_LIVE_CANARY=1 GUANGDADA_API_KEY="$GUANGDADA_API_KEY" PATH=/Users/zww/.nvm/versions/node/v24.14.1/bin:$PATH npm test -- --runInBand tests/guangdada-client.test.ts -t "live response shape"
 canary('live response shape: returns the documented Guangdada envelope', async () => {
   resolveLiveCanary(process.env)
   const response = await fetchGuangdadaAdsPage({
