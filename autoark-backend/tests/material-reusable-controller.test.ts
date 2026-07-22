@@ -148,4 +148,28 @@ describe('material reusable controller', () => {
       },
     })
   })
+
+  it('shows uploaded and ready materials when the library has no status filter', async () => {
+    const listChain = {
+      sort: jest.fn().mockReturnThis(),
+      skip: jest.fn().mockReturnThis(),
+      limit: jest.fn().mockReturnThis(),
+      lean: jest.fn().mockResolvedValue([]),
+    }
+    ;(Material.find as jest.Mock).mockReturnValue(listChain)
+    ;(Material.countDocuments as jest.Mock).mockResolvedValue(0)
+
+    const res = createResponse()
+
+    await getMaterialList(createRequest(), res as any)
+
+    const query = (Material.find as jest.Mock).mock.calls[0][0]
+    expect(query).toEqual({
+      $and: [
+        { status: { $in: ['uploaded', 'ready'] } },
+        { organizationId: expect.anything() },
+      ],
+    })
+    expect(Material.countDocuments).toHaveBeenCalledWith(query)
+  })
 })

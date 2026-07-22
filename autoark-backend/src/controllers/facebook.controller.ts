@@ -27,6 +27,7 @@ import {
 import logger from '../utils/logger'
 import { writeAuditLog } from '../services/auditLog.service'
 import { backfillFacebookOriginalImages } from '../services/facebookMaterialBackfill.service'
+import { deduplicateFacebookMaterials } from '../services/facebookMaterialDeduplication.service'
 
 const FACEBOOK_LIST_MAX_LIMIT = 100
 const FACEBOOK_DIAGNOSE_DEFAULT_LIMIT = 20
@@ -388,6 +389,56 @@ export const backfillOriginalImages = async (
       targetType: 'bullmq_queue',
       targetId: 'facebook.material.sync',
       summary: 'Facebook 原图回填失败',
+      reason: error.message,
+    })
+    next(error)
+  }
+}
+
+export const deduplicateMaterials = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
+  if (!requireSuperAdmin(req, res)) return
+
+  const dryRun = req.body?.dryRun !== false
+  try {
+    const result = await deduplicateFacebookMaterials({
+      dryRun,
+      confirmation: typeof req.body?.confirmation === 'string'
+        ? req.body.confirmation
+        : undefined,
+      maxGroups: typeof req.body?.maxGroups === 'number'
+        ? req.body.maxGroups
+        : undefined,
+    })
+
+    await writeAuditLog(req, {
+      category: 'facebook',
+      action: dryRun
+        ? 'facebook.material.deduplicate.preview'
+        : 'facebook.material.deduplicate.apply',
+      status: 'success',
+      targetType: 'material',
+      targetId: 'facebook-imports',
+      summary: dryRun
+        ? `预览 Facebook 素材去重：${result.duplicateDocuments} 条冗余记录`
+        : `执行 Facebook 素材去重：合并 ${result.mergedGroups} 组，归档 ${result.archivedDocuments} 条冗余记录`,
+      metadata: result,
+    })
+
+    res.json({ success: true, data: result })
+  } catch (error: any) {
+    await writeAuditLog(req, {
+      category: 'facebook',
+      action: dryRun
+        ? 'facebook.material.deduplicate.preview'
+        : 'facebook.material.deduplicate.apply',
+      status: 'failed',
+      targetType: 'material',
+      targetId: 'facebook-imports',
+      summary: 'Facebook 素材去重失败',
       reason: error.message,
     })
     next(error)

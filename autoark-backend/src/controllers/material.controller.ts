@@ -940,7 +940,7 @@ export const getMaterialList = async (req: Request, res: Response) => {
       type, 
       folder, 
       tags, 
-      status = 'uploaded',
+      status,
       search,
       sortBy = 'createdAt',
       sortOrder = 'desc',
@@ -948,7 +948,9 @@ export const getMaterialList = async (req: Request, res: Response) => {
     const { page, pageSize, skip } = parsePagination(req.query)
     
     // 根据用户权限过滤
-    const safeStatus = pickAllowedString(status, MATERIAL_STATUS_FILTERS, 'uploaded')
+    const safeStatus = status === undefined
+      ? { $in: ['uploaded', 'ready'] }
+      : pickAllowedString(status, MATERIAL_STATUS_FILTERS, 'uploaded')
     const safeType = pickOptionalMaterialType(type)
     const safeFolder = pickSafeQueryString(folder, MATERIAL_TEXT_FILTER_MAX_LENGTH)
     const safeTags = pickSafeTagList(tags)

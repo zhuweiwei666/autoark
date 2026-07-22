@@ -100,6 +100,9 @@ const materialSchema = new mongoose.Schema(
       importedAt: { type: Date },
       importedBy: { type: String },
     },
+
+    // Exact-content duplicate retained during the safety window after consolidation.
+    deduplicatedInto: { type: mongoose.Schema.Types.ObjectId, ref: 'Material', index: true },
     
     // ========== 使用统计（实时更新）==========
     usage: {
