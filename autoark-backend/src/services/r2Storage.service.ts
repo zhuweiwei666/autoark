@@ -150,6 +150,13 @@ export const uploadToR2 = async (params: {
 }
 
 /**
+ * Explicit buffer-upload seam for server-side ingestion jobs.
+ * Keep uploadToR2 as the compatible public implementation.
+ */
+export const uploadBufferToR2 = (params: Parameters<typeof uploadToR2>[0]) =>
+  uploadToR2(params)
+
+/**
  * 从 R2 删除文件
  */
 export const deleteFromR2 = async (key: string): Promise<{
@@ -176,6 +183,12 @@ export const deleteFromR2 = async (key: string): Promise<{
     }
   }
 }
+
+/**
+ * Explicit object-cleanup seam for ingestion race losers.
+ * Keep deleteFromR2 unchanged for existing callers.
+ */
+export const deleteR2Object = (key: string) => deleteFromR2(key)
 
 /**
  * 从 R2 读取文件流，用于公开素材 URL 代理
@@ -324,7 +337,9 @@ export const generatePresignedUploadUrls = async (files: Array<{
 
 export default {
   uploadToR2,
+  uploadBufferToR2,
   deleteFromR2,
+  deleteR2Object,
   getObjectFromR2,
   checkR2Config,
   generatePresignedUploadUrl,
