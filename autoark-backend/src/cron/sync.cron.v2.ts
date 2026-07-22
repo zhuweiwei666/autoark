@@ -17,7 +17,9 @@ const initSyncCronV2 = () => {
     logger.cron(`[Sync Cron V2] Triggering Facebook Sync via Queue`)
 
     try {
-      const result = await facebookCampaignsV2Service.syncCampaignsFromAdAccountsV2()
+      const result = await facebookCampaignsV2Service.syncCampaignsFromAdAccountsV2({
+        preventOverlap: true,
+      })
       const duration = Date.now() - startTime
       logger.cron(`[Sync Cron V2] Queued ${result.jobsQueued} jobs - ${duration}ms`)
     } catch (error) {
@@ -28,4 +30,3 @@ const initSyncCronV2 = () => {
 }
 
 export default initSyncCronV2
-

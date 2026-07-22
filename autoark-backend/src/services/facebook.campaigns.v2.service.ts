@@ -14,6 +14,7 @@ const isQueueAvailable = (): boolean => {
 export const syncCampaignsFromAdAccountsV2 = async (options?: {
   accountIds?: string[]
   limit?: number
+  preventOverlap?: boolean
 }) => {
   if (!isQueueAvailable()) {
     throw new Error('Queue system not available. Please configure REDIS_URL environment variable.')
@@ -45,13 +46,44 @@ export const syncCampaignsFromAdAccountsV2 = async (options?: {
       throw new Error(`No live ${queueWithoutWorkers.name} workers; refusing to enqueue account jobs`)
     }
 
-    const pendingJobs = await accountQueue!.getJobs(
+    if (options?.preventOverlap) {
+      const pendingJobs: Record<string, number> = {}
+      for (const { name, queue } of pipelineQueues) {
+        const counts = await queue.getJobCounts('active', 'waiting', 'prioritized', 'delayed')
+        const queueName = name.split('.')[1]
+        pendingJobs[queueName] = (
+          (counts.active || 0)
+          + (counts.waiting || 0)
+          + (counts.prioritized || 0)
+          + (counts.delayed || 0)
+        )
+      }
+      const totalPending = Object.values(pendingJobs).reduce((sum, count) => sum + count, 0)
+      if (totalPending > 0) {
+        logger.info(`[Scheduler] Skipping overlapping full sync: ${totalPending} pipeline jobs still pending`)
+        return {
+          syncedAccounts: 0,
+          jobsQueued: 0,
+          jobsSkippedPending: 0,
+          skippedPipelineBusy: true,
+          pendingJobs: {
+            account: pendingJobs.account || 0,
+            campaign: pendingJobs.campaign || 0,
+            ad: pendingJobs.ad || 0,
+            material: pendingJobs.material || 0,
+            total: totalPending,
+          },
+        }
+      }
+    }
+
+    const pendingAccountJobs = await accountQueue!.getJobs(
       ['active', 'waiting', 'prioritized', 'delayed'],
       0,
       9999,
     )
     const pendingAccountIds = new Set(
-      pendingJobs
+      pendingAccountJobs
         .map((job) => normalizeForStorage(job.data?.accountId))
         .filter(Boolean),
     )
