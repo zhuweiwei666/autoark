@@ -10,7 +10,8 @@ describe('Guangdada normalization', () => {
       id: 'record-1',
       package_name: 'Example Game',
       videos: [
-        { id: 'video-1', url: 'http://cdn.example/video.mp4', role: 'primary' },
+        { id: 'video-1', url: 'https://cdn.example/video.mp4', role: 'primary' },
+        { id: 'video-http', url: 'http://cdn.example/insecure.mp4' },
         'ftp://cdn.example/private.mp4',
       ],
       images: [
@@ -54,9 +55,10 @@ describe('Guangdada normalization', () => {
   })
 
   it('normalizes HTTPS identity consistently', () => {
-    expect(normalizeHttpsMediaUrl('HTTP://CDN.Example:80/a.mp4?b=2&a=1#preview')).toBe(
+    expect(normalizeHttpsMediaUrl('HTTPS://CDN.Example:443/a.mp4?b=2&a=1#preview')).toBe(
       'https://cdn.example/a.mp4?a=1&b=2',
     )
+    expect(normalizeHttpsMediaUrl('http://cdn.example/a.mp4')).toBeUndefined()
     expect(normalizeHttpsMediaUrl('file:///tmp/private.mp4')).toBeUndefined()
     expect(normalizeHttpsMediaUrl('not a url')).toBeUndefined()
   })
@@ -74,10 +76,11 @@ describe('Guangdada normalization', () => {
     }])[0]
 
     expect(first.providerAssetKey).toBe(refreshed.providerAssetKey)
+    expect(first.providerAssetKey).toBe('video:native-video-1')
     expect(first.providerAssetKey).not.toContain('cdn.example')
   })
 
-  it('uses record identity plus media position when no native media ID exists', () => {
+  it('hashes record identity, media position, and URL when no native media ID exists', () => {
     const normalized = normalizeGuangdadaAds([{
       ad_id: 'native-record-1',
       package_name: 'Example Game',
@@ -95,9 +98,10 @@ describe('Guangdada normalization', () => {
       ],
     }])
 
-    expect(normalized.map((asset) => asset.providerAssetKey)).toEqual(
+    expect(normalized.map((asset) => asset.providerAssetKey)).not.toEqual(
       refreshed.map((asset) => asset.providerAssetKey),
     )
+    expect(normalized.every((asset) => /^sha256:[a-f0-9]{64}$/.test(asset.providerAssetKey))).toBe(true)
     expect(new Set(normalized.map((asset) => asset.providerAssetKey)).size).toBe(2)
   })
 
@@ -105,7 +109,7 @@ describe('Guangdada normalization', () => {
     const first = normalizeGuangdadaAds([{
       package_name: 'Example Game',
       advertiser_name: 'Example Studio',
-      videos: [{ url: 'http://CDN.example/video.mp4?b=2&a=1' }],
+      videos: [{ url: 'HTTPS://CDN.example/video.mp4?b=2&a=1' }],
     }])[0]
     const equivalent = normalizeGuangdadaAds([{
       package_name: 'Example Game',

@@ -213,11 +213,10 @@ export const fetchGuangdadaAds = async (
   let page = request.page
 
   while (data.length < maxItems) {
-    const pageSize = Math.min(request.pageSize, maxItems - data.length)
     const response = await fetchGuangdadaAdsPage({
       ...options,
       page,
-      pageSize,
+      pageSize: request.pageSize,
     })
     pagination = response.pagination
     data.push(...response.data.slice(0, maxItems - data.length))
@@ -225,7 +224,7 @@ export const fetchGuangdadaAds = async (
     if (
       response.data.length === 0 ||
       data.length >= maxItems ||
-      !hasAnotherPage(pagination, page, pageSize, response.data.length)
+      !hasAnotherPage(pagination, page, request.pageSize, response.data.length)
     ) {
       break
     }

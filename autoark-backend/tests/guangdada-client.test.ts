@@ -105,29 +105,32 @@ describe('Guangdada API client', () => {
     expect(url.searchParams.get('recent_days')).toBe('365')
   })
 
-  it('follows pagination without exceeding the requested item count', async () => {
-    const fetchImpl = jest.fn()
-      .mockResolvedValueOnce(okResponse([{ id: 'a' }, { id: 'b' }], {
-        page: 2,
-        total_pages: 4,
-      }))
-      .mockResolvedValueOnce(okResponse([{ id: 'c' }], {
-        page: 3,
-        total_pages: 4,
-      }))
+  it('keeps remote page size fixed while slicing the merged result to maxItems', async () => {
+    const records = Array.from({ length: 5 }, (_, id) => ({ id }))
+    const fetchImpl = jest.fn().mockImplementation(async (requestUrl: string | URL) => {
+      const url = new URL(requestUrl)
+      const page = Number(url.searchParams.get('page'))
+      const pageSize = Number(url.searchParams.get('page_size'))
+      const offset = (page - 1) * pageSize
+      return okResponse(records.slice(offset, offset + pageSize), {
+        page,
+        page_size: pageSize,
+        total_pages: Math.ceil(records.length / pageSize),
+      })
+    })
 
     const response = await fetchGuangdadaAds({
-      page: 2,
+      page: 1,
       pageSize: 2,
       maxItems: 3,
       fetchImpl,
     })
 
-    expect(response.data.map((record) => record.id)).toEqual(['a', 'b', 'c'])
+    expect(response.data.map((record) => record.id)).toEqual([0, 1, 2])
     expect(fetchImpl).toHaveBeenCalledTimes(2)
     const urls = fetchImpl.mock.calls.map(([value]) => new URL(value))
-    expect(urls.map((url) => url.searchParams.get('page'))).toEqual(['2', '3'])
-    expect(urls.map((url) => url.searchParams.get('page_size'))).toEqual(['2', '1'])
+    expect(urls.map((url) => url.searchParams.get('page'))).toEqual(['1', '2'])
+    expect(urls.map((url) => url.searchParams.get('page_size'))).toEqual(['2', '2'])
   })
 
   it('caps a multi-page pull at 1000 records', async () => {

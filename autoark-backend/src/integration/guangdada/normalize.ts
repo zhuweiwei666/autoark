@@ -47,9 +47,8 @@ export const normalizeHttpsMediaUrl = (value: unknown): string | undefined => {
 
   try {
     const url = new URL(raw)
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') return undefined
+    if (url.protocol !== 'https:') return undefined
     if (url.username || url.password) return undefined
-    url.protocol = 'https:'
     url.hash = ''
     url.searchParams.sort()
     return url.toString()
@@ -133,9 +132,8 @@ const providerAssetKey = (options: {
   mediaUrl: string
 }) => {
   if (options.mediaId) return `${options.mediaType}:${options.mediaId}`
-  if (options.recordId) return `record:${options.recordId}:${options.mediaType}:${options.mediaIndex}`
   const input = [
-    options.fallbackRecordId,
+    options.recordId ?? options.fallbackRecordId,
     options.mediaType,
     String(options.mediaIndex),
     options.mediaUrl,
