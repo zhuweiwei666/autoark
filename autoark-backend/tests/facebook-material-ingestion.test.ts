@@ -132,7 +132,7 @@ describe('facebook material ingestion', () => {
     expect(mockMaterialFindOneAndUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
         organizationId: '665000000000000000000001',
-        fingerprintKey: expect.stringMatching(/^fb:[a-f0-9]{16}:sha256:/),
+        fingerprintKey: expect.stringMatching(/^content:[a-f0-9]{16}:sha256:/),
       }),
       expect.objectContaining({
         $setOnInsert: expect.objectContaining({
@@ -145,6 +145,8 @@ describe('facebook material ingestion', () => {
       }),
       expect.objectContaining({ upsert: true, new: true }),
     )
+    const insertedFields = mockMaterialFindOneAndUpdate.mock.calls[0][1].$setOnInsert
+    expect(insertedFields).not.toHaveProperty('folder')
     expect(mockCreativeFindOneAndUpdate).toHaveBeenLastCalledWith(
       { creativeId: 'creative-1' },
       expect.objectContaining({
@@ -203,7 +205,77 @@ describe('facebook material ingestion', () => {
     const secondUpload = mockUploadToR2.mock.calls[1][0]
 
     expect(firstQuery.fingerprintKey).toBe(secondQuery.fingerprintKey)
+    expect(firstQuery.fingerprintKey).toMatch(/^content:[a-f0-9]{16}:sha256:/)
     expect(firstUpload.folder).toBe(secondUpload.folder)
+  })
+
+  it('keeps identical content separate across organization-private scopes', async () => {
+    mockFetchVideoSource.mockResolvedValue({
+      success: true,
+      source: 'https://video.example/shared-private.mp4',
+      length: 8,
+    })
+
+    await ingestCreativeAssets({
+      creative: { creativeId: 'creative-private-a', videoId: 'video-private-a' },
+      accountId: 'account-a',
+      organizationId: '665000000000000000000001',
+      token: 'TOKEN-A',
+    })
+    await ingestCreativeAssets({
+      creative: { creativeId: 'creative-private-b', videoId: 'video-private-b' },
+      accountId: 'account-b',
+      organizationId: '665000000000000000000002',
+      token: 'TOKEN-B',
+    })
+
+    const firstQuery = mockMaterialFindOneAndUpdate.mock.calls[0][0]
+    const secondQuery = mockMaterialFindOneAndUpdate.mock.calls[1][0]
+
+    expect(firstQuery.fingerprintKey).toMatch(/^content:[a-f0-9]{16}:sha256:/)
+    expect(secondQuery.fingerprintKey).toMatch(/^content:[a-f0-9]{16}:sha256:/)
+    expect(firstQuery.fingerprintKey).not.toBe(secondQuery.fingerprintKey)
+  })
+
+  it('reuses an active legacy Facebook fingerprint by scoped SHA before uploading', async () => {
+    mockFetchVideoSource.mockResolvedValue({
+      success: true,
+      source: 'https://video.example/legacy.mp4',
+      length: 8,
+    })
+    const legacy = {
+      ...materialDocument('material-legacy'),
+      fingerprintKey: 'fb:legacy-owner:sha256:legacy-sha',
+      source: { platform: 'facebook', isOriginal: true },
+    }
+    mockMaterialFindOne
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(legacy)
+
+    const result = await ingestCreativeAssets({
+      creative: { creativeId: 'creative-legacy', videoId: 'video-legacy' },
+      accountId: 'account-legacy',
+      organizationId: '665000000000000000000001',
+      token: 'TOKEN',
+    })
+
+    expect(mockMaterialFindOne).toHaveBeenNthCalledWith(2, {
+      organizationId: '665000000000000000000001',
+      status: { $in: ['uploaded', 'ready'] },
+      'fingerprint.sha256': expect.stringMatching(/^[a-f0-9]{64}$/),
+    })
+    expect(mockUploadToR2).not.toHaveBeenCalled()
+    expect(mockMaterialFindOneAndUpdate).not.toHaveBeenCalled()
+    expect(mockMaterialUpdateOne).toHaveBeenCalledWith(
+      { _id: legacy._id },
+      expect.not.objectContaining({ $set: expect.objectContaining({ fingerprintKey: expect.anything() }) }),
+    )
+    expect(result).toMatchObject({
+      success: true,
+      materialIds: ['material-legacy'],
+      imported: 0,
+      reused: 1,
+    })
   })
 
   it('reuses an original native Facebook asset before downloading it again', async () => {
@@ -252,6 +324,7 @@ describe('facebook material ingestion', () => {
     }
     mockMaterialFindOne
       .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null)
       .mockResolvedValueOnce(deleted)
     mockMaterialFindOneAndUpdate.mockResolvedValueOnce({
       ...materialDocument('material-deleted'),
@@ -265,6 +338,11 @@ describe('facebook material ingestion', () => {
     })
 
     expect(mockUploadToR2).toHaveBeenCalled()
+    expect(mockMaterialFindOne).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      organizationId: { $in: [null] },
+      status: { $in: ['uploaded', 'ready'] },
+      'fingerprint.sha256': expect.any(String),
+    }))
     expect(mockMaterialFindOneAndUpdate).toHaveBeenCalledWith(
       { _id: deleted._id, status: 'deleted' },
       expect.objectContaining({
@@ -414,6 +492,7 @@ describe('facebook material ingestion', () => {
     mockMaterialFindOne
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null)
       .mockResolvedValueOnce(materialDocument('material-race-winner'))
     mockMaterialFindOneAndUpdate.mockRejectedValueOnce(duplicateKeyError)
 
@@ -428,6 +507,37 @@ describe('facebook material ingestion', () => {
     expect(result).toMatchObject({
       success: true,
       materialIds: ['material-race-winner'],
+      reused: 1,
+    })
+  })
+
+  it('cleans up its R2 upload when a concurrent canonical upsert already won', async () => {
+    mockFetchVideoSource.mockResolvedValue({
+      success: true,
+      source: 'https://video.example/concurrent.mp4',
+      length: 8,
+    })
+    mockMaterialFindOne
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null)
+    mockMaterialFindOneAndUpdate.mockResolvedValueOnce({
+      value: materialDocument('material-concurrent-winner'),
+      lastErrorObject: { updatedExisting: true },
+    })
+
+    const result = await ingestCreativeAssets({
+      creative: { creativeId: 'creative-concurrent', videoId: 'video-concurrent' },
+      accountId: '123',
+      organizationId: '665000000000000000000001',
+      token: 'TOKEN',
+    })
+
+    expect(mockDeleteFromR2).toHaveBeenCalledWith('tenant/facebook/video.mp4')
+    expect(result).toMatchObject({
+      success: true,
+      materialIds: ['material-concurrent-winner'],
+      imported: 0,
       reused: 1,
     })
   })

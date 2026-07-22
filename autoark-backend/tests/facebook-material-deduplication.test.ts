@@ -55,7 +55,7 @@ jest.mock('../src/services/r2Storage.service', () => ({
 }))
 
 import { deduplicateFacebookMaterials } from '../src/services/facebookMaterialDeduplication.service'
-import { buildFacebookMaterialFingerprintKey } from '../src/utils/facebookMaterialIdentity'
+import { buildMaterialFingerprintKey } from '../src/utils/materialContentIdentity'
 
 const objectId = (value: string) => ({ toString: () => value })
 
@@ -152,7 +152,7 @@ describe('Facebook material deduplication', () => {
     expect(sharedUpdate[0]._id.toString()).toBe('material-a')
     expect(sharedUpdate[1]).toEqual(expect.objectContaining({
       $set: expect.objectContaining({
-        fingerprintKey: expect.stringMatching(/^fb:[a-f0-9]{16}:sha256:shared-sha$/),
+        fingerprintKey: expect.stringMatching(/^content:[a-f0-9]{16}:sha256:shared-sha$/),
         facebookMappings: expect.arrayContaining([
           expect.objectContaining({ accountId: 'account-a' }),
           expect.objectContaining({ accountId: 'account-b' }),
@@ -182,7 +182,7 @@ describe('Facebook material deduplication', () => {
 
   it('limits actionable work so completed canonical groups do not strand later duplicates', async () => {
     const completed = material('material-complete', 'complete-sha', 'account-a', '2026-07-20T00:00:00Z')
-    completed.fingerprintKey = buildFacebookMaterialFingerprintKey(undefined, 'complete-sha')
+    completed.fingerprintKey = buildMaterialFingerprintKey(undefined, 'complete-sha')
     mockMaterialFind.mockReturnValue(findChain([
       completed,
       material('material-later-a', 'later-sha', 'account-b', '2026-07-21T00:00:00Z'),

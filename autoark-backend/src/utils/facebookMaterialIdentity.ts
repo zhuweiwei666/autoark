@@ -7,6 +7,7 @@ const ownerScope = (organizationId?: string) => organizationId
 export const getFacebookMaterialOwnerHash = (organizationId?: string): string =>
   createHash('sha256').update(ownerScope(organizationId)).digest('hex').slice(0, 16)
 
+/** @deprecated New material writers use the source-neutral content identity helper. */
 export const buildFacebookMaterialFingerprintKey = (
   organizationId: string | undefined,
   sha256: string,

@@ -6,9 +6,12 @@ import { fetchImageByHash, fetchVideoSource } from '../integration/facebook/ads.
 import { deleteFromR2, uploadToR2 } from './r2Storage.service'
 import { normalizeForApi, normalizeForStorage } from '../utils/accountId'
 import {
-  buildFacebookMaterialFingerprintKey,
   buildFacebookMaterialStorageFolder,
 } from '../utils/facebookMaterialIdentity'
+import {
+  buildActiveShaQuery,
+  buildMaterialFingerprintKey,
+} from '../utils/materialContentIdentity'
 import logger from '../utils/logger'
 
 export type FacebookCreativeAsset = {
@@ -338,17 +341,16 @@ export const ingestCreativeAssets = async (params: {
       const downloaded = await downloadAsset(resolved)
       const sha256 = hash('sha256', downloaded.buffer)
       const md5 = hash('md5', downloaded.buffer)
-      const fingerprintKey = buildFacebookMaterialFingerprintKey(organizationId, sha256)
-      const materialQuery: any = { organizationId, fingerprintKey }
-      if (!organizationId) delete materialQuery.organizationId
+      const fingerprintKey = buildMaterialFingerprintKey(organizationId, sha256)
+      const activeShaQuery: any = buildActiveShaQuery(organizationId, sha256)
       const activeMaterialQuery = {
-        ...materialQuery,
-        status: { $in: ['uploaded', 'ready'] },
+        ...activeShaQuery,
+        fingerprintKey,
       }
       const mapping = materialMapping(resolved, accountId, creativeId)
 
-      const existing = await Material.findOne(materialQuery)
-      if (existing && ['uploaded', 'ready'].includes((existing as any).status)) {
+      const existing = await Material.findOne(activeShaQuery)
+      if (existing) {
         const materialId = existing._id.toString()
         materialIds.push(materialId)
         localAssets.push({
@@ -370,6 +372,11 @@ export const ingestCreativeAssets = async (params: {
         reused += 1
         continue
       }
+
+      const deleted = await Material.findOne({
+        ...activeShaQuery,
+        status: 'deleted',
+      })
 
       const extension = extensionForMime(downloaded.mimeType, resolved.type)
       const originalName = `${creativeId}-${resolved.imageHash || resolved.videoId || sha256.slice(0, 12)}${extension}`
@@ -419,15 +426,14 @@ export const ingestCreativeAssets = async (params: {
           importedAt: new Date(),
           importedBy: 'facebook-sync',
         },
-        folder: 'Facebook导入',
         tags: ['facebook', 'auto-import', resolved.isOriginal ? 'original' : 'preview'],
       }
 
       let material: any
       let wonInsert = true
-      if ((existing as any)?.status === 'deleted') {
+      if (deleted) {
         material = await Material.findOneAndUpdate(
-          { _id: existing._id, status: 'deleted' },
+          { _id: deleted._id, status: 'deleted' },
           {
             $set: materialFields,
             $addToSet: {
@@ -445,7 +451,7 @@ export const ingestCreativeAssets = async (params: {
         }
       } else {
         try {
-          material = await Material.findOneAndUpdate(
+          const upsertResult: any = await Material.findOneAndUpdate(
             activeMaterialQuery,
             {
               $setOnInsert: materialFields,
@@ -454,11 +460,23 @@ export const ingestCreativeAssets = async (params: {
                 'usage.accounts': normalizeForStorage(accountId),
               },
             },
-            { upsert: true, new: true, setDefaultsOnInsert: true },
+            {
+              upsert: true,
+              new: true,
+              setDefaultsOnInsert: true,
+              includeResultMetadata: true,
+            },
           )
+          if (upsertResult && Object.prototype.hasOwnProperty.call(upsertResult, 'value')) {
+            material = upsertResult.value
+            wonInsert = upsertResult.lastErrorObject?.updatedExisting !== true
+            if (!wonInsert) await deleteFromR2(upload.key)
+          } else {
+            material = upsertResult
+          }
         } catch (error: any) {
           if (error?.code !== 11000) throw error
-          material = await Material.findOne(activeMaterialQuery)
+          material = await Material.findOne(activeShaQuery)
           await deleteFromR2(upload.key)
           if (!material) throw error
           wonInsert = false

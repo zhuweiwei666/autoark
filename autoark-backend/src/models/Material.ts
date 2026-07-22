@@ -165,6 +165,7 @@ materialSchema.index({ 'storage.url': 1 })
 
 // 指纹索引（核心）
 materialSchema.index({ fingerprintKey: 1 }, { unique: true, sparse: true })
+materialSchema.index({ organizationId: 1, 'fingerprint.sha256': 1, status: 1 })
 materialSchema.index({ 'fingerprint.pHash': 1 })
 materialSchema.index({ 'fingerprint.md5': 1 })
 
