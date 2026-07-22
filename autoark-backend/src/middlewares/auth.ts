@@ -3,6 +3,14 @@ import { verifyToken, JwtPayload } from '../utils/jwt'
 import { UserRole } from '../models/User'
 import User from '../models/User'
 
+const normalizeOrganizationId = (organizationId: any): string | undefined => {
+  if (!organizationId) return undefined
+  const id = typeof organizationId === 'object' && organizationId._id
+    ? organizationId._id
+    : organizationId
+  return id.toString()
+}
+
 // 扩展 Express Request 类型，添加 user 属性
 declare global {
   namespace Express {
@@ -46,9 +54,13 @@ export const authenticate = async (
       return
     }
 
-    // 身份来自已验证的 token，但权限必须以当前数据库状态为准。
+    // userId 来自已验证的 token；所有授权相关属性必须以当前数据库状态为准。
     req.user = {
-      ...decoded,
+      userId: decoded.userId,
+      username: user.username,
+      email: user.email,
+      role: user.role,
+      organizationId: normalizeOrganizationId(user.organizationId),
       permissions: user.permissions || [],
     }
 

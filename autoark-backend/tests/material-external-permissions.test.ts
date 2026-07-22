@@ -1,9 +1,11 @@
+const mockCreateUser = jest.fn()
 const mockUpdateUser = jest.fn()
 const mockWriteAuditLog = jest.fn()
 
 jest.mock('../src/services/user.service', () => ({
   __esModule: true,
   default: {
+    createUser: mockCreateUser,
     updateUser: mockUpdateUser,
   },
 }))
@@ -19,7 +21,17 @@ import { canManageExternalMaterials, canReadExternalMaterials } from '../src/uti
 import { generateToken, verifyToken } from '../src/utils/jwt'
 import { sanitizeUserCreateInput, sanitizeUserUpdateInput } from '../src/utils/userInput'
 
+const realUserService = jest.requireActual('../src/services/user.service').default
+
 describe('external material permission boundaries', () => {
+  beforeEach(() => {
+    jest.clearAllMocks()
+  })
+
+  afterEach(() => {
+    jest.restoreAllMocks()
+  })
+
   const superAdmin = {
     role: UserRole.SUPER_ADMIN,
     permissions: [],
@@ -88,21 +100,36 @@ describe('external material permission boundaries', () => {
     }
   })
 
-  it('refreshes permissions from the database instead of trusting stale JWT claims', async () => {
+  it('refreshes role, populated organization scope, and permissions before authorization', async () => {
+    const userId = '665000000000000000000001'
+    const oldOrgId = '665000000000000000000099'
+    const newOrgId = '665000000000000000000088'
     const token = generateToken({
-      _id: { toString: () => '665000000000000000000001' },
+      _id: { toString: () => userId },
       username: 'stale-admin',
       email: 'stale@example.com',
-      role: UserRole.ORG_ADMIN,
-      organizationId: { toString: () => '665000000000000000000099' },
+      role: UserRole.SUPER_ADMIN,
+      organizationId: { toString: () => oldOrgId },
       permissions: [UserPermission.MATERIALS_EXTERNAL_MANAGE],
     } as any)
     expect(verifyToken(token).permissions).toEqual([UserPermission.MATERIALS_EXTERNAL_MANAGE])
 
-    const findById = jest.spyOn(User, 'findById').mockResolvedValue({
+    const targetUser = {
+      _id: { toString: () => userId },
+      username: 'current-member',
+      email: 'current@example.com',
+      role: UserRole.MEMBER,
       status: UserStatus.ACTIVE,
-      permissions: [UserPermission.MATERIALS_EXTERNAL_READ],
-    } as any)
+      organizationId: { toString: () => newOrgId },
+      permissions: [],
+      save: jest.fn().mockResolvedValue(undefined),
+    }
+    const findById = jest.spyOn(User, 'findById')
+      .mockResolvedValueOnce({
+        ...targetUser,
+        organizationId: { _id: { toString: () => newOrgId } },
+      } as any)
+      .mockResolvedValueOnce(targetUser as any)
     const req: any = { headers: { authorization: `Bearer ${token}` } }
     const res: any = {
       status: jest.fn().mockReturnThis(),
@@ -112,12 +139,104 @@ describe('external material permission boundaries', () => {
 
     await authenticate(req, res, next)
 
-    expect(findById).toHaveBeenCalledWith('665000000000000000000001')
-    expect(req.user.permissions).toEqual([UserPermission.MATERIALS_EXTERNAL_READ])
+    expect(findById).toHaveBeenCalledWith(userId)
+    expect(req.user).toEqual(expect.objectContaining({
+      userId,
+      username: 'current-member',
+      email: 'current@example.com',
+      role: UserRole.MEMBER,
+      organizationId: newOrgId,
+      permissions: [],
+    }))
+    expect(canReadExternalMaterials(req.user)).toBe(false)
     expect(canManageExternalMaterials(req.user)).toBe(false)
     expect(next).toHaveBeenCalledTimes(1)
 
-    findById.mockRestore()
+    await realUserService.updateUser(
+      userId,
+      { permissions: [UserPermission.MATERIALS_EXTERNAL_READ] },
+      req.user,
+    )
+    expect(targetUser.permissions).toEqual([])
+    expect(targetUser.save).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    ['unpopulated', { toString: () => '665000000000000000000077' }, '665000000000000000000077'],
+    ['detached', undefined, undefined],
+  ])('refreshes %s organization scope from the database', async (_case, organizationId, expected) => {
+    const token = generateToken({
+      _id: { toString: () => '665000000000000000000003' },
+      username: 'stale-member',
+      email: 'stale-member@example.com',
+      role: UserRole.MEMBER,
+      organizationId: { toString: () => '665000000000000000000099' },
+      permissions: [],
+    } as any)
+    jest.spyOn(User, 'findById').mockResolvedValue({
+      username: 'current-member',
+      email: 'current-member@example.com',
+      role: UserRole.MEMBER,
+      status: UserStatus.ACTIVE,
+      organizationId,
+      permissions: [],
+    } as any)
+    const req: any = { headers: { authorization: `Bearer ${token}` } }
+    const res: any = {
+      status: jest.fn().mockReturnThis(),
+      json: jest.fn(),
+    }
+
+    await authenticate(req, res, jest.fn())
+
+    expect(req.user.organizationId).toBe(expected)
+  })
+
+  it('includes allowlisted permissions but no credentials in the user create audit snapshot', async () => {
+    mockCreateUser.mockResolvedValue({
+      _id: '665000000000000000000004',
+      username: 'manager',
+      email: 'manager@example.com',
+      password: 'must-not-be-logged',
+      role: UserRole.MEMBER,
+      status: UserStatus.ACTIVE,
+      permissions: [UserPermission.MATERIALS_EXTERNAL_MANAGE],
+    })
+    const req: any = {
+      user: {
+        userId: '665000000000000000000001',
+        role: UserRole.SUPER_ADMIN,
+      },
+      headers: { authorization: 'Bearer must-not-be-logged' },
+      body: {
+        username: 'manager',
+        email: 'manager@example.com',
+        password: 'must-not-be-logged',
+        permissions: [UserPermission.MATERIALS_EXTERNAL_MANAGE],
+      },
+    }
+    const res: any = {
+      status: jest.fn().mockReturnThis(),
+      json: jest.fn(),
+    }
+
+    await userController.createUser(req, res)
+
+    expect(mockCreateUser).toHaveBeenCalledWith(
+      expect.objectContaining({ permissions: [UserPermission.MATERIALS_EXTERNAL_MANAGE] }),
+      req.user,
+    )
+    const auditDetails = mockWriteAuditLog.mock.calls[0][1]
+    expect(auditDetails.after).toEqual({
+      username: 'manager',
+      email: 'manager@example.com',
+      role: UserRole.MEMBER,
+      status: UserStatus.ACTIVE,
+      permissions: [UserPermission.MATERIALS_EXTERNAL_MANAGE],
+    })
+    expect(auditDetails).not.toHaveProperty('password')
+    expect(auditDetails).not.toHaveProperty('authorization')
+    expect(JSON.stringify(auditDetails)).not.toContain('must-not-be-logged')
   })
 
   it('includes permissions but never credentials in the user update audit snapshot', async () => {
