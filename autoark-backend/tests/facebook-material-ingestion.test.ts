@@ -40,6 +40,7 @@ import {
 
 const materialDocument = (id = 'material-1') => ({
   _id: { toString: () => id },
+  status: 'ready',
   storage: { key: 'key', url: 'https://r2.example/key' },
 })
 
@@ -178,6 +179,108 @@ describe('facebook material ingestion', () => {
     })
   })
 
+  it('uses one global content fingerprint for unowned Facebook accounts', async () => {
+    mockFetchVideoSource.mockResolvedValue({
+      success: true,
+      source: 'https://video.example/shared.mp4',
+      length: 8,
+    })
+
+    await ingestCreativeAssets({
+      creative: { creativeId: 'creative-account-a', videoId: 'video-account-a' },
+      accountId: 'account-a',
+      token: 'TOKEN-A',
+    })
+    await ingestCreativeAssets({
+      creative: { creativeId: 'creative-account-b', videoId: 'video-account-b' },
+      accountId: 'account-b',
+      token: 'TOKEN-B',
+    })
+
+    const firstQuery = mockMaterialFindOneAndUpdate.mock.calls[0][0]
+    const secondQuery = mockMaterialFindOneAndUpdate.mock.calls[1][0]
+    const firstUpload = mockUploadToR2.mock.calls[0][0]
+    const secondUpload = mockUploadToR2.mock.calls[1][0]
+
+    expect(firstQuery.fingerprintKey).toBe(secondQuery.fingerprintKey)
+    expect(firstUpload.folder).toBe(secondUpload.folder)
+  })
+
+  it('reuses an original native Facebook asset before downloading it again', async () => {
+    mockMaterialFindOne.mockResolvedValue({
+      ...materialDocument('material-shared-native'),
+      source: { platform: 'facebook', isOriginal: true },
+    })
+
+    const result = await ingestCreativeAssets({
+      creative: { creativeId: 'creative-shared', videoId: 'video-shared' },
+      accountId: 'account-b',
+      token: 'TOKEN-B',
+    })
+
+    expect(mockFetchVideoSource).not.toHaveBeenCalled()
+    expect(global.fetch).not.toHaveBeenCalled()
+    expect(mockUploadToR2).not.toHaveBeenCalled()
+    expect(mockMaterialFindOne).toHaveBeenCalledWith(expect.objectContaining({
+      status: { $in: ['uploaded', 'ready'] },
+      'source.platform': 'facebook',
+      'source.isOriginal': true,
+      $or: expect.arrayContaining([
+        { 'facebookMappings.videoId': 'video-shared' },
+        { 'facebook.videoId': 'video-shared' },
+      ]),
+    }))
+    const reuseUpdate = mockMaterialUpdateOne.mock.calls[0][1]
+    expect(reuseUpdate.$addToSet.facebookMappings).not.toHaveProperty('uploadedAt')
+    expect(result).toMatchObject({
+      success: true,
+      materialIds: ['material-shared-native'],
+      reused: 1,
+    })
+  })
+
+  it('rehydrates a deleted material instead of linking to its removed R2 object', async () => {
+    mockFetchVideoSource.mockResolvedValue({
+      success: true,
+      source: 'https://video.example/restored.mp4',
+      length: 8,
+    })
+    const deleted = {
+      ...materialDocument('material-deleted'),
+      status: 'deleted',
+      source: { platform: 'facebook', isOriginal: true },
+    }
+    mockMaterialFindOne
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(deleted)
+    mockMaterialFindOneAndUpdate.mockResolvedValueOnce({
+      ...materialDocument('material-deleted'),
+      status: 'ready',
+    })
+
+    const result = await ingestCreativeAssets({
+      creative: { creativeId: 'creative-restored', videoId: 'video-restored' },
+      accountId: 'account-restored',
+      token: 'TOKEN',
+    })
+
+    expect(mockUploadToR2).toHaveBeenCalled()
+    expect(mockMaterialFindOneAndUpdate).toHaveBeenCalledWith(
+      { _id: deleted._id, status: 'deleted' },
+      expect.objectContaining({
+        $set: expect.objectContaining({
+          status: 'ready',
+          storage: expect.objectContaining({ provider: 'r2' }),
+        }),
+      }),
+      { new: true },
+    )
+    expect(result).toMatchObject({
+      success: true,
+      materialIds: ['material-deleted'],
+    })
+  })
+
   it('resolves an image hash to the original image and labels preview fallback honestly', async () => {
     ;(global.fetch as jest.Mock).mockResolvedValue({
       ok: true,
@@ -309,6 +412,7 @@ describe('facebook material ingestion', () => {
     const duplicateKeyError: any = new Error('duplicate key')
     duplicateKeyError.code = 11000
     mockMaterialFindOne
+      .mockResolvedValueOnce(null)
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce(materialDocument('material-race-winner'))
     mockMaterialFindOneAndUpdate.mockRejectedValueOnce(duplicateKeyError)

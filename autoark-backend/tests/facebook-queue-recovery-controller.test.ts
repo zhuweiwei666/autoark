@@ -1,6 +1,7 @@
 const mockRecover = jest.fn()
 const mockRetryFailures = jest.fn()
 const mockOriginalImageBackfill = jest.fn()
+const mockMaterialDeduplication = jest.fn()
 const mockWriteAuditLog = jest.fn()
 
 jest.mock('../src/services/facebook.campaigns.v2.service', () => ({
@@ -12,6 +13,10 @@ jest.mock('../src/services/facebookMaterialBackfill.service', () => ({
   backfillFacebookOriginalImages: mockOriginalImageBackfill,
 }))
 
+jest.mock('../src/services/facebookMaterialDeduplication.service', () => ({
+  deduplicateFacebookMaterials: mockMaterialDeduplication,
+}))
+
 jest.mock('../src/services/auditLog.service', () => ({
   writeAuditLog: mockWriteAuditLog,
 }))
@@ -19,6 +24,7 @@ jest.mock('../src/services/auditLog.service', () => ({
 import { UserRole } from '../src/models/User'
 import {
   backfillOriginalImages,
+  deduplicateMaterials,
   recoverQueue,
   retryFailedQueueJobs,
 } from '../src/controllers/facebook.controller'
@@ -50,6 +56,16 @@ describe('facebook queue recovery controller', () => {
       eligible: 650,
       skippedNoToken: 21,
       queued: 0,
+    })
+    mockMaterialDeduplication.mockResolvedValue({
+      dryRun: true,
+      totalMaterials: 1634,
+      distinctFiles: 723,
+      duplicateGroups: 229,
+      duplicateDocuments: 911,
+      mergedGroups: 0,
+      archivedDocuments: 0,
+      deletedDocuments: 0,
     })
   })
 
@@ -137,6 +153,30 @@ describe('facebook queue recovery controller', () => {
     })
     expect(mockWriteAuditLog).toHaveBeenCalledWith(req, expect.objectContaining({
       action: 'facebook.material.original_image_backfill.preview',
+      status: 'success',
+    }))
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }))
+    expect(next).not.toHaveBeenCalled()
+  })
+
+  it('previews Facebook material deduplication and records an audit event', async () => {
+    const req: any = {
+      user: { role: UserRole.SUPER_ADMIN, userId: '665000000000000000000001' },
+      body: { maxGroups: 1000 },
+      get: jest.fn(),
+    }
+    const res: any = response()
+    const next = jest.fn()
+
+    await deduplicateMaterials(req, res, next)
+
+    expect(mockMaterialDeduplication).toHaveBeenCalledWith({
+      dryRun: true,
+      confirmation: undefined,
+      maxGroups: 1000,
+    })
+    expect(mockWriteAuditLog).toHaveBeenCalledWith(req, expect.objectContaining({
+      action: 'facebook.material.deduplicate.preview',
       status: 'success',
     }))
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }))
