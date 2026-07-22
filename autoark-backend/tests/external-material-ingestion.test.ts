@@ -1,3 +1,4 @@
+import { createHash } from 'crypto'
 const mockDownloadRemoteMedia = jest.fn()
 const mockUploadBufferToR2 = jest.fn()
 const mockDeleteR2Object = jest.fn()
@@ -38,6 +39,7 @@ import {
   ingestExternalMaterials,
 } from '../src/services/externalMaterialIngestion.service'
 import type { NormalizedGuangdadaAsset } from '../src/integration/guangdada/types'
+import { buildMaterialFingerprintKey } from '../src/utils/materialContentIdentity'
 
 const candidate = (
   providerAssetKey: string,
@@ -133,13 +135,98 @@ describe('external material ingestion', () => {
         $set: expect.objectContaining({
           heat: 99,
           estimatedValue: 250,
-          lastMediaUrl: 'https://cdn.example/refreshed.mp4?signature=rotated',
+          lastMediaUrl: 'https://cdn.example/refreshed.mp4',
           lastSeenAt: expect.any(Date),
         }),
       }),
       expect.objectContaining({ new: true, upsert: true }),
     )
   })
+
+  it('downloads with the original signed URL but persists redacted origin URLs and errors', async () => {
+    const secretSentinel = 'SECRET_SENTINEL_QUERY_AND_FRAGMENT'
+    const signedMediaUrl =
+      `https://cdn.example/assets/video.mp4?signature=${secretSentinel}` +
+      `&X-Amz-Credential=${secretSentinel}#${secretSentinel}`
+    const signedSourcePageUrl =
+      `https://provider.example/detail/record?token=${secretSentinel}` +
+      `#${secretSentinel}`
+    mockOriginFindOneAndUpdate.mockRejectedValue(
+      new Error(`database failure ${secretSentinel}`),
+    )
+
+    const result = await ingestExternalMaterial(
+      candidate('asset-redacted-observation', {
+        mediaUrl: signedMediaUrl,
+        sourcePageUrl: signedSourcePageUrl,
+      }),
+    )
+
+    expect(mockDownloadRemoteMedia).toHaveBeenCalledWith(signedMediaUrl)
+    expect(mockOriginFindOneAndUpdate).toHaveBeenCalledTimes(3)
+    expect(mockOriginFindOneAndUpdate).toHaveBeenLastCalledWith(
+      expect.any(Object),
+      expect.objectContaining({
+        $set: expect.objectContaining({
+          lastMediaUrl: 'https://cdn.example/assets/video.mp4',
+          sourcePageUrl: 'https://provider.example/detail/record',
+        }),
+      }),
+      expect.any(Object),
+    )
+    expect(JSON.stringify(mockOriginFindOneAndUpdate.mock.calls)).not.toContain(
+      secretSentinel,
+    )
+    expect(JSON.stringify(result)).not.toContain(secretSentinel)
+    expect(result).toEqual({
+      kind: 'failed',
+      retryable: true,
+      category: 'origin_mapping_failed',
+    })
+  })
+
+  it.each([
+    'https://SECRET_SENTINEL_USER:SECRET_SENTINEL_PASSWORD@cdn.example/video.mp4',
+    'http://cdn.example/SECRET_SENTINEL_HTTP.mp4',
+    'SECRET_SENTINEL_MALFORMED',
+  ])(
+    'rejects an unsafe lastMediaUrl candidate without persisting it: %s',
+    async (mediaUrl) => {
+      const result = await ingestExternalMaterial(
+        candidate('asset-invalid-media-origin', { mediaUrl }),
+      )
+
+      expect(result).toEqual({ kind: 'invalid', reason: 'invalid_candidate' })
+      expect(mockDownloadRemoteMedia).not.toHaveBeenCalled()
+      expect(mockOriginFindOneAndUpdate).not.toHaveBeenCalled()
+      expect(JSON.stringify(result)).not.toContain('SECRET_SENTINEL')
+    },
+  )
+
+  it.each([
+    'https://SECRET_SENTINEL_USER:SECRET_SENTINEL_PASSWORD@provider.example/detail',
+    'http://provider.example/SECRET_SENTINEL_HTTP',
+    'SECRET_SENTINEL_MALFORMED',
+  ])(
+    'omits an unsafe sourcePageUrl from persisted metadata: %s',
+    async (sourcePageUrl) => {
+      const result = await ingestExternalMaterial(
+        candidate('asset-invalid-source-origin', { sourcePageUrl }),
+      )
+
+      expect(result).toEqual({
+        kind: 'created',
+        materialId: 'material-created',
+      })
+      expect(mockOriginFindOneAndUpdate).toHaveBeenCalledTimes(1)
+      const persistedArguments = JSON.stringify(
+        mockOriginFindOneAndUpdate.mock.calls,
+      )
+      expect(persistedArguments).not.toContain('sourcePageUrl')
+      expect(persistedArguments).not.toContain('SECRET_SENTINEL')
+      expect(JSON.stringify(result)).not.toContain('SECRET_SENTINEL')
+    },
+  )
 
   it('remaps a deleted origin directly to an active global canonical with the same SHA', async () => {
     const deleted = material('material-deleted', { status: 'deleted' })
@@ -259,6 +346,70 @@ describe('external material ingestion', () => {
     expect(mockDownloadRemoteMedia).toHaveBeenCalledTimes(2)
     expect(mockUploadBufferToR2).toHaveBeenCalledTimes(1)
     expect(mockMaterialCreate).toHaveBeenCalledTimes(1)
+  })
+
+  it('creates the exact global canonical identity from downloaded bytes and the external R2 prefix', async () => {
+    const bytes = Buffer.from('fixed-canonical-byte-payload-v1')
+    const expectedSha256 = createHash('sha256').update(bytes).digest('hex')
+    const expectedMd5 = createHash('md5').update(bytes).digest('hex')
+    const expectedFingerprintKey = buildMaterialFingerprintKey(
+      undefined,
+      expectedSha256,
+    )
+    const expectedStorageKey =
+      'global/external/guangdada/fixed-canonical-object.mp4'
+    mockDownloadRemoteMedia.mockResolvedValue({
+      buffer: bytes,
+      mimeType: 'video/mp4',
+      filename: 'fixed-canonical.mp4',
+      host: 'cdn.example',
+    })
+    mockUploadBufferToR2.mockResolvedValue({
+      success: true,
+      key: expectedStorageKey,
+      url: `https://r2.example/${expectedStorageKey}`,
+    })
+
+    const result = await ingestExternalMaterial(
+      candidate('asset-exact-canonical'),
+    )
+
+    expect(result).toEqual({ kind: 'created', materialId: 'material-created' })
+    expect(mockUploadBufferToR2).toHaveBeenCalledWith(
+      expect.objectContaining({
+        buffer: bytes,
+        folder: 'global/external/guangdada',
+      }),
+    )
+    expect(mockMaterialFindOne).toHaveBeenCalledWith(
+      expect.objectContaining({
+        organizationId: { $in: [null] },
+        status: { $in: ['uploaded', 'ready'] },
+        'fingerprint.sha256': expectedSha256,
+      }),
+    )
+    expect(mockMaterialCreate).toHaveBeenCalledTimes(1)
+    const createdPayload = mockMaterialCreate.mock.calls[0][0]
+    expect(createdPayload).toMatchObject({
+      status: 'ready',
+      fingerprint: {
+        sha256: expectedSha256,
+        md5: expectedMd5,
+      },
+      fingerprintKey: expectedFingerprintKey,
+      storage: {
+        key: expectedStorageKey,
+      },
+    })
+    expect(createdPayload.fingerprint.md5).not.toBe(expectedSha256)
+    expect(createdPayload.fingerprintKey).toBe(
+      buildMaterialFingerprintKey(undefined, expectedSha256),
+    )
+    expect(
+      createdPayload.storage.key.startsWith('global/external/guangdada/'),
+    ).toBe(true)
+    expect(createdPayload).not.toHaveProperty('organizationId')
+    expect(createdPayload).not.toHaveProperty('folder')
   })
 
   it('reuses an existing global Facebook material when downloaded bytes match', async () => {

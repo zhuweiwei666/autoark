@@ -128,6 +128,13 @@ const safeHttpsUrl = (value: unknown): string | undefined => {
   }
 }
 
+const persistedHttpsUrl = (value: unknown): string | undefined => {
+  const raw = safeHttpsUrl(value)
+  if (!raw) return undefined
+  const parsed = new URL(raw)
+  return `${parsed.origin}${parsed.pathname}`
+}
+
 const optionalMetric = (value: unknown): number | undefined =>
   typeof value === 'number' && Number.isFinite(value) && value >= 0
     ? value
@@ -154,7 +161,7 @@ const validateCandidate = (
   )
   const heat = optionalMetric(input.heat)
   const estimatedValue = optionalMetric(input.estimatedValue)
-  const sourcePageUrl = safeHttpsUrl(input.sourcePageUrl)
+  const sourcePageUrl = persistedHttpsUrl(input.sourcePageUrl)
   if (
     !providerAssetKey ||
     !packageKey ||
@@ -215,7 +222,7 @@ const observationUpdate = (
     mediaRole: candidate.mediaRole,
     mediaIndex: candidate.mediaIndex,
     lastSeenAt: observedAt,
-    lastMediaUrl: candidate.mediaUrl,
+    lastMediaUrl: persistedHttpsUrl(candidate.mediaUrl),
   }
   if (candidate.packageName !== undefined)
     fields.packageName = candidate.packageName
