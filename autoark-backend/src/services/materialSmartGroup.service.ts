@@ -75,133 +75,95 @@ const distinctNonemptyAccountIdsExpression = (input: any, item: string, value: a
   ],
 })
 
-const mappingAccountIdsExpression = (): any => distinctNonemptyAccountIdsExpression(
-  '$facebookMappings',
-  'mapping',
-  '$$mapping.accountId',
-)
-
-const usageAccountIdsExpression = (): any => distinctNonemptyAccountIdsExpression(
-  '$usage.accounts',
-  'usageAccountId',
-  '$$usageAccountId',
-)
-
-const sourceAccountIdsExpression = (): any => ({
-  $let: {
-    vars: { accountId: asCanonicalAccountIdExpression('$source.externalAccountId') },
-    in: {
-      $cond: [
-        { $ne: ['$$accountId', ''] },
-        ['$$accountId'],
-        [],
-      ],
-    },
-  },
-})
-
-type FacebookAccountIdSource = 'mappingAccountIds' | 'sourceAccountIds' | 'usageAccountIds'
-
-const FACEBOOK_ACCOUNT_ID_SOURCE_PRECEDENCE: FacebookAccountIdSource[] = [
-  'mappingAccountIds',
-  'sourceAccountIds',
-  'usageAccountIds',
-]
-
-const facebookAccountIdSources: Record<FacebookAccountIdSource, {
-  fromMaterial: (material: any) => any[]
-  expression: () => any
-}> = {
-  mappingAccountIds: {
-    fromMaterial: material => (
-      Array.isArray(material?.facebookMappings)
-        ? material.facebookMappings.map((mapping: any) => mapping?.accountId)
-        : []
-    ),
-    expression: mappingAccountIdsExpression,
-  },
-  sourceAccountIds: {
-    fromMaterial: material => [material?.source?.externalAccountId],
-    expression: sourceAccountIdsExpression,
-  },
-  usageAccountIds: {
-    fromMaterial: material => (
-      Array.isArray(material?.usage?.accounts) ? material.usage.accounts : []
-    ),
-    expression: usageAccountIdsExpression,
-  },
+type FacebookAccountIdSource = {
+  path: string
+  cardinality: 'scalar' | 'array'
+  leafPath?: string
 }
+
+const FACEBOOK_ACCOUNT_ID_SOURCES: readonly FacebookAccountIdSource[] = [
+  { path: 'facebookMappings', cardinality: 'array', leafPath: 'accountId' },
+  { path: 'source.externalAccountId', cardinality: 'scalar' },
+  { path: 'usage.accounts', cardinality: 'array' },
+]
+const FACEBOOK_PLATFORM_PATH = 'source.platform'
+
+const valueAtMaterialPath = (value: any, path: string): any => path
+  .split('.')
+  .reduce((current, segment) => current?.[segment], value)
 
 const distinctMaterialAccountIds = (values: any[]): string[] => [
   ...new Set(values.map(value => normalizeForStorage(value)).filter(Boolean)),
 ]
 
-const facebookRelationSignals = [
-  {
-    fromMaterial: (material: any) => (
-      Array.isArray(material?.facebookMappings) && material.facebookMappings.length > 0
-    ),
-    expression: () => ({
-      $gt: [{ $size: { $ifNull: ['$facebookMappings', []] } }, 0],
-    }),
-  },
-  {
-    fromMaterial: (material: any) => (
-      String(material?.source?.platform || '').trim().toLowerCase() === 'facebook'
-    ),
-    expression: () => ({
-      $eq: [
-        { $toLower: asTrimmedStringExpression('$source.platform') },
-        'facebook',
-      ],
-    }),
-  },
-  {
-    fromMaterial: (material: any) => (
-      distinctMaterialAccountIds(facebookAccountIdSources.sourceAccountIds.fromMaterial(material)).length > 0
-    ),
-    expression: () => ({
-      $gt: [{ $size: sourceAccountIdsExpression() }, 0],
-    }),
-  },
-  {
-    fromMaterial: (material: any) => (
-      distinctMaterialAccountIds(facebookAccountIdSources.usageAccountIds.fromMaterial(material)).length > 0
-    ),
-    expression: () => ({
-      $gt: [{ $size: usageAccountIdsExpression() }, 0],
-    }),
-  },
-]
+const accountIdValuesFromMaterial = (material: any, source: FacebookAccountIdSource): any[] => {
+  const value = valueAtMaterialPath(material, source.path)
+  if (source.cardinality === 'scalar') return [value]
+  if (!Array.isArray(value)) return []
+  return source.leafPath
+    ? value.map(item => valueAtMaterialPath(item, source.leafPath!))
+    : value
+}
 
-export const resolveFacebookMaterialMembership = (material: any): FacebookMaterialMembership => {
-  let accountIds: string[] = []
-  for (const sourceName of FACEBOOK_ACCOUNT_ID_SOURCE_PRECEDENCE) {
-    accountIds = distinctMaterialAccountIds(
-      facebookAccountIdSources[sourceName].fromMaterial(material),
-    )
-    if (accountIds.length > 0) break
+const accountIdSourceExpression = (source: FacebookAccountIdSource, index: number): any => {
+  const fieldReference = `$${source.path}`
+  if (source.cardinality === 'scalar') {
+    return {
+      $let: {
+        vars: { accountId: asCanonicalAccountIdExpression(fieldReference) },
+        in: {
+          $cond: [
+            { $ne: ['$$accountId', ''] },
+            ['$$accountId'],
+            [],
+          ],
+        },
+      },
+    }
   }
 
+  const item = `source${index}Item`
+  const valueReference = source.leafPath ? `$$${item}.${source.leafPath}` : `$$${item}`
+  return distinctNonemptyAccountIdsExpression(fieldReference, item, valueReference)
+}
+
+const accountIdsBySourceFromMaterial = (material: any): string[][] => (
+  FACEBOOK_ACCOUNT_ID_SOURCES.map(source => distinctMaterialAccountIds(
+    accountIdValuesFromMaterial(material, source),
+  ))
+)
+
+export const resolveFacebookMaterialMembership = (material: any): FacebookMaterialMembership => {
+  const accountIdsBySource = accountIdsBySourceFromMaterial(material)
+  const accountIds = accountIdsBySource.find(values => values.length > 0) || []
+  const mappingRows = valueAtMaterialPath(material, FACEBOOK_ACCOUNT_ID_SOURCES[0].path)
+  const sourcePlatform = valueAtMaterialPath(material, FACEBOOK_PLATFORM_PATH)
+
   return {
-    facebookRelated: facebookRelationSignals.some(signal => signal.fromMaterial(material)),
+    facebookRelated: (
+      (Array.isArray(mappingRows) && mappingRows.length > 0) ||
+      String(sourcePlatform || '').trim().toLowerCase() === 'facebook' ||
+      accountIdsBySource.slice(1).some(values => values.length > 0)
+    ),
     accountIds,
   }
 }
 
 export const buildFacebookAccountIdsExpression = (): any => {
-  const variables = Object.fromEntries(FACEBOOK_ACCOUNT_ID_SOURCE_PRECEDENCE.map(sourceName => (
-    [sourceName, facebookAccountIdSources[sourceName].expression()]
+  const sourceVariable = (index: number) => `source${index}AccountIds`
+  const variables = Object.fromEntries(FACEBOOK_ACCOUNT_ID_SOURCES.map((source, index) => (
+    [sourceVariable(index), accountIdSourceExpression(source, index)]
   )))
-  const inExpression = FACEBOOK_ACCOUNT_ID_SOURCE_PRECEDENCE
+  const inExpression = FACEBOOK_ACCOUNT_ID_SOURCES
+    .map((_source, index) => sourceVariable(index))
     .slice(0, -1)
-    .reduceRight<any>((fallback, sourceName) => ({
+    .reduceRight<any>((fallback, variable) => ({
       $cond: [
-        { $gt: [{ $size: `$$${sourceName}` }, 0] },
-        `$$${sourceName}`,
+        { $gt: [{ $size: `$$${variable}` }, 0] },
+        `$$${variable}`,
         fallback,
       ],
-    }), `$$${FACEBOOK_ACCOUNT_ID_SOURCE_PRECEDENCE[FACEBOOK_ACCOUNT_ID_SOURCE_PRECEDENCE.length - 1]}`)
+    }), `$$${sourceVariable(FACEBOOK_ACCOUNT_ID_SOURCES.length - 1)}`)
 
   return {
     $let: {
@@ -212,7 +174,22 @@ export const buildFacebookAccountIdsExpression = (): any => {
 }
 
 export const buildFacebookRelatedExpression = (): any => ({
-  $or: facebookRelationSignals.map(signal => signal.expression()),
+  $or: [
+    {
+      $gt: [{
+        $size: { $ifNull: [`$${FACEBOOK_ACCOUNT_ID_SOURCES[0].path}`, []] },
+      }, 0],
+    },
+    {
+      $eq: [
+        { $toLower: asTrimmedStringExpression(`$${FACEBOOK_PLATFORM_PATH}`) },
+        'facebook',
+      ],
+    },
+    ...FACEBOOK_ACCOUNT_ID_SOURCES.slice(1).map((source, index) => ({
+      $gt: [{ $size: accountIdSourceExpression(source, index + 1) }, 0],
+    })),
+  ],
 })
 
 export const buildFacebookSmartGroupFilter = (key: string): any => {
@@ -251,7 +228,12 @@ export const buildFacebookSmartGroupFilter = (key: string): any => {
   }
 }
 
-const buildFacebookSmartGroupPipeline = (materialFilter: any): any[] => [
+export const buildFacebookMembershipProjection = (): any => ({
+  facebookRelated: buildFacebookRelatedExpression(),
+  accountIds: buildFacebookAccountIdsExpression(),
+})
+
+export const buildFacebookSmartGroupPipeline = (materialFilter: any): any[] => [
   {
     $match: combineFilters(
       { status: { $in: ACTIVE_MATERIAL_STATUSES } },
@@ -259,10 +241,7 @@ const buildFacebookSmartGroupPipeline = (materialFilter: any): any[] => [
     ),
   },
   {
-    $project: {
-      facebookRelated: buildFacebookRelatedExpression(),
-      accountIds: buildFacebookAccountIdsExpression(),
-    },
+    $project: buildFacebookMembershipProjection(),
   },
   {
     $facet: {

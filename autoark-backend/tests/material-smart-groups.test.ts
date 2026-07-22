@@ -104,6 +104,130 @@ const loadSmartGroupService = (): any => {
   }
 }
 
+const valueAtPath = (value: any, pathText: string): any => {
+  if (!pathText) return value
+  return pathText.split('.').reduce((current, segment) => current?.[segment], value)
+}
+
+const evaluateMongoExpression = (
+  expression: any,
+  document: any,
+  variables: Record<string, any> = {},
+): any => {
+  if (Array.isArray(expression)) {
+    return expression.map(value => evaluateMongoExpression(value, document, variables))
+  }
+  if (expression === null || typeof expression !== 'object') {
+    if (typeof expression !== 'string' || !expression.startsWith('$')) return expression
+    const reference = expression.slice(expression.startsWith('$$') ? 2 : 1)
+    const [root, ...path] = reference.split('.')
+    const source = expression.startsWith('$$') ? variables[root] : document[root]
+    return valueAtPath(source, path.join('.'))
+  }
+
+  if ('$let' in expression) {
+    const scoped = { ...variables }
+    Object.entries(expression.$let.vars).forEach(([name, value]) => {
+      scoped[name] = evaluateMongoExpression(value, document, variables)
+    })
+    return evaluateMongoExpression(expression.$let.in, document, scoped)
+  }
+  if ('$trim' in expression) {
+    return String(evaluateMongoExpression(expression.$trim.input, document, variables) ?? '').trim()
+  }
+  if ('$convert' in expression) {
+    const value = evaluateMongoExpression(expression.$convert.input, document, variables)
+    if (value === null || value === undefined) {
+      return evaluateMongoExpression(expression.$convert.onNull, document, variables)
+    }
+    if (expression.$convert.to !== 'string') throw new Error('Unsupported $convert target')
+    return String(value)
+  }
+  if ('$cond' in expression) {
+    const [condition, whenTrue, whenFalse] = expression.$cond
+    return evaluateMongoExpression(condition, document, variables)
+      ? evaluateMongoExpression(whenTrue, document, variables)
+      : evaluateMongoExpression(whenFalse, document, variables)
+  }
+  if ('$eq' in expression || '$ne' in expression || '$gt' in expression) {
+    const operator = '$eq' in expression ? '$eq' : '$ne' in expression ? '$ne' : '$gt'
+    const [left, right] = expression[operator].map((value: any) => (
+      evaluateMongoExpression(value, document, variables)
+    ))
+    if (operator === '$eq') return left === right
+    if (operator === '$ne') return left !== right
+    return left > right
+  }
+  if ('$toLower' in expression) {
+    return String(evaluateMongoExpression(expression.$toLower, document, variables)).toLowerCase()
+  }
+  if ('$substrCP' in expression) {
+    const [input, start, length] = expression.$substrCP.map((value: any) => (
+      evaluateMongoExpression(value, document, variables)
+    ))
+    return Array.from(String(input)).slice(start, start + length).join('')
+  }
+  if ('$subtract' in expression) {
+    const [left, right] = expression.$subtract.map((value: any) => (
+      evaluateMongoExpression(value, document, variables)
+    ))
+    return left - right
+  }
+  if ('$strLenCP' in expression) {
+    return Array.from(String(evaluateMongoExpression(expression.$strLenCP, document, variables))).length
+  }
+  if ('$setUnion' in expression) {
+    const values = expression.$setUnion.flatMap((value: any) => (
+      evaluateMongoExpression(value, document, variables)
+    ))
+    return [...new Map(values.map((value: any) => [JSON.stringify(value), value])).values()]
+  }
+  if ('$filter' in expression) {
+    const input = evaluateMongoExpression(expression.$filter.input, document, variables)
+    return input.filter((value: any) => evaluateMongoExpression(
+      expression.$filter.cond,
+      document,
+      { ...variables, [expression.$filter.as]: value },
+    ))
+  }
+  if ('$map' in expression) {
+    const input = evaluateMongoExpression(expression.$map.input, document, variables)
+    return input.map((value: any) => evaluateMongoExpression(
+      expression.$map.in,
+      document,
+      { ...variables, [expression.$map.as]: value },
+    ))
+  }
+  if ('$ifNull' in expression) {
+    const [value, fallback] = expression.$ifNull
+    const evaluated = evaluateMongoExpression(value, document, variables)
+    return evaluated === null || evaluated === undefined
+      ? evaluateMongoExpression(fallback, document, variables)
+      : evaluated
+  }
+  if ('$size' in expression) {
+    return evaluateMongoExpression(expression.$size, document, variables).length
+  }
+  if ('$or' in expression) {
+    return expression.$or.some((value: any) => evaluateMongoExpression(value, document, variables))
+  }
+
+  return Object.fromEntries(Object.entries(expression).map(([key, value]) => (
+    [key, evaluateMongoExpression(value, document, variables)]
+  )))
+}
+
+const matchesMongoFilter = (document: any, filter: any): boolean => {
+  if (filter.$and) return filter.$and.every((part: any) => matchesMongoFilter(document, part))
+  return Object.entries(filter).every(([pathText, expected]: [string, any]) => {
+    const actual = valueAtPath(document, pathText)
+    if (expected && typeof expected === 'object' && '$in' in expected) {
+      return expected.$in.includes(actual)
+    }
+    return actual === expected
+  })
+}
+
 describe('Facebook material smart groups', () => {
   beforeEach(() => {
     jest.clearAllMocks()
@@ -116,6 +240,7 @@ describe('Facebook material smart groups', () => {
     expect(service).toBeDefined()
 
     expect(service.resolveFacebookMaterialMembership).toEqual(expect.any(Function))
+    expect(service.buildFacebookSmartGroupPipeline).toEqual(expect.any(Function))
     const fixtures = [
       {
         _id: 'mapping-a-b',
@@ -173,12 +298,18 @@ describe('Facebook material smart groups', () => {
       },
     ]
 
-    const visible = fixtures.filter(material => (
-      material.organizationId === ORG_ID && ['uploaded', 'ready'].includes(material.status)
-    ))
+    const expectedPipeline = service.buildFacebookSmartGroupPipeline({ organizationId: ORG_ID })
+    expect(expectedPipeline[0].$match).toEqual({
+      $and: [
+        { status: { $in: ['uploaded', 'ready'] } },
+        { organizationId: ORG_ID },
+      ],
+    })
+    const projection = expectedPipeline[1].$project
+    const visible = fixtures.filter(material => matchesMongoFilter(material, expectedPipeline[0].$match))
     const resolved = visible.map(material => ({
       id: material._id,
-      ...service.resolveFacebookMaterialMembership(material),
+      ...evaluateMongoExpression(projection, material),
     }))
     expect(resolved).toEqual([
       { id: 'mapping-a-b', facebookRelated: true, accountIds: ['1111', '2222'] },
@@ -187,6 +318,12 @@ describe('Facebook material smart groups', () => {
       { id: 'facebook-unassigned', facebookRelated: true, accountIds: [] },
       { id: 'manual-unrelated', facebookRelated: false, accountIds: [] },
     ])
+    visible.forEach((material, index) => {
+      expect(service.resolveFacebookMaterialMembership(material)).toEqual({
+        facebookRelated: resolved[index].facebookRelated,
+        accountIds: resolved[index].accountIds,
+      })
+    })
 
     const related = resolved.filter(material => material.facebookRelated)
     const countByAccount = new Map<string, number>()
@@ -232,12 +369,7 @@ describe('Facebook material smart groups', () => {
     ]))
 
     const pipeline = mockMaterialAggregate.mock.calls[0][0]
-    expect(pipeline[0].$match).toEqual({
-      $and: [
-        { status: { $in: ['uploaded', 'ready'] } },
-        { organizationId: ORG_ID },
-      ],
-    })
+    expect(pipeline).toEqual(expectedPipeline)
     const unwindStages = JSON.stringify(pipeline).match(/\"\$unwind\"/g) || []
     expect(unwindStages).toHaveLength(1)
     expect(pipeline[1].$project.accountIds).toEqual(service.buildFacebookAccountIdsExpression())
@@ -252,13 +384,13 @@ describe('Facebook material smart groups', () => {
     const accountIdsExpression = service.buildFacebookAccountIdsExpression()
     expect(accountIdsExpression.$let.in).toEqual({
       $cond: [
-        { $gt: [{ $size: '$$mappingAccountIds' }, 0] },
-        '$$mappingAccountIds',
+        { $gt: [{ $size: '$$source0AccountIds' }, 0] },
+        '$$source0AccountIds',
         {
           $cond: [
-            { $gt: [{ $size: '$$sourceAccountIds' }, 0] },
-            '$$sourceAccountIds',
-            '$$usageAccountIds',
+            { $gt: [{ $size: '$$source1AccountIds' }, 0] },
+            '$$source1AccountIds',
+            '$$source2AccountIds',
           ],
         },
       ],
