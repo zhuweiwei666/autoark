@@ -1,5 +1,10 @@
+import dns from 'dns'
 import { EventEmitter } from 'events'
+import https from 'https'
+import type { ClientRequest, IncomingMessage } from 'http'
+import type { AddressInfo } from 'net'
 import { PassThrough } from 'stream'
+import type { TLSSocket } from 'tls'
 import {
   createSafeMediaFilename,
   downloadRemoteMedia,
@@ -7,6 +12,79 @@ import {
   RemoteMediaDownloadError,
   type RemoteMediaDownloadDependencies,
 } from '../src/services/remoteMediaDownload.service'
+
+// TEST-ONLY certificate authority and server identity. These credentials protect no real system.
+const TEST_ONLY_CA = `-----BEGIN CERTIFICATE-----
+MIIDQTCCAimgAwIBAgIUHb+rkbv2tL14f9s9TyY0QGEglr0wDQYJKoZIhvcNAQEL
+BQAwJzElMCMGA1UEAwwcQXV0b0FyayBSZW1vdGUgTWVkaWEgVGVzdCBDQTAgFw0y
+NjA3MjIxMjA5MTdaGA8yMTI2MDYyODEyMDkxN1owJzElMCMGA1UEAwwcQXV0b0Fy
+ayBSZW1vdGUgTWVkaWEgVGVzdCBDQTCCASIwDQYJKoZIhvcNAQEBBQADggEPADCC
+AQoCggEBALVUSNGD/Y93tPa59ogDRVfl2ycCHN3u5co8zRa9HZWvPOi3eJHK4pdG
+7To++39vfMBvIEsHdZdJ17aWWSxuOCrFu8ud240qz6LWjx2d0uGpLN/Al932CUIW
+QN3Ei2PgFyMOJIYHu6y+uh+G5UJFA1V+fwdLGDP5l1OhBqTnx1IcDSMjXBE2aTUC
+b+BeG+de1j/DS3tr2wPpUMb5Nydx12AK00Ogjc0GM+mUHVlWwImkz+Nf2nq4qml5
+XJy9Z0x7r1Lw2/vqQyuT/FRgYCbZoPoEw7wuzyWScxuiAL9Fiob3ducdDmRFdW5B
+0P8mq1X7z0AuM+RnFoLBhAJCJICpjgUCAwEAAaNjMGEwHQYDVR0OBBYEFHjQEMUh
+XHJBX5Nmh3s+ne3NNHiaMB8GA1UdIwQYMBaAFHjQEMUhXHJBX5Nmh3s+ne3NNHia
+MA8GA1UdEwEB/wQFMAMBAf8wDgYDVR0PAQH/BAQDAgEGMA0GCSqGSIb3DQEBCwUA
+A4IBAQAcb6E4k+ASsgb5js/0GnI3gqbebVTZXI3iQ4DMf1+EmDOvjtu2lFLy6iR4
+MDq6iMPrEVHBG44YwCJSQdDBWGLDFHns97xLiQ/8iKTdPRNs1EXRowGLPOmbmfFd
+Yefns7UE3HvHIICOHgVm6OVhGxRO3IC4mEr9/gXNMeVXsi52RwT8yuoIXyZCV51f
+bnG4kNP4J4LCC7Fp8MJbSrgV6FR4wwJvykX6xneRJOiiHBhHB5sY40l6q7t5gOkr
+T04EoOXt/DlSydvLt0n+enokxny4yQ1YCuUwjI1eg+Gt9EGXudMo7fGCvZU7iX3a
+RDsgFIqNiOwelyb8hSrWPp4roLUx
+-----END CERTIFICATE-----`
+
+const TEST_ONLY_SERVER_KEY = `-----BEGIN PRIVATE KEY-----
+MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQC2sPSJGrF7jCj4
+iQsZt5/XOte0DO8reTuD1lWwyP5s2beknF7gGlas/Atcnq/fFGhQVYJB9rpYeh7t
+uY4Dh312SF0Iui1muIpQ7RD/YMQx2BDo0Tv55ZG2p6slQhWcmrAoKPQCEiMcrl3v
+cXyd9nFHxWzfvdrq7RSizfhYnJF/NU526JXjPrZ9YmZiuJNnZT6wmP6fli2Cd07a
+3kp4PrEPRgSz+G8X2DMFyWKw4WYdAdzhsgv/rDn/pCNagROSbifqkfB+7odyRBFJ
+Y++ZuNWRvxzBzU9pNnc9owIl6WiXRLg7cihUKVx2aMqyKPK9YDIGzMoyqaVcO81z
+xQ+PamatAgMBAAECggEAPZXMcVV+xAu9Gf80r0Av0WHEKi18CJcvIWPE8jnnTrFc
+D1EpSHmIg3rZp6jU16os+fvBU9RFACN2vqOhBH6NpCyDtDfyqyCFe/9WjghESxsv
+pBQ4mCaz5rOB5abv2yFoRbl8fCA6FuaOwvNqU2Oqz0t1xrzdCfnOzY0KbXCmOY+e
+ipn3pDmQF98NULNVXRdh+KqyalL1S874Yx8zsXOmKbF29mk2+UcXsq7FsJ4xYC/B
+c4xzVd2rDhSEI8h5tT40htDBvbz4+jJDK1ICBlIoazPJj23YfaKMVYupJI4aJSg2
+FNC4YzyC4o0a9wMbRJlIa3x9AwJczywebtpgNpEjvwKBgQD95fjLd+WGAru4St1I
+uciusnmgxildDqswLIb/7AS82+kz/yWG0Z/5KzsP7niS7hBxvkLMnd+qX5XAdHsx
+jPbqAUQ8u4aGFsiFXxsfkZohA+4o3AH2Mnep14/xel4wE7FKE9UpRWw+X2Vz7CQv
+WGLSdmQioPFPAJaXGSDzXZorMwKBgQC4NBcxEPTlBuUH71+avm2dSfYx20lNc3Da
+cjS0SIEVVN9fFcx9NdnwCA4f91xN96mknwYRYZcnjcCwSfcOfgBfZ7oq7MWMwrJe
+hoHI+hFb/cGaEtG3gi4wXKXiWJLO75p2ExgGmIjMRNGxBz6fdvG3Rg1NrBzFAI/A
+M3QwTMAmnwKBgHhTi9RJzxHyq6pMeJCl03DPjorePu4mLIUZJSWWYixrABsvWUaK
+hAkfLs9/Ec94WXy+UYQNcdmZkSvzSAsUplQCI6ewq7FSjNeAWidc5rGs3iqpEZjv
+E/z+9u3XM1oPix7zRTtY9lKc/USx7fguKC9cAlrS8WmiervDIfWUL6M3AoGAat+O
+NSGpdNgzOg9gYN/rqT6oYPTh6tX3vEZW3eLTQhUkJH75TgxYjjOePl2+aF4xRxoc
+4yjEEmbkTWQcu4PPo4sDMLR/SdQMuVtBIeI1ADKSiVox407cjaKzfEf3pajO7YLW
+hb0qYZnsL9IMO2k/hR5XyaD6cDKLNPClkQB22/ECgYBE9ulGpFBNGYMfgQ8F1KPV
+MVfSNFDvlaUVyWA1o/KcQSAWLzXmWXRS2OWVmGEN2lBL80+WWQmV37Naqtnm/EDO
+EWY4v3t1mHIuLyaCzpULmXN2WlGpfX/Uc5ouZ1met17U6ewPEZmXtcXvzI+kEoM7
+5mzpfCEHiNzvmR+9s6VXyQ==
+-----END PRIVATE KEY-----`
+
+const TEST_ONLY_SERVER_CERT = `-----BEGIN CERTIFICATE-----
+MIIDbTCCAlWgAwIBAgIUWIx5+SrS9+OfFM3UkzhEt9mNeRswDQYJKoZIhvcNAQEL
+BQAwJzElMCMGA1UEAwwcQXV0b0FyayBSZW1vdGUgTWVkaWEgVGVzdCBDQTAgFw0y
+NjA3MjIxMjA5MTdaGA8yMTI2MDYyODEyMDkxN1owHDEaMBgGA1UEAwwRbWVkaWEt
+b25lLmludmFsaWQwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQC2sPSJ
+GrF7jCj4iQsZt5/XOte0DO8reTuD1lWwyP5s2beknF7gGlas/Atcnq/fFGhQVYJB
+9rpYeh7tuY4Dh312SF0Iui1muIpQ7RD/YMQx2BDo0Tv55ZG2p6slQhWcmrAoKPQC
+EiMcrl3vcXyd9nFHxWzfvdrq7RSizfhYnJF/NU526JXjPrZ9YmZiuJNnZT6wmP6f
+li2Cd07a3kp4PrEPRgSz+G8X2DMFyWKw4WYdAdzhsgv/rDn/pCNagROSbifqkfB+
+7odyRBFJY++ZuNWRvxzBzU9pNnc9owIl6WiXRLg7cihUKVx2aMqyKPK9YDIGzMoy
+qaVcO81zxQ+PamatAgMBAAGjgZkwgZYwLwYDVR0RBCgwJoIRbWVkaWEtb25lLmlu
+dmFsaWSCEW1lZGlhLXR3by5pbnZhbGlkMA4GA1UdDwEB/wQEAwIFoDATBgNVHSUE
+DDAKBggrBgEFBQcDATAdBgNVHQ4EFgQU3izeqvkKV0ESxZFCoIk6ckl8B/4wHwYD
+VR0jBBgwFoAUeNAQxSFcckFfk2aHez6d7c00eJowDQYJKoZIhvcNAQELBQADggEB
+AHNdOoDpmiDZBm/fi3lvy9/PbcASmrTMndoF4/Hh4Y9brUuwRe8iiYuoEBnVx1/L
+JqzKsdWse5N8YfLk/nBcsxRLaIhBJ4/1TYTqi7ujuXfP/kaB96tu9qdu+tYIQCOL
+S0BVsPGSIyzrLUmnpfkfpXySIuHmKnW5o0Rri+O31RVygR+/XdAbWUXe9oHHrKuv
+AfuA8V915fFaCRWQ9bilzCPlzRsbBiKO6z15eno3wCCJhffUSjVYSHjKLnBCAZo4
+DqyyxYilESl1qd8gzbeyhIN89eqvppbFNFRoHqVJQdTWwWXjsoaQsGdbvLj95PDo
+hutJp47alfNpTF3CeoWTIVo=
+-----END CERTIFICATE-----`
 
 type ResponseStep = {
   statusCode?: number
@@ -18,11 +96,20 @@ type ResponseStep = {
 }
 
 const createRequestSequence = (steps: ResponseStep[]) => {
-  const requests: any[] = []
-  const responses: PassThrough[] = []
-  const request = jest.fn((options: any, onResponse: (response: any) => void) => {
+  type FakeRequest = EventEmitter & {
+    destroyed: boolean
+    destroy: jest.Mock
+    end: jest.Mock
+  }
+  type FakeResponse = PassThrough & IncomingMessage
+
+  const requests: FakeRequest[] = []
+  const responses: FakeResponse[] = []
+  const requestImplementation: NonNullable<
+    RemoteMediaDownloadDependencies['request']
+  > = (_options, onResponse) => {
     const step = steps[requests.length] || {}
-    const req = new EventEmitter() as any
+    const req = new EventEmitter() as FakeRequest
     req.destroyed = false
     req.destroy = jest.fn(() => {
       req.destroyed = true
@@ -40,7 +127,7 @@ const createRequestSequence = (steps: ResponseStep[]) => {
         }
         if (step.statusCode === undefined) return
 
-        const response = new PassThrough() as any
+        const response = new PassThrough() as FakeResponse
         response.statusCode = step.statusCode
         response.headers = step.headers || {}
         responses.push(response)
@@ -50,25 +137,146 @@ const createRequestSequence = (steps: ResponseStep[]) => {
       })
     })
     requests.push(req)
-    return req
-  })
+    return req as unknown as ClientRequest
+  }
+  const request = jest.fn(requestImplementation)
 
   return { request, requests, responses }
 }
 
-const publicResolver = jest.fn(async () => [{ address: '93.184.216.34', family: 4 as const }])
+const publicResolver = jest.fn(async () => [
+  { address: '93.184.216.34', family: 4 as const },
+])
 
-const expectCategory = async (promise: Promise<unknown>, category: string, host?: string) => {
+const expectCategory = async (
+  promise: Promise<unknown>,
+  category: string,
+  host?: string,
+) => {
   try {
     await promise
     throw new Error('expected download to reject')
   } catch (error) {
     expect(error).toBeInstanceOf(RemoteMediaDownloadError)
     expect((error as RemoteMediaDownloadError).category).toBe(category)
-    if (host !== undefined) expect((error as RemoteMediaDownloadError).host).toBe(host)
+    if (host !== undefined)
+      expect((error as RemoteMediaDownloadError).host).toBe(host)
     return error as RemoteMediaDownloadError
   }
 }
+
+describe('remote media real TLS pinning', () => {
+  const firstHostname = 'media-one.invalid'
+  const secondHostname = 'media-two.invalid'
+  const wrongHostname = 'media-wrong.invalid'
+  const received: Array<{
+    host: string | undefined
+    servername: string | false
+  }> = []
+  let server: https.Server
+  let port: number
+
+  beforeAll(async () => {
+    server = https.createServer(
+      { key: TEST_ONLY_SERVER_KEY, cert: TEST_ONLY_SERVER_CERT },
+      (request, response) => {
+        received.push({
+          host: request.headers.host,
+          servername: (request.socket as TLSSocket).servername,
+        })
+        if (
+          request.headers.host === `${firstHostname}:${port}` &&
+          request.url === '/start'
+        ) {
+          response.writeHead(302, {
+            location: `https://${secondHostname}:${port}/final.png`,
+          })
+          response.end()
+          return
+        }
+        response.writeHead(200, { 'content-type': 'image/png' })
+        response.end('real-tls-png')
+      },
+    )
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(0, '127.0.0.1', () => resolve())
+    })
+    port = (server.address() as AddressInfo).port
+  })
+
+  afterAll(async () => {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()))
+    })
+  })
+
+  beforeEach(() => {
+    received.length = 0
+  })
+
+  const createRealTlsDependencies = () => {
+    const resolve = jest.fn(async () => [
+      { address: '127.0.0.1', family: 4 as const },
+    ])
+    const dependencies = {
+      resolve,
+      isPublicAddress: () => true,
+      request: ((
+        options: https.RequestOptions,
+        onResponse: (response: IncomingMessage) => void,
+      ) =>
+        https.request(
+          { ...options, ca: TEST_ONLY_CA },
+          onResponse,
+        )) as NonNullable<RemoteMediaDownloadDependencies['request']>,
+    } as RemoteMediaDownloadDependencies
+    return { dependencies, resolve }
+  }
+
+  it('uses the pinned lookup with original Host and SNI on every real TLS redirect hop', async () => {
+    await expect(dns.promises.lookup(firstHostname)).rejects.toMatchObject({
+      code: 'ENOTFOUND',
+    })
+    await expect(dns.promises.lookup(secondHostname)).rejects.toMatchObject({
+      code: 'ENOTFOUND',
+    })
+    const { dependencies, resolve } = createRealTlsDependencies()
+
+    const result = await downloadRemoteMedia(
+      `https://${firstHostname}:${port}/start`,
+      {},
+      dependencies,
+    )
+
+    expect(result).toMatchObject({
+      buffer: Buffer.from('real-tls-png'),
+      mimeType: 'image/png',
+      filename: 'final.png',
+      host: secondHostname,
+    })
+    expect(resolve.mock.calls).toEqual([[firstHostname], [secondHostname]])
+    expect(received).toEqual([
+      { host: `${firstHostname}:${port}`, servername: firstHostname },
+      { host: `${secondHostname}:${port}`, servername: secondHostname },
+    ])
+  })
+
+  it('rejects a CA-trusted certificate whose hostname does not match', async () => {
+    const { dependencies } = createRealTlsDependencies()
+
+    await expectCategory(
+      downloadRemoteMedia(
+        `https://${wrongHostname}:${port}/file.png`,
+        {},
+        dependencies,
+      ),
+      'network',
+      wrongHostname,
+    )
+    expect(received).toEqual([])
+  })
+})
 
 describe('remote media address policy', () => {
   it.each([
@@ -118,28 +326,49 @@ describe('remote media address policy', () => {
     expect(isPublicIpAddress(address)).toBe(false)
   })
 
-  it.each(['1.1.1.1', '8.8.8.8', '93.184.216.34', '2001:4860:4860::8888', '2606:4700:4700::1111'])(
-    'accepts globally routable address %s',
-    (address) => {
-      expect(isPublicIpAddress(address)).toBe(true)
-    },
-  )
+  it.each([
+    '1.1.1.1',
+    '8.8.8.8',
+    '93.184.216.34',
+    '2001:4860:4860::8888',
+    '2606:4700:4700::1111',
+  ])('accepts globally routable address %s', (address) => {
+    expect(isPublicIpAddress(address)).toBe(true)
+  })
 
   it('rejects non-HTTPS, credentialed, malformed URL, and malformed hostname inputs', async () => {
-    await expectCategory(downloadRemoteMedia('http://media.example/file.jpg'), 'protocol', 'media.example')
+    await expectCategory(
+      downloadRemoteMedia('http://media.example/file.jpg'),
+      'protocol',
+      'media.example',
+    )
     const credentialError = await expectCategory(
-      downloadRemoteMedia('https://user:SECRET@media.example/file.jpg?token=QUERY'),
+      downloadRemoteMedia(
+        'https://user:SECRET@media.example/file.jpg?token=QUERY',
+      ),
       'credentials',
       'media.example',
     )
     expect(String(credentialError)).not.toContain('SECRET')
     expect(String(credentialError)).not.toContain('QUERY')
-    await expectCategory(downloadRemoteMedia('https://[::1'), 'invalid_url', 'unknown')
-    await expectCategory(downloadRemoteMedia('https://bad_host.example/file.jpg'), 'invalid_host', 'unknown')
+    await expectCategory(
+      downloadRemoteMedia('https://[::1'),
+      'invalid_url',
+      'unknown',
+    )
+    await expectCategory(
+      downloadRemoteMedia('https://bad_host.example/file.jpg'),
+      'invalid_host',
+      'unknown',
+    )
   })
 
   it('rejects an IP literal in a blocked range, including mapped IPv6', async () => {
-    await expectCategory(downloadRemoteMedia('https://127.0.0.1/file.jpg'), 'blocked_address', '127.0.0.1')
+    await expectCategory(
+      downloadRemoteMedia('https://127.0.0.1/file.jpg'),
+      'blocked_address',
+      '127.0.0.1',
+    )
     await expectCategory(
       downloadRemoteMedia('https://[::ffff:127.0.0.1]/file.jpg'),
       'blocked_address',
@@ -155,7 +384,11 @@ describe('remote media address policy', () => {
     const transport = createRequestSequence([{ statusCode: 200 }])
 
     await expectCategory(
-      downloadRemoteMedia('https://media.example/file.jpg', {}, { resolve: resolver, request: transport.request }),
+      downloadRemoteMedia(
+        'https://media.example/file.jpg',
+        {},
+        { resolve: resolver, request: transport.request },
+      ),
       'blocked_address',
       'media.example',
     )
@@ -163,11 +396,13 @@ describe('remote media address policy', () => {
   })
 
   it('pins the verified address while retaining the original hostname for Host, SNI, and certificate checks', async () => {
-    const transport = createRequestSequence([{
-      statusCode: 200,
-      headers: { 'content-type': 'image/jpeg' },
-      chunks: ['jpeg'],
-    }])
+    const transport = createRequestSequence([
+      {
+        statusCode: 200,
+        headers: { 'content-type': 'image/jpeg' },
+        chunks: ['jpeg'],
+      },
+    ])
     const resolver = jest.fn(async () => [
       { address: '93.184.216.34', family: 4 as const },
       { address: '2606:4700:4700::1111', family: 6 as const },
@@ -189,12 +424,18 @@ describe('remote media address policy', () => {
       agent: false,
       maxRedirects: 0,
     })
-    const lookupResult = await new Promise<{ address: string; family: number }>((resolve, reject) => {
-      options.lookup('media.example', {}, (error: Error | null, address: string, family: number) => {
-        if (error) reject(error)
-        else resolve({ address, family })
-      })
-    })
+    const lookupResult = await new Promise<{ address: string; family: number }>(
+      (resolve, reject) => {
+        options.lookup(
+          'media.example',
+          {},
+          (error: Error | null, address: string, family: number) => {
+            if (error) reject(error)
+            else resolve({ address, family })
+          },
+        )
+      },
+    )
     expect(lookupResult).toEqual({ address: '93.184.216.34', family: 4 })
   })
 })
@@ -204,7 +445,10 @@ describe('remote media redirects', () => {
 
   it('resolves relative redirects and independently validates and pins every hop', async () => {
     const transport = createRequestSequence([
-      { statusCode: 302, headers: { location: '../assets/final.PNG?token=SECRET' } },
+      {
+        statusCode: 302,
+        headers: { location: '../assets/final.PNG?token=SECRET' },
+      },
       {
         statusCode: 200,
         headers: { 'content-type': 'image/png; charset=binary' },
@@ -223,7 +467,9 @@ describe('remote media redirects', () => {
       '/original/start',
       '/assets/final.PNG?token=SECRET',
     ])
-    expect(transport.request.mock.calls.every((call) => call[0].maxRedirects === 0)).toBe(true)
+    expect(
+      transport.request.mock.calls.every((call) => call[0].maxRedirects === 0),
+    ).toBe(true)
     expect(result).toMatchObject({
       buffer: Buffer.from('png'),
       mimeType: 'image/png',
@@ -237,28 +483,42 @@ describe('remote media redirects', () => {
     ['http://cdn.example/file.jpg', 'protocol'],
     ['https://user:SECRET@cdn.example/file.jpg', 'credentials'],
   ])('rejects an unsafe redirect target %s', async (location, category) => {
-    const transport = createRequestSequence([{ statusCode: 302, headers: { location } }])
+    const transport = createRequestSequence([
+      { statusCode: 302, headers: { location } },
+    ])
     await expectCategory(
-      downloadRemoteMedia('https://media.example/start', {}, { resolve: publicResolver, request: transport.request }),
+      downloadRemoteMedia(
+        'https://media.example/start',
+        {},
+        { resolve: publicResolver, request: transport.request },
+      ),
       category,
       'cdn.example',
     )
   })
 
   it('rejects a redirect hostname when DNS includes a blocked result', async () => {
-    const resolver = jest.fn(async (hostname: string) => hostname === 'media.example'
-      ? [{ address: '93.184.216.34', family: 4 as const }]
-      : [
-          { address: '93.184.216.35', family: 4 as const },
-          { address: '10.0.0.5', family: 4 as const },
-        ])
-    const transport = createRequestSequence([{
-      statusCode: 302,
-      headers: { location: 'https://cdn.example/file.jpg' },
-    }])
+    const resolver = jest.fn(async (hostname: string) =>
+      hostname === 'media.example'
+        ? [{ address: '93.184.216.34', family: 4 as const }]
+        : [
+            { address: '93.184.216.35', family: 4 as const },
+            { address: '10.0.0.5', family: 4 as const },
+          ],
+    )
+    const transport = createRequestSequence([
+      {
+        statusCode: 302,
+        headers: { location: 'https://cdn.example/file.jpg' },
+      },
+    ])
 
     await expectCategory(
-      downloadRemoteMedia('https://media.example/start', {}, { resolve: resolver, request: transport.request }),
+      downloadRemoteMedia(
+        'https://media.example/start',
+        {},
+        { resolve: resolver, request: transport.request },
+      ),
       'blocked_address',
       'cdn.example',
     )
@@ -285,70 +545,94 @@ describe('remote media redirects', () => {
   it.each([
     [{}, 'redirect_location'],
     [{ location: 'http://[' }, 'redirect_location'],
-  ])('classifies missing or invalid redirect Location safely', async (headers, category) => {
-    const transport = createRequestSequence([{ statusCode: 302, headers }])
-    const error = await expectCategory(
-      downloadRemoteMedia(
-        'https://media.example/start?token=QUERY',
-        {},
-        { resolve: publicResolver, request: transport.request },
-      ),
-      category,
-      'media.example',
-    )
-    expect(String(error)).not.toContain('QUERY')
-  })
+  ])(
+    'classifies missing or invalid redirect Location safely',
+    async (headers, category) => {
+      const transport = createRequestSequence([{ statusCode: 302, headers }])
+      const error = await expectCategory(
+        downloadRemoteMedia(
+          'https://media.example/start?token=QUERY',
+          {},
+          { resolve: publicResolver, request: transport.request },
+        ),
+        category,
+        'media.example',
+      )
+      expect(String(error)).not.toContain('QUERY')
+    },
+  )
 })
 
 describe('remote media response policy', () => {
   beforeEach(() => publicResolver.mockClear())
 
-  it.each(['text/html', 'image/svg+xml', 'application/octet-stream'])('rejects disallowed MIME type %s', async (mimeType) => {
-    const transport = createRequestSequence([{
-      statusCode: 200,
-      headers: { 'content-type': mimeType },
-      chunks: ['not-safe-media'],
-    }])
-    await expectCategory(
-      downloadRemoteMedia('https://media.example/file', {}, { resolve: publicResolver, request: transport.request }),
-      'mime_type',
-      'media.example',
-    )
-    expect(transport.responses[0].destroyed).toBe(true)
-  })
+  it.each(['text/html', 'image/svg+xml', 'application/octet-stream'])(
+    'rejects disallowed MIME type %s',
+    async (mimeType) => {
+      const transport = createRequestSequence([
+        {
+          statusCode: 200,
+          headers: { 'content-type': mimeType },
+          chunks: ['not-safe-media'],
+        },
+      ])
+      await expectCategory(
+        downloadRemoteMedia(
+          'https://media.example/file',
+          {},
+          { resolve: publicResolver, request: transport.request },
+        ),
+        'mime_type',
+        'media.example',
+      )
+      expect(transport.responses[0].destroyed).toBe(true)
+    },
+  )
 
   it('normalizes Content-Type parameters and accepts approved image and video formats', async () => {
-    const imageTransport = createRequestSequence([{
-      statusCode: 200,
-      headers: { 'content-type': ' IMAGE/WEBP ; charset=binary' },
-      chunks: ['webp'],
-    }])
+    const imageTransport = createRequestSequence([
+      {
+        statusCode: 200,
+        headers: { 'content-type': ' IMAGE/WEBP ; charset=binary' },
+        chunks: ['webp'],
+      },
+    ])
     const image = await downloadRemoteMedia(
       'https://media.example/file',
       {},
       { resolve: publicResolver, request: imageTransport.request },
     )
-    expect(image).toMatchObject({ mimeType: 'image/webp', filename: 'file.webp' })
+    expect(image).toMatchObject({
+      mimeType: 'image/webp',
+      filename: 'file.webp',
+    })
 
-    const videoTransport = createRequestSequence([{
-      statusCode: 200,
-      headers: { 'content-type': 'video/mp4; codecs=avc1' },
-      chunks: ['mp4'],
-    }])
+    const videoTransport = createRequestSequence([
+      {
+        statusCode: 200,
+        headers: { 'content-type': 'video/mp4; codecs=avc1' },
+        chunks: ['mp4'],
+      },
+    ])
     const video = await downloadRemoteMedia(
       'https://media.example/movie.anything',
       {},
       { resolve: publicResolver, request: videoTransport.request },
     )
-    expect(video).toMatchObject({ mimeType: 'video/mp4', filename: 'movie.mp4' })
+    expect(video).toMatchObject({
+      mimeType: 'video/mp4',
+      filename: 'movie.mp4',
+    })
   })
 
   it('rejects an oversized declared Content-Length before consuming the body', async () => {
-    const transport = createRequestSequence([{
-      statusCode: 200,
-      headers: { 'content-type': 'image/jpeg', 'content-length': '6' },
-      end: false,
-    }])
+    const transport = createRequestSequence([
+      {
+        statusCode: 200,
+        headers: { 'content-type': 'image/jpeg', 'content-length': '6' },
+        end: false,
+      },
+    ])
     await expectCategory(
       downloadRemoteMedia(
         'https://media.example/file.jpg',
@@ -362,11 +646,13 @@ describe('remote media response policy', () => {
   })
 
   it('streams and aborts as soon as an absent or forged length exceeds maxBytes', async () => {
-    const transport = createRequestSequence([{
-      statusCode: 200,
-      headers: { 'content-type': 'image/jpeg', 'content-length': '2' },
-      chunks: ['abc', 'def'],
-    }])
+    const transport = createRequestSequence([
+      {
+        statusCode: 200,
+        headers: { 'content-type': 'image/jpeg', 'content-length': '2' },
+        chunks: ['abc', 'def'],
+      },
+    ])
     await expectCategory(
       downloadRemoteMedia(
         'https://media.example/file.jpg',
@@ -381,28 +667,38 @@ describe('remote media response policy', () => {
   })
 
   it('returns a Buffer only after the response completes', async () => {
-    const transport = createRequestSequence([{
-      statusCode: 200,
-      headers: { 'content-type': 'image/png' },
-      chunks: ['partial'],
-      end: false,
-    }])
+    const transport = createRequestSequence([
+      {
+        statusCode: 200,
+        headers: { 'content-type': 'image/png' },
+        chunks: ['partial'],
+        end: false,
+      },
+    ])
     let settled = false
     const pending = downloadRemoteMedia(
       'https://media.example/file.png',
       { totalTimeoutMs: 200 },
       { resolve: publicResolver, request: transport.request },
-    ).finally(() => { settled = true })
+    ).finally(() => {
+      settled = true
+    })
     await new Promise((resolve) => setImmediate(resolve))
     expect(settled).toBe(false)
     transport.responses[0].end('-complete')
-    await expect(pending).resolves.toMatchObject({ buffer: Buffer.from('partial-complete') })
+    await expect(pending).resolves.toMatchObject({
+      buffer: Buffer.from('partial-complete'),
+    })
   })
 
   it('redacts transport details and never exposes query strings, response bodies, or tokens in errors', async () => {
-    const transport = createRequestSequence([{
-      error: new Error('Authorization: Bearer TOKEN response=SECRET_BODY url=https://media.example/file?token=QUERY'),
-    }])
+    const transport = createRequestSequence([
+      {
+        error: new Error(
+          'Authorization: Bearer TOKEN response=SECRET_BODY url=https://media.example/file?token=QUERY',
+        ),
+      },
+    ])
     const error = await expectCategory(
       downloadRemoteMedia(
         'https://media.example/file?token=QUERY',
@@ -412,8 +708,12 @@ describe('remote media response policy', () => {
       'network',
       'media.example',
     )
-    expect(String(error)).toBe('RemoteMediaDownloadError: remote_media_network host=media.example')
-    expect(JSON.stringify(error)).not.toMatch(/TOKEN|SECRET_BODY|QUERY|Authorization/)
+    expect(String(error)).toBe(
+      'RemoteMediaDownloadError: remote_media_network host=media.example',
+    )
+    expect(JSON.stringify(error)).not.toMatch(
+      /TOKEN|SECRET_BODY|QUERY|Authorization/,
+    )
   })
 })
 
@@ -449,12 +749,14 @@ describe('remote media timeouts and cancellation', () => {
   })
 
   it('bounds total body time and destroys both response and request', async () => {
-    const transport = createRequestSequence([{
-      statusCode: 200,
-      headers: { 'content-type': 'image/jpeg' },
-      chunks: ['partial'],
-      end: false,
-    }])
+    const transport = createRequestSequence([
+      {
+        statusCode: 200,
+        headers: { 'content-type': 'image/jpeg' },
+        chunks: ['partial'],
+        end: false,
+      },
+    ])
     await expectCategory(
       downloadRemoteMedia(
         'https://media.example/file.jpg',
@@ -492,7 +794,11 @@ describe('remote media timeouts and cancellation', () => {
     await expectCategory(
       downloadRemoteMedia(
         'https://media.example/start',
-        { maxRedirects: Number.POSITIVE_INFINITY, maxBytes: 0, totalTimeoutMs: Number.POSITIVE_INFINITY },
+        {
+          maxRedirects: Number.POSITIVE_INFINITY,
+          maxBytes: 0,
+          totalTimeoutMs: Number.POSITIVE_INFINITY,
+        },
         { resolve: publicResolver, request: transport.request },
       ),
       'redirect_limit',
@@ -500,16 +806,20 @@ describe('remote media timeouts and cancellation', () => {
     )
     expect(transport.request).toHaveBeenCalledTimes(4)
 
-    const bodyTransport = createRequestSequence([{
-      statusCode: 200,
-      headers: { 'content-type': 'image/jpeg' },
-      chunks: ['not-zero'],
-    }])
-    await expect(downloadRemoteMedia(
-      'https://media.example/file.jpg',
-      { maxBytes: 0 },
-      { resolve: publicResolver, request: bodyTransport.request },
-    )).resolves.toMatchObject({ buffer: Buffer.from('not-zero') })
+    const bodyTransport = createRequestSequence([
+      {
+        statusCode: 200,
+        headers: { 'content-type': 'image/jpeg' },
+        chunks: ['not-zero'],
+      },
+    ])
+    await expect(
+      downloadRemoteMedia(
+        'https://media.example/file.jpg',
+        { maxBytes: 0 },
+        { resolve: publicResolver, request: bodyTransport.request },
+      ),
+    ).resolves.toMatchObject({ buffer: Buffer.from('not-zero') })
   })
 })
 
@@ -520,26 +830,50 @@ describe('safe media filename', () => {
       'image/jpeg',
     )
     expect(filename).toBe('secret_php.jpg')
-    expect(filename).not.toMatch(/[\\/?\u0000-\u001f]/)
+    expect(filename).not.toMatch(/[\\/?]/)
+    expect(
+      Array.from(filename).some((character) => {
+        const codePoint = character.codePointAt(0) || 0
+        return codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f)
+      }),
+    ).toBe(false)
     expect(filename).not.toContain('SECRET')
   })
 
   it('provides a fallback for an empty path and forces the approved MIME extension', () => {
-    expect(createSafeMediaFilename(new URL('https://media.example/'), 'image/png')).toBe('media.png')
-    expect(createSafeMediaFilename(new URL('https://media.example/avatar.svg'), 'image/webp')).toBe('avatar.webp')
+    expect(
+      createSafeMediaFilename(new URL('https://media.example/'), 'image/png'),
+    ).toBe('media.png')
+    expect(
+      createSafeMediaFilename(
+        new URL('https://media.example/avatar.svg'),
+        'image/webp',
+      ),
+    ).toBe('avatar.webp')
   })
 
   it('preserves safe Unicode, normalizes whitespace, and handles multi-dot names', () => {
-    expect(createSafeMediaFilename(
-      new URL('https://media.example/%E7%B4%A0%E6%9D%90%20%E6%9C%80%E7%BB%88%E7%89%88.PNG'),
-      'image/png',
-    )).toBe('素材_最终版.png')
-    expect(createSafeMediaFilename(new URL('https://media.example/avatar.php.exe'), 'image/jpeg')).toBe('avatar_php.jpg')
+    expect(
+      createSafeMediaFilename(
+        new URL(
+          'https://media.example/%E7%B4%A0%E6%9D%90%20%E6%9C%80%E7%BB%88%E7%89%88.PNG',
+        ),
+        'image/png',
+      ),
+    ).toBe('素材_最终版.png')
+    expect(
+      createSafeMediaFilename(
+        new URL('https://media.example/avatar.php.exe'),
+        'image/jpeg',
+      ),
+    ).toBe('avatar_php.jpg')
   })
 
   it('limits the UTF-8 filename length without splitting Unicode characters', () => {
     const filename = createSafeMediaFilename(
-      new URL(`https://media.example/${encodeURIComponent('图'.repeat(200))}.png`),
+      new URL(
+        `https://media.example/${encodeURIComponent('图'.repeat(200))}.png`,
+      ),
       'image/png',
     )
     expect(Buffer.byteLength(filename)).toBeLessThanOrEqual(120)
