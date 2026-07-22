@@ -1,6 +1,7 @@
 const mockAdd = jest.fn()
 const mockGetWorkersCount = jest.fn()
 const mockGetJobs = jest.fn()
+const mockGetJobCounts = jest.fn()
 const mockIsPaused = jest.fn()
 const mockResume = jest.fn()
 const mockAccountFind = jest.fn()
@@ -8,14 +9,15 @@ const mockAccountFind = jest.fn()
 jest.mock('../src/queue/facebook.queue', () => ({
   accountQueue: {
     add: mockAdd,
+    getJobCounts: mockGetJobCounts,
     getWorkersCount: mockGetWorkersCount,
     getJobs: mockGetJobs,
     isPaused: mockIsPaused,
     resume: mockResume,
   },
-  campaignQueue: { getJobs: mockGetJobs, isPaused: mockIsPaused, getWorkersCount: mockGetWorkersCount, resume: mockResume },
-  adQueue: { getJobs: mockGetJobs, isPaused: mockIsPaused, getWorkersCount: mockGetWorkersCount, resume: mockResume },
-  materialQueue: { getJobs: mockGetJobs, isPaused: mockIsPaused, getWorkersCount: mockGetWorkersCount, resume: mockResume },
+  campaignQueue: { getJobs: mockGetJobs, getJobCounts: mockGetJobCounts, isPaused: mockIsPaused, getWorkersCount: mockGetWorkersCount, resume: mockResume },
+  adQueue: { getJobs: mockGetJobs, getJobCounts: mockGetJobCounts, isPaused: mockIsPaused, getWorkersCount: mockGetWorkersCount, resume: mockResume },
+  materialQueue: { getJobs: mockGetJobs, getJobCounts: mockGetJobCounts, isPaused: mockIsPaused, getWorkersCount: mockGetWorkersCount, resume: mockResume },
 }))
 
 jest.mock('../src/models/Account', () => ({
@@ -52,6 +54,7 @@ describe('facebook queue scheduler safety', () => {
     mockAccountFind.mockResolvedValue(accounts)
     mockGetWorkersCount.mockResolvedValue(1)
     mockGetJobs.mockResolvedValue([])
+    mockGetJobCounts.mockResolvedValue({ active: 0, waiting: 0, prioritized: 0, delayed: 0 })
     mockIsPaused.mockResolvedValue(false)
     mockResume.mockResolvedValue(undefined)
     mockAdd.mockImplementation(async (_name, data, options) => ({ data, opts: options }))
@@ -120,9 +123,36 @@ describe('facebook queue scheduler safety', () => {
     })
   })
 
-  it('supports an explicit active-account canary without queuing the full catalog', async () => {
+  it('skips a scheduled full cycle while any pipeline queue is still draining', async () => {
+    mockGetJobCounts
+      .mockResolvedValueOnce({ active: 0, waiting: 0, prioritized: 0, delayed: 0 })
+      .mockResolvedValueOnce({ active: 0, waiting: 0, prioritized: 12, delayed: 0 })
+      .mockResolvedValueOnce({ active: 0, waiting: 0, prioritized: 100, delayed: 0 })
+      .mockResolvedValueOnce({ active: 2, waiting: 0, prioritized: 200, delayed: 0 })
+
+    const result = await syncCampaignsFromAdAccountsV2({ preventOverlap: true })
+
+    expect(mockAdd).not.toHaveBeenCalled()
+    expect(result).toMatchObject({
+      syncedAccounts: 0,
+      jobsQueued: 0,
+      skippedPipelineBusy: true,
+      pendingJobs: {
+        account: 0,
+        campaign: 12,
+        ad: 100,
+        material: 202,
+        total: 314,
+      },
+    })
+  })
+
+  it('allows an explicit active-account canary while scheduled overlap checks would see a busy pipeline', async () => {
+    mockGetJobCounts.mockResolvedValue({ active: 2, waiting: 3, prioritized: 100, delayed: 4 })
+
     const result = await syncCampaignsFromAdAccountsV2({ accountIds: ['222'], limit: 1 })
 
+    expect(mockGetJobCounts).not.toHaveBeenCalled()
     expect(mockAdd).toHaveBeenCalledTimes(1)
     expect(mockAdd).toHaveBeenCalledWith(
       'sync-account',
