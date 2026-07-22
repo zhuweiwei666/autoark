@@ -111,20 +111,103 @@ describe('Facebook material smart groups', () => {
     mockMaterialCountDocuments.mockResolvedValue(0)
   })
 
-  it('counts a material mapped to A+B once globally and once in each account group', async () => {
+  it('resolves raw visible material fixtures before grouping and counts A+B once globally', async () => {
     const service = loadSmartGroupService()
     expect(service).toBeDefined()
 
+    expect(service.resolveFacebookMaterialMembership).toEqual(expect.any(Function))
+    const fixtures = [
+      {
+        _id: 'mapping-a-b',
+        organizationId: ORG_ID,
+        status: 'uploaded',
+        facebookMappings: [
+          { accountId: '1111' },
+          { accountId: '2222' },
+          { accountId: 'act_1111' },
+        ],
+        source: { platform: 'facebook', externalAccountId: '3333' },
+        usage: { accounts: ['4444'] },
+      },
+      {
+        _id: 'source-fallback',
+        organizationId: ORG_ID,
+        status: 'ready',
+        facebookMappings: [{ accountId: ' ' }],
+        source: { platform: 'facebook', externalAccountId: '3333' },
+        usage: { accounts: ['4444'] },
+      },
+      {
+        _id: 'usage-fallback',
+        organizationId: ORG_ID,
+        status: 'uploaded',
+        facebookMappings: [],
+        source: { platform: 'facebook' },
+        usage: { accounts: ['4444', 'act_4444'] },
+      },
+      {
+        _id: 'facebook-unassigned',
+        organizationId: ORG_ID,
+        status: 'ready',
+        source: { platform: 'facebook' },
+        usage: { accounts: [] },
+      },
+      {
+        _id: 'manual-unrelated',
+        organizationId: ORG_ID,
+        status: 'uploaded',
+        source: { type: 'upload' },
+        usage: { accounts: [] },
+      },
+      {
+        _id: 'foreign-tenant',
+        organizationId: '665000000000000000000099',
+        status: 'ready',
+        facebookMappings: [{ accountId: '9999' }],
+      },
+      {
+        _id: 'inactive-visible-tenant',
+        organizationId: ORG_ID,
+        status: 'processing',
+        facebookMappings: [{ accountId: '8888' }],
+      },
+    ]
+
+    const visible = fixtures.filter(material => (
+      material.organizationId === ORG_ID && ['uploaded', 'ready'].includes(material.status)
+    ))
+    const resolved = visible.map(material => ({
+      id: material._id,
+      ...service.resolveFacebookMaterialMembership(material),
+    }))
+    expect(resolved).toEqual([
+      { id: 'mapping-a-b', facebookRelated: true, accountIds: ['1111', '2222'] },
+      { id: 'source-fallback', facebookRelated: true, accountIds: ['3333'] },
+      { id: 'usage-fallback', facebookRelated: true, accountIds: ['4444'] },
+      { id: 'facebook-unassigned', facebookRelated: true, accountIds: [] },
+      { id: 'manual-unrelated', facebookRelated: false, accountIds: [] },
+    ])
+
+    const related = resolved.filter(material => material.facebookRelated)
+    const countByAccount = new Map<string, number>()
+    related.forEach((material) => {
+      const memberships = material.accountIds.length > 0
+        ? material.accountIds
+        : ['__unassigned__']
+      memberships.forEach((accountId: string) => {
+        countByAccount.set(accountId, (countByAccount.get(accountId) || 0) + 1)
+      })
+    })
+
     mockMaterialAggregate.mockResolvedValue([{
-      global: [{ count: 1 }],
-      accounts: [
-        { _id: '1111', count: 1 },
-        { _id: '2222', count: 1 },
-      ],
+      global: [{ count: related.length }],
+      accounts: [...countByAccount].map(([_id, count]) => ({ _id, count })),
     }])
     mockAccountQuery([
       { accountId: '1111', name: 'Alpha', status: 'active', accountStatus: 1 },
       { accountId: '2222', name: 'Beta', status: 'active', accountStatus: 1 },
+      { accountId: '3333', name: 'Gamma', status: 'active', accountStatus: 1 },
+      { accountId: '4444', name: 'Delta', status: 'active', accountStatus: 1 },
     ])
 
     const roots = await service.getFacebookMaterialSmartGroups({
@@ -137,12 +220,15 @@ describe('Facebook material smart groups', () => {
       key: 'facebook',
       type: 'facebook-root',
       label: 'Facebook',
-      count: 1,
+      count: 4,
     })
     expect(roots[0].children).toEqual(expect.arrayContaining([
-      expect.objectContaining({ key: '__all__', count: 1 }),
+      expect.objectContaining({ key: '__all__', count: 4 }),
+      expect.objectContaining({ key: '__unassigned__', count: 1 }),
       expect.objectContaining({ key: '1111', count: 1 }),
       expect.objectContaining({ key: '2222', count: 1 }),
+      expect.objectContaining({ key: '3333', count: 1 }),
+      expect.objectContaining({ key: '4444', count: 1 }),
     ]))
 
     const pipeline = mockMaterialAggregate.mock.calls[0][0]
@@ -154,6 +240,8 @@ describe('Facebook material smart groups', () => {
     })
     const unwindStages = JSON.stringify(pipeline).match(/\"\$unwind\"/g) || []
     expect(unwindStages).toHaveLength(1)
+    expect(pipeline[1].$project.accountIds).toEqual(service.buildFacebookAccountIdsExpression())
+    expect(pipeline[1].$project.facebookRelated).toEqual(service.buildFacebookRelatedExpression())
     expect(pipeline[2].$facet.global).toContainEqual({ $count: 'count' })
   })
 
@@ -168,8 +256,8 @@ describe('Facebook material smart groups', () => {
         '$$mappingAccountIds',
         {
           $cond: [
-            { $ne: ['$$sourceAccountId', ''] },
-            ['$$sourceAccountId'],
+            { $gt: [{ $size: '$$sourceAccountIds' }, 0] },
+            '$$sourceAccountIds',
             '$$usageAccountIds',
           ],
         },
@@ -278,6 +366,38 @@ describe('Facebook material smart groups', () => {
       success: true,
       data: expect.objectContaining({ list: [], total: 0 }),
     }))
+  })
+
+  it.each([
+    ['__all__', 'all'],
+    ['__unassigned__', 'unassigned'],
+  ])('applies the exact %s Facebook membership condition to GET /materials', async (key, kind) => {
+    const service = loadSmartGroupService()
+    expect(service).toBeDefined()
+    const res = createResponse()
+
+    await materialController.getMaterialList(createRequest({
+      smartGroupType: 'facebook-account',
+      smartGroupKey: key,
+    }), res as any)
+
+    const filter = mockMaterialFind.mock.calls[0][0]
+    const appliedSmartGroupFilter = filter.$and[1]
+    if (kind === 'all') {
+      expect(appliedSmartGroupFilter).toEqual({
+        $expr: service.buildFacebookRelatedExpression(),
+      })
+    } else {
+      expect(appliedSmartGroupFilter).toEqual({
+        $expr: {
+          $and: [
+            service.buildFacebookRelatedExpression(),
+            { $eq: [{ $size: service.buildFacebookAccountIdsExpression() }, 0] },
+          ],
+        },
+      })
+    }
+    expect(JSON.stringify(filter)).not.toContain('folder')
   })
 
   it('returns the future-compatible root array and does not write a smart-group key to Material.folder', async () => {
