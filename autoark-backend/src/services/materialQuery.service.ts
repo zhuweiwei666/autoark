@@ -31,6 +31,96 @@ export interface MaterialOriginResult {
   hasMore: boolean
 }
 
+const MISSING_SCOPE_VALUE = Symbol('missing-scope-value')
+
+const scopeConditionMatches = (
+  condition: any,
+  value: unknown | typeof MISSING_SCOPE_VALUE,
+): boolean => {
+  if (condition === null) {
+    return value === null || value === MISSING_SCOPE_VALUE
+  }
+  if (
+    condition instanceof RegExp ||
+    Array.isArray(condition) ||
+    typeof condition !== 'object'
+  ) {
+    return false
+  }
+
+  const entries = Object.entries(condition)
+  if (
+    entries.length === 0 ||
+    entries.some(([operator]) => !operator.startsWith('$'))
+  ) {
+    return false
+  }
+
+  return entries.every(([operator, operand]) => {
+    if (operator === '$eq') return scopeConditionMatches(operand, value)
+    if (operator === '$in') {
+      return (
+        Array.isArray(operand) &&
+        operand.some((candidate) => scopeConditionMatches(candidate, value))
+      )
+    }
+    if (operator === '$exists') {
+      return Boolean(operand) === (value !== MISSING_SCOPE_VALUE)
+    }
+    if (operator === '$ne') {
+      if (value === MISSING_SCOPE_VALUE && operand === null) return false
+      return !scopeConditionMatches(operand, value)
+    }
+    if (operator === '$nin') {
+      if (value === MISSING_SCOPE_VALUE) return true
+      return (
+        Array.isArray(operand) &&
+        !operand.some((candidate) => scopeConditionMatches(candidate, value))
+      )
+    }
+    if (operator === '$not') return !scopeConditionMatches(operand, value)
+    return true
+  })
+}
+
+const filterMayMatchGlobalState = (
+  filter: any,
+  organizationId: null | typeof MISSING_SCOPE_VALUE,
+): boolean => {
+  if (!filter || typeof filter !== 'object' || Array.isArray(filter))
+    return true
+
+  return Object.entries(filter).every(([field, condition]) => {
+    if (field === '$and') {
+      return (
+        !Array.isArray(condition) ||
+        condition.every((part) =>
+          filterMayMatchGlobalState(part, organizationId),
+        )
+      )
+    }
+    if (field === '$or') {
+      return (
+        !Array.isArray(condition) ||
+        condition.some((part) =>
+          filterMayMatchGlobalState(part, organizationId),
+        )
+      )
+    }
+    if (field === 'organizationId') {
+      return scopeConditionMatches(condition, organizationId)
+    }
+    if (field === 'createdBy') {
+      return scopeConditionMatches(condition, MISSING_SCOPE_VALUE)
+    }
+    return true
+  })
+}
+
+export const materialFilterMayMatchGlobal = (filter: any): boolean =>
+  filterMayMatchGlobalState(filter, null) ||
+  filterMayMatchGlobalState(filter, MISSING_SCOPE_VALUE)
+
 const asTrimmedStringExpression = (input: any): any => ({
   $trim: {
     input: {
@@ -141,7 +231,7 @@ export const buildMaterialPagePipeline = ({
     )
   }
 
-  if (excludeExternalOnly) {
+  if (excludeExternalOnly && materialFilterMayMatchGlobal(filter)) {
     pipeline.push(
       externalOriginLookup(originCollectionName),
       { $match: { $expr: { $not: [externalOnlyExpression()] } } },
@@ -305,10 +395,11 @@ export const queryMaterialOrigins = async (
   const [result] = await MaterialOriginMapping.aggregate(
     buildMaterialOriginPipeline(materialId),
   )
+  const total = safeCount(result?.total?.[0]?.count)
+  if (total === 0) return null
   const origins = (Array.isArray(result?.data) ? result.data : [])
     .slice(0, EXTERNAL_ORIGIN_LIMIT)
     .map(safeOriginSummary)
-  const total = safeCount(result?.total?.[0]?.count)
   return {
     origins,
     total,

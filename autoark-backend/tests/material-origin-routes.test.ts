@@ -380,6 +380,9 @@ const matchesFixtureFilter = (
     if (expected instanceof RegExp) {
       return expected.test(String(actual ?? ''))
     }
+    if (expected?.toHexString instanceof Function) {
+      return mongoValuesEqual(actual, expected)
+    }
     if (expected && typeof expected === 'object' && !Array.isArray(expected)) {
       return Object.entries(expected).every(
         ([operator, operand]: [string, any]) => {
@@ -819,12 +822,65 @@ describe('production material aggregation pipeline semantics', () => {
     expect(result.total).toEqual([{ count: 3 }])
   })
 
-  it('hides external-only materials from the ordinary list but retains Facebook reuse', () => {
+  it.each([
+    [
+      'organization',
+      {
+        $and: [
+          { status: { $in: ['uploaded', 'ready'] } },
+          {
+            organizationId: new ObjectId('665000000000000000000301'),
+          },
+        ],
+      },
+    ],
+    [
+      'owner',
+      {
+        $and: [
+          { status: { $in: ['uploaded', 'ready'] } },
+          { createdBy: { $in: ['tenant-user'] } },
+        ],
+      },
+    ],
+  ])(
+    'skips external-origin relationship isolation for an explicit %s scope',
+    (_scope, filter) => {
+      const pipeline = buildMaterialPagePipeline({
+        filter,
+        sort: { createdAt: -1, _id: -1 },
+        skip: 0,
+        pageSize: 20,
+        excludeExternalOnly: true,
+        originCollectionName: FIXTURE_ORIGIN_COLLECTION,
+      })
+
+      expect(
+        pipeline.some(
+          (stage: any) => stage.$lookup?.as === '__externalOrigins',
+        ),
+      ).toBe(false)
+      expect(pipeline).toEqual([
+        { $match: filter },
+        expect.objectContaining({ $facet: expect.any(Object) }),
+      ])
+    },
+  )
+
+  it('keeps external-only isolation for a synthetic global filter without external read', () => {
     const pipeline = buildMaterialPagePipeline({
       filter: {
-        organizationId: { $in: [null] },
-        status: { $in: ['uploaded', 'ready'] },
-        type: 'video',
+        $and: [
+          { status: { $in: ['uploaded', 'ready'] }, type: 'video' },
+          {
+            $or: [
+              {
+                organizationId: new ObjectId('665000000000000000000302'),
+              },
+              { organizationId: { $in: [null] } },
+            ],
+          },
+        ],
       },
       sort: { name: 1, _id: 1 },
       skip: 0,
@@ -1009,64 +1065,60 @@ describe('restricted external material queries and origin routes', () => {
     )
   })
 
-  it('excludes external-only global records while retaining a Facebook-reused canonical', async () => {
-    const facebookReused = {
-      _id: REUSED_MATERIAL_ID,
-      name: 'Facebook reusable',
-      type: 'image',
-      status: 'ready',
-      source: {
-        platform: 'guangdada',
-        importedBy: 'external-material-sync',
-      },
-      facebookMappings: [{ accountId: '1234' }],
-    }
-    mockMaterialAggregate.mockResolvedValueOnce([
-      {
-        data: [facebookReused],
-        total: [{ count: 1 }],
-      },
-    ])
+  it.each([
+    ['default', {}],
+    ['search', { search: 'Tenant' }],
+    ['folder', { folder: '665000000000000000000401' }],
+  ])(
+    'keeps the ordinary tenant %s list contract without an origin lookup',
+    async (_case, query) => {
+      const tenantMaterial = {
+        _id: REUSED_MATERIAL_ID,
+        name: 'Tenant material',
+        type: 'image',
+        status: 'ready',
+      }
+      mockMaterialAggregate.mockResolvedValueOnce([
+        {
+          data: [tenantMaterial],
+          total: [{ count: 1 }],
+        },
+      ])
 
-    const response = await request(app)
-      .get('/api/materials')
-      .set('x-test-role', 'ordinary')
+      const response = await request(app)
+        .get('/api/materials')
+        .set('x-test-role', 'ordinary')
+        .query(query)
 
-    expect(response.status).toBe(200)
-    expect(response.body.data.list.map((row: any) => row._id)).toEqual([
-      REUSED_MATERIAL_ID,
-    ])
-    const pipeline = mockMaterialAggregate.mock.calls[0][0]
-    const originLookupIndex = pipeline.findIndex(
-      (stage: any) => stage.$lookup?.as === '__externalOrigins',
-    )
-    expect(originLookupIndex).toBeGreaterThan(-1)
-    const exclusion = pipeline[originLookupIndex + 1]
-    expect(exclusion).toHaveProperty('$match.$expr')
-    expect(JSON.stringify(exclusion)).toMatch(
-      /__externalOrigins|source\.platform|source\.importedBy|facebookMappings|usage\.accounts/,
-    )
-
-    const externalOnly = {
-      organizationId: null,
-      source: {
-        platform: 'guangdada',
-        importedBy: 'external-material-sync',
-      },
-      facebookMappings: [],
-      usage: { accounts: [] },
-      __externalOrigins: [{ _id: 'origin-secret' }],
-    }
-    const reused = {
-      ...externalOnly,
-      facebookMappings: [{ accountId: '1234' }],
-    }
-    expect(evaluateMongoExpression(exclusion.$match.$expr, externalOnly)).toBe(
-      false,
-    )
-    expect(evaluateMongoExpression(exclusion.$match.$expr, reused)).toBe(true)
-    expect(JSON.stringify(response.body)).not.toContain('origin-secret')
-  })
+      expect(response.status).toBe(200)
+      expect(response.body).toEqual({
+        success: true,
+        data: {
+          list: [tenantMaterial],
+          total: 1,
+          page: 1,
+          pageSize: 20,
+          totalPages: 1,
+        },
+      })
+      const pipeline = mockMaterialAggregate.mock.calls[0][0]
+      const facetIndex = pipeline.findIndex((stage: any) => stage.$facet)
+      expect(facetIndex).toBeGreaterThan(0)
+      expect(
+        pipeline
+          .slice(0, facetIndex)
+          .some((stage: any) => stage.$lookup?.as === '__externalOrigins'),
+      ).toBe(false)
+      expect(pipeline[facetIndex].$facet).toEqual({
+        data: [
+          { $sort: { createdAt: -1, _id: -1 } },
+          { $skip: 0 },
+          { $limit: 20 },
+        ],
+        total: [{ $count: 'count' }],
+      })
+    },
+  )
 
   it('returns the same fixed 403 for existing-looking and invalid origin IDs before queries', async () => {
     for (const id of [VALID_MATERIAL_ID, 'not-an-object-id']) {
@@ -1199,19 +1251,42 @@ describe('restricted external material queries and origin routes', () => {
     )
   })
 
-  it('returns 404 without querying origins when the global active material is unavailable', async () => {
-    mockMaterialFindOne.mockReturnValueOnce(materialOneQuery(null))
+  it.each(['unknown', 'deleted', 'private'])(
+    'returns the same 404 without querying origins for an unavailable %s material',
+    async () => {
+      mockMaterialFindOne.mockReturnValueOnce(materialOneQuery(null))
+
+      const response = await request(app)
+        .get(`/api/materials/${VALID_MATERIAL_ID}/origins`)
+        .set('x-test-role', 'super')
+
+      expect(response.status).toBe(404)
+      expect(response.body).toEqual({
+        success: false,
+        error: '素材不可用',
+      })
+      expect(mockOriginAggregate).not.toHaveBeenCalled()
+      expect(JSON.stringify(response.body)).not.toContain(VALID_MATERIAL_ID)
+    },
+  )
+
+  it('returns the same 404 for an active global material with no origins', async () => {
+    mockOriginAggregate.mockResolvedValueOnce([{ data: [], total: [] }])
 
     const response = await request(app)
       .get(`/api/materials/${VALID_MATERIAL_ID}/origins`)
-      .set('x-test-role', 'super')
+      .set('x-test-role', 'reader')
 
     expect(response.status).toBe(404)
     expect(response.body).toEqual({
       success: false,
       error: '素材不可用',
     })
-    expect(mockOriginAggregate).not.toHaveBeenCalled()
+    expect(mockMaterialFindOne).toHaveBeenCalledTimes(1)
+    expect(mockOriginAggregate).toHaveBeenCalledTimes(1)
+    expect(JSON.stringify(response.body)).not.toMatch(
+      new RegExp(`${VALID_MATERIAL_ID}|origin|exists|deleted|private`, 'i'),
+    )
   })
 
   it('sanitizes material-list and origin database failures', async () => {

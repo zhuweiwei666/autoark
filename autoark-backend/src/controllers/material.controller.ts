@@ -44,6 +44,7 @@ import {
 } from '../services/materialSmartGroup.service'
 import {
   isExternalPackageKey,
+  materialFilterMayMatchGlobal,
   queryMaterialOrigins,
   queryMaterialPage,
 } from '../services/materialQuery.service'
@@ -1060,6 +1061,7 @@ export const getMaterialList = async (req: Request, res: Response) => {
         !wantsExternalPackage
         && Boolean(req.user)
         && !canReadExternalMaterials(req.user!)
+        && materialFilterMayMatchGlobal(filter)
       ),
     })
     
