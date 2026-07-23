@@ -47,4 +47,6 @@ jobs:
         env:
           AUTOARK_REF: ${{ inputs.ref }}
           PROD_HOST: autoark-prod
+          GUANGDADA_API_KEY: ${{ secrets.GUANGDADA_API_KEY }}
+          EXTERNAL_MATERIAL_SYNC_ENABLED: ${{ vars.EXTERNAL_MATERIAL_SYNC_ENABLED || 'false' }}
         run: bash deploy/prod-deploy.sh
