@@ -12,6 +12,7 @@ import {
   MaterialSmartGroupRequestError,
   requestExternalMaterialSync,
   setExternalMaterialPaused,
+  toggleSmartGroupExpansion,
   type ExternalMaterialStatus,
   type MaterialOriginsResult,
   type MaterialSelection,
@@ -142,6 +143,13 @@ export default function MaterialLibraryPage() {
     setPage(1)
   }
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set())
+  const [expandedSmartGroups, setExpandedSmartGroups] = useState<Set<string>>(
+    () => new Set([
+      'facebook-root:facebook',
+      'external-root:external',
+      'external-provider:guangdada',
+    ]),
+  )
   const [smartGroups, setSmartGroups] = useState<MaterialSmartGroupNode[]>([])
   const [smartGroupsLoading, setSmartGroupsLoading] = useState(true)
   const [smartGroupsError, setSmartGroupsError] = useState(false)
@@ -770,6 +778,9 @@ export default function MaterialLibraryPage() {
 
   const renderSmartGroupNode = (group: MaterialSmartGroupNode, depth = 0) => {
     const selectable = group.type === 'facebook-account' || group.type === 'external-package'
+    const isExpandable = Boolean(group.children?.length)
+    const nodeId = `${group.type}:${group.key}`
+    const isExpanded = expandedSmartGroups.has(nodeId)
     const isSelected = selection.kind === 'smart' &&
       selection.type === group.type &&
       selection.key === group.key
@@ -784,17 +795,37 @@ export default function MaterialLibraryPage() {
       <div key={`${group.type}:${group.key}`}>
         <button
           type="button"
-          disabled={!selectable}
-          onClick={() => selectSmartGroup(group)}
+          disabled={!selectable && !isExpandable}
+          aria-expanded={isExpandable ? isExpanded : undefined}
+          onClick={() => {
+            if (isExpandable) {
+              setExpandedSmartGroups((current) => (
+                toggleSmartGroupExpansion(current, nodeId)
+              ))
+              return
+            }
+            selectSmartGroup(group)
+          }}
           className={`w-full rounded px-2 py-1.5 text-sm flex items-center gap-2 ${
             isSelected
               ? 'bg-indigo-100 text-indigo-700'
-              : selectable
+              : selectable || isExpandable
                 ? 'text-slate-700 hover:bg-slate-100'
                 : 'text-slate-600 cursor-default'
           }`}
           style={{ paddingLeft: `${8 + depth * 14}px` }}
         >
+          <span className="flex h-4 w-3 shrink-0 items-center justify-center" aria-hidden="true">
+            {isExpandable && (
+              <svg
+                viewBox="0 0 20 20"
+                fill="currentColor"
+                className={`h-3 w-3 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
+              >
+                <path d="M7 5.5 12 10l-5 4.5v-9Z" />
+              </svg>
+            )}
+          </span>
           <span
             className={`flex h-5 w-5 items-center justify-center rounded ${
               group.type.startsWith('external')
@@ -803,7 +834,11 @@ export default function MaterialLibraryPage() {
             }`}
             aria-hidden="true"
           >
-            {group.type.startsWith('external') ? '◆' : 'f'}
+            {group.type.startsWith('external')
+              ? '◆'
+              : group.type === 'facebook-optimizer'
+                ? '人'
+                : 'f'}
           </span>
           <span className="min-w-0 flex-1 truncate text-left">{sourceLabel}</span>
           {statusLabel && (
@@ -813,7 +848,7 @@ export default function MaterialLibraryPage() {
           )}
           <span className="text-xs text-slate-400">{group.count}</span>
         </button>
-        {group.children?.map((child) => renderSmartGroupNode(child, depth + 1))}
+        {isExpanded && group.children?.map((child) => renderSmartGroupNode(child, depth + 1))}
       </div>
     )
   }

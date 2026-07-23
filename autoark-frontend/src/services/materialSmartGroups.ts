@@ -6,6 +6,7 @@ export interface MaterialSmartGroupNode {
   key: string
   type:
     | 'facebook-root'
+    | 'facebook-optimizer'
     | 'facebook-account'
     | 'external-root'
     | 'external-provider'
@@ -101,6 +102,19 @@ export interface LatestRequestHandlers<T> {
   onSuccess: (value: T) => void
   onError?: (error: unknown) => void
   onSettled?: () => void
+}
+
+export const toggleSmartGroupExpansion = (
+  expanded: ReadonlySet<string>,
+  nodeId: string,
+): Set<string> => {
+  const next = new Set(expanded)
+  if (next.has(nodeId)) {
+    next.delete(nodeId)
+  } else {
+    next.add(nodeId)
+  }
+  return next
 }
 
 export const createLatestRequestRunner = () => {
