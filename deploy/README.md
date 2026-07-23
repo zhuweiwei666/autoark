@@ -24,7 +24,9 @@ The deploy wrapper accepts only `true` or `false`, refuses to enable sync with a
 empty key, and streams both values over SSH standard input. It atomically updates
 only these named entries in `/root/prod.env` and
 `/opt/autoark/deploy/.env`, preserving the rest of each file and enforcing mode
-`600`. The values are never placed in SSH arguments or deploy logs.
+`600`. The values are never placed in SSH arguments or deploy logs. When an
+override is not set, the value already present in the selected environment source
+is preserved.
 
 ## Standard Release Flow
 
@@ -32,7 +34,8 @@ only these named entries in `/root/prod.env` and
 2. From a clean local checkout, run:
 
 ```bash
-AUTOARK_REF=main bash deploy/prod-deploy.sh
+git fetch origin main
+AUTOARK_REF="$(git rev-parse 'origin/main^{commit}')" bash deploy/prod-deploy.sh
 ```
 
 3. The local deploy wrapper connects to the server, runs
@@ -41,17 +44,31 @@ AUTOARK_REF=main bash deploy/prod-deploy.sh
 Useful overrides:
 
 ```bash
-PROD_HOST=root@45.33.103.31 AUTOARK_REF=main bash deploy/prod-deploy.sh
-AUTOARK_ENV_FILE=/Users/zww/.config/autoark/prod.env bash deploy/prod-deploy.sh
-AUTOARK_SKIP_VERIFY=true bash deploy/prod-deploy.sh
+PROD_HOST=root@45.33.103.31 AUTOARK_REF=<verified-40-character-sha> bash deploy/prod-deploy.sh
+AUTOARK_REF=<verified-40-character-sha> AUTOARK_ENV_FILE=/Users/zww/.config/autoark/prod.env bash deploy/prod-deploy.sh
+AUTOARK_REF=<verified-40-character-sha> AUTOARK_SKIP_VERIFY=true bash deploy/prod-deploy.sh
 ```
 
 GitHub Actions supplies `GUANGDADA_API_KEY` from the repository secret of the
 same name and `EXTERNAL_MATERIAL_SYNC_ENABLED` from the repository variable of
-the same name only to the deploy step. `AUTOARK_ENV_FILE` remains supported for
-full environment-file rotation: after checkout, the uploaded file atomically
-replaces the complete runtime `deploy/.env`, then the two external-material
-entries are reconciled from the deploy-step environment.
+the same name only to the deploy step. The production job is protected by the
+GitHub `production` environment. Before any production secret is exposed, the
+workflow proves the requested commit is already contained in `origin/main` and
+passes only its immutable SHA to the deploy wrapper.
+
+Configure `AUTOARK_PROD_HOST_KEY` as the trusted, single-line SSH host public key
+for the production server, for example an `ssh-ed25519 ...` line obtained through
+an authenticated out-of-band channel. The workflow pins it to the fixed
+`autoark-prod-production` alias and refuses to use trust-on-first-use or
+runtime host-key discovery.
+
+`AUTOARK_ENV_FILE` remains supported for full environment-file rotation. It is
+uploaded to a non-canonical pending path first. One server-side deployment lock
+then covers checkout, construction of the complete two-file environment pair,
+secret synchronization, pair commit, and `server-deploy.sh`. The old pair and a
+recovery marker remain until deployment succeeds. An interrupted or failed
+deployment rolls back, and a normal retry consumes a completed pending upload
+and converges `/root/prod.env` with runtime `deploy/.env`.
 
 ## First Server Bootstrap
 
