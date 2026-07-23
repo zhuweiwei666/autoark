@@ -255,12 +255,32 @@ const safeCount = (value: unknown): number => {
     : 0
 }
 
+const projectMaterialListItem = (material: any): any => {
+  if (
+    !material ||
+    typeof material !== 'object' ||
+    !material.source ||
+    typeof material.source !== 'object' ||
+    typeof material.source.platform !== 'string' ||
+    material.source.platform.trim().toLowerCase() !== EXTERNAL_PROVIDER ||
+    !Object.prototype.hasOwnProperty.call(material.source, 'externalCreativeId')
+  ) {
+    return material
+  }
+
+  const source = { ...material.source }
+  delete source.externalCreativeId
+  return { ...material, source }
+}
+
 export const queryMaterialPage = async (
   query: MaterialPageQuery,
 ): Promise<MaterialPageResult> => {
   const [result] = await Material.aggregate(buildMaterialPagePipeline(query))
   return {
-    list: Array.isArray(result?.data) ? result.data : [],
+    list: Array.isArray(result?.data)
+      ? result.data.map(projectMaterialListItem)
+      : [],
     total: safeCount(result?.total?.[0]?.count),
   }
 }

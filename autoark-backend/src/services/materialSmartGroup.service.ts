@@ -307,24 +307,26 @@ export const buildExternalSmartGroupPipeline = ({
   {
     $facet: {
       global: [
-        { $group: { _id: null, materialIds: { $addToSet: '$materialId' } } },
-        { $project: { _id: 0, count: { $size: '$materialIds' } } },
+        { $group: { _id: '$materialId' } },
+        { $count: 'count' },
       ],
       packages: [
         {
           $group: {
-            _id: '$packageKey',
-            materialIds: { $addToSet: '$materialId' },
+            _id: {
+              packageKey: '$packageKey',
+              materialId: '$materialId',
+            },
             packageName: { $max: '$packageName' },
             productName: { $max: '$productName' },
           },
         },
         {
-          $project: {
-            _id: 1,
-            packageName: 1,
-            productName: 1,
-            count: { $size: '$materialIds' },
+          $group: {
+            _id: '$_id.packageKey',
+            packageName: { $max: '$packageName' },
+            productName: { $max: '$productName' },
+            count: { $sum: 1 },
           },
         },
         { $sort: { productName: 1, packageName: 1, _id: 1 } },

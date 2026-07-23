@@ -10,12 +10,16 @@ import {
 import { deleteR2Object, uploadBufferToR2 } from './r2Storage.service'
 import { downloadRemoteMedia } from './remoteMediaDownload.service'
 
-export type ExternalIngestionOutcome =
+type ExternalIngestionResult =
   | { kind: 'alreadySeen'; materialId: string }
   | { kind: 'contentReused'; materialId: string }
   | { kind: 'created'; materialId: string }
   | { kind: 'invalid'; reason: string }
   | { kind: 'failed'; retryable: boolean; category: string }
+
+export type ExternalIngestionOutcome = ExternalIngestionResult & {
+  downloaded: boolean
+}
 
 const ACTIVE_MATERIAL_STATUSES = ['uploaded', 'ready'] as const
 const ORIGIN_UPSERT_ATTEMPTS = 3
@@ -330,7 +334,7 @@ const mappingFailed = (
   category:
     | 'origin_mapping_failed'
     | 'origin_mapping_stale' = 'origin_mapping_failed',
-): ExternalIngestionOutcome => ({
+): ExternalIngestionResult => ({
   kind: 'failed',
   retryable: true,
   category,
@@ -395,7 +399,7 @@ const mapToCanonical = async (
   candidate: NormalizedGuangdadaAsset,
   canonical: MaterialRecord,
   kind: 'contentReused' | 'created',
-): Promise<ExternalIngestionOutcome> => {
+): Promise<ExternalIngestionResult> => {
   const resolution = await observeCanonical(candidate, canonical)
   if (resolution.kind === 'failed') return mappingFailed(resolution.category)
   return {
@@ -433,7 +437,7 @@ const deletedGlobalBySha = async (sha256: string) =>
 
 const preDownloadMapping = async (
   candidate: NormalizedGuangdadaAsset,
-): Promise<ExternalIngestionOutcome | undefined> => {
+): Promise<ExternalIngestionResult | undefined> => {
   const mapping = (await MaterialOriginMapping.findOne(
     originFilter(candidate),
   )) as unknown as OriginRecord | null
@@ -460,7 +464,7 @@ const preDownloadMapping = async (
   return mapToCanonical(candidate, winner, 'contentReused')
 }
 
-const downloadFailure = (error: unknown): ExternalIngestionOutcome => {
+const downloadFailure = (error: unknown): ExternalIngestionResult => {
   const reportedCategory = errorField(error, 'category')
   const unsafeCategory =
     typeof reportedCategory === 'string' ? reportedCategory : ''
@@ -507,7 +511,6 @@ const createMaterialFields = (
     source: {
       type: 'import',
       platform: candidate.provider,
-      externalCreativeId: candidate.providerAssetKey,
       assetKind: candidate.mediaRole,
       isOriginal: true,
       importedAt: new Date(),
@@ -530,7 +533,8 @@ const plannedExternalStorageKey = (
 
 const ingestValidatedCandidate = async (
   candidate: NormalizedGuangdadaAsset,
-): Promise<ExternalIngestionOutcome> => {
+  downloadState: { downloaded: boolean },
+): Promise<ExternalIngestionResult> => {
   try {
     const preDownload = await preDownloadMapping(candidate)
     if (preDownload) return preDownload
@@ -548,6 +552,7 @@ const ingestValidatedCandidate = async (
   } catch (error: unknown) {
     return downloadFailure(error)
   }
+  downloadState.downloaded = true
 
   if (
     !Buffer.isBuffer(downloaded.buffer) ||
@@ -568,7 +573,7 @@ const ingestValidatedCandidate = async (
   const cleanupAndMapWinner = async (
     winner: MaterialRecord,
     kind: 'created' | 'contentReused' = 'contentReused',
-  ): Promise<ExternalIngestionOutcome> => {
+  ): Promise<ExternalIngestionResult> => {
     if (
       materialStorageKey(winner) !== plannedStorageKey &&
       !(await cleanupOwnObject(plannedStorageKey))
@@ -667,7 +672,7 @@ const ingestValidatedCandidate = async (
     }
   }
 
-  const reconciliationFailed = (): ExternalIngestionOutcome => ({
+  const reconciliationFailed = (): ExternalIngestionResult => ({
     kind: 'failed',
     retryable: true,
     category: 'canonical_reconciliation_failed',
@@ -676,10 +681,10 @@ const ingestValidatedCandidate = async (
   const cleanupDifferentWinner = async (
     winner: MaterialRecord,
     kind: 'created' | 'contentReused' = 'contentReused',
-  ): Promise<ExternalIngestionOutcome> => cleanupAndMapWinner(winner, kind)
+  ): Promise<ExternalIngestionResult> => cleanupAndMapWinner(winner, kind)
 
   const reconcileUnknownMaterialWrite =
-    async (): Promise<ExternalIngestionOutcome> => {
+    async (): Promise<ExternalIngestionResult> => {
       let committed: MaterialRecord | null
       let winner: MaterialRecord | null
       try {
@@ -705,7 +710,7 @@ const ingestValidatedCandidate = async (
       }
     }
 
-  const resolveLosingUpload = async (): Promise<ExternalIngestionOutcome> => {
+  const resolveLosingUpload = async (): Promise<ExternalIngestionResult> => {
     let reconciliationUnavailable = false
     for (
       let attempt = 0;
@@ -773,14 +778,22 @@ export const ingestExternalMaterial = async (
   input: NormalizedGuangdadaAsset,
 ): Promise<ExternalIngestionOutcome> => {
   const candidate = validateCandidate(input)
-  if (!candidate) return { kind: 'invalid', reason: 'invalid_candidate' }
+  if (!candidate)
+    return {
+      kind: 'invalid',
+      reason: 'invalid_candidate',
+      downloaded: false,
+    }
+  const downloadState = { downloaded: false }
   try {
-    return await ingestValidatedCandidate(candidate)
+    const result = await ingestValidatedCandidate(candidate, downloadState)
+    return { ...result, downloaded: downloadState.downloaded }
   } catch {
     return {
       kind: 'failed',
       retryable: true,
       category: 'unexpected_ingestion_failure',
+      downloaded: downloadState.downloaded,
     }
   }
 }

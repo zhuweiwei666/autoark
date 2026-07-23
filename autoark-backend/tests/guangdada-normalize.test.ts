@@ -248,6 +248,100 @@ describe('Guangdada normalization', () => {
     expect(equivalent.mediaUrl).toBe(reorderedUrl)
     expect(first.providerAssetKey).toBe(equivalent.providerAssetKey)
   })
+
+  it('keeps URL fallback identity stable across signed-query rotation while distinguishing paths', () => {
+    const [first, rotated, differentPath] = [
+      {
+        mediaUrl:
+          'https://cdn.example/assets/video.mp4?signature=first&expires=100',
+        pageUrl: 'https://provider.example/ad/record?signature=first',
+      },
+      {
+        mediaUrl:
+          'https://cdn.example/assets/video.mp4?signature=second&expires=200',
+        pageUrl: 'https://provider.example/ad/record?signature=second',
+      },
+      {
+        mediaUrl:
+          'https://cdn.example/assets/other.mp4?signature=first&expires=100',
+        pageUrl: 'https://provider.example/ad/record?signature=third',
+      },
+    ].map(({ mediaUrl, pageUrl }) =>
+      normalizeGuangdadaAds([
+        {
+          package_name: 'Package',
+          source_page_url: pageUrl,
+          videos: [{ url: mediaUrl }],
+        },
+      ])[0],
+    )
+
+    expect(first.providerAssetKey).toBe(rotated.providerAssetKey)
+    expect(first.providerAssetKey).not.toBe(differentPath.providerAssetKey)
+  })
+
+  it('keeps unlabeled package grouping stable across signed-query rotation while distinguishing paths', () => {
+    const [first, rotated, differentPath] = [
+      'https://cdn.example/assets/video.mp4?signature=first&expires=100',
+      'https://cdn.example/assets/video.mp4?signature=second&expires=200',
+      'https://cdn.example/assets/other.mp4?signature=first&expires=100',
+    ].map((url) =>
+      normalizeGuangdadaAds([
+        {
+          videos: [{ url }],
+        },
+      ])[0],
+    )
+
+    expect(first.packageKey).toBe(rotated.packageKey)
+    expect(first.packageKey).not.toBe(differentPath.packageKey)
+  })
+
+  it('distinguishes fallback provider identity by record, type, index, and path', () => {
+    const baseline = normalizeGuangdadaAds([
+      {
+        id: 'record-a',
+        videos: [{ url: 'https://cdn.example/assets/media.bin?signature=a' }],
+      },
+    ])[0]
+    const differentRecord = normalizeGuangdadaAds([
+      {
+        id: 'record-b',
+        videos: [{ url: 'https://cdn.example/assets/media.bin?signature=b' }],
+      },
+    ])[0]
+    const differentType = normalizeGuangdadaAds([
+      {
+        id: 'record-a',
+        images: [{ url: 'https://cdn.example/assets/media.bin?signature=c' }],
+      },
+    ])[0]
+    const differentIndex = normalizeGuangdadaAds([
+      {
+        id: 'record-a',
+        videos: [
+          { url: 'https://cdn.example/assets/media.bin?signature=d' },
+          { url: 'https://cdn.example/assets/media.bin?signature=e' },
+        ],
+      },
+    ])[1]
+    const differentPath = normalizeGuangdadaAds([
+      {
+        id: 'record-a',
+        videos: [{ url: 'https://cdn.example/assets/other.bin?signature=f' }],
+      },
+    ])[0]
+
+    expect(
+      new Set([
+        baseline.providerAssetKey,
+        differentRecord.providerAssetKey,
+        differentType.providerAssetKey,
+        differentIndex.providerAssetKey,
+        differentPath.providerAssetKey,
+      ]).size,
+    ).toBe(5)
+  })
 })
 
 describe('MaterialOriginMapping model', () => {

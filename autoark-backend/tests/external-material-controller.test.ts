@@ -324,6 +324,73 @@ describe('external material controller and routes', () => {
     })
   })
 
+  it('returns a fixed non-success response when sync is disabled', async () => {
+    mockEnqueue.mockResolvedValueOnce({
+      enqueued: false,
+      status: 'disabled',
+      runId: 'run-secret-id',
+      request: {
+        provider: 'guangdada',
+        mode: 'scheduled',
+        dryRun: false,
+        recentDays: 3,
+        limit: 500,
+      },
+    })
+
+    const response = await request(app)
+      .post('/api/materials/external/guangdada/sync')
+      .set('x-test-role', 'manager')
+      .send({})
+
+    expect(response.status).toBe(503)
+    expect(response.body).toEqual({
+      success: false,
+      message: '外部素材同步当前不可用',
+    })
+    expect(JSON.stringify(response.body)).not.toMatch(
+      /run-secret|key|config|disabled|guangdada/i,
+    )
+  })
+
+  it.each([
+    ['duplicate', 409],
+    ['unavailable', 503],
+  ] as const)(
+    'preserves the %s admission status contract',
+    async (status, responseStatus) => {
+      mockEnqueue.mockResolvedValueOnce({
+        enqueued: false,
+        status,
+        request: {
+          provider: 'guangdada',
+          mode: 'scheduled',
+          dryRun: false,
+          recentDays: 3,
+          limit: 500,
+        },
+      })
+
+      const response = await request(app)
+        .post('/api/materials/external/guangdada/sync')
+        .set('x-test-role', 'manager')
+        .send({})
+
+      expect(response.status).toBe(responseStatus)
+      expect(response.body).toEqual({
+        success: true,
+        data: {
+          provider: 'guangdada',
+          mode: 'scheduled',
+          dryRun: false,
+          request: { recentDays: 3, limit: 500 },
+          status,
+          enqueued: false,
+        },
+      })
+    },
+  )
+
   it.each([
     [{ mode: 'canary10', dryRun: false, unknown: true }],
     [{ mode: 'not-a-mode', dryRun: false }],

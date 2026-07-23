@@ -42,6 +42,7 @@ import {
   acquireExternalMaterialLock,
   checkpointExternalMaterialRunWithFence,
   claimExternalMaterialDelivery,
+  closeExternalMaterialWorkerInstance,
   handleExternalMaterialWorkerFailure,
   processExternalMaterialSyncJob,
   releaseExternalMaterialLock,
@@ -2201,12 +2202,29 @@ describe('external material worker orchestration', () => {
       { provider: 'guangdada', providerAssetKey: 'bad', estimatedValue: 7 },
       { provider: 'guangdada', providerAssetKey: 'retry', estimatedValue: 6 },
     ]
-    const retryable = { kind: 'failed', retryable: true, category: 'network' }
+    const retryable = {
+      kind: 'failed',
+      retryable: true,
+      category: 'origin_mapping_failed',
+      downloaded: false,
+    }
     const ingest = jest
       .fn()
-      .mockResolvedValueOnce({ kind: 'alreadySeen', materialId: 'm1' })
-      .mockResolvedValueOnce({ kind: 'created', materialId: 'm2' })
-      .mockResolvedValueOnce({ kind: 'invalid', reason: 'invalid_media' })
+      .mockResolvedValueOnce({
+        kind: 'alreadySeen',
+        materialId: 'm1',
+        downloaded: false,
+      })
+      .mockResolvedValueOnce({
+        kind: 'created',
+        materialId: 'm2',
+        downloaded: true,
+      })
+      .mockResolvedValueOnce({
+        kind: 'invalid',
+        reason: 'invalid_candidate',
+        downloaded: false,
+      })
       .mockResolvedValueOnce(retryable)
       .mockResolvedValueOnce(retryable)
       .mockResolvedValueOnce(retryable)
@@ -2227,7 +2245,7 @@ describe('external material worker orchestration', () => {
         discovered: 4,
         considered: 4,
         alreadySeen: 1,
-        downloaded: 3,
+        downloaded: 1,
         contentReused: 0,
         newlyCreated: 1,
         invalid: 1,
@@ -2242,6 +2260,48 @@ describe('external material worker orchestration', () => {
       }),
       expect.any(Object),
     )
+  })
+
+  it('counts a candidate download once when a later ingestion retry is pre-download reused', async () => {
+    const asset = {
+      provider: 'guangdada',
+      providerAssetKey: 'retry-after-download',
+      estimatedValue: 9,
+    }
+    const ingest = jest
+      .fn()
+      .mockResolvedValueOnce({
+        kind: 'failed',
+        retryable: true,
+        category: 'origin_mapping_failed',
+        downloaded: true,
+      })
+      .mockResolvedValueOnce({
+        kind: 'alreadySeen',
+        materialId: 'material-reused-on-retry',
+        downloaded: false,
+      })
+    const deps = workerDependencies({
+      fetchAds: jest
+        .fn()
+        .mockResolvedValue({ data: [{}], pagination: {} }),
+      normalizeAds: jest.fn().mockReturnValue([asset]),
+      ingest,
+    })
+
+    await expect(
+      processExternalMaterialSyncJob(job(), deps),
+    ).resolves.toMatchObject({
+      status: 'completed',
+      counters: expect.objectContaining({
+        discovered: 1,
+        considered: 1,
+        alreadySeen: 1,
+        downloaded: 1,
+        failed: 0,
+      }),
+    })
+    expect(ingest).toHaveBeenCalledTimes(2)
   })
 
   it('pauses recurring sync atomically on 401/403 without persisting provider error text', async () => {
@@ -2397,7 +2457,6 @@ describe('external material worker orchestration', () => {
   })
 
   const expectNoStaleContinuationSideEffects = (deps: any) => {
-    expect(deps.runs.get).not.toHaveBeenCalled()
     expect(deps.runs.update).not.toHaveBeenCalled()
     expect(deps.states.get).not.toHaveBeenCalled()
     expect(deps.states.update).not.toHaveBeenCalled()
@@ -2496,6 +2555,111 @@ describe('external material worker orchestration', () => {
     expect(retry.fetchAds).not.toHaveBeenCalled()
   })
 
+  it('re-enqueues the current generation after an older continuation retry loses its claim', async () => {
+    const currentIntent = {
+      _id: 'run-1',
+      provider: 'guangdada',
+      mode: request.mode,
+      dryRun: false,
+      request: { recentDays: 3, limit: 10 },
+      status: 'deferred',
+      counters: { ...counters(), deferred: 2 },
+      cursor: null,
+      deferCount: 2,
+      continuationPending: true,
+      continuationGeneration: 2,
+      continuationJobId:
+        'external-material-guangdada-continuation-run-1-2',
+      continuationDueAt: new Date('2026-07-23T00:02:00.000Z'),
+      resumeRequired: false,
+    }
+    const deps = workerDependencies({
+      runs: {
+        ...workerDependencies().runs,
+        claimDelivery: jest.fn().mockResolvedValue(null),
+        get: jest.fn().mockResolvedValue(currentIntent),
+      },
+    })
+
+    await expect(
+      processExternalMaterialSyncJob(
+        continuationJob(
+          'external-material-guangdada-continuation-run-1-1',
+          1,
+          1,
+        ),
+        deps,
+      ),
+    ).resolves.toEqual({
+      status: 'deferred',
+      counters: currentIntent.counters,
+    })
+    expect(deps.runs.get).toHaveBeenCalledWith('run-1')
+    expect(deps.enqueueContinuation).toHaveBeenCalledWith({
+      runId: 'run-1',
+      provider: 'guangdada',
+      request,
+      deferCount: 2,
+      generation: 2,
+      jobId: 'external-material-guangdada-continuation-run-1-2',
+      dueAt: new Date('2026-07-23T00:02:00.000Z'),
+    })
+    expect(deps.runs.update).not.toHaveBeenCalled()
+    expect(deps.fetchAds).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['feature disabled', { featureEnabled: false }],
+    ['API key missing', { apiKeyPresent: false }],
+  ])(
+    'does not re-enqueue the current generation when %s',
+    async (_case, gateOverride) => {
+      const currentIntent = {
+        _id: 'run-1',
+        provider: 'guangdada',
+        mode: request.mode,
+        dryRun: false,
+        request: { recentDays: 3, limit: 10 },
+        status: 'deferred',
+        counters: { ...counters(), deferred: 2 },
+        cursor: null,
+        deferCount: 2,
+        continuationPending: true,
+        continuationGeneration: 2,
+        continuationJobId:
+          'external-material-guangdada-continuation-run-1-2',
+        continuationDueAt: new Date('2026-07-23T00:02:00.000Z'),
+        resumeRequired: false,
+      }
+      const deps = workerDependencies({
+        ...gateOverride,
+        runs: {
+          ...workerDependencies().runs,
+          claimDelivery: jest.fn().mockResolvedValue(null),
+          get: jest.fn().mockResolvedValue(currentIntent),
+        },
+      })
+
+      await expect(
+        processExternalMaterialSyncJob(
+          continuationJob(
+            'external-material-guangdada-continuation-run-1-1',
+            1,
+            1,
+          ),
+          deps,
+        ),
+      ).resolves.toEqual({
+        status: 'deferred',
+        counters: currentIntent.counters,
+      })
+      expect(deps.runs.get).toHaveBeenCalledWith('run-1')
+      expect(deps.enqueueContinuation).not.toHaveBeenCalled()
+      expect(deps.runs.update).not.toHaveBeenCalled()
+      expect(deps.fetchAds).not.toHaveBeenCalled()
+    },
+  )
+
   it.each(['completed', 'failed'])(
     'ignores a continuation for a terminal %s run',
     async (status) => {
@@ -2520,6 +2684,7 @@ describe('external material worker orchestration', () => {
             ? terminalRun
             : null,
       )
+      deps.runs.get.mockResolvedValue(terminalRun)
 
       await expect(
         processExternalMaterialSyncJob(
@@ -3725,6 +3890,106 @@ describe('external material worker orchestration', () => {
         alreadySeen: 2000,
       }),
     })
+  })
+
+  it('bounds graceful worker shutdown and force closes after the deadline', async () => {
+    const pause = jest.fn().mockReturnValue(new Promise<void>(() => undefined))
+    const close = jest.fn().mockResolvedValue(undefined)
+    const waitForTimeout = jest.fn().mockResolvedValue(undefined)
+
+    await closeExternalMaterialWorkerInstance(
+      { pause, close },
+      { gracefulTimeoutMs: 250, waitForTimeout },
+    )
+
+    expect(waitForTimeout).toHaveBeenCalledWith(250)
+    expect(pause).toHaveBeenCalledTimes(1)
+    expect(close).toHaveBeenCalledTimes(1)
+    expect(close).toHaveBeenCalledWith(true)
+  })
+
+  it('closes normally after active work drains within the deadline', async () => {
+    const pause = jest.fn().mockResolvedValue(undefined)
+    const close = jest.fn().mockResolvedValue(undefined)
+    const waitForTimeout = jest
+      .fn()
+      .mockReturnValue(new Promise<void>(() => undefined))
+
+    await closeExternalMaterialWorkerInstance(
+      { pause, close },
+      { gracefulTimeoutMs: 250, waitForTimeout },
+    )
+
+    expect(pause).toHaveBeenCalledTimes(1)
+    expect(close).toHaveBeenCalledTimes(1)
+    expect(close).toHaveBeenCalledWith()
+  })
+
+  it('force closes when pausing the worker rejects', async () => {
+    const pause = jest.fn().mockRejectedValue(new Error('pause failed'))
+    const close = jest.fn().mockResolvedValue(undefined)
+    const waitForTimeout = jest
+      .fn()
+      .mockReturnValue(new Promise<void>(() => undefined))
+
+    await closeExternalMaterialWorkerInstance(
+      { pause, close },
+      { gracefulTimeoutMs: 250, waitForTimeout },
+    )
+
+    expect(pause).toHaveBeenCalledTimes(1)
+    expect(close).toHaveBeenCalledTimes(1)
+    expect(close).toHaveBeenCalledWith(true)
+  })
+
+  it('awaits normal close completion after the worker drains', async () => {
+    let resolveClose!: () => void
+    let closeStarted!: () => void
+    const closeStartedPromise = new Promise<void>((resolve) => {
+      closeStarted = resolve
+    })
+    const closePromise = new Promise<void>((resolve) => {
+      resolveClose = resolve
+    })
+    const pause = jest.fn().mockResolvedValue(undefined)
+    const close = jest.fn().mockImplementation(() => {
+      closeStarted()
+      return closePromise
+    })
+    const waitForTimeout = jest
+      .fn()
+      .mockReturnValue(new Promise<void>(() => undefined))
+    let settled = false
+
+    const shutdown = closeExternalMaterialWorkerInstance(
+      { pause, close },
+      { gracefulTimeoutMs: 250, waitForTimeout },
+    ).finally(() => {
+      settled = true
+    })
+    await closeStartedPromise
+
+    expect(settled).toBe(false)
+    resolveClose()
+    await expect(shutdown).resolves.toBeUndefined()
+    expect(settled).toBe(true)
+  })
+
+  it('propagates a normal close rejection after the worker drains', async () => {
+    const closeError = new Error('worker close failed')
+    const pause = jest.fn().mockResolvedValue(undefined)
+    const close = jest.fn().mockRejectedValue(closeError)
+    const waitForTimeout = jest
+      .fn()
+      .mockReturnValue(new Promise<void>(() => undefined))
+
+    await expect(
+      closeExternalMaterialWorkerInstance(
+        { pause, close },
+        { gracefulTimeoutMs: 250, waitForTimeout },
+      ),
+    ).rejects.toBe(closeError)
+    expect(close).toHaveBeenCalledWith()
   })
 })
 

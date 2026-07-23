@@ -80,4 +80,29 @@ describe('material smart groups', () => {
     assert.match(service, /\/api\/materials\/external\/guangdada\/status/)
     assert.match(service, /\/api\/materials\/external\/guangdada\/(sync|pause|resume)/)
   })
+
+  it('protects smart groups and external status with independent latest-request runners', () => {
+    const page = readSource('src/pages/MaterialLibraryPage.tsx')
+
+    assert.match(
+      page,
+      /smartGroupsRequestRunnerRef\s*=\s*useRef\(createLatestRequestRunner\(\)\)/,
+    )
+    assert.match(
+      page,
+      /externalStatusRequestRunnerRef\s*=\s*useRef\(createLatestRequestRunner\(\)\)/,
+    )
+    assert.match(
+      page,
+      /smartGroupsRequestRunnerRef\.current\.run\([\s\S]*loadMaterialSmartGroups\(signal\)/,
+    )
+    assert.match(
+      page,
+      /externalStatusRequestRunnerRef\.current\.run\([\s\S]*loadExternalMaterialStatus\(signal\)/,
+    )
+    assert.match(
+      page,
+      /smartGroupsRequestRunnerRef\.current\.abort\(\)[\s\S]*externalStatusRequestRunnerRef\.current\.abort\(\)/,
+    )
+  })
 })

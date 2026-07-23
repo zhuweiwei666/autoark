@@ -153,8 +153,10 @@ const readJson = async <T>(response: Response, fallback: string): Promise<T> => 
   return payload.data as T
 }
 
-export const loadMaterialSmartGroups = async (): Promise<MaterialSmartGroupNode[]> => {
-  const response = await authFetch('/api/materials/smart-groups')
+export const loadMaterialSmartGroups = async (
+  signal?: AbortSignal,
+): Promise<MaterialSmartGroupNode[]> => {
+  const response = await authFetch('/api/materials/smart-groups', { signal })
   return readJson<MaterialSmartGroupNode[]>(response, '智能分组暂不可用')
 }
 
@@ -203,8 +205,10 @@ export const readMaterialOriginsResponse = async (
   return readJson<MaterialOriginsResult>(response, '来源详情暂不可用')
 }
 
-export const loadExternalMaterialStatus = async (): Promise<ExternalMaterialStatus> => {
-  const response = await authFetch('/api/materials/external/guangdada/status')
+export const loadExternalMaterialStatus = async (
+  signal?: AbortSignal,
+): Promise<ExternalMaterialStatus> => {
+  const response = await authFetch('/api/materials/external/guangdada/status', { signal })
   return readJson<ExternalMaterialStatus>(response, '同步状态暂不可用')
 }
 
@@ -234,6 +238,19 @@ export const readExternalMaterialSyncResponse = async (
   if (isDuplicate) {
     return payload.data as ExternalMaterialSyncResult
   }
+  if (!response.ok && payload?.data?.status === 'disabled') {
+    throw new MaterialSmartGroupRequestError('外部素材同步未启用', response.status)
+  }
+  if (
+    !response.ok &&
+    payload?.success === true &&
+    payload?.data?.status === 'unavailable'
+  ) {
+    throw new MaterialSmartGroupRequestError(
+      '外部素材同步服务暂不可用',
+      response.status,
+    )
+  }
   if (!response.ok || !payload?.success) {
     throw new MaterialSmartGroupRequestError(
       payload?.message || payload?.error || '同步请求失败',
@@ -246,9 +263,12 @@ export const readExternalMaterialSyncResponse = async (
 export const externalMaterialSyncFeedback = (
   result: ExternalMaterialSyncResult,
   action: string,
-): string => (
-  result.status === 'duplicate' ? '已有任务运行中' : `${action}请求已提交`
-)
+): string => {
+  if (result.status === 'duplicate') return '已有任务运行中'
+  if (result.status === 'disabled') return '外部素材同步未启用'
+  if (result.status === 'unavailable') return '外部素材同步服务暂不可用'
+  return `${action}请求已提交`
+}
 
 export const setExternalMaterialPaused = async (paused: boolean): Promise<void> => {
   const action = paused ? 'pause' : 'resume'

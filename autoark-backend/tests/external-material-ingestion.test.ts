@@ -133,6 +133,73 @@ describe('external material ingestion', () => {
     })
   })
 
+  it('reports no download for invalid candidates, database lookup failures, and download errors', async () => {
+    const invalid = await ingestExternalMaterial(
+      candidate('asset-invalid-before-download', {
+        mediaUrl: 'http://private.invalid/media.mp4',
+      }),
+    )
+
+    mockOriginFindOne.mockRejectedValueOnce(new Error('database unavailable'))
+    const lookupFailed = await ingestExternalMaterial(
+      candidate('asset-lookup-before-download'),
+    )
+
+    mockDownloadRemoteMedia.mockRejectedValueOnce(
+      Object.assign(new Error('network unavailable'), { category: 'network' }),
+    )
+    const downloadFailed = await ingestExternalMaterial(
+      candidate('asset-download-error'),
+    )
+
+    expect(invalid).toMatchObject({
+      kind: 'invalid',
+      reason: 'invalid_candidate',
+      downloaded: false,
+    })
+    expect(lookupFailed).toMatchObject({
+      kind: 'failed',
+      category: 'database_lookup_failed',
+      downloaded: false,
+    })
+    expect(downloadFailed).toMatchObject({
+      kind: 'failed',
+      category: 'download_network',
+      downloaded: false,
+    })
+  })
+
+  it('reports a download after remote content returns even when later processing rejects it', async () => {
+    mockDownloadRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.alloc(0),
+      mimeType: 'video/mp4',
+      filename: 'empty.mp4',
+      host: 'cdn.example',
+    })
+
+    const result = await ingestExternalMaterial(
+      candidate('asset-invalid-after-download'),
+    )
+
+    mockMaterialFindOne.mockRejectedValueOnce(
+      new Error('database unavailable after download'),
+    )
+    const lookupFailed = await ingestExternalMaterial(
+      candidate('asset-lookup-after-download'),
+    )
+
+    expect(result).toEqual({
+      kind: 'invalid',
+      reason: 'invalid_media',
+      downloaded: true,
+    })
+    expect(lookupFailed).toMatchObject({
+      kind: 'failed',
+      category: 'database_lookup_failed',
+      downloaded: true,
+    })
+  })
+
   it('updates an active provider observation without downloading or uploading again', async () => {
     const existing = material('material-already-seen')
     mockOriginFindOne.mockResolvedValue({
@@ -151,9 +218,11 @@ describe('external material ingestion', () => {
     )
 
     expect(result).toEqual({
+      downloaded: expect.any(Boolean),
       kind: 'alreadySeen',
       materialId: 'material-already-seen',
     })
+    expect(result.downloaded).toBe(false)
     expect(mockDownloadRemoteMedia).not.toHaveBeenCalled()
     expect(mockUploadBufferToR2).not.toHaveBeenCalled()
     expect(mockOriginFindOneAndUpdate).toHaveBeenCalledWith(
@@ -210,6 +279,7 @@ describe('external material ingestion', () => {
     )
     expect(JSON.stringify(result)).not.toContain(secretSentinel)
     expect(result).toEqual({
+      downloaded: expect.any(Boolean),
       kind: 'failed',
       retryable: true,
       category: 'origin_mapping_failed',
@@ -227,7 +297,11 @@ describe('external material ingestion', () => {
         candidate('asset-invalid-media-origin', { mediaUrl }),
       )
 
-      expect(result).toEqual({ kind: 'invalid', reason: 'invalid_candidate' })
+      expect(result).toEqual({
+        downloaded: expect.any(Boolean),
+        kind: 'invalid',
+        reason: 'invalid_candidate',
+      })
       expect(mockDownloadRemoteMedia).not.toHaveBeenCalled()
       expect(mockOriginFindOneAndUpdate).not.toHaveBeenCalled()
       expect(JSON.stringify(result)).not.toContain('SECRET_SENTINEL')
@@ -246,6 +320,7 @@ describe('external material ingestion', () => {
       )
 
       expect(result).toEqual({
+        downloaded: expect.any(Boolean),
         kind: 'created',
         materialId: 'material-created',
       })
@@ -275,6 +350,7 @@ describe('external material ingestion', () => {
     const result = await ingestExternalMaterial(candidate('asset-stale-origin'))
 
     expect(result).toEqual({
+      downloaded: expect.any(Boolean),
       kind: 'contentReused',
       materialId: 'material-global-winner',
     })
@@ -316,6 +392,7 @@ describe('external material ingestion', () => {
     expect(mockDownloadRemoteMedia).toHaveBeenCalledTimes(1)
     expect(mockUploadBufferToR2).not.toHaveBeenCalled()
     expect(result).toEqual({
+      downloaded: expect.any(Boolean),
       kind: 'contentReused',
       materialId: 'material-downloaded-winner',
     })
@@ -338,6 +415,7 @@ describe('external material ingestion', () => {
     )
 
     expect(result).toEqual({
+      downloaded: expect.any(Boolean),
       kind: 'created',
       materialId: 'material-deleted-content',
     })
@@ -410,6 +488,7 @@ describe('external material ingestion', () => {
     )
 
     expect(result).toEqual({
+      downloaded: expect.any(Boolean),
       kind: 'created',
       materialId: 'material-deleted-d2-exact',
     })
@@ -489,6 +568,7 @@ describe('external material ingestion', () => {
     )
 
     expect(result).toEqual({
+      downloaded: expect.any(Boolean),
       kind: 'created',
       materialId: 'material-visible-after-race',
     })
@@ -521,8 +601,13 @@ describe('external material ingestion', () => {
     const first = await ingestExternalMaterial(candidate('asset-a'))
     const second = await ingestExternalMaterial(candidate('asset-b'))
 
-    expect(first).toEqual({ kind: 'created', materialId: 'material-shared' })
+    expect(first).toEqual({
+      downloaded: expect.any(Boolean),
+      kind: 'created',
+      materialId: 'material-shared',
+    })
     expect(second).toEqual({
+      downloaded: expect.any(Boolean),
       kind: 'contentReused',
       materialId: 'material-shared',
     })
@@ -559,7 +644,12 @@ describe('external material ingestion', () => {
       candidate('asset-exact-canonical'),
     )
 
-    expect(result).toEqual({ kind: 'created', materialId: 'material-created' })
+    expect(result).toEqual({
+      downloaded: expect.any(Boolean),
+      kind: 'created',
+      materialId: 'material-created',
+    })
+    expect(result.downloaded).toBe(true)
     expect(mockUploadBufferToR2).toHaveBeenCalledWith(
       expect.objectContaining({
         buffer: bytes,
@@ -595,6 +685,7 @@ describe('external material ingestion', () => {
     ).toBe(true)
     expect(createdPayload).not.toHaveProperty('organizationId')
     expect(createdPayload).not.toHaveProperty('folder')
+    expect(createdPayload.source).not.toHaveProperty('externalCreativeId')
   })
 
   it('plans a stable R2 key before upload and separates provider assets with identical bytes', async () => {
@@ -629,6 +720,7 @@ describe('external material ingestion', () => {
     )
 
     expect(first).toEqual({
+      downloaded: expect.any(Boolean),
       kind: 'failed',
       retryable: true,
       category: 'storage_upload_failed',
@@ -670,11 +762,16 @@ describe('external material ingestion', () => {
     const second = await ingestExternalMaterial(candidate('asset-put-retry'))
 
     expect(first).toEqual({
+      downloaded: expect.any(Boolean),
       kind: 'failed',
       retryable: true,
       category: 'storage_upload_failed',
     })
-    expect(second).toEqual({ kind: 'created', materialId: 'material-created' })
+    expect(second).toEqual({
+      downloaded: expect.any(Boolean),
+      kind: 'created',
+      materialId: 'material-created',
+    })
     const keys = mockUploadBufferToR2.mock.calls.map(([params]) => params.key)
     expect(keys).toEqual([
       plannedExternalKey('asset-put-retry', bytes),
@@ -714,6 +811,7 @@ describe('external material ingestion', () => {
     const result = await ingestExternalMaterial(candidate('asset-db-committed'))
 
     expect(result).toEqual({
+      downloaded: expect.any(Boolean),
       kind: 'created',
       materialId: 'material-db-committed',
     })
@@ -739,6 +837,7 @@ describe('external material ingestion', () => {
     )
 
     expect(result).toEqual({
+      downloaded: expect.any(Boolean),
       kind: 'failed',
       retryable: true,
       category: 'canonical_write_failed',
@@ -804,11 +903,13 @@ describe('external material ingestion', () => {
     )
 
     expect(firstResult).toEqual({
+      downloaded: expect.any(Boolean),
       kind: 'failed',
       retryable: true,
       category: 'canonical_write_failed',
     })
     expect(retryResult).toEqual({
+      downloaded: expect.any(Boolean),
       kind: 'contentReused',
       materialId: 'material-committed-after-query',
     })
@@ -832,6 +933,7 @@ describe('external material ingestion', () => {
     )
 
     expect(result).toEqual({
+      downloaded: expect.any(Boolean),
       kind: 'failed',
       retryable: true,
       category: 'canonical_reconciliation_failed',
@@ -871,6 +973,7 @@ describe('external material ingestion', () => {
     const result = await ingestExternalMaterial(candidate('asset-other-winner'))
 
     expect(result).toEqual({
+      downloaded: expect.any(Boolean),
       kind: 'contentReused',
       materialId: 'material-other-winner',
     })
@@ -923,11 +1026,13 @@ describe('external material ingestion', () => {
     )
 
     expect(first).toEqual({
+      downloaded: expect.any(Boolean),
       kind: 'failed',
       retryable: true,
       category: 'storage_cleanup_failed',
     })
     expect(second).toEqual({
+      downloaded: expect.any(Boolean),
       kind: 'contentReused',
       materialId: 'material-cleanup-retry-winner',
     })
@@ -980,6 +1085,7 @@ describe('external material ingestion', () => {
     )
 
     expect(result).toEqual({
+      downloaded: expect.any(Boolean),
       kind: 'contentReused',
       materialId: 'material-referenced-key-winner',
     })
@@ -1007,6 +1113,7 @@ describe('external material ingestion', () => {
     )
 
     expect(result).toEqual({
+      downloaded: expect.any(Boolean),
       kind: 'contentReused',
       materialId: 'material-facebook',
     })
@@ -1039,7 +1146,11 @@ describe('external material ingestion', () => {
       candidate('asset-private-match'),
     )
 
-    expect(result).toEqual({ kind: 'created', materialId: 'material-created' })
+    expect(result).toEqual({
+      downloaded: expect.any(Boolean),
+      kind: 'created',
+      materialId: 'material-created',
+    })
     const canonicalQueries = mockMaterialFindOne.mock.calls
       .map(([query]) => query)
       .filter((query) => query?.['fingerprint.sha256'])
@@ -1207,6 +1318,7 @@ describe('external material ingestion', () => {
     )
 
     expect(result).toEqual({
+      downloaded: expect.any(Boolean),
       kind: 'failed',
       retryable: true,
       category: 'storage_cleanup_failed',
@@ -1249,6 +1361,7 @@ describe('external material ingestion', () => {
     const result = await ingestExternalMaterial(candidate('asset-origin-race'))
 
     expect(result).toEqual({
+      downloaded: expect.any(Boolean),
       kind: 'contentReused',
       materialId: 'material-origin-race',
     })
@@ -1345,10 +1458,12 @@ describe('external material ingestion', () => {
       const oldResult = await oldResultPromise
 
       expect(newResult).toEqual({
+        downloaded: expect.any(Boolean),
         kind: 'contentReused',
         materialId: 'material-new-observation',
       })
       expect(oldResult).toEqual({
+        downloaded: expect.any(Boolean),
         kind: 'contentReused',
         materialId: 'material-new-observation',
       })
@@ -1418,6 +1533,7 @@ describe('external material ingestion', () => {
       )
 
       expect(result).toEqual({
+        downloaded: expect.any(Boolean),
         kind: 'contentReused',
         materialId: 'material-newer-origin-observation',
       })
@@ -1457,6 +1573,7 @@ describe('external material ingestion', () => {
     )
 
     expect(result).toEqual({
+      downloaded: expect.any(Boolean),
       kind: 'failed',
       retryable: true,
       category: 'origin_mapping_stale',
@@ -1494,6 +1611,7 @@ describe('external material ingestion', () => {
       )
 
       expect(result).toEqual({
+        downloaded: expect.any(Boolean),
         kind: 'contentReused',
         materialId: 'material-origin-winner',
       })
@@ -1517,7 +1635,11 @@ describe('external material ingestion', () => {
       candidate('asset-mapping-retry'),
     )
 
-    expect(result).toEqual({ kind: 'created', materialId: 'material-created' })
+    expect(result).toEqual({
+      downloaded: expect.any(Boolean),
+      kind: 'created',
+      materialId: 'material-created',
+    })
     expect(mockOriginFindOneAndUpdate).toHaveBeenCalledTimes(3)
     expect(mockDownloadRemoteMedia).toHaveBeenCalledTimes(1)
     expect(mockUploadBufferToR2).toHaveBeenCalledTimes(1)
@@ -1558,11 +1680,13 @@ describe('external material ingestion', () => {
     )
 
     expect(first).toEqual({
+      downloaded: expect.any(Boolean),
       kind: 'failed',
       retryable: true,
       category: 'origin_mapping_failed',
     })
     expect(second).toEqual({
+      downloaded: expect.any(Boolean),
       kind: 'contentReused',
       materialId: 'material-mapping-failure',
     })
@@ -1600,6 +1724,7 @@ describe('external material ingestion', () => {
     )
 
     expect(result).toEqual({
+      downloaded: expect.any(Boolean),
       kind: 'contentReused',
       materialId: 'material-active-replacement',
     })
@@ -1629,9 +1754,22 @@ describe('external material ingestion', () => {
     const results = await ingestExternalMaterials([invalid, failed, valid])
 
     expect(results).toEqual([
-      { kind: 'invalid', reason: 'invalid_candidate' },
-      { kind: 'failed', retryable: true, category: 'download_network' },
-      { kind: 'created', materialId: 'material-created' },
+      {
+        kind: 'invalid',
+        reason: 'invalid_candidate',
+        downloaded: false,
+      },
+      {
+        kind: 'failed',
+        retryable: true,
+        category: 'download_network',
+        downloaded: false,
+      },
+      {
+        kind: 'created',
+        materialId: 'material-created',
+        downloaded: true,
+      },
     ])
     expect(mockDownloadRemoteMedia).toHaveBeenCalledTimes(2)
     expect(mockUploadBufferToR2).toHaveBeenCalledTimes(1)

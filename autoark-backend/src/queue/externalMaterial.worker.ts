@@ -50,6 +50,8 @@ const RESTORE_ATTEMPTS_DEFAULT = 2
 const RESTORE_ATTEMPTS_MAX = 3
 const RESTORE_TIMEOUT_DEFAULT_MS = 2_000
 const RESTORE_TIMEOUT_MAX_MS = 10_000
+const WORKER_CLOSE_TIMEOUT_DEFAULT_MS = 10_000
+const WORKER_CLOSE_TIMEOUT_MAX_MS = 60_000
 
 class ContinuationSchedulingError extends Error {
   constructor(originalError: unknown) {
@@ -1114,8 +1116,10 @@ const processClaimedExternalMaterialSyncRun = async (
 
           let outcome:
             Awaited<ReturnType<typeof ingestExternalMaterial>> | undefined
+          let downloadedForCandidate = false
           for (let attempt = 0; attempt < INGESTION_ATTEMPTS; attempt += 1) {
             outcome = await dependencies.ingest(assets[index])
+            downloadedForCandidate ||= outcome.downloaded === true
             if (!(await heartbeat())) {
               return finishLockLost()
             }
@@ -1139,12 +1143,15 @@ const processClaimedExternalMaterialSyncRun = async (
               kind: 'failed',
               retryable: true,
               category: 'unexpected_ingestion_failure',
+              downloaded: false,
             }
+          }
+          if (downloadedForCandidate) {
+            batchCounters.downloaded += 1
           }
           if (outcome.kind === 'alreadySeen') {
             batchCounters.alreadySeen += 1
           } else {
-            batchCounters.downloaded += 1
             if (outcome.kind === 'contentReused') {
               batchCounters.contentReused += 1
             } else if (outcome.kind === 'created') {
@@ -1401,33 +1408,33 @@ export const processExternalMaterialSyncJob = async (
     new Date(startedAt.getTime() + claimLeaseTtl(dependencies.claimLeaseTtlMs)),
   )
   if (!run) {
-    if (!isContinuation) {
-      const current = await dependencies.runs.get(runId)
-      if (!current) throw new Error('external_material_run_not_found')
-      if (current.continuationPending !== true) {
-        return { status: 'stale', counters: emptyCounters() }
-      }
-      const intent = pendingContinuationIntent(
-        runId,
-        provider,
-        request,
-        current,
-      )
-      if (!intent) {
-        return { status: 'stale', counters: emptyCounters() }
-      }
-      if (dependencies.featureEnabled && dependencies.apiKeyPresent) {
-        await dependencies.enqueueContinuation(intent)
-      }
-      return {
-        status: 'deferred',
-        counters: {
-          ...emptyCounters(),
-          ...(current.counters || {}),
-        },
-      }
+    const current = await dependencies.runs.get(runId)
+    if (!current) {
+      if (!isContinuation) throw new Error('external_material_run_not_found')
+      return { status: 'stale', counters: emptyCounters() }
     }
-    return { status: 'stale', counters: emptyCounters() }
+    if (current.continuationPending !== true) {
+      return { status: 'stale', counters: emptyCounters() }
+    }
+    const intent = pendingContinuationIntent(
+      runId,
+      provider,
+      request,
+      current,
+    )
+    if (!intent) {
+      return { status: 'stale', counters: emptyCounters() }
+    }
+    if (dependencies.featureEnabled && dependencies.apiKeyPresent) {
+      await dependencies.enqueueContinuation(intent)
+    }
+    return {
+      status: 'deferred',
+      counters: {
+        ...emptyCounters(),
+        ...(current.counters || {}),
+      },
+    }
   }
 
   try {
@@ -1484,6 +1491,51 @@ export const handleExternalMaterialWorkerFailure = async (
 
 export let externalMaterialWorker: Worker | null = null
 
+type ClosableExternalMaterialWorker = Pick<Worker, 'pause' | 'close'>
+
+interface ExternalMaterialWorkerCloseOptions {
+  gracefulTimeoutMs?: number
+  waitForTimeout?: (milliseconds: number) => Promise<void>
+}
+
+const waitForWorkerCloseTimeout = (milliseconds: number): Promise<void> =>
+  new Promise((resolve) => {
+    const timer = setTimeout(resolve, milliseconds)
+    timer.unref?.()
+  })
+
+export const closeExternalMaterialWorkerInstance = async (
+  worker: ClosableExternalMaterialWorker,
+  options: ExternalMaterialWorkerCloseOptions = {},
+): Promise<void> => {
+  const gracefulTimeoutMs = clampInteger(
+    options.gracefulTimeoutMs,
+    WORKER_CLOSE_TIMEOUT_DEFAULT_MS,
+    1,
+    WORKER_CLOSE_TIMEOUT_MAX_MS,
+  )
+  const gracefulResult = Promise.resolve()
+    .then(() => worker.pause())
+    .then(
+      () => 'drained' as const,
+      () => 'failed' as const,
+    )
+  const timedOut = (options.waitForTimeout ?? waitForWorkerCloseTimeout)(
+    gracefulTimeoutMs,
+  ).then(() => 'timed_out' as const)
+
+  const result = await Promise.race([gracefulResult, timedOut])
+  if (result === 'drained') {
+    await worker.close()
+    return
+  }
+
+  logger.warn(
+    '[ExternalMaterialWorker] Graceful drain did not complete; forcing close',
+  )
+  await worker.close(true)
+}
+
 export const initExternalMaterialWorker = async (
   redis: Redis | null = getRedisClient(),
 ): Promise<boolean> => {
@@ -1525,5 +1577,5 @@ export const closeExternalMaterialWorker = async (): Promise<void> => {
   const worker = externalMaterialWorker
   externalMaterialWorker = null
   workerRedis = null
-  if (worker) await worker.close()
+  if (worker) await closeExternalMaterialWorkerInstance(worker)
 }

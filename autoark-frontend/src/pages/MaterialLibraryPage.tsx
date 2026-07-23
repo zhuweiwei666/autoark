@@ -176,6 +176,8 @@ export default function MaterialLibraryPage() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const newFolderInputRef = useRef<HTMLInputElement>(null)
   const materialRequestRunnerRef = useRef(createLatestRequestRunner())
+  const smartGroupsRequestRunnerRef = useRef(createLatestRequestRunner())
+  const externalStatusRequestRunnerRef = useRef(createLatestRequestRunner())
   const canReadExternal = isSuperAdmin || Boolean(
     user?.permissions?.includes('materials:external:read') ||
     user?.permissions?.includes('materials:external:manage'),
@@ -193,13 +195,17 @@ export default function MaterialLibraryPage() {
     loadMaterials()
   }, [selection, filter, page])
 
-  useEffect(() => (
-    () => materialRequestRunnerRef.current.abort()
-  ), [])
+  useEffect(() => () => {
+    materialRequestRunnerRef.current.abort()
+    smartGroupsRequestRunnerRef.current.abort()
+    externalStatusRequestRunnerRef.current.abort()
+  }, [])
 
   useEffect(() => {
     if (!canManageExternal) {
+      externalStatusRequestRunnerRef.current.abort()
       setExternalStatus(null)
+      setExternalStatusError(false)
       return
     }
     void refreshExternalStatus()
@@ -246,28 +252,37 @@ export default function MaterialLibraryPage() {
     return () => document.removeEventListener('click', handleClick)
   }, [])
 
-  const refreshSmartGroups = async () => {
-    setSmartGroupsLoading(true)
-    setSmartGroupsError(false)
-    try {
-      setSmartGroups(await loadMaterialSmartGroups())
-    } catch {
-      setSmartGroups([])
-      setSmartGroupsError(true)
-    } finally {
-      setSmartGroupsLoading(false)
-    }
-  }
+  const refreshSmartGroups = () => (
+    smartGroupsRequestRunnerRef.current.run(
+      (signal) => loadMaterialSmartGroups(signal),
+      {
+        onStart: () => {
+          setSmartGroupsLoading(true)
+          setSmartGroupsError(false)
+        },
+        onSuccess: setSmartGroups,
+        onError: () => {
+          setSmartGroups([])
+          setSmartGroupsError(true)
+        },
+        onSettled: () => setSmartGroupsLoading(false),
+      },
+    )
+  )
 
-  const refreshExternalStatus = async () => {
-    setExternalStatusError(false)
-    try {
-      setExternalStatus(await loadExternalMaterialStatus())
-    } catch {
-      setExternalStatus(null)
-      setExternalStatusError(true)
-    }
-  }
+  const refreshExternalStatus = () => (
+    externalStatusRequestRunnerRef.current.run(
+      (signal) => loadExternalMaterialStatus(signal),
+      {
+        onStart: () => setExternalStatusError(false),
+        onSuccess: setExternalStatus,
+        onError: () => {
+          setExternalStatus(null)
+          setExternalStatusError(true)
+        },
+      },
+    )
+  )
 
   const selectSmartGroup = (group: MaterialSmartGroupNode) => {
     if (group.type !== 'facebook-account' && group.type !== 'external-package') return

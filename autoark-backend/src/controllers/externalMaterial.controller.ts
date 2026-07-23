@@ -19,6 +19,10 @@ const FAILURE_BODY = {
   success: false,
   message: '外部素材同步操作失败',
 }
+const SYNC_DISABLED_BODY = {
+  success: false,
+  message: '外部素材同步当前不可用',
+}
 
 const COUNTER_KEYS = [
   'discovered',
@@ -177,6 +181,9 @@ export const syncGuangdadaExternal = async (req: Request, res: Response) => {
       },
     })
 
+    if (result.status === 'disabled') {
+      return res.status(503).json(SYNC_DISABLED_BODY)
+    }
     const responseStatus = result.enqueued
       ? 202
       : result.status === 'duplicate'

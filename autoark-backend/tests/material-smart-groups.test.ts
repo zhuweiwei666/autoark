@@ -670,18 +670,35 @@ describe('Facebook material smart groups', () => {
         }),
       }),
     ]))
-    const packageGroup = pipeline
-      .find((stage: any) => stage.$facet)
-      .$facet.packages.find((stage: any) => stage.$group)
-    expect(packageGroup.$group).toMatchObject({
-      _id: '$packageKey',
-      materialIds: { $addToSet: '$materialId' },
-    })
-    const packageProjection = pipeline
-      .find((stage: any) => stage.$facet)
-      .$facet.packages.find((stage: any) => stage.$project)
-    expect(packageProjection.$project.count).toEqual({ $size: '$materialIds' })
-    expect(JSON.stringify(pipeline)).not.toContain('providerAssetKey')
+    const facet = pipeline.find((stage: any) => stage.$facet).$facet
+    expect(facet.global).toEqual([
+      { $group: { _id: '$materialId' } },
+      { $count: 'count' },
+    ])
+    expect(facet.packages).toEqual([
+      {
+        $group: {
+          _id: {
+            packageKey: '$packageKey',
+            materialId: '$materialId',
+          },
+          packageName: { $max: '$packageName' },
+          productName: { $max: '$productName' },
+        },
+      },
+      {
+        $group: {
+          _id: '$_id.packageKey',
+          packageName: { $max: '$packageName' },
+          productName: { $max: '$productName' },
+          count: { $sum: 1 },
+        },
+      },
+      { $sort: { productName: 1, packageName: 1, _id: 1 } },
+    ])
+    expect(JSON.stringify(pipeline)).not.toMatch(
+      /providerAssetKey|\$addToSet|\$size/,
+    )
   })
 
   it('returns only a safe paused boolean and status badge for the external provider', async () => {

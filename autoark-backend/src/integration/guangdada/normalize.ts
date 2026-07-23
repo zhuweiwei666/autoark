@@ -53,6 +53,13 @@ export const normalizeHttpsMediaUrl = (value: unknown): string | undefined => {
   return url.toString()
 }
 
+const providerMediaIdentityUrl = (value: unknown): string | undefined => {
+  const raw = validatedHttpsMediaUrl(value)
+  if (!raw) return undefined
+  const url = new URL(raw)
+  return `${url.origin}${url.pathname}`
+}
+
 const validatedHttpsMediaUrl = (value: unknown): string | undefined => {
   const raw = asTrimmedString(value)
   if (!raw) return undefined
@@ -177,7 +184,8 @@ const normalizeMedia = (
   const originalUrl = mediaUrl(media)
   if (!originalUrl) return undefined
   const normalizedUrl = normalizeHttpsMediaUrl(originalUrl)
-  if (!normalizedUrl) return undefined
+  const identityUrl = providerMediaIdentityUrl(originalUrl)
+  if (!normalizedUrl || !identityUrl) return undefined
 
   const labels = {
     packageName: context.packageName,
@@ -194,12 +202,15 @@ const normalizeMedia = (
     providerAssetKey: providerAssetKey({
       mediaId,
       recordId: context.recordId,
-      fallbackRecordId: fallbackRecordIdentity(labels, context.sourcePageUrl),
+      fallbackRecordId: fallbackRecordIdentity(
+        labels,
+        providerMediaIdentityUrl(context.sourcePageUrl),
+      ),
       mediaType,
       mediaIndex,
-      mediaUrl: normalizedUrl,
+      mediaUrl: identityUrl,
     }),
-    packageKey: `pkg_${sha256(packageIdentity(record, labels, context.recordId, normalizedUrl))}`,
+    packageKey: `pkg_${sha256(packageIdentity(record, labels, context.recordId, identityUrl))}`,
     mediaType,
     mediaRole: role,
     mediaIndex,

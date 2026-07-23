@@ -1065,6 +1065,51 @@ describe('restricted external material queries and origin routes', () => {
     )
   })
 
+  it('removes historical Guangdada external creative IDs without stripping Facebook IDs', async () => {
+    const guangdadaRow = {
+      _id: '665000000000000000000021',
+      name: 'Historical Guangdada material',
+      source: {
+        platform: 'guangdada',
+        importedBy: 'external-material-sync',
+        externalCreativeId: 'internal-provider-asset-key',
+        assetKind: 'primary',
+      },
+    }
+    const facebookRow = {
+      _id: '665000000000000000000022',
+      name: 'Facebook material',
+      source: {
+        platform: 'facebook',
+        externalCreativeId: 'facebook-creative-id',
+        assetKind: 'video',
+      },
+    }
+    mockMaterialAggregate.mockResolvedValueOnce([
+      {
+        data: [guangdadaRow, facebookRow],
+        total: [{ count: 2 }],
+      },
+    ])
+
+    const response = await request(app)
+      .get('/api/materials')
+      .set('x-test-role', 'reader')
+
+    expect(response.status).toBe(200)
+    expect(response.body.data.list).toEqual([
+      {
+        ...guangdadaRow,
+        source: {
+          platform: 'guangdada',
+          importedBy: 'external-material-sync',
+          assetKind: 'primary',
+        },
+      },
+      facebookRow,
+    ])
+  })
+
   it.each([
     ['default', {}],
     ['search', { search: 'Tenant' }],
