@@ -86,6 +86,34 @@ if [ -n "${AUTOARK_ENV_FILE:-}" ]; then
     exit 1
   fi
   ssh "$PROD_HOST" "chmod 600 $QUOTED_REMOTE_ENV_UPLOAD_CANDIDATE"
+
+  read -r -d '' REMOTE_PUBLISH_ENV_UPLOAD_SCRIPT <<'REMOTE_SCRIPT' || true
+# AUTOARK_PUBLISH_ENV_UPLOAD_V1
+set -euo pipefail
+
+upload_candidate_path="$1"
+upload_pending_path="$2"
+deploy_lock_file="$3"
+if ! command -v flock >/dev/null 2>&1; then
+  echo 'flock is required for production deployment.'
+  exit 1
+fi
+exec 9>"$deploy_lock_file"
+flock -x 9
+if [ ! -f "$upload_candidate_path" ]; then
+  echo 'Missing staged production environment upload.'
+  exit 1
+fi
+mv -f -- "$upload_candidate_path" "$upload_pending_path"
+chmod 600 "$upload_pending_path"
+REMOTE_SCRIPT
+
+  printf -v QUOTED_REMOTE_PUBLISH_ENV_UPLOAD_SCRIPT '%q' "$REMOTE_PUBLISH_ENV_UPLOAD_SCRIPT"
+  printf -v QUOTED_REMOTE_ENV_UPLOAD_STAGE '%q' "$REMOTE_ENV_UPLOAD_STAGE"
+  printf -v QUOTED_REMOTE_DEPLOY_LOCK_FILE '%q' "$REMOTE_DEPLOY_LOCK_FILE"
+  REMOTE_PUBLISH_ENV_UPLOAD_COMMAND="bash -c $QUOTED_REMOTE_PUBLISH_ENV_UPLOAD_SCRIPT -- $QUOTED_REMOTE_ENV_UPLOAD_CANDIDATE $QUOTED_REMOTE_ENV_UPLOAD_STAGE $QUOTED_REMOTE_DEPLOY_LOCK_FILE"
+  ssh "$PROD_HOST" "$REMOTE_PUBLISH_ENV_UPLOAD_COMMAND"
+  REMOTE_ENV_UPLOAD_CANDIDATE=''
 fi
 
 read -r -d '' REMOTE_DEPLOY_TRANSACTION_SCRIPT <<'REMOTE_SCRIPT' || true

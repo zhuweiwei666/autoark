@@ -82,6 +82,15 @@ printf '%s\n' "$*" >> "$SSH_ARG_LOG"
 shift
 remote_command="${1:-}"
 case "$remote_command" in
+  *AUTOARK_PUBLISH_ENV_UPLOAD_V1*)
+    bash -c "$remote_command"
+    if [ -n "${FAIL_AFTER_UPLOAD_PUBLISH_ONCE_FILE:-}" ] &&
+      [ ! -e "$FAIL_AFTER_UPLOAD_PUBLISH_ONCE_FILE" ]; then
+      : > "$FAIL_AFTER_UPLOAD_PUBLISH_ONCE_FILE"
+      exit 96
+    fi
+    exit 0
+    ;;
   *AUTOARK_DEPLOY_TRANSACTION_V1*)
     printf 'remote-session\n' >> "$REMOTE_ORDER_LOG"
     ;;
@@ -373,6 +382,33 @@ fi
 run_deploy >"$TEST_DIR/scp-retry.log"
 assert_consistent_pair
 grep -qx 'SCP_OLD=preserved' "$ROOT_ENV"
+
+# An interruption after upload validation but before the deployment transaction
+# must leave a stable pending file, not an undiscoverable unique candidate.
+seed_pair 'PUBLISH_OLD=preserved' 'PUBLISH_OLD=preserved'
+cp "$ROOT_ENV" "$DEPLOY_ENV"
+chmod 600 "$DEPLOY_ENV"
+reset_observation_logs
+make_full_env "$FULL_ENV" 'PUBLISH_NEW=preserved'
+PUBLISH_FAILURE="$TEST_DIR/publish-failed"
+if run_deploy \
+  AUTOARK_ENV_FILE="$FULL_ENV" \
+  FAIL_AFTER_UPLOAD_PUBLISH_ONCE_FILE="$PUBLISH_FAILURE" >"$TEST_DIR/publish-failure.log" 2>&1; then
+  echo 'injected post-publish interruption unexpectedly succeeded'
+  exit 1
+fi
+PENDING_ENV="${ROOT_ENV}.upload-pending"
+test -f "$PENDING_ENV"
+if compgen -G "${PENDING_ENV}.uploading.*" >/dev/null; then
+  echo 'post-publish interruption left an orphan upload candidate'
+  exit 1
+fi
+assert_consistent_pair
+grep -qx 'PUBLISH_OLD=preserved' "$ROOT_ENV"
+run_deploy >"$TEST_DIR/publish-retry.log"
+assert_consistent_pair
+grep -qx 'PUBLISH_NEW=preserved' "$ROOT_ENV"
+test ! -e "$PENDING_ENV"
 
 # Prepare failure after a successful upload leaves the old pair untouched.
 # A plain retry consumes the pending upload and converges both files.
