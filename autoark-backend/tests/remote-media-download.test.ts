@@ -1066,7 +1066,7 @@ describe('remote media response policy', () => {
     const transport = createRequestSequence([
       {
         error: new Error(
-          'Authorization: Bearer TOKEN response=SECRET_BODY url=https://media.example/file?token=QUERY',
+          'Authorization: Bearer <TOKEN> response=SECRET_BODY url=https://media.example/file?token=QUERY',
         ),
       },
     ])
