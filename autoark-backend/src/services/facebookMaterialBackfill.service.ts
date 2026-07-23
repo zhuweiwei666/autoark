@@ -2,6 +2,10 @@ import Account from '../models/Account'
 import Creative from '../models/Creative'
 import { materialQueue } from '../queue/facebook.queue'
 import { normalizeForStorage } from '../utils/accountId'
+import {
+  FACEBOOK_SYNC_DISABLED_MESSAGE,
+  isFacebookSyncEnabled,
+} from '../config/facebookSync'
 
 const ORIGINAL_IMAGE_BACKFILL_CONFIRMATION = 'BACKFILL_FACEBOOK_ORIGINAL_IMAGES'
 
@@ -13,6 +17,9 @@ export const backfillFacebookOriginalImages = async (options?: {
   if (!materialQueue) throw new Error('Queue system not available')
 
   const dryRun = options?.dryRun !== false
+  if (!dryRun && !isFacebookSyncEnabled()) {
+    throw new Error(FACEBOOK_SYNC_DISABLED_MESSAGE)
+  }
   if (!dryRun && options?.confirmation !== ORIGINAL_IMAGE_BACKFILL_CONFIRMATION) {
     throw new Error(`Original image backfill requires confirmation: ${ORIGINAL_IMAGE_BACKFILL_CONFIRMATION}`)
   }

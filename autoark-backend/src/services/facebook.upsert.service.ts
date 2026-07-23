@@ -79,7 +79,7 @@ export interface RawInsightsInput {
   datePreset: string
   adId: string // Raw 数据主要存 Ad 级别
   country?: string | null
-  raw: any
+  raw?: any
   
   // 关键字段提取 (用于快速查询)
   accountId?: string
@@ -152,8 +152,10 @@ class UpsertService {
           action_values: doc.action_values,
           mobile_app_install_count: doc.mobile_app_install_count,
           
-          raw: doc.raw,
           updatedAt: new Date(),
+        },
+        $unset: {
+          raw: '',
         },
         $setOnInsert: {
           createdAt: new Date(),
@@ -189,7 +191,6 @@ class UpsertService {
 
       const update = {
         $set: {
-          raw: doc.raw,
           accountId: doc.accountId,
           campaignId: doc.campaignId,
           adsetId: doc.adsetId,
@@ -200,6 +201,9 @@ class UpsertService {
           syncedAt: doc.syncedAt || new Date(),
           tokenId: doc.tokenId,
           updatedAt: new Date()
+        },
+        $unset: {
+          raw: '',
         },
         $setOnInsert: {
           channel: 'facebook',
