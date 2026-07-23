@@ -27,11 +27,14 @@ import {
   SYNC_DEFAULTS,
   clampExternalMaterialSyncRequest,
   deterministicExternalMaterialJobId,
+  enqueueExternalMaterialContinuation,
   enqueueExternalMaterialSync,
+  externalMaterialContinuationJobId,
   parseExternalMaterialSyncRequest,
 } from '../src/queue/externalMaterial.queue'
 import {
   acquireExternalMaterialLock,
+  handleExternalMaterialWorkerFailure,
   processExternalMaterialSyncJob,
   releaseExternalMaterialLock,
   renewExternalMaterialLock,
@@ -80,6 +83,8 @@ const workerDependencies = (overrides: Record<string, unknown> = {}) => {
     request: { recentDays: request.recentDays, limit: request.limit },
     status: 'queued',
     counters: counters(),
+    cursor: null,
+    deferCount: 0,
   }
   return {
     featureEnabled: true,
@@ -92,6 +97,8 @@ const workerDependencies = (overrides: Record<string, unknown> = {}) => {
       get: jest.fn().mockResolvedValue(run),
       findRunningConflict: jest.fn().mockResolvedValue(null),
       update: jest.fn().mockResolvedValue(run),
+      checkpoint: jest.fn().mockResolvedValue(run),
+      failExhausted: jest.fn().mockResolvedValue(run),
     },
     states: {
       get: jest.fn().mockResolvedValue({
@@ -105,6 +112,7 @@ const workerDependencies = (overrides: Record<string, unknown> = {}) => {
     fetchAds: jest.fn().mockResolvedValue({ data: [], pagination: {} }),
     normalizeAds: jest.fn().mockReturnValue([]),
     ingest: jest.fn(),
+    enqueueContinuation: jest.fn().mockResolvedValue({ id: 'delayed-job' }),
     sleep: jest.fn().mockResolvedValue(undefined),
     setInterval: jest.fn().mockReturnValue(1),
     clearInterval: jest.fn(),
@@ -190,6 +198,11 @@ describe('external material sync models and request bounds', () => {
     ])
     expect(runSchema.path('request.limit').options.max).toBe(2000)
     expect(runSchema.path('cursor').options.maxlength).toBeLessThanOrEqual(512)
+    expect(runSchema.path('deferredUntil')).toBeDefined()
+    expect(runSchema.path('retryAfterMs').options.max).toBeLessThanOrEqual(
+      60 * 60 * 1000,
+    )
+    expect(runSchema.path('deferCount').options.max).toBeLessThanOrEqual(3)
     expect(runSchema.path('errorSamples.category')).toBeDefined()
     expect(runSchema.path('rawRecord')).toBeUndefined()
     expect(runSchema.path('mediaUrl')).toBeUndefined()
@@ -200,11 +213,35 @@ describe('external material sync models and request bounds', () => {
           { provider: 1 },
           expect.objectContaining({
             unique: true,
-            partialFilterExpression: expect.any(Object),
+            partialFilterExpression: {
+              status: { $in: expect.arrayContaining(['deferred']) },
+            },
           }),
         ]),
       ]),
     )
+
+    const cast = ExternalMaterialSyncRun.castObject({
+      provider: 'guangdada',
+      mode: 'scheduled',
+      dryRun: false,
+      request: { recentDays: '3', limit: '500' },
+      status: 'deferred',
+      counters: counters(),
+      deferredUntil: '2026-07-23T00:01:00.000Z',
+      retryAfterMs: '60000',
+      deferCount: '1',
+      rawRecord: { secret: true },
+      mediaUrl: 'https://secret.invalid/media',
+    })
+    expect(cast).toMatchObject({
+      request: { recentDays: 3, limit: 500 },
+      retryAfterMs: 60_000,
+      deferCount: 1,
+    })
+    expect(cast).not.toHaveProperty('rawRecord')
+    expect(cast).not.toHaveProperty('mediaUrl')
+    expect(new ExternalMaterialSyncRun(cast).validateSync()).toBeUndefined()
   })
 })
 
@@ -215,6 +252,47 @@ describe('external material queue admission', () => {
     )
     expect(deterministicExternalMaterialJobId('guangdada', 'scheduled')).toBe(
       'external-material-guangdada-scheduled',
+    )
+  })
+
+  it('enqueues a real delayed continuation with deterministic bounded data', async () => {
+    const queue = {
+      add: jest.fn().mockResolvedValue({ id: 'delayed-job' }),
+    }
+    const continuationId = externalMaterialContinuationJobId(
+      'guangdada',
+      'run-1',
+      1,
+    )
+
+    await enqueueExternalMaterialContinuation(
+      {
+        runId: 'run-1',
+        provider: 'guangdada',
+        request,
+        retryAfterMs: Number.MAX_SAFE_INTEGER,
+        deferCount: 1,
+      },
+      { queue } as any,
+    )
+
+    expect(continuationId).toBe(
+      externalMaterialContinuationJobId('guangdada', 'run-1', 1),
+    )
+    expect(queue.add).toHaveBeenCalledWith(
+      'sync',
+      {
+        runId: 'run-1',
+        provider: 'guangdada',
+        request,
+        continuation: true,
+        deferCount: 1,
+      },
+      expect.objectContaining({
+        jobId: continuationId,
+        delay: 60 * 60 * 1000,
+        attempts: 3,
+      }),
     )
   })
 
@@ -242,6 +320,34 @@ describe('external material queue admission', () => {
       } as any),
     ).resolves.toMatchObject({ enqueued: false, status: 'duplicate' })
     expect(queue.getJobs).toHaveBeenCalledWith(['waiting', 'active', 'delayed'])
+    expect(runs.create).not.toHaveBeenCalled()
+    expect(queue.add).not.toHaveBeenCalled()
+  })
+
+  it('treats a persisted deferred continuation run as an active overlap', async () => {
+    const queue = {
+      getJobs: jest.fn().mockResolvedValue([]),
+      add: jest.fn(),
+    }
+    const runs = {
+      findActive: jest.fn().mockResolvedValue({
+        _id: 'run-1',
+        status: 'deferred',
+        deferredUntil: new Date('2026-07-23T00:01:00.000Z'),
+      }),
+      create: jest.fn(),
+      update: jest.fn(),
+    }
+
+    await expect(
+      enqueueExternalMaterialSync(request, {
+        queue,
+        runs,
+        featureEnabled: true,
+        apiKeyPresent: true,
+      } as any),
+    ).resolves.toMatchObject({ enqueued: false, status: 'duplicate' })
+    expect(runs.findActive).toHaveBeenCalledWith('guangdada')
     expect(runs.create).not.toHaveBeenCalled()
     expect(queue.add).not.toHaveBeenCalled()
   })
@@ -559,7 +665,7 @@ describe('external material worker orchestration', () => {
     expect(persisted).not.toContain('secret-bearing')
   })
 
-  it('defers a 429 with bounded retry-after and does not spin', async () => {
+  it('defers a 429 with a bounded persisted delayed continuation and does not spin', async () => {
     const deps = workerDependencies({
       fetchAds: jest.fn().mockRejectedValue(
         new GuangdadaApiError({
@@ -581,6 +687,132 @@ describe('external material worker orchestration', () => {
     expect(result.retryAfterMs).toBeLessThanOrEqual(60 * 60 * 1000)
     expect(deps.fetchAds).toHaveBeenCalledTimes(1)
     expect(deps.sleep).not.toHaveBeenCalled()
+    expect(deps.runs.update).toHaveBeenCalledWith(
+      'run-1',
+      expect.objectContaining({
+        status: 'deferred',
+        deferredUntil: new Date('2026-07-23T01:00:00.000Z'),
+        retryAfterMs: 60 * 60 * 1000,
+        deferCount: 1,
+      }),
+    )
+    expect(deps.enqueueContinuation).toHaveBeenCalledWith({
+      runId: 'run-1',
+      provider: 'guangdada',
+      request,
+      retryAfterMs: 60 * 60 * 1000,
+      deferCount: 1,
+    })
+    expect(JSON.stringify(deps.runs.update.mock.calls)).not.toContain(
+      'completedAt',
+    )
+  })
+
+  it('resumes a deferred continuation as running and clears its delay metadata', async () => {
+    const deferredRun = {
+      _id: 'run-1',
+      provider: 'guangdada',
+      mode: request.mode,
+      dryRun: false,
+      request: { recentDays: 3, limit: 10 },
+      status: 'deferred',
+      counters: counters(),
+      cursor: null,
+      deferCount: 1,
+      deferredUntil: new Date('2026-07-23T00:00:00.000Z'),
+      retryAfterMs: 60_000,
+    }
+    const deps = workerDependencies({
+      runs: {
+        get: jest.fn().mockResolvedValue(deferredRun),
+        findRunningConflict: jest.fn().mockResolvedValue(null),
+        update: jest.fn().mockResolvedValue(deferredRun),
+        checkpoint: jest.fn().mockResolvedValue(deferredRun),
+        failExhausted: jest.fn().mockResolvedValue(deferredRun),
+      },
+    })
+
+    await processExternalMaterialSyncJob(
+      job({
+        data: {
+          runId: 'run-1',
+          provider: 'guangdada',
+          request,
+          continuation: true,
+          deferCount: 1,
+        },
+      }),
+      deps,
+    )
+
+    expect(deps.runs.update).toHaveBeenNthCalledWith(
+      1,
+      'run-1',
+      expect.objectContaining({
+        status: 'running',
+        deferredUntil: null,
+        retryAfterMs: null,
+      }),
+    )
+  })
+
+  it.each([
+    ['defer limit is exhausted', { deferCount: 3 }, undefined],
+    [
+      'continuation enqueue fails',
+      { deferCount: 0 },
+      new Error('unsafe queue'),
+    ],
+  ])('fails safely when %s', async (_case, runPatch, enqueueError) => {
+    const run = {
+      _id: 'run-1',
+      provider: 'guangdada',
+      mode: request.mode,
+      dryRun: false,
+      request: { recentDays: 3, limit: 10 },
+      status: 'running',
+      counters: counters(),
+      cursor: null,
+      ...runPatch,
+    }
+    const deps = workerDependencies({
+      runs: {
+        get: jest.fn().mockResolvedValue(run),
+        findRunningConflict: jest.fn().mockResolvedValue(null),
+        update: jest.fn().mockResolvedValue(run),
+        checkpoint: jest.fn().mockResolvedValue(run),
+        failExhausted: jest.fn().mockResolvedValue(run),
+      },
+      fetchAds: jest.fn().mockRejectedValue(
+        new GuangdadaApiError({
+          message: 'unsafe rate response',
+          category: 'rate_limit',
+          status: 429,
+          retryable: true,
+          retryAfterMs: 60_000,
+        }),
+      ),
+      enqueueContinuation: enqueueError
+        ? jest.fn().mockRejectedValue(enqueueError)
+        : jest.fn(),
+    })
+
+    await expect(
+      processExternalMaterialSyncJob(job(), deps),
+    ).resolves.toMatchObject({ status: 'failed' })
+    expect(JSON.stringify(deps.runs.update.mock.calls)).not.toContain('unsafe')
+    expect(deps.runs.update).toHaveBeenLastCalledWith(
+      'run-1',
+      expect.objectContaining({
+        status: 'failed',
+        errorSamples: expect.arrayContaining([
+          expect.objectContaining({ category: 'rate_limit' }),
+        ]),
+      }),
+    )
+    if (run.deferCount === 3) {
+      expect(deps.enqueueContinuation).not.toHaveBeenCalled()
+    }
   })
 
   it('retries 5xx/network fetches a bounded number with capped backoff', async () => {
@@ -615,6 +847,7 @@ describe('external material worker orchestration', () => {
       eval: jest
         .fn()
         .mockResolvedValueOnce(1)
+        .mockResolvedValueOnce(1)
         .mockResolvedValueOnce(0)
         .mockResolvedValue(0),
     }
@@ -644,6 +877,7 @@ describe('external material worker orchestration', () => {
       eval: jest
         .fn()
         .mockResolvedValueOnce(1)
+        .mockResolvedValueOnce(1)
         .mockResolvedValueOnce(0)
         .mockResolvedValue(0),
     }
@@ -666,6 +900,7 @@ describe('external material worker orchestration', () => {
 
     expect(result).toMatchObject({ status: 'failed', retryable: true })
     expect(deps.ingest).toHaveBeenCalledTimes(1)
+    expect(deps.sleep).toHaveBeenCalledTimes(1)
     expect(JSON.stringify(deps.runs.update.mock.calls)).toContain('lock_lost')
   })
 
@@ -698,6 +933,127 @@ describe('external material worker orchestration', () => {
     const persisted = JSON.stringify(deps.runs.update.mock.calls)
     expect(persisted).toContain('lock_lost')
     expect(persisted).not.toContain('cancelled')
+  })
+
+  it('does not count or complete the unique final item after timer lock loss during ingest', async () => {
+    let renewalTick: (() => void) | undefined
+    const redis = {
+      set: jest.fn().mockResolvedValue('OK'),
+      eval: jest
+        .fn()
+        .mockResolvedValueOnce(1)
+        .mockResolvedValueOnce(0)
+        .mockResolvedValue(0),
+    }
+    const deps = workerDependencies({
+      redis,
+      setInterval: jest.fn((callback: () => void) => {
+        renewalTick = callback
+        return 1
+      }),
+      fetchAds: jest
+        .fn()
+        .mockResolvedValue({ data: [{ id: 'only' }], pagination: {} }),
+      normalizeAds: jest
+        .fn()
+        .mockReturnValue([{ provider: 'guangdada', providerAssetKey: 'only' }]),
+      ingest: jest.fn(async () => {
+        renewalTick?.()
+        await Promise.resolve()
+        await Promise.resolve()
+        return { kind: 'created', materialId: 'm1' }
+      }),
+    })
+
+    const result = await processExternalMaterialSyncJob(job(), deps)
+
+    expect(result).toMatchObject({
+      status: 'failed',
+      retryable: true,
+      counters: expect.objectContaining({
+        newlyCreated: 0,
+        downloaded: 0,
+      }),
+    })
+    expect(deps.ingest).toHaveBeenCalledTimes(1)
+    expect(deps.runs.checkpoint).not.toHaveBeenCalled()
+    const persisted = JSON.stringify(deps.runs.update.mock.calls)
+    expect(persisted).toContain('lock_lost')
+    expect(persisted).not.toContain('"status":"completed"')
+  })
+
+  it.each(['normalize', 'checkpoint', 'progress'])(
+    'lets an unexpected %s failure reach BullMQ retry handling',
+    async (failurePoint) => {
+      const unsafeError = new Error(`unsafe ${failurePoint} details`)
+      const deps = workerDependencies({
+        fetchAds: jest
+          .fn()
+          .mockResolvedValue({ data: [{ id: 'one' }], pagination: {} }),
+        normalizeAds:
+          failurePoint === 'normalize'
+            ? jest.fn(() => {
+                throw unsafeError
+              })
+            : jest.fn().mockReturnValue(
+                failurePoint === 'progress'
+                  ? [
+                      {
+                        provider: 'guangdada',
+                        providerAssetKey: 'one',
+                      },
+                    ]
+                  : [],
+              ),
+        ingest: jest
+          .fn()
+          .mockResolvedValue({ kind: 'alreadySeen', materialId: 'existing' }),
+      })
+      if (failurePoint === 'checkpoint') {
+        deps.runs.checkpoint.mockRejectedValue(unsafeError)
+      }
+      const failingJob = job({
+        updateProgress:
+          failurePoint === 'progress'
+            ? jest.fn().mockRejectedValue(unsafeError)
+            : jest.fn(),
+      })
+
+      await expect(
+        processExternalMaterialSyncJob(failingJob as any, deps),
+      ).rejects.toThrow(unsafeError)
+      expect(
+        deps.runs.update.mock.calls.some(
+          ([, update]: [string, Record<string, unknown>]) =>
+            update.status === 'failed',
+        ),
+      ).toBe(false)
+    },
+  )
+
+  it('only terminalizes an unexpected BullMQ failure after attempts are exhausted', async () => {
+    const deps = workerDependencies()
+    const unsafeError = new Error('unsafe provider payload')
+
+    await handleExternalMaterialWorkerFailure(
+      job({ attemptsMade: 2, opts: { attempts: 3 } }) as any,
+      unsafeError,
+      deps,
+    )
+    expect(deps.runs.failExhausted).not.toHaveBeenCalled()
+
+    await handleExternalMaterialWorkerFailure(
+      job({ attemptsMade: 3, opts: { attempts: 3 } }) as any,
+      unsafeError,
+      deps,
+    )
+    expect(deps.runs.failExhausted).toHaveBeenCalledWith(
+      'run-1',
+      new Date('2026-07-23T00:00:00.000Z'),
+    )
+    expect(JSON.stringify(deps.runs.failExhausted.mock.calls)).not.toContain(
+      'unsafe',
+    )
   })
 
   it('resumes backfill from a bounded cursor and persists the next page with progress', async () => {
@@ -735,8 +1091,9 @@ describe('external material worker orchestration', () => {
     expect(deps.states.update).toHaveBeenCalledWith('guangdada', {
       backfillCursor: '8',
     })
-    expect(deps.runs.update).toHaveBeenCalledWith(
+    expect(deps.runs.checkpoint).toHaveBeenCalledWith(
       'run-1',
+      null,
       expect.objectContaining({ cursor: '8', counters: expect.any(Object) }),
     )
   })
@@ -811,6 +1168,25 @@ describe('external material worker orchestration', () => {
     expect(states.update).toHaveBeenNthCalledWith(2, 'guangdada', {
       backfillCursor: '27',
     })
+    expect(deps.runs.checkpoint).toHaveBeenCalledTimes(2)
+    expect(deps.runs.checkpoint).toHaveBeenNthCalledWith(
+      1,
+      'run-1',
+      null,
+      expect.objectContaining({
+        cursor: '17',
+        counters: expect.objectContaining({ discovered: 1000 }),
+      }),
+    )
+    expect(deps.runs.checkpoint).toHaveBeenNthCalledWith(
+      2,
+      'run-1',
+      '17',
+      expect.objectContaining({
+        cursor: '27',
+        counters: expect.objectContaining({ discovered: 2000 }),
+      }),
+    )
     expect(result).toMatchObject({
       status: 'completed',
       counters: expect.objectContaining({ discovered: 2000 }),
@@ -853,6 +1229,139 @@ describe('external material worker orchestration', () => {
     expect(resumedFetch).toHaveBeenCalledWith(
       expect.objectContaining({ page: 27 }),
     )
+  })
+
+  it('replays an interrupted 1000-item batch without double-counting its run checkpoint', async () => {
+    const firstBatch = Array.from({ length: 1000 }, (_, index) => ({
+      id: `a-${index}`,
+    }))
+    const secondBatch = Array.from({ length: 1000 }, (_, index) => ({
+      id: `b-${index}`,
+    }))
+    const normalizeAds = jest.fn((records: Array<{ id: string }>) =>
+      records.map((record) => ({
+        provider: 'guangdada',
+        providerAssetKey: record.id,
+      })),
+    )
+    const stateRecord = {
+      provider: 'guangdada',
+      paused: false,
+      recurringEnabled: true,
+      backfillCursor: '7',
+    }
+    const interruptedJob = job({
+      data: {
+        runId: 'run-1',
+        provider: 'guangdada',
+        request: {
+          ...request,
+          mode: 'backfill',
+          recentDays: 30,
+          limit: 2000,
+        },
+      },
+      updateProgress: jest
+        .fn()
+        .mockRejectedValueOnce(new Error('progress storage unavailable')),
+    })
+    const interrupted = workerDependencies({
+      states: {
+        get: jest.fn().mockResolvedValue(stateRecord),
+        update: jest.fn().mockResolvedValue(undefined),
+      },
+      fetchAds: jest.fn().mockResolvedValue({
+        data: firstBatch,
+        pagination: { page: 16, has_more: true },
+      }),
+      normalizeAds,
+      ingest: jest
+        .fn()
+        .mockResolvedValue({ kind: 'alreadySeen', materialId: 'existing' }),
+    })
+
+    await expect(
+      processExternalMaterialSyncJob(interruptedJob as any, interrupted),
+    ).rejects.toThrow('progress storage unavailable')
+    expect(interrupted.ingest).toHaveBeenCalledTimes(25)
+    expect(interrupted.runs.checkpoint).not.toHaveBeenCalled()
+    expect(interrupted.states.update).not.toHaveBeenCalled()
+    expect(
+      interrupted.runs.update.mock.calls.some(
+        ([, update]: [string, Record<string, any>]) =>
+          update.counters?.discovered === 1000,
+      ),
+    ).toBe(false)
+
+    const restarted = workerDependencies({
+      states: {
+        get: jest.fn().mockResolvedValue(stateRecord),
+        update: jest.fn().mockResolvedValue(undefined),
+      },
+      fetchAds: jest
+        .fn()
+        .mockResolvedValueOnce({
+          data: firstBatch,
+          pagination: { page: 16, has_more: true },
+        })
+        .mockResolvedValueOnce({
+          data: secondBatch,
+          pagination: { page: 26, has_more: true },
+        }),
+      normalizeAds,
+      ingest: jest
+        .fn()
+        .mockResolvedValue({ kind: 'alreadySeen', materialId: 'existing' }),
+    })
+
+    const result = await processExternalMaterialSyncJob(
+      job({
+        data: interruptedJob.data,
+      }),
+      restarted,
+    )
+
+    expect(restarted.fetchAds).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ page: 7 }),
+    )
+    expect(restarted.fetchAds).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ page: 17 }),
+    )
+    expect(restarted.ingest).toHaveBeenCalledTimes(2000)
+    expect(restarted.runs.checkpoint).toHaveBeenCalledTimes(2)
+    expect(restarted.runs.checkpoint).toHaveBeenNthCalledWith(
+      1,
+      'run-1',
+      null,
+      expect.objectContaining({
+        cursor: '17',
+        counters: expect.objectContaining({
+          discovered: 1000,
+          alreadySeen: 1000,
+        }),
+      }),
+    )
+    expect(restarted.runs.checkpoint).toHaveBeenNthCalledWith(
+      2,
+      'run-1',
+      '17',
+      expect.objectContaining({
+        cursor: '27',
+        counters: expect.objectContaining({
+          discovered: 2000,
+          alreadySeen: 2000,
+        }),
+      }),
+    )
+    expect(result).toMatchObject({
+      status: 'completed',
+      counters: expect.objectContaining({
+        discovered: 2000,
+        alreadySeen: 2000,
+      }),
+    })
   })
 })
 
@@ -916,5 +1425,113 @@ describe('external material cron', () => {
         mode: 'scheduled',
       }),
     )
+  })
+})
+
+const integrationDescribe = process.env.TEST_REDIS_URL
+  ? describe
+  : describe.skip
+
+integrationDescribe('external material Redis and BullMQ integration', () => {
+  const redisUrl = process.env.TEST_REDIS_URL as string
+  let RedisConstructor: any
+  let redis: any
+
+  beforeAll(async () => {
+    RedisConstructor = jest.requireActual('ioredis').default
+    redis = new RedisConstructor(redisUrl, {
+      maxRetriesPerRequest: null,
+    })
+    await redis.ping()
+  })
+
+  afterAll(async () => {
+    if (redis) await redis.quit()
+  })
+
+  it('rejects nonowners and expired owners with real Redis Lua execution', async () => {
+    const provider = 'guangdada'
+    const key = `external-material:sync-lock:${provider}`
+    await redis.del(key)
+
+    const owner = await acquireExternalMaterialLock(redis, provider, 30_000)
+    expect(owner).toBeTruthy()
+    await expect(
+      renewExternalMaterialLock(redis, provider, 'not-the-owner', 30_000),
+    ).resolves.toBe(false)
+    await expect(
+      releaseExternalMaterialLock(redis, provider, 'not-the-owner'),
+    ).resolves.toBe(false)
+    await expect(
+      renewExternalMaterialLock(redis, provider, owner!, 30_000),
+    ).resolves.toBe(true)
+
+    await redis.set(key, owner, 'PX', 50)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    await expect(
+      renewExternalMaterialLock(redis, provider, owner!, 30_000),
+    ).resolves.toBe(false)
+    await expect(
+      releaseExternalMaterialLock(redis, provider, owner!),
+    ).resolves.toBe(false)
+  })
+
+  it('keeps delayed jobs delayed until due and exposes terminal failed attempts', async () => {
+    const { Queue: RealQueue, Worker: RealWorker } =
+      jest.requireActual('bullmq')
+    const queueName = `external-material-integration-${process.pid}-${Date.now()}`
+    const queueConnection = new RedisConstructor(redisUrl, {
+      maxRetriesPerRequest: null,
+    })
+    const workerConnection = new RedisConstructor(redisUrl, {
+      maxRetriesPerRequest: null,
+    })
+    const queue = new RealQueue(queueName, {
+      connection: queueConnection,
+    })
+    const worker = new RealWorker(
+      queueName,
+      async (queuedJob: any) => {
+        if (queuedJob.name === 'terminal') {
+          throw new Error('integration failure')
+        }
+        return { ok: true }
+      },
+      { connection: workerConnection },
+    )
+    const waitForState = async (jobId: string, wanted: string) => {
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        const current = await queue.getJob(jobId)
+        if (current && (await current.getState()) === wanted) return current
+        await new Promise((resolve) => setTimeout(resolve, 25))
+      }
+      throw new Error(`integration_state_timeout_${wanted}`)
+    }
+
+    try {
+      const delayed = await queue.add(
+        'delayed',
+        { safe: true },
+        { jobId: 'delayed', delay: 200 },
+      )
+      await expect(delayed.getState()).resolves.toBe('delayed')
+      await waitForState('delayed', 'completed')
+
+      await queue.add(
+        'terminal',
+        { safe: true },
+        { jobId: 'terminal', attempts: 1 },
+      )
+      const terminal = await waitForState('terminal', 'failed')
+      expect(terminal.attemptsMade).toBe(1)
+    } finally {
+      await worker.close()
+      await queue.obliterate({ force: true })
+      await queue.close()
+      await Promise.all([
+        queueConnection.quit().catch(() => undefined),
+        workerConnection.quit().catch(() => undefined),
+      ])
+    }
   })
 })

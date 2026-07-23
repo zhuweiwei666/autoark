@@ -21,7 +21,9 @@ import logger from '../utils/logger'
 import {
   EXTERNAL_MATERIAL_QUEUE_NAME,
   ExternalMaterialSyncRequest,
+  MAX_EXTERNAL_MATERIAL_DEFERS,
   clampExternalMaterialSyncRequest,
+  enqueueExternalMaterialContinuation,
 } from './externalMaterial.queue'
 
 const LOCK_TTL_DEFAULT_MS = 120_000
@@ -54,6 +56,9 @@ type RedisLockClient = Pick<Redis, 'set' | 'eval'>
 
 interface SyncRunRecord {
   counters?: Partial<ExternalMaterialSyncCounters>
+  cursor?: string | null
+  deferCount?: number
+  status?: string
 }
 
 interface SyncStateRecord {
@@ -69,6 +74,12 @@ interface RunStore {
     runId: string,
   ): Promise<unknown>
   update(id: string, update: Record<string, unknown>): Promise<unknown>
+  checkpoint(
+    id: string,
+    expectedCursor: string | null,
+    update: Record<string, unknown>,
+  ): Promise<unknown>
+  failExhausted(id: string, completedAt: Date): Promise<unknown>
 }
 
 interface StateStore {
@@ -88,6 +99,7 @@ interface WorkerDependencies {
   fetchAds: typeof fetchGuangdadaAds
   normalizeAds: typeof normalizeGuangdadaAds
   ingest: typeof ingestExternalMaterial
+  enqueueContinuation: typeof enqueueExternalMaterialContinuation
   sleep: (milliseconds: number) => Promise<void>
   setInterval: typeof setInterval
   clearInterval: typeof clearInterval
@@ -100,6 +112,8 @@ interface ExternalMaterialJobData {
   runId: string
   provider: ExternalMaterialProvider
   request: ExternalMaterialSyncRequest
+  continuation?: true
+  deferCount?: number
 }
 
 interface ExternalMaterialProcessResult {
@@ -120,6 +134,21 @@ const emptyCounters = (): ExternalMaterialSyncCounters => ({
   invalid: 0,
   failed: 0,
   deferred: 0,
+})
+
+const mergeCounters = (
+  committed: ExternalMaterialSyncCounters,
+  batch: ExternalMaterialSyncCounters,
+): ExternalMaterialSyncCounters => ({
+  discovered: committed.discovered + batch.discovered,
+  considered: committed.considered + batch.considered,
+  alreadySeen: committed.alreadySeen + batch.alreadySeen,
+  downloaded: committed.downloaded + batch.downloaded,
+  contentReused: committed.contentReused + batch.contentReused,
+  newlyCreated: committed.newlyCreated + batch.newlyCreated,
+  invalid: committed.invalid + batch.invalid,
+  failed: committed.failed + batch.failed,
+  deferred: committed.deferred + batch.deferred,
 })
 
 const lockKey = (provider: ExternalMaterialProvider): string =>
@@ -203,7 +232,41 @@ const defaultRunStore: RunStore = {
     ExternalMaterialSyncRun.findByIdAndUpdate(
       id,
       { $set: update },
-      { new: true },
+      { new: true, runValidators: true },
+    ),
+  checkpoint: (id, expectedCursor, update) =>
+    ExternalMaterialSyncRun.findOneAndUpdate(
+      {
+        _id: id,
+        status: 'running',
+        ...(expectedCursor === null
+          ? { $or: [{ cursor: null }, { cursor: { $exists: false } }] }
+          : { cursor: expectedCursor }),
+      },
+      { $set: update },
+      { new: true, runValidators: true },
+    ),
+  failExhausted: (id, completedAt) =>
+    ExternalMaterialSyncRun.findOneAndUpdate(
+      {
+        _id: id,
+        status: { $in: ['queued', 'running', 'deferred'] },
+      },
+      {
+        $set: {
+          status: 'failed',
+          completedAt,
+          deferredUntil: null,
+          retryAfterMs: null,
+        },
+        $push: {
+          errorSamples: {
+            $each: [{ category: 'unexpected', at: completedAt }],
+            $slice: -MAX_ERROR_SAMPLES,
+          },
+        },
+      },
+      { new: true, runValidators: true },
     ),
 }
 
@@ -237,6 +300,7 @@ const defaultDependencies = (): WorkerDependencies => {
     fetchAds: fetchGuangdadaAds,
     normalizeAds: normalizeGuangdadaAds,
     ingest: ingestExternalMaterial,
+    enqueueContinuation: enqueueExternalMaterialContinuation,
     sleep: wait,
     setInterval,
     clearInterval,
@@ -317,6 +381,7 @@ const fetchWithRetries = async (
   batchLimit: number,
   dependencies: WorkerDependencies,
   signal: AbortSignal,
+  ensureOwned: () => Promise<boolean>,
 ) => {
   for (let attempt = 0; attempt < FETCH_ATTEMPTS; attempt += 1) {
     try {
@@ -342,6 +407,9 @@ const fetchWithRetries = async (
         throw error
       }
       await dependencies.sleep(Math.min(30_000, 1000 * 2 ** attempt))
+      if (!(await ensureOwned())) {
+        throw new Error('external_material_lock_lost')
+      }
     }
   }
   throw new Error('external_material_fetch_exhausted')
@@ -374,7 +442,7 @@ export const processExternalMaterialSyncJob = async (
   const request = clampExternalMaterialSyncRequest(job.data.request)
   const run = await dependencies.runs.get(runId)
   if (!run) throw new Error('external_material_run_not_found')
-  const currentCounters: ExternalMaterialSyncCounters = {
+  let committedCounters: ExternalMaterialSyncCounters = {
     ...emptyCounters(),
     ...(run.counters || {}),
   }
@@ -386,32 +454,32 @@ export const processExternalMaterialSyncJob = async (
       dependencies,
       runId,
       'disabled',
-      currentCounters,
+      committedCounters,
       errorSamples,
     )
   }
 
   const state = await dependencies.states.get(provider)
   if (state?.paused) {
-    currentCounters.deferred += 1
+    committedCounters.deferred += 1
     appendError(errorSamples, 'paused')
     return finishRun(
       dependencies,
       runId,
       'deferred',
-      currentCounters,
+      committedCounters,
       errorSamples,
     )
   }
 
   if (await dependencies.runs.findRunningConflict(provider, runId)) {
-    currentCounters.deferred += 1
+    committedCounters.deferred += 1
     appendError(errorSamples, 'active_run')
     return finishRun(
       dependencies,
       runId,
       'deferred',
-      currentCounters,
+      committedCounters,
       errorSamples,
     )
   }
@@ -423,13 +491,13 @@ export const processExternalMaterialSyncJob = async (
     ttl,
   )
   if (!owner) {
-    currentCounters.deferred += 1
+    committedCounters.deferred += 1
     appendError(errorSamples, 'lock_busy')
     return finishRun(
       dependencies,
       runId,
       'deferred',
-      currentCounters,
+      committedCounters,
       errorSamples,
     )
   }
@@ -467,37 +535,53 @@ export const processExternalMaterialSyncJob = async (
     },
     lockRenewInterval(dependencies.lockRenewIntervalMs, ttl),
   )
+  const finishLockLost = () =>
+    finishRun(
+      dependencies,
+      runId,
+      'failed',
+      committedCounters,
+      [{ category: 'lock_lost' }],
+      { retryable: true },
+    )
 
   try {
     await dependencies.runs.update(runId, {
       status: 'running',
       startedAt: dependencies.now(),
-      counters: currentCounters,
+      counters: committedCounters,
       errorSamples,
+      deferredUntil: null,
+      retryAfterMs: null,
     })
 
+    let persistedCursor =
+      request.mode === 'backfill' && typeof run.cursor === 'string'
+        ? run.cursor
+        : null
     let cursor =
       request.mode === 'backfill'
-        ? String(pageFromCursor(state?.backfillCursor))
+        ? String(pageFromCursor(persistedCursor ?? state?.backfillCursor))
         : null
     let page = cursor ? pageFromCursor(cursor) : 1
-    let batchIndex = 0
-    let processedCount = 0
+    let processedCount =
+      committedCounters.alreadySeen + committedCounters.downloaded
 
-    while (currentCounters.discovered < request.limit) {
-      if (batchIndex > 0 && !(await heartbeat())) {
-        appendError(errorSamples, 'lock_lost')
-        return finishRun(
-          dependencies,
-          runId,
-          'failed',
-          currentCounters,
-          errorSamples,
-          { retryable: true },
-        )
-      }
+    if (
+      request.mode === 'backfill' &&
+      persistedCursor &&
+      state?.backfillCursor !== persistedCursor
+    ) {
+      if (!(await heartbeat())) return finishLockLost()
+      await dependencies.states.update(provider, {
+        backfillCursor: persistedCursor,
+      })
+      if (lockLost) return finishLockLost()
+    }
 
-      const remaining = request.limit - currentCounters.discovered
+    while (committedCounters.discovered < request.limit) {
+      if (lockLost) return finishLockLost()
+      const remaining = request.limit - committedCounters.discovered
       const batchLimit = Math.min(remaining, GUANGDADA_LIMITS.totalItems)
       let fetched: Awaited<ReturnType<typeof fetchGuangdadaAds>>
       try {
@@ -507,18 +591,11 @@ export const processExternalMaterialSyncJob = async (
           batchLimit,
           dependencies,
           controller.signal,
+          heartbeat,
         )
       } catch (error) {
         if (lockLost) {
-          appendError(errorSamples, 'lock_lost')
-          return finishRun(
-            dependencies,
-            runId,
-            'failed',
-            currentCounters,
-            errorSamples,
-            { retryable: true },
-          )
+          return finishLockLost()
         }
         const category = safeCategory(error)
         appendError(errorSamples, category)
@@ -536,7 +613,7 @@ export const processExternalMaterialSyncJob = async (
             dependencies,
             runId,
             'failed',
-            currentCounters,
+            committedCounters,
             errorSamples,
           )
         }
@@ -544,22 +621,67 @@ export const processExternalMaterialSyncJob = async (
           error instanceof GuangdadaApiError &&
           error.category === 'rate_limit'
         ) {
-          currentCounters.deferred += 1
+          if (!(await heartbeat())) return finishLockLost()
+          const deferCount =
+            clampInteger(run.deferCount, 0, 0, MAX_EXTERNAL_MATERIAL_DEFERS) + 1
+          if (deferCount > MAX_EXTERNAL_MATERIAL_DEFERS) {
+            return finishRun(
+              dependencies,
+              runId,
+              'failed',
+              committedCounters,
+              errorSamples,
+              {
+                deferredUntil: null,
+                retryAfterMs: null,
+              },
+            )
+          }
+          committedCounters.deferred += 1
           const retryAfterMs = providerRetryAfter(error)
-          return finishRun(
-            dependencies,
-            runId,
-            'deferred',
-            currentCounters,
-            errorSamples,
-            { retryAfterMs },
+          const deferredUntil = new Date(
+            dependencies.now().getTime() + retryAfterMs,
           )
+          await dependencies.runs.update(runId, {
+            status: 'deferred',
+            counters: committedCounters,
+            errorSamples,
+            deferredUntil,
+            retryAfterMs,
+            deferCount,
+          })
+          try {
+            await dependencies.enqueueContinuation({
+              runId,
+              provider,
+              request,
+              retryAfterMs,
+              deferCount,
+            })
+          } catch {
+            return finishRun(
+              dependencies,
+              runId,
+              'failed',
+              committedCounters,
+              errorSamples,
+              {
+                deferredUntil: null,
+                retryAfterMs: null,
+              },
+            )
+          }
+          return {
+            status: 'deferred',
+            counters: committedCounters,
+            retryAfterMs,
+          }
         }
         return finishRun(
           dependencies,
           runId,
           'failed',
-          currentCounters,
+          committedCounters,
           errorSamples,
           {
             retryable: error instanceof GuangdadaApiError && error.retryable,
@@ -567,63 +689,37 @@ export const processExternalMaterialSyncJob = async (
         )
       }
 
-      if (lockLost) {
-        appendError(errorSamples, 'lock_lost')
-        return finishRun(
-          dependencies,
-          runId,
-          'failed',
-          currentCounters,
-          errorSamples,
-          { retryable: true },
-        )
-      }
-
+      if (lockLost) return finishLockLost()
       const discoveredInBatch = Math.min(
         batchLimit,
         Array.isArray(fetched.data) ? fetched.data.length : 0,
       )
-      currentCounters.discovered += discoveredInBatch
+      const batchCounters = emptyCounters()
+      batchCounters.discovered = discoveredInBatch
       const remainingConsideration = Math.max(
         0,
-        request.limit - currentCounters.considered,
+        request.limit - committedCounters.considered,
       )
       const assets = rankAssets(
         dependencies.normalizeAds(fetched.data),
         remainingConsideration,
       )
-      currentCounters.considered += assets.length
+      batchCounters.considered = assets.length
 
       if (!request.dryRun) {
         for (let index = 0; index < assets.length; index += 1) {
           if (!(await heartbeat())) {
-            appendError(errorSamples, 'lock_lost')
-            return finishRun(
-              dependencies,
-              runId,
-              'failed',
-              currentCounters,
-              errorSamples,
-              { retryable: true },
-            )
+            return finishLockLost()
           }
 
           let outcome:
             | Awaited<ReturnType<typeof ingestExternalMaterial>>
             | undefined
           for (let attempt = 0; attempt < INGESTION_ATTEMPTS; attempt += 1) {
-            if (attempt > 0 && !(await heartbeat())) {
-              appendError(errorSamples, 'lock_lost')
-              return finishRun(
-                dependencies,
-                runId,
-                'failed',
-                currentCounters,
-                errorSamples,
-                { retryable: true },
-              )
-            }
             outcome = await dependencies.ingest(assets[index])
+            if (!(await heartbeat())) {
+              return finishLockLost()
+            }
             if (
               outcome.kind !== 'failed' ||
               !outcome.retryable ||
@@ -632,6 +728,9 @@ export const processExternalMaterialSyncJob = async (
               break
             }
             await dependencies.sleep(Math.min(2000, 250 * 2 ** attempt))
+            if (!(await heartbeat())) {
+              return finishLockLost()
+            }
           }
 
           if (!outcome) {
@@ -642,17 +741,17 @@ export const processExternalMaterialSyncJob = async (
             }
           }
           if (outcome.kind === 'alreadySeen') {
-            currentCounters.alreadySeen += 1
+            batchCounters.alreadySeen += 1
           } else {
-            currentCounters.downloaded += 1
+            batchCounters.downloaded += 1
             if (outcome.kind === 'contentReused') {
-              currentCounters.contentReused += 1
+              batchCounters.contentReused += 1
             } else if (outcome.kind === 'created') {
-              currentCounters.newlyCreated += 1
+              batchCounters.newlyCreated += 1
             } else if (outcome.kind === 'invalid') {
-              currentCounters.invalid += 1
+              batchCounters.invalid += 1
             } else {
-              currentCounters.failed += 1
+              batchCounters.failed += 1
               appendError(errorSamples, 'ingestion_retry_exhausted')
             }
           }
@@ -662,12 +761,9 @@ export const processExternalMaterialSyncJob = async (
             processedCount % PROGRESS_BATCH_SIZE === 0 ||
             index === assets.length - 1
           ) {
-            await dependencies.runs.update(runId, {
-              counters: currentCounters,
-              errorSamples,
-            })
             await job.updateProgress({
-              considered: currentCounters.considered,
+              considered:
+                committedCounters.considered + batchCounters.considered,
               processed: processedCount,
             })
           }
@@ -678,19 +774,32 @@ export const processExternalMaterialSyncJob = async (
         request.mode === 'backfill'
           ? nextBackfillCursor(fetched.pagination as Record<string, unknown>)
           : null
+      if (!(await heartbeat())) return finishLockLost()
+      const checkpointCounters = mergeCounters(committedCounters, batchCounters)
+      const checkpointed = await dependencies.runs.checkpoint(
+        runId,
+        persistedCursor,
+        {
+          cursor: nextCursor,
+          counters: checkpointCounters,
+          errorSamples,
+        },
+      )
+      if (!checkpointed) {
+        throw new Error('external_material_checkpoint_conflict')
+      }
+      committedCounters = checkpointCounters
+      persistedCursor = nextCursor
+
       if (request.mode === 'backfill') {
         cursor = nextCursor
+        if (!(await heartbeat())) return finishLockLost()
         await dependencies.states.update(provider, {
           backfillCursor: cursor,
         })
-        await dependencies.runs.update(runId, {
-          cursor,
-          counters: currentCounters,
-          errorSamples,
-        })
+        if (lockLost) return finishLockLost()
       }
 
-      batchIndex += 1
       if (
         request.mode !== 'backfill' ||
         discoveredInBatch === 0 ||
@@ -702,11 +811,12 @@ export const processExternalMaterialSyncJob = async (
       page = pageFromCursor(nextCursor)
     }
 
+    if (!(await heartbeat())) return finishLockLost()
     return finishRun(
       dependencies,
       runId,
       'completed',
-      currentCounters,
+      committedCounters,
       errorSamples,
       request.mode === 'backfill' ? { cursor } : {},
     )
@@ -718,6 +828,25 @@ export const processExternalMaterialSyncJob = async (
       owner,
     ).catch(() => false)
   }
+}
+
+export const handleExternalMaterialWorkerFailure = async (
+  job: Pick<
+    Job<ExternalMaterialJobData>,
+    'data' | 'attemptsMade' | 'opts'
+  > | null,
+  _error: unknown,
+  suppliedDependencies?: Pick<WorkerDependencies, 'runs' | 'now'>,
+): Promise<void> => {
+  if (!job?.data?.runId) return
+  const dependencies = suppliedDependencies ?? defaultDependencies()
+  const configuredAttempts = Number(job.opts.attempts ?? 1)
+  const attempts =
+    Number.isFinite(configuredAttempts) && configuredAttempts > 0
+      ? Math.trunc(configuredAttempts)
+      : 1
+  if (job.attemptsMade < attempts) return
+  await dependencies.runs.failExhausted(job.data.runId, dependencies.now())
 }
 
 export let externalMaterialWorker: Worker | null = null
@@ -745,8 +874,12 @@ export const initExternalMaterialWorker = async (
       limiter: { max: 1, duration: 1000 },
     },
   )
-  externalMaterialWorker.on('failed', () => {
-    logger.error('[ExternalMaterialWorker] Job failed')
+  externalMaterialWorker.on('failed', (job, error) => {
+    void handleExternalMaterialWorkerFailure(job, error).catch(() => {
+      logger.error(
+        '[ExternalMaterialWorker] Terminal failure persistence failed',
+      )
+    })
   })
   externalMaterialWorker.on('error', () => {
     logger.error('[ExternalMaterialWorker] Worker error')

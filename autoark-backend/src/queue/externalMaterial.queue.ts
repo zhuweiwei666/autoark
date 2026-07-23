@@ -12,6 +12,9 @@ import type { ExternalMaterialProvider } from '../models/ExternalMaterialSyncSta
 import logger from '../utils/logger'
 
 export const EXTERNAL_MATERIAL_QUEUE_NAME = 'external-material.sync'
+export const MAX_EXTERNAL_MATERIAL_DEFERS = 3
+const RATE_LIMIT_MIN_MS = 60_000
+const RATE_LIMIT_MAX_MS = 60 * 60 * 1000
 
 export const SYNC_DEFAULTS = Object.freeze({
   scheduled: Object.freeze({ recentDays: 3, limit: 500 }),
@@ -21,7 +24,7 @@ export const SYNC_DEFAULTS = Object.freeze({
 })
 
 const MODES = Object.keys(SYNC_DEFAULTS) as ExternalMaterialSyncMode[]
-const ACTIVE_STATUSES = ['queued', 'running'] as const
+const ACTIVE_STATUSES = ['queued', 'running', 'deferred'] as const
 const REQUEST_KEYS = new Set(['mode', 'dryRun', 'recentDays', 'limit'])
 
 export interface ExternalMaterialSyncRequest {
@@ -54,6 +57,18 @@ export interface ExternalMaterialEnqueueResult {
   status: 'queued' | 'duplicate' | 'disabled' | 'unavailable'
   runId?: string
   request: ExternalMaterialSyncRequest
+}
+
+export interface ExternalMaterialContinuationInput {
+  runId: string
+  provider: ExternalMaterialProvider
+  request: ExternalMaterialSyncRequest
+  retryAfterMs: number
+  deferCount: number
+}
+
+export interface ExternalMaterialContinuationDependencies {
+  queue?: Pick<Queue, 'add'> | null
 }
 
 const emptyCounters = (): ExternalMaterialSyncCounters => ({
@@ -139,6 +154,21 @@ export const deterministicExternalMaterialJobId = (
     ? `external-material-${provider}-scheduled`
     : `external-material-${provider}-${mode}-${randomUUID()}`
 
+export const externalMaterialContinuationJobId = (
+  provider: ExternalMaterialProvider,
+  runId: string,
+  deferCount: number,
+): string => {
+  const safeRunId = runId.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 96)
+  if (!safeRunId) throw new Error('invalid_external_material_run_id')
+  const boundedDeferCount = boundedInteger(
+    deferCount,
+    1,
+    MAX_EXTERNAL_MATERIAL_DEFERS,
+  )
+  return `external-material-${provider}-continuation-${safeRunId}-${boundedDeferCount}`
+}
+
 const defaultRunStore: RunStore = {
   findActive: (provider) =>
     ExternalMaterialSyncRun.findOne({
@@ -208,6 +238,50 @@ export const closeExternalMaterialQueue = async (): Promise<void> => {
   const queue = externalMaterialQueue
   externalMaterialQueue = null
   if (queue) await queue.close()
+}
+
+export const enqueueExternalMaterialContinuation = async (
+  input: ExternalMaterialContinuationInput,
+  dependencies: ExternalMaterialContinuationDependencies = {},
+) => {
+  const queue =
+    dependencies.queue === undefined
+      ? externalMaterialQueue
+      : dependencies.queue
+  if (!queue) throw new Error('external_material_queue_unavailable')
+  if (
+    !Number.isInteger(input.deferCount) ||
+    input.deferCount < 1 ||
+    input.deferCount > MAX_EXTERNAL_MATERIAL_DEFERS
+  ) {
+    throw new Error('external_material_defer_limit')
+  }
+
+  const request = clampExternalMaterialSyncRequest(input.request)
+  const retryAfterMs = Math.max(
+    RATE_LIMIT_MIN_MS,
+    boundedInteger(input.retryAfterMs, RATE_LIMIT_MIN_MS, RATE_LIMIT_MAX_MS),
+  )
+  return queue.add(
+    'sync',
+    {
+      runId: input.runId,
+      provider: input.provider,
+      request,
+      continuation: true,
+      deferCount: input.deferCount,
+    },
+    {
+      jobId: externalMaterialContinuationJobId(
+        input.provider,
+        input.runId,
+        input.deferCount,
+      ),
+      delay: retryAfterMs,
+      attempts: 3,
+      backoff: { type: 'exponential', delay: 30_000 },
+    },
+  )
 }
 
 export const enqueueExternalMaterialSync = async (
