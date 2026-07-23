@@ -41,11 +41,11 @@ import {
 import {
   acquireExternalMaterialLock,
   checkpointExternalMaterialRunWithFence,
-  claimExternalMaterialContinuation,
+  claimExternalMaterialDelivery,
   handleExternalMaterialWorkerFailure,
   processExternalMaterialSyncJob,
   releaseExternalMaterialLock,
-  renewExternalMaterialContinuationLease,
+  renewExternalMaterialExecutionLease,
   renewExternalMaterialLock,
   updateExternalMaterialRunWithFence,
 } from '../src/queue/externalMaterial.worker'
@@ -100,11 +100,12 @@ const workerDependencies = (overrides: Record<string, unknown> = {}) => {
     continuationJobId: null,
     continuationDueAt: null,
     resumeRequired: false,
-    continuationClaimJobId: null,
-    continuationClaimDeferCount: null,
-    continuationClaimToken: null,
-    continuationClaimGeneration: null,
-    continuationClaimExpiresAt: null,
+    executionClaimJobId: null,
+    executionClaimAttempt: null,
+    executionClaimDeferCount: null,
+    executionClaimToken: null,
+    executionClaimGeneration: null,
+    executionClaimExpiresAt: null,
   }
   return {
     featureEnabled: true,
@@ -115,42 +116,50 @@ const workerDependencies = (overrides: Record<string, unknown> = {}) => {
     },
     runs: {
       get: jest.fn().mockResolvedValue(run),
-      claimContinuation: jest.fn(
+      claimDelivery: jest.fn(
         async (
           runId: string,
           provider: string,
-          deferCount: number,
-          generation: number,
-          jobId: string,
+          delivery: {
+            jobId: string
+            attempt: number
+            generation: number
+            deferCount: number | null
+            continuation: boolean
+          },
           claimToken: string,
           _startedAt: Date,
           expiresAt: Date,
         ) =>
           runId === String(run._id) &&
           provider === run.provider &&
-          run.status === 'deferred' &&
-          run.continuationPending === true &&
-          deferCount === run.deferCount &&
-          generation === run.continuationGeneration
+          ((delivery.continuation &&
+            run.status === 'deferred' &&
+            run.continuationPending === true &&
+            delivery.jobId === run.continuationJobId &&
+            delivery.deferCount === run.deferCount &&
+            delivery.generation === run.continuationGeneration) ||
+            (!delivery.continuation && run.status === 'queued'))
             ? {
                 ...run,
                 status: 'running',
                 continuationPending: false,
-                continuationClaimJobId: jobId,
-                continuationClaimDeferCount: deferCount,
-                continuationClaimToken: claimToken,
-                continuationClaimGeneration: generation,
-                continuationClaimExpiresAt: expiresAt,
+                executionClaimJobId: delivery.jobId,
+                executionClaimAttempt: delivery.attempt,
+                executionClaimDeferCount: delivery.deferCount,
+                executionClaimToken: claimToken,
+                executionClaimGeneration: delivery.generation,
+                executionClaimExpiresAt: expiresAt,
               }
             : null,
       ),
-      restoreContinuation: jest.fn().mockResolvedValue(run),
+      restoreDelivery: jest.fn().mockResolvedValue(run),
       findRunningConflict: jest.fn().mockResolvedValue(null),
       update: jest.fn().mockResolvedValue(run),
       checkpoint: jest.fn().mockResolvedValue(run),
-      renewContinuationLease: jest.fn().mockResolvedValue(run),
-      failExhausted: jest.fn().mockResolvedValue(run),
-      failClaimedContinuation: jest.fn().mockResolvedValue(run),
+      renewExecutionLease: jest.fn().mockResolvedValue(run),
+      failTerminalBackup: jest.fn().mockResolvedValue(run),
+      failClaimedDelivery: jest.fn().mockResolvedValue(run),
     },
     states: {
       get: jest.fn().mockResolvedValue({
@@ -205,14 +214,28 @@ const statefulContinuationDependencies = (
     continuationJobId: 'continuation-job',
     continuationDueAt: new Date('2026-07-23T00:00:00.000Z'),
     resumeRequired: false,
-    continuationClaimJobId: null,
-    continuationClaimDeferCount: null,
-    continuationClaimToken: null,
-    continuationClaimGeneration: null,
-    continuationClaimExpiresAt: null,
+    executionClaimJobId: null,
+    executionClaimAttempt: null,
+    executionClaimDeferCount: null,
+    executionClaimToken: null,
+    executionClaimGeneration: null,
+    executionClaimExpiresAt: null,
   }
   let currentNow = new Date('2026-07-23T00:00:00.000Z')
   let resolveLateRestore: (() => void) | undefined
+  const owns = (fence: {
+    token: string
+    jobId: string
+    attempt: number
+    generation: number
+    deferCount: number | null
+  }) =>
+    run.status === 'running' &&
+    run.executionClaimToken === fence.token &&
+    run.executionClaimJobId === fence.jobId &&
+    run.executionClaimAttempt === fence.attempt &&
+    run.executionClaimGeneration === fence.generation &&
+    run.executionClaimDeferCount === fence.deferCount
   const deps = workerDependencies({
     restoreAttempts: 1,
     restoreTimeoutMs: 5,
@@ -220,13 +243,17 @@ const statefulContinuationDependencies = (
     now: () => currentNow,
   })
 
-  deps.runs.claimContinuation.mockImplementation(
+  deps.runs.claimDelivery.mockImplementation(
     async (
       runId: string,
       provider: string,
-      deferCount: number,
-      generation: number,
-      jobId: string,
+      delivery: {
+        jobId: string
+        attempt: number
+        generation: number
+        deferCount: number | null
+        continuation: boolean
+      },
       claimToken: string,
       startedAt: Date,
       expiresAt: Date,
@@ -234,9 +261,10 @@ const statefulContinuationDependencies = (
       if (
         runId !== String(run._id) ||
         provider !== run.provider ||
-        deferCount !== run.deferCount ||
-        generation !== run.continuationGeneration ||
-        typeof jobId !== 'string' ||
+        delivery.continuation !== true ||
+        delivery.deferCount !== run.deferCount ||
+        delivery.generation !== run.continuationGeneration ||
+        typeof delivery.jobId !== 'string' ||
         typeof claimToken !== 'string'
       ) {
         return null
@@ -244,48 +272,52 @@ const statefulContinuationDependencies = (
       const deferredClaim =
         run.status === 'deferred' &&
         run.continuationPending === true &&
-        run.continuationJobId === jobId
-      const retryClaim =
+        run.continuationJobId === delivery.jobId
+      const sameDelivery =
         run.status === 'running' &&
         run.continuationPending === false &&
-        run.continuationClaimJobId === jobId &&
-        run.continuationClaimDeferCount === deferCount &&
-        run.continuationClaimGeneration === generation &&
-        run.continuationClaimExpiresAt instanceof Date &&
-        run.continuationClaimExpiresAt.getTime() <= startedAt.getTime()
+        run.executionClaimJobId === delivery.jobId &&
+        run.executionClaimDeferCount === delivery.deferCount &&
+        run.executionClaimGeneration === delivery.generation
+      const retryClaim =
+        sameDelivery &&
+        (run.executionClaimAttempt < delivery.attempt ||
+          (run.executionClaimAttempt === delivery.attempt &&
+            run.executionClaimExpiresAt instanceof Date &&
+            run.executionClaimExpiresAt.getTime() <= startedAt.getTime()))
       if (!deferredClaim && !retryClaim) return null
       run = {
         ...run,
         status: 'running',
         continuationPending: false,
-        continuationClaimJobId: jobId,
-        continuationClaimDeferCount: deferCount,
-        continuationClaimToken: claimToken,
-        continuationClaimGeneration: generation,
-        continuationClaimExpiresAt: expiresAt,
+        executionClaimJobId: delivery.jobId,
+        executionClaimAttempt: delivery.attempt,
+        executionClaimDeferCount: delivery.deferCount,
+        executionClaimToken: claimToken,
+        executionClaimGeneration: delivery.generation,
+        executionClaimExpiresAt: expiresAt,
       }
       return { ...run }
     },
   )
-  deps.runs.restoreContinuation.mockImplementation(
-    (runId: string, fence: { token: string; generation: number }) => {
+  deps.runs.restoreDelivery.mockImplementation(
+    (runId: string, fence: Parameters<typeof owns>[0]) => {
       const applyRestore = () => {
         if (
           runId === String(run._id) &&
-          run.status === 'running' &&
           run.continuationPending === false &&
-          run.continuationClaimToken === fence.token &&
-          run.continuationClaimGeneration === fence.generation
+          owns(fence)
         ) {
           run = {
             ...run,
             status: 'deferred',
             continuationPending: true,
-            continuationClaimJobId: null,
-            continuationClaimDeferCount: null,
-            continuationClaimToken: null,
-            continuationClaimGeneration: null,
-            continuationClaimExpiresAt: null,
+            executionClaimJobId: null,
+            executionClaimAttempt: null,
+            executionClaimDeferCount: null,
+            executionClaimToken: null,
+            executionClaimGeneration: null,
+            executionClaimExpiresAt: null,
           }
         }
         return { ...run }
@@ -305,15 +337,9 @@ const statefulContinuationDependencies = (
     async (
       _runId: string,
       update: Record<string, unknown>,
-      fence?: { token: string; generation: number },
+      fence: Parameters<typeof owns>[0],
     ) => {
-      if (
-        fence &&
-        (run.continuationClaimToken !== fence.token ||
-          run.continuationClaimGeneration !== fence.generation)
-      ) {
-        return null
-      }
+      if (!fence || !owns(fence)) return null
       run = { ...run, ...update }
       return { ...run }
     },
@@ -323,57 +349,42 @@ const statefulContinuationDependencies = (
       _runId: string,
       _cursor: string | null,
       update: Record<string, unknown>,
-      fence?: { token: string; generation: number },
+      fence: Parameters<typeof owns>[0],
     ) => {
-      if (
-        fence &&
-        (run.continuationClaimToken !== fence.token ||
-          run.continuationClaimGeneration !== fence.generation)
-      ) {
-        return null
-      }
+      if (!fence || !owns(fence)) return null
       run = { ...run, ...update }
       return { ...run }
     },
   )
-  deps.runs.renewContinuationLease.mockImplementation(
+  deps.runs.renewExecutionLease.mockImplementation(
     async (
       _runId: string,
-      fence: { token: string; generation: number },
+      fence: Parameters<typeof owns>[0],
       expiresAt: Date,
     ) => {
-      if (
-        run.continuationClaimToken !== fence.token ||
-        run.continuationClaimGeneration !== fence.generation
-      ) {
-        return null
-      }
-      run = { ...run, continuationClaimExpiresAt: expiresAt }
+      if (!owns(fence)) return null
+      run = { ...run, executionClaimExpiresAt: expiresAt }
       return { ...run }
     },
   )
-  deps.runs.failClaimedContinuation.mockImplementation(
+  deps.runs.failClaimedDelivery.mockImplementation(
     async (
       runId: string,
-      fence: { token: string; generation: number },
+      fence: Parameters<typeof owns>[0],
       completedAt: Date,
     ) => {
-      if (
-        runId === String(run._id) &&
-        run.status === 'running' &&
-        run.continuationClaimToken === fence.token &&
-        run.continuationClaimGeneration === fence.generation
-      ) {
+      if (runId === String(run._id) && owns(fence)) {
         run = {
           ...run,
           status: 'failed',
           completedAt,
           continuationPending: false,
-          continuationClaimJobId: null,
-          continuationClaimDeferCount: null,
-          continuationClaimToken: null,
-          continuationClaimGeneration: null,
-          continuationClaimExpiresAt: null,
+          executionClaimJobId: null,
+          executionClaimAttempt: null,
+          executionClaimDeferCount: null,
+          executionClaimToken: null,
+          executionClaimGeneration: null,
+          executionClaimExpiresAt: null,
         }
       }
       return { ...run }
@@ -387,6 +398,186 @@ const statefulContinuationDependencies = (
       currentNow = value
     },
     releaseLateRestore: () => resolveLateRestore?.(),
+  }
+}
+
+const statefulInitialDeliveryDependencies = () => {
+  let run: Record<string, any> = {
+    _id: 'run-1',
+    provider: 'guangdada',
+    mode: request.mode,
+    dryRun: false,
+    request: { recentDays: 3, limit: 10 },
+    status: 'queued',
+    counters: counters(),
+    cursor: null,
+    deferCount: 0,
+    continuationPending: false,
+    continuationGeneration: 0,
+    continuationJobId: null,
+    continuationDueAt: null,
+    resumeRequired: false,
+    executionClaimJobId: null,
+    executionClaimAttempt: null,
+    executionClaimDeferCount: null,
+    executionClaimToken: null,
+    executionClaimGeneration: null,
+    executionClaimExpiresAt: null,
+  }
+  let currentNow = new Date('2026-07-23T00:00:00.000Z')
+  const deps = workerDependencies({
+    claimLeaseTtlMs: 30_000,
+    now: () => currentNow,
+  })
+  const owns = (fence: {
+    token: string
+    jobId: string
+    attempt: number
+    generation: number
+    deferCount: number | null
+  }) =>
+    run.status === 'running' &&
+    run.executionClaimToken === fence.token &&
+    run.executionClaimJobId === fence.jobId &&
+    run.executionClaimAttempt === fence.attempt &&
+    run.executionClaimGeneration === fence.generation &&
+    run.executionClaimDeferCount === fence.deferCount
+
+  deps.runs.get.mockImplementation(async () => ({ ...run }))
+  deps.runs.claimDelivery = jest.fn(
+    async (
+      runId: string,
+      provider: string,
+      delivery: {
+        jobId: string
+        attempt: number
+        generation: number
+        deferCount: number | null
+        continuation: boolean
+      },
+      claimToken: string,
+      startedAt: Date,
+      expiresAt: Date,
+    ) => {
+      if (
+        runId !== String(run._id) ||
+        provider !== run.provider ||
+        delivery.continuation ||
+        delivery.generation !== 0 ||
+        delivery.deferCount !== null
+      ) {
+        return null
+      }
+      const firstClaim =
+        run.status === 'queued' && run.continuationPending === false
+      const sameDelivery =
+        run.status === 'running' &&
+        run.executionClaimJobId === delivery.jobId &&
+        run.executionClaimGeneration === delivery.generation &&
+        run.executionClaimDeferCount === delivery.deferCount
+      const higherAttempt =
+        sameDelivery && run.executionClaimAttempt < delivery.attempt
+      const expiredStalledAttempt =
+        sameDelivery &&
+        run.executionClaimAttempt === delivery.attempt &&
+        run.executionClaimExpiresAt instanceof Date &&
+        run.executionClaimExpiresAt.getTime() <= startedAt.getTime()
+      if (!firstClaim && !higherAttempt && !expiredStalledAttempt) return null
+      run = {
+        ...run,
+        status: 'running',
+        executionClaimJobId: delivery.jobId,
+        executionClaimAttempt: delivery.attempt,
+        executionClaimDeferCount: delivery.deferCount,
+        executionClaimToken: claimToken,
+        executionClaimGeneration: delivery.generation,
+        executionClaimExpiresAt: expiresAt,
+        startedAt,
+      }
+      return { ...run }
+    },
+  )
+  deps.runs.update.mockImplementation(
+    async (
+      _runId: string,
+      update: Record<string, unknown>,
+      fence: Parameters<typeof owns>[0],
+    ) => {
+      if (!fence || !owns(fence)) return null
+      run = { ...run, ...update }
+      return { ...run }
+    },
+  )
+  deps.runs.checkpoint.mockImplementation(
+    async (
+      _runId: string,
+      expectedCursor: string | null,
+      update: Record<string, unknown>,
+      fence: Parameters<typeof owns>[0],
+    ) => {
+      if (!fence || !owns(fence) || (run.cursor ?? null) !== expectedCursor) {
+        return null
+      }
+      run = { ...run, ...update }
+      return { ...run }
+    },
+  )
+  deps.runs.renewExecutionLease = jest.fn(
+    async (
+      _runId: string,
+      fence: Parameters<typeof owns>[0],
+      expiresAt: Date,
+    ) => {
+      if (!fence || !owns(fence)) return null
+      run = { ...run, executionClaimExpiresAt: expiresAt }
+      return { ...run }
+    },
+  )
+  deps.runs.restoreDelivery = jest.fn(
+    async (_runId: string, fence: Parameters<typeof owns>[0]) => {
+      if (!fence || !owns(fence)) return null
+      run = {
+        ...run,
+        status: 'queued',
+        startedAt: null,
+        executionClaimJobId: null,
+        executionClaimAttempt: null,
+        executionClaimDeferCount: null,
+        executionClaimToken: null,
+        executionClaimGeneration: null,
+        executionClaimExpiresAt: null,
+      }
+      return { ...run }
+    },
+  )
+  deps.runs.failClaimedDelivery = jest.fn(
+    async (
+      _runId: string,
+      fence: Parameters<typeof owns>[0],
+      completedAt: Date,
+    ) => {
+      if (!fence || !owns(fence)) return null
+      run = {
+        ...run,
+        status: 'failed',
+        completedAt,
+        executionClaimJobId: null,
+        executionClaimAttempt: null,
+        executionClaimDeferCount: null,
+        executionClaimToken: null,
+        executionClaimGeneration: null,
+        executionClaimExpiresAt: null,
+      }
+      return { ...run }
+    },
+  )
+
+  return {
+    deps,
+    getRun: () => ({ ...run }),
+    setNow: (value: Date) => {
+      currentNow = value
+    },
   }
 }
 
@@ -478,10 +669,10 @@ describe('external material sync models and request bounds', () => {
       required: true,
     })
     expect(
-      runSchema.path('continuationClaimJobId').options.maxlength,
+      runSchema.path('executionClaimJobId').options.maxlength,
     ).toBeLessThanOrEqual(200)
-    expect(runSchema.path('continuationClaimDeferCount').options.max).toBe(3)
-    expect(runSchema.path('continuationClaimDeferCount').options.min).toBe(0)
+    expect(runSchema.path('executionClaimDeferCount').options.max).toBe(3)
+    expect(runSchema.path('executionClaimDeferCount').options.min).toBe(0)
     expect(runSchema.path('continuationGeneration').options).toMatchObject({
       type: Number,
       default: 0,
@@ -500,12 +691,16 @@ describe('external material sync models and request bounds', () => {
       required: true,
     })
     expect(
-      runSchema.path('continuationClaimToken').options.maxlength,
+      runSchema.path('executionClaimToken').options.maxlength,
     ).toBeLessThanOrEqual(64)
-    expect(runSchema.path('continuationClaimGeneration').options.max).toBe(
+    expect(runSchema.path('executionClaimAttempt').options).toMatchObject({
+      min: 0,
+      max: 100,
+    })
+    expect(runSchema.path('executionClaimGeneration').options.max).toBe(
       runSchema.path('continuationGeneration').options.max,
     )
-    expect(runSchema.path('continuationClaimExpiresAt')).toBeDefined()
+    expect(runSchema.path('executionClaimExpiresAt')).toBeDefined()
     expect(runSchema.path('errorSamples.category')).toBeDefined()
     expect(runSchema.path('rawRecord')).toBeUndefined()
     expect(runSchema.path('mediaUrl')).toBeUndefined()
@@ -542,11 +737,12 @@ describe('external material sync models and request bounds', () => {
       continuationJobId: 'continuation-job',
       continuationDueAt: '2026-07-23T00:01:00.000Z',
       resumeRequired: false,
-      continuationClaimJobId: 'safe-job',
-      continuationClaimDeferCount: '1',
-      continuationClaimToken: 'claim-token-1',
-      continuationClaimGeneration: '2',
-      continuationClaimExpiresAt: '2026-07-23T00:02:00.000Z',
+      executionClaimJobId: 'safe-job',
+      executionClaimAttempt: '2',
+      executionClaimDeferCount: '1',
+      executionClaimToken: 'claim-token-1',
+      executionClaimGeneration: '2',
+      executionClaimExpiresAt: '2026-07-23T00:02:00.000Z',
       rawRecord: { secret: true },
       mediaUrl: 'https://secret.invalid/media',
     })
@@ -558,10 +754,11 @@ describe('external material sync models and request bounds', () => {
       continuationGeneration: 2,
       continuationJobId: 'continuation-job',
       resumeRequired: false,
-      continuationClaimJobId: 'safe-job',
-      continuationClaimDeferCount: 1,
-      continuationClaimToken: 'claim-token-1',
-      continuationClaimGeneration: 2,
+      executionClaimJobId: 'safe-job',
+      executionClaimAttempt: 2,
+      executionClaimDeferCount: 1,
+      executionClaimToken: 'claim-token-1',
+      executionClaimGeneration: 2,
     })
     expect(cast).not.toHaveProperty('rawRecord')
     expect(cast).not.toHaveProperty('mediaUrl')
@@ -579,18 +776,21 @@ describe('external material sync models and request bounds', () => {
       deferCount: 0,
       continuationPending: false,
       continuationGeneration: 1,
-      continuationClaimJobId:
-        'external-material-guangdada-continuation-run-1-1',
-      continuationClaimDeferCount: 0,
-      continuationClaimToken: 'claim-token-1',
-      continuationClaimGeneration: 1,
-      continuationClaimExpiresAt: new Date('2026-07-23T00:02:00.000Z'),
+      executionClaimJobId: 'external-material-guangdada-continuation-run-1-1',
+      executionClaimAttempt: 0,
+      executionClaimDeferCount: 0,
+      executionClaimToken: 'claim-token-1',
+      executionClaimGeneration: 1,
+      executionClaimExpiresAt: new Date('2026-07-23T00:02:00.000Z'),
     })
 
     await expect(claimedPause.validate()).resolves.toBeUndefined()
-    claimedPause.continuationClaimDeferCount = 0.5
+    claimedPause.executionClaimDeferCount = 0.5
     await expect(claimedPause.validate()).rejects.toThrow()
-    claimedPause.continuationClaimDeferCount = -1
+    claimedPause.executionClaimDeferCount = -1
+    await expect(claimedPause.validate()).rejects.toThrow()
+    claimedPause.executionClaimDeferCount = 0
+    claimedPause.executionClaimAttempt = 0.5
     await expect(claimedPause.validate()).rejects.toThrow()
   })
 })
@@ -757,12 +957,13 @@ describe('external material queue admission', () => {
     provider: 'guangdada' as const,
     status: 'running',
     continuationPending: false,
-    continuationClaimJobId:
+    executionClaimJobId:
       'external-material-guangdada-continuation-run-expired-2',
-    continuationClaimDeferCount: 0,
-    continuationClaimToken: 'expired-token',
-    continuationClaimGeneration: 2,
-    continuationClaimExpiresAt: new Date('2026-07-23T00:01:00.000Z'),
+    executionClaimAttempt: 0,
+    executionClaimDeferCount: 0,
+    executionClaimToken: 'expired-token',
+    executionClaimGeneration: 2,
+    executionClaimExpiresAt: new Date('2026-07-23T00:01:00.000Z'),
   }
 
   it.each(['failed', 'completed', 'missing'])(
@@ -806,6 +1007,47 @@ describe('external material queue admission', () => {
       )
     },
   )
+
+  it('recovers an expired terminal initial delivery with its complete execution fence', async () => {
+    const initialClaim = {
+      ...expiredClaim,
+      executionClaimJobId: 'external-material-guangdada-canary10',
+      executionClaimAttempt: 2,
+      executionClaimDeferCount: null,
+      executionClaimGeneration: 0,
+    }
+    const runs = {
+      findExpiredClaims: jest.fn().mockResolvedValue([initialClaim]),
+      failExpiredClaim: jest
+        .fn()
+        .mockResolvedValue({ _id: 'run-expired', status: 'failed' }),
+    }
+
+    await expect(
+      recoverExpiredExternalMaterialClaims(
+        { provider: 'guangdada' },
+        {
+          runs,
+          queue: {
+            getJob: jest.fn().mockResolvedValue({
+              getState: jest.fn().mockResolvedValue('failed'),
+            }),
+          } as any,
+          now: () => new Date('2026-07-23T00:02:00.000Z'),
+        },
+      ),
+    ).resolves.toBe(1)
+    expect(runs.failExpiredClaim).toHaveBeenCalledWith(
+      expect.objectContaining({
+        executionClaimJobId: 'external-material-guangdada-canary10',
+        executionClaimAttempt: 2,
+        executionClaimDeferCount: null,
+        executionClaimGeneration: 0,
+        executionClaimToken: 'expired-token',
+      }),
+      new Date('2026-07-23T00:02:00.000Z'),
+    )
+  })
 
   it.each(['waiting', 'delayed', 'active'])(
     'retains an expired claim while its BullMQ job is %s',
@@ -857,8 +1099,8 @@ describe('external material queue admission', () => {
     ).resolves.toBe(0)
     expect(runs.failExpiredClaim).toHaveBeenCalledWith(
       expect.objectContaining({
-        continuationClaimToken: 'expired-token',
-        continuationClaimGeneration: 2,
+        executionClaimToken: 'expired-token',
+        executionClaimGeneration: 2,
       }),
       expect.any(Date),
     )
@@ -880,13 +1122,14 @@ describe('external material queue admission', () => {
           provider: 'guangdada',
           status: 'running',
           continuationPending: false,
-          continuationClaimJobId:
+          executionClaimJobId:
             'external-material-guangdada-continuation-run-expired-2',
-          continuationClaimDeferCount: 0,
-          continuationClaimToken: 'expired-token',
-          continuationClaimGeneration: 2,
-          continuationClaimExpiresAt: {
-            $eq: expiredClaim.continuationClaimExpiresAt,
+          executionClaimAttempt: 0,
+          executionClaimDeferCount: 0,
+          executionClaimToken: 'expired-token',
+          executionClaimGeneration: 2,
+          executionClaimExpiresAt: {
+            $eq: expiredClaim.executionClaimExpiresAt,
             $lte: completedAt,
           },
         }),
@@ -897,11 +1140,12 @@ describe('external material queue admission', () => {
           completedAt,
           continuationPending: false,
           continuationJobId: null,
-          continuationClaimJobId: null,
-          continuationClaimDeferCount: null,
-          continuationClaimToken: null,
-          continuationClaimGeneration: null,
-          continuationClaimExpiresAt: null,
+          executionClaimJobId: null,
+          executionClaimAttempt: null,
+          executionClaimDeferCount: null,
+          executionClaimToken: null,
+          executionClaimGeneration: null,
+          executionClaimExpiresAt: null,
         }),
         $push: {
           errorSamples: {
@@ -1276,6 +1520,247 @@ describe('external material redis lock', () => {
 })
 
 describe('external material worker orchestration', () => {
+  it('lets an expired stalled initial delivery be replaced and rejects every late owner write', async () => {
+    const { deps, getRun, setNow } = statefulInitialDeliveryDependencies()
+    let releaseOwnerA: (() => void) | undefined
+    let markOwnerAStarted: (() => void) | undefined
+    const ownerAStarted = new Promise<void>((resolve) => {
+      markOwnerAStarted = resolve
+    })
+    deps.fetchAds
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            markOwnerAStarted?.()
+            releaseOwnerA = () => resolve({ data: [], pagination: {} })
+          }),
+      )
+      .mockResolvedValueOnce({ data: [], pagination: {} })
+    const initialJob = job({ id: 'initial-job', attemptsMade: 0 })
+    const ownerA = processExternalMaterialSyncJob(initialJob as any, deps)
+    await ownerAStarted
+    const ownerAFence = {
+      token: getRun().executionClaimToken,
+      jobId: 'initial-job',
+      attempt: 0,
+      generation: 0,
+      deferCount: null,
+    }
+
+    try {
+      setNow(new Date('2026-07-23T00:01:00.000Z'))
+      await expect(
+        processExternalMaterialSyncJob(initialJob as any, deps),
+      ).resolves.toMatchObject({ status: 'completed' })
+      expect(getRun()).toMatchObject({
+        status: 'completed',
+        executionClaimJobId: null,
+        executionClaimAttempt: null,
+        executionClaimToken: null,
+        executionClaimGeneration: null,
+        executionClaimExpiresAt: null,
+      })
+      const completed = getRun()
+
+      await expect(
+        deps.runs.checkpoint(
+          'run-1',
+          null,
+          { cursor: 'late-checkpoint' },
+          ownerAFence,
+        ),
+      ).resolves.toBeNull()
+      await expect(
+        deps.runs.update(
+          'run-1',
+          { status: 'completed', cursor: 'late-complete' },
+          ownerAFence,
+        ),
+      ).resolves.toBeNull()
+      await expect(
+        deps.runs.update(
+          'run-1',
+          {
+            status: 'failed',
+            errorSamples: [{ category: 'lock_lost' }],
+          },
+          ownerAFence,
+        ),
+      ).resolves.toBeNull()
+      expect(getRun()).toEqual(completed)
+    } finally {
+      releaseOwnerA?.()
+      await expect(ownerA).resolves.toMatchObject({ status: 'stale' })
+    }
+  })
+
+  it('rejects a same-attempt initial replacement while its execution lease is live', async () => {
+    const { deps } = statefulInitialDeliveryDependencies()
+    let releaseOwnerA: (() => void) | undefined
+    let markOwnerAStarted: (() => void) | undefined
+    const ownerAStarted = new Promise<void>((resolve) => {
+      markOwnerAStarted = resolve
+    })
+    deps.fetchAds.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          markOwnerAStarted?.()
+          releaseOwnerA = () => resolve({ data: [], pagination: {} })
+        }),
+    )
+    const initialJob = job({ id: 'initial-job', attemptsMade: 0 })
+    const ownerA = processExternalMaterialSyncJob(initialJob as any, deps)
+    await ownerAStarted
+
+    try {
+      await expect(
+        processExternalMaterialSyncJob(initialJob as any, deps),
+      ).resolves.toMatchObject({ status: 'stale' })
+      expect(deps.fetchAds).toHaveBeenCalledTimes(1)
+    } finally {
+      releaseOwnerA?.()
+      await expect(ownerA).resolves.toMatchObject({ status: 'completed' })
+    }
+  })
+
+  it('lets the same initial job reclaim ownership on a higher BullMQ attempt', async () => {
+    const { deps, getRun } = statefulInitialDeliveryDependencies()
+    let releaseOwnerA: (() => void) | undefined
+    let markOwnerAStarted: (() => void) | undefined
+    const ownerAStarted = new Promise<void>((resolve) => {
+      markOwnerAStarted = resolve
+    })
+    deps.fetchAds
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            markOwnerAStarted?.()
+            releaseOwnerA = () => resolve({ data: [], pagination: {} })
+          }),
+      )
+      .mockResolvedValueOnce({ data: [], pagination: {} })
+    const ownerA = processExternalMaterialSyncJob(
+      job({ id: 'initial-job', attemptsMade: 0 }) as any,
+      deps,
+    )
+    await ownerAStarted
+
+    try {
+      await expect(
+        processExternalMaterialSyncJob(
+          job({ id: 'initial-job', attemptsMade: 1 }) as any,
+          deps,
+        ),
+      ).resolves.toMatchObject({ status: 'completed' })
+      expect(getRun()).toMatchObject({ status: 'completed' })
+    } finally {
+      releaseOwnerA?.()
+      await expect(ownerA).resolves.toMatchObject({ status: 'stale' })
+    }
+  })
+
+  it('does not let a different initial job steal a live execution lease', async () => {
+    const { deps } = statefulInitialDeliveryDependencies()
+    let releaseOwnerA: (() => void) | undefined
+    let markOwnerAStarted: (() => void) | undefined
+    const ownerAStarted = new Promise<void>((resolve) => {
+      markOwnerAStarted = resolve
+    })
+    deps.fetchAds.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          markOwnerAStarted?.()
+          releaseOwnerA = () => resolve({ data: [], pagination: {} })
+        }),
+    )
+    const ownerA = processExternalMaterialSyncJob(
+      job({ id: 'initial-job', attemptsMade: 0 }) as any,
+      deps,
+    )
+    await ownerAStarted
+
+    try {
+      await expect(
+        processExternalMaterialSyncJob(
+          job({ id: 'different-job', attemptsMade: 0 }) as any,
+          deps,
+        ),
+      ).resolves.toMatchObject({ status: 'stale' })
+      expect(deps.fetchAds).toHaveBeenCalledTimes(1)
+    } finally {
+      releaseOwnerA?.()
+      await expect(ownerA).resolves.toMatchObject({ status: 'completed' })
+    }
+  })
+
+  it('lets a higher initial BullMQ attempt reclaim after owned restore persistence fails', async () => {
+    const coreError = new Error('unsafe initial attempt failure')
+    const { deps, getRun } = statefulInitialDeliveryDependencies()
+    deps.states.get.mockRejectedValueOnce(coreError)
+    deps.runs.restoreDelivery.mockRejectedValue(
+      new Error('mongo restore unavailable'),
+    )
+
+    await expect(
+      processExternalMaterialSyncJob(
+        job({ id: 'initial-job', attemptsMade: 0 }) as any,
+        deps,
+      ),
+    ).rejects.toThrow(coreError)
+    expect(getRun()).toMatchObject({
+      status: 'running',
+      executionClaimJobId: 'initial-job',
+      executionClaimAttempt: 0,
+      executionClaimToken: expect.any(String),
+      executionClaimGeneration: 0,
+    })
+
+    await expect(
+      processExternalMaterialSyncJob(
+        job({ id: 'initial-job', attemptsMade: 1 }) as any,
+        deps,
+      ),
+    ).resolves.toMatchObject({ status: 'completed' })
+    expect(getRun()).toMatchObject({
+      status: 'completed',
+      executionClaimJobId: null,
+      executionClaimAttempt: null,
+      executionClaimToken: null,
+    })
+  })
+
+  it('terminalizes a final initial attempt with its full ownership fence', async () => {
+    const coreError = new Error('unsafe final initial failure')
+    const { deps, getRun } = statefulInitialDeliveryDependencies()
+    deps.states.get.mockRejectedValueOnce(coreError)
+
+    await expect(
+      processExternalMaterialSyncJob(
+        job({ id: 'initial-job', attemptsMade: 2 }) as any,
+        deps,
+      ),
+    ).rejects.toThrow(coreError)
+    expect(deps.runs.restoreDelivery).not.toHaveBeenCalled()
+    expect(deps.runs.failClaimedDelivery).toHaveBeenCalledWith(
+      'run-1',
+      expect.objectContaining({
+        token: expect.any(String),
+        jobId: 'initial-job',
+        attempt: 2,
+        generation: 0,
+        deferCount: null,
+        continuation: false,
+      }),
+      new Date('2026-07-23T00:00:00.000Z'),
+    )
+    expect(getRun()).toMatchObject({
+      status: 'failed',
+      executionClaimJobId: null,
+      executionClaimAttempt: null,
+      executionClaimToken: null,
+    })
+  })
+
   it('atomically claims a pause continuation with deferCount zero', async () => {
     const claimed = new ExternalMaterialSyncRun({
       provider: 'guangdada',
@@ -1287,12 +1772,11 @@ describe('external material worker orchestration', () => {
       deferCount: 0,
       continuationPending: false,
       continuationGeneration: 1,
-      continuationClaimJobId:
-        'external-material-guangdada-continuation-run-1-1',
-      continuationClaimDeferCount: 0,
-      continuationClaimToken: 'claim-token-1',
-      continuationClaimGeneration: 1,
-      continuationClaimExpiresAt: new Date('2026-07-23T00:02:00.000Z'),
+      executionClaimJobId: 'external-material-guangdada-continuation-run-1-1',
+      executionClaimDeferCount: 0,
+      executionClaimToken: 'claim-token-1',
+      executionClaimGeneration: 1,
+      executionClaimExpiresAt: new Date('2026-07-23T00:02:00.000Z'),
     })
     const findOneAndUpdate = jest
       .spyOn(ExternalMaterialSyncRun, 'findOneAndUpdate')
@@ -1300,12 +1784,16 @@ describe('external material worker orchestration', () => {
 
     try {
       await expect(
-        claimExternalMaterialContinuation(
+        claimExternalMaterialDelivery(
           'run-1',
           'guangdada',
-          0,
-          1,
-          'external-material-guangdada-continuation-run-1-1',
+          {
+            jobId: 'external-material-guangdada-continuation-run-1-1',
+            attempt: 0,
+            generation: 1,
+            deferCount: 0,
+            continuation: true,
+          },
           'claim-token-1',
           new Date('2026-07-23T00:00:00.000Z'),
           new Date('2026-07-23T00:02:00.000Z'),
@@ -1314,14 +1802,18 @@ describe('external material worker orchestration', () => {
       await expect(claimed.validate()).resolves.toBeUndefined()
       expect(findOneAndUpdate.mock.calls[0]?.[0]).toEqual(
         expect.objectContaining({
-          deferCount: 0,
-          continuationGeneration: 1,
+          $or: expect.arrayContaining([
+            expect.objectContaining({
+              deferCount: 0,
+              continuationGeneration: 1,
+            }),
+          ]),
         }),
       )
       expect(findOneAndUpdate.mock.calls[0]?.[1]).toEqual({
         $set: expect.objectContaining({
-          continuationClaimDeferCount: 0,
-          continuationClaimGeneration: 1,
+          executionClaimDeferCount: 0,
+          executionClaimGeneration: 1,
         }),
       })
     } finally {
@@ -1345,12 +1837,16 @@ describe('external material worker orchestration', () => {
 
     try {
       await expect(
-        claimExternalMaterialContinuation(
+        claimExternalMaterialDelivery(
           'run-1',
           'guangdada',
-          2,
-          2,
-          'continuation-job',
+          {
+            jobId: 'continuation-job',
+            attempt: 0,
+            generation: 2,
+            deferCount: 2,
+            continuation: true,
+          },
           'claim-token-1',
           startedAt,
           expiresAt,
@@ -1360,21 +1856,32 @@ describe('external material worker orchestration', () => {
         {
           _id: 'run-1',
           provider: 'guangdada',
-          deferCount: 2,
-          continuationGeneration: 2,
           $or: [
             {
               status: 'deferred',
               continuationPending: true,
               continuationJobId: 'continuation-job',
+              deferCount: 2,
+              continuationGeneration: 2,
             },
             {
               status: 'running',
               continuationPending: false,
-              continuationClaimJobId: 'continuation-job',
-              continuationClaimDeferCount: 2,
-              continuationClaimGeneration: 2,
-              continuationClaimExpiresAt: { $lte: startedAt },
+              $or: [
+                {
+                  executionClaimJobId: 'continuation-job',
+                  executionClaimAttempt: { $lt: 0 },
+                  executionClaimDeferCount: 2,
+                  executionClaimGeneration: 2,
+                },
+                {
+                  executionClaimJobId: 'continuation-job',
+                  executionClaimAttempt: 0,
+                  executionClaimDeferCount: 2,
+                  executionClaimGeneration: 2,
+                  executionClaimExpiresAt: { $lte: startedAt },
+                },
+              ],
             },
           ],
         },
@@ -1382,11 +1889,12 @@ describe('external material worker orchestration', () => {
           $set: {
             status: 'running',
             continuationPending: false,
-            continuationClaimJobId: 'continuation-job',
-            continuationClaimDeferCount: 2,
-            continuationClaimToken: 'claim-token-1',
-            continuationClaimGeneration: 2,
-            continuationClaimExpiresAt: expiresAt,
+            executionClaimJobId: 'continuation-job',
+            executionClaimAttempt: 0,
+            executionClaimDeferCount: 2,
+            executionClaimToken: 'claim-token-1',
+            executionClaimGeneration: 2,
+            executionClaimExpiresAt: expiresAt,
             startedAt,
             deferredUntil: null,
             retryAfterMs: null,
@@ -1407,22 +1915,30 @@ describe('external material worker orchestration', () => {
     const afterExpiry = new Date('2026-07-23T00:03:00.000Z')
 
     try {
-      await claimExternalMaterialContinuation(
+      await claimExternalMaterialDelivery(
         'run-1',
         'guangdada',
-        2,
-        2,
-        'continuation-job',
+        {
+          jobId: 'continuation-job',
+          attempt: 0,
+          generation: 2,
+          deferCount: 2,
+          continuation: true,
+        },
         'replacement-token-before',
         beforeExpiry,
         new Date('2026-07-23T00:03:00.000Z'),
       )
-      await claimExternalMaterialContinuation(
+      await claimExternalMaterialDelivery(
         'run-1',
         'guangdada',
-        2,
-        2,
-        'continuation-job',
+        {
+          jobId: 'continuation-job',
+          attempt: 0,
+          generation: 2,
+          deferCount: 2,
+          continuation: true,
+        },
         'replacement-token-after',
         afterExpiry,
         new Date('2026-07-23T00:05:00.000Z'),
@@ -1431,18 +1947,22 @@ describe('external material worker orchestration', () => {
       expect(findOneAndUpdate).toHaveBeenNthCalledWith(
         1,
         expect.objectContaining({
-          continuationGeneration: 2,
           $or: expect.arrayContaining([
             expect.objectContaining({
-              continuationClaimJobId: 'continuation-job',
-              continuationClaimGeneration: 2,
-              continuationClaimExpiresAt: { $lte: beforeExpiry },
+              $or: expect.arrayContaining([
+                expect.objectContaining({
+                  executionClaimJobId: 'continuation-job',
+                  executionClaimAttempt: 0,
+                  executionClaimGeneration: 2,
+                  executionClaimExpiresAt: { $lte: beforeExpiry },
+                }),
+              ]),
             }),
           ]),
         }),
         expect.objectContaining({
           $set: expect.objectContaining({
-            continuationClaimToken: 'replacement-token-before',
+            executionClaimToken: 'replacement-token-before',
           }),
         }),
         expect.any(Object),
@@ -1452,13 +1972,17 @@ describe('external material worker orchestration', () => {
         expect.objectContaining({
           $or: expect.arrayContaining([
             expect.objectContaining({
-              continuationClaimExpiresAt: { $lte: afterExpiry },
+              $or: expect.arrayContaining([
+                expect.objectContaining({
+                  executionClaimExpiresAt: { $lte: afterExpiry },
+                }),
+              ]),
             }),
           ]),
         }),
         expect.objectContaining({
           $set: expect.objectContaining({
-            continuationClaimToken: 'replacement-token-after',
+            executionClaimToken: 'replacement-token-after',
           }),
         }),
         expect.any(Object),
@@ -1471,15 +1995,22 @@ describe('external material worker orchestration', () => {
     }
   })
 
-  it('fences lease renewal, checkpoints, and terminal writes by token and generation', async () => {
+  it('fences lease renewal, checkpoints, and terminal writes by the full delivery identity', async () => {
     const findOneAndUpdate = jest
       .spyOn(ExternalMaterialSyncRun, 'findOneAndUpdate')
       .mockResolvedValue(null)
-    const fence = { token: 'old-token', generation: 2 }
+    const fence = {
+      token: 'old-token',
+      jobId: 'continuation-job',
+      attempt: 0,
+      generation: 2,
+      deferCount: 2,
+      continuation: true,
+    }
     const expiresAt = new Date('2026-07-23T00:02:00.000Z')
 
     try {
-      await renewExternalMaterialContinuationLease('run-1', fence, expiresAt)
+      await renewExternalMaterialExecutionLease('run-1', fence, expiresAt)
       await checkpointExternalMaterialRunWithFence('run-1', '7', fence, {
         cursor: '8',
         counters: counters(),
@@ -1492,15 +2023,18 @@ describe('external material worker orchestration', () => {
         expect(filter).toMatchObject({
           _id: 'run-1',
           status: 'running',
-          continuationClaimToken: 'old-token',
-          continuationClaimGeneration: 2,
+          executionClaimToken: 'old-token',
+          executionClaimJobId: 'continuation-job',
+          executionClaimAttempt: 0,
+          executionClaimDeferCount: 2,
+          executionClaimGeneration: 2,
         })
       }
       expect(findOneAndUpdate).toHaveBeenNthCalledWith(
         1,
         expect.any(Object),
         {
-          $set: { continuationClaimExpiresAt: expiresAt },
+          $set: { executionClaimExpiresAt: expiresAt },
         },
         { new: true, runValidators: true },
       )
@@ -1530,7 +2064,7 @@ describe('external material worker orchestration', () => {
       continuationJobId: 'continuation-job',
     }
     const deps = workerDependencies()
-    deps.runs.claimContinuation.mockResolvedValue({
+    deps.runs.claimDelivery.mockResolvedValue({
       ...deferredRun,
       status: 'running',
       continuationPending: false,
@@ -1543,19 +2077,30 @@ describe('external material worker orchestration', () => {
       ),
     ).resolves.toMatchObject({ status: 'completed' })
 
-    const claimCall = deps.runs.claimContinuation.mock.calls[0]
+    const claimCall = deps.runs.claimDelivery.mock.calls[0]
     expect(claimCall).toEqual([
       'run-1',
       'guangdada',
-      2,
-      2,
-      'continuation-job',
+      {
+        jobId: 'continuation-job',
+        attempt: 0,
+        generation: 2,
+        deferCount: 2,
+        continuation: true,
+      },
       expect.stringMatching(/^[a-f0-9-]{16,}$/),
       new Date('2026-07-23T00:00:00.000Z'),
       new Date('2026-07-23T00:02:00.000Z'),
     ])
-    const fence = { token: claimCall[5], generation: 2 }
-    expect(deps.runs.renewContinuationLease).toHaveBeenCalledWith(
+    const fence = {
+      token: claimCall[3],
+      jobId: 'continuation-job',
+      attempt: 0,
+      generation: 2,
+      deferCount: 2,
+      continuation: true,
+    }
+    expect(deps.runs.renewExecutionLease).toHaveBeenCalledWith(
       'run-1',
       fence,
       new Date('2026-07-23T00:02:00.000Z'),
@@ -1588,6 +2133,11 @@ describe('external material worker orchestration', () => {
       expect.objectContaining({
         status: 'disabled',
         errorSamples: [{ category: 'configuration' }],
+      }),
+      expect.objectContaining({
+        jobId: 'safe-job',
+        attempt: 0,
+        generation: 0,
       }),
     )
   })
@@ -1690,6 +2240,7 @@ describe('external material worker orchestration', () => {
       expect.objectContaining({
         counters: expect.objectContaining({ failed: 1 }),
       }),
+      expect.any(Object),
     )
   })
 
@@ -1753,6 +2304,7 @@ describe('external material worker orchestration', () => {
         continuationDueAt: new Date('2026-07-23T01:00:00.000Z'),
         resumeRequired: false,
       }),
+      expect.any(Object),
     )
     expect(deps.enqueueContinuation).toHaveBeenCalledWith({
       runId: 'run-1',
@@ -1789,17 +2341,18 @@ describe('external material worker orchestration', () => {
     const deps = workerDependencies({
       runs: {
         get: jest.fn().mockResolvedValue(deferredRun),
-        claimContinuation: jest.fn().mockResolvedValue({
+        claimDelivery: jest.fn().mockResolvedValue({
           ...deferredRun,
           status: 'running',
           continuationPending: false,
         }),
-        restoreContinuation: jest.fn().mockResolvedValue(deferredRun),
+        restoreDelivery: jest.fn().mockResolvedValue(deferredRun),
         findRunningConflict: jest.fn().mockResolvedValue(null),
         update: jest.fn().mockResolvedValue(deferredRun),
         checkpoint: jest.fn().mockResolvedValue(deferredRun),
-        failExhausted: jest.fn().mockResolvedValue(deferredRun),
-        failClaimedContinuation: jest.fn().mockResolvedValue(deferredRun),
+        renewExecutionLease: jest.fn().mockResolvedValue(deferredRun),
+        failTerminalBackup: jest.fn().mockResolvedValue(deferredRun),
+        failClaimedDelivery: jest.fn().mockResolvedValue(deferredRun),
       },
     })
 
@@ -1817,12 +2370,16 @@ describe('external material worker orchestration', () => {
       deps,
     )
 
-    expect(deps.runs.claimContinuation).toHaveBeenCalledWith(
+    expect(deps.runs.claimDelivery).toHaveBeenCalledWith(
       'run-1',
       'guangdada',
-      1,
-      1,
-      'safe-job',
+      {
+        jobId: 'safe-job',
+        attempt: 0,
+        generation: 1,
+        deferCount: 1,
+        continuation: true,
+      },
       expect.any(String),
       new Date('2026-07-23T00:00:00.000Z'),
       new Date('2026-07-23T00:02:00.000Z'),
@@ -1890,9 +2447,10 @@ describe('external material worker orchestration', () => {
         continuationGeneration: 1,
         continuationJobId: 'external-material-guangdada-continuation-run-1-1',
       }),
+      expect.any(Object),
     )
     expect(original.enqueueContinuation).toHaveBeenCalledTimes(1)
-    expect(original.runs.failExhausted).not.toHaveBeenCalled()
+    expect(original.runs.failTerminalBackup).not.toHaveBeenCalled()
 
     const persistedIntent = {
       _id: 'run-1',
@@ -1913,6 +2471,7 @@ describe('external material worker orchestration', () => {
     const retry = workerDependencies({
       runs: {
         ...workerDependencies().runs,
+        claimDelivery: jest.fn().mockResolvedValue(null),
         get: jest.fn().mockResolvedValue(persistedIntent),
         update: jest.fn(),
       },
@@ -1948,12 +2507,16 @@ describe('external material worker orchestration', () => {
         continuationPending: false,
         deferCount: 1,
       }
-      deps.runs.claimContinuation.mockImplementation(
-        async (_runId: string, provider: string, deferCount: number) =>
+      deps.runs.claimDelivery.mockImplementation(
+        async (
+          _runId: string,
+          provider: string,
+          delivery: { deferCount: number },
+        ) =>
           terminalRun.status === 'deferred' &&
           terminalRun.continuationPending === true &&
           terminalRun.provider === provider &&
-          terminalRun.deferCount === deferCount
+          terminalRun.deferCount === delivery.deferCount
             ? terminalRun
             : null,
       )
@@ -1976,12 +2539,16 @@ describe('external material worker orchestration', () => {
         status: 'stale',
         counters: counters(),
       })
-      expect(deps.runs.claimContinuation).toHaveBeenCalledWith(
+      expect(deps.runs.claimDelivery).toHaveBeenCalledWith(
         'run-1',
         'guangdada',
-        1,
-        1,
-        'safe-job',
+        {
+          jobId: 'safe-job',
+          attempt: 0,
+          generation: 1,
+          deferCount: 1,
+          continuation: true,
+        },
         expect.any(String),
         new Date('2026-07-23T00:00:00.000Z'),
         new Date('2026-07-23T00:02:00.000Z'),
@@ -1992,7 +2559,7 @@ describe('external material worker orchestration', () => {
 
   it('ignores an older defer count while atomically resuming the current count', async () => {
     const old = workerDependencies()
-    old.runs.claimContinuation.mockResolvedValue(null)
+    old.runs.claimDelivery.mockResolvedValue(null)
     await expect(
       processExternalMaterialSyncJob(
         job({
@@ -2023,7 +2590,7 @@ describe('external material worker orchestration', () => {
       continuationPending: false,
     }
     const current = workerDependencies()
-    current.runs.claimContinuation.mockResolvedValue(currentRun)
+    current.runs.claimDelivery.mockResolvedValue(currentRun)
     await expect(
       processExternalMaterialSyncJob(
         job({
@@ -2039,12 +2606,16 @@ describe('external material worker orchestration', () => {
         current,
       ),
     ).resolves.toMatchObject({ status: 'completed' })
-    expect(current.runs.claimContinuation).toHaveBeenCalledWith(
+    expect(current.runs.claimDelivery).toHaveBeenCalledWith(
       'run-1',
       'guangdada',
-      2,
-      2,
-      'safe-job',
+      {
+        jobId: 'safe-job',
+        attempt: 0,
+        generation: 2,
+        deferCount: 2,
+        continuation: true,
+      },
       expect.any(String),
       new Date('2026-07-23T00:00:00.000Z'),
       new Date('2026-07-23T00:02:00.000Z'),
@@ -2106,17 +2677,17 @@ describe('external material worker orchestration', () => {
     const deps = workerDependencies({
       runs: {
         get: jest.fn().mockResolvedValue(deferredRun),
-        claimContinuation: jest.fn().mockResolvedValue({
+        claimDelivery: jest.fn().mockResolvedValue({
           ...deferredRun,
           status: 'running',
           continuationPending: false,
         }),
-        restoreContinuation: jest.fn().mockResolvedValue(deferredRun),
+        restoreDelivery: jest.fn().mockResolvedValue(deferredRun),
         findRunningConflict: jest.fn().mockResolvedValue(null),
         update: jest.fn().mockResolvedValue(deferredRun),
         checkpoint: jest.fn().mockResolvedValue(deferredRun),
-        failExhausted: jest.fn().mockResolvedValue(deferredRun),
-        failClaimedContinuation: jest.fn().mockResolvedValue(deferredRun),
+        failTerminalBackup: jest.fn().mockResolvedValue(deferredRun),
+        failClaimedDelivery: jest.fn().mockResolvedValue(deferredRun),
       },
       states: {
         get: jest.fn(async () => ({
@@ -2217,6 +2788,7 @@ describe('external material worker orchestration', () => {
           continuationPending: true,
           resumeRequired: true,
         }),
+        expect.any(Object),
       )
     },
   )
@@ -2245,11 +2817,23 @@ describe('external material worker orchestration', () => {
     const deps = workerDependencies({
       runs: {
         get: jest.fn().mockResolvedValue(run),
+        claimDelivery: jest.fn().mockResolvedValue({
+          ...run,
+          status: 'running',
+          executionClaimJobId: 'safe-job',
+          executionClaimAttempt: 0,
+          executionClaimDeferCount: null,
+          executionClaimToken: 'claim-token',
+          executionClaimGeneration: 0,
+          executionClaimExpiresAt: new Date('2026-07-23T00:02:00.000Z'),
+        }),
+        restoreDelivery: jest.fn().mockResolvedValue(run),
         findRunningConflict: jest.fn().mockResolvedValue(null),
         update: jest.fn().mockResolvedValue(run),
         checkpoint: jest.fn().mockResolvedValue(run),
-        failExhausted: jest.fn().mockResolvedValue(run),
-        failClaimedContinuation: jest.fn().mockResolvedValue(run),
+        renewExecutionLease: jest.fn().mockResolvedValue(run),
+        failTerminalBackup: jest.fn().mockResolvedValue(run),
+        failClaimedDelivery: jest.fn().mockResolvedValue(run),
       },
       fetchAds: jest.fn().mockRejectedValue(
         new GuangdadaApiError({
@@ -2282,6 +2866,7 @@ describe('external material worker orchestration', () => {
             expect.objectContaining({ category: 'rate_limit' }),
           ]),
         }),
+        expect.any(Object),
       )
       expect(deps.enqueueContinuation).not.toHaveBeenCalled()
     } else {
@@ -2292,6 +2877,7 @@ describe('external material worker orchestration', () => {
           continuationPending: true,
           continuationGeneration: 1,
         }),
+        expect.any(Object),
       )
     }
   })
@@ -2524,7 +3110,7 @@ describe('external material worker orchestration', () => {
       ),
     ).rejects.toThrow(coreError)
 
-    expect(deps.runs.restoreContinuation).toHaveBeenCalledWith(
+    expect(deps.runs.restoreDelivery).toHaveBeenCalledWith(
       'run-1',
       expect.objectContaining({
         token: expect.any(String),
@@ -2534,11 +3120,11 @@ describe('external material worker orchestration', () => {
     expect(getRun()).toMatchObject({
       status: 'deferred',
       continuationPending: true,
-      continuationClaimJobId: null,
-      continuationClaimDeferCount: null,
-      continuationClaimToken: null,
-      continuationClaimGeneration: null,
-      continuationClaimExpiresAt: null,
+      executionClaimJobId: null,
+      executionClaimDeferCount: null,
+      executionClaimToken: null,
+      executionClaimGeneration: null,
+      executionClaimExpiresAt: null,
     })
   })
 
@@ -2559,13 +3145,13 @@ describe('external material worker orchestration', () => {
       expect(getRun()).toMatchObject({
         status: 'running',
         continuationPending: false,
-        continuationClaimJobId: 'continuation-job',
-        continuationClaimDeferCount: 2,
-        continuationClaimToken: expect.any(String),
-        continuationClaimGeneration: 2,
-        continuationClaimExpiresAt: new Date('2026-07-23T00:00:30.000Z'),
+        executionClaimJobId: 'continuation-job',
+        executionClaimDeferCount: 2,
+        executionClaimToken: expect.any(String),
+        executionClaimGeneration: 2,
+        executionClaimExpiresAt: new Date('2026-07-23T00:00:30.000Z'),
       })
-      const expiredToken = getRun().continuationClaimToken
+      const expiredToken = getRun().executionClaimToken
 
       await expect(
         processExternalMaterialSyncJob(
@@ -2601,30 +3187,30 @@ describe('external material worker orchestration', () => {
       await fetchStarted
       expect(getRun()).toMatchObject({
         status: 'running',
-        continuationClaimJobId: 'continuation-job',
-        continuationClaimToken: expect.any(String),
-        continuationClaimGeneration: 2,
-        continuationClaimExpiresAt: new Date('2026-07-23T00:01:30.000Z'),
+        executionClaimJobId: 'continuation-job',
+        executionClaimToken: expect.any(String),
+        executionClaimGeneration: 2,
+        executionClaimExpiresAt: new Date('2026-07-23T00:01:30.000Z'),
       })
-      expect(getRun().continuationClaimToken).not.toBe(expiredToken)
+      expect(getRun().executionClaimToken).not.toBe(expiredToken)
 
       releaseLateRestore()
       await Promise.resolve()
       expect(getRun()).toMatchObject({
         status: 'running',
-        continuationClaimToken: expect.any(String),
-        continuationClaimGeneration: 2,
+        executionClaimToken: expect.any(String),
+        executionClaimGeneration: 2,
       })
       releaseFetch?.()
       await expect(retry).resolves.toMatchObject({ status: 'completed' })
       expect(getRun()).toMatchObject({
         status: 'completed',
         continuationPending: false,
-        continuationClaimJobId: null,
-        continuationClaimDeferCount: null,
-        continuationClaimToken: null,
-        continuationClaimGeneration: null,
-        continuationClaimExpiresAt: null,
+        executionClaimJobId: null,
+        executionClaimDeferCount: null,
+        executionClaimToken: null,
+        executionClaimGeneration: null,
+        executionClaimExpiresAt: null,
       })
     },
   )
@@ -2641,8 +3227,8 @@ describe('external material worker orchestration', () => {
       ),
     ).rejects.toThrow(coreError)
 
-    expect(deps.runs.restoreContinuation).not.toHaveBeenCalled()
-    expect(deps.runs.failClaimedContinuation).toHaveBeenCalledWith(
+    expect(deps.runs.restoreDelivery).not.toHaveBeenCalled()
+    expect(deps.runs.failClaimedDelivery).toHaveBeenCalledWith(
       'run-1',
       expect.objectContaining({
         token: expect.any(String),
@@ -2653,11 +3239,11 @@ describe('external material worker orchestration', () => {
     expect(getRun()).toMatchObject({
       status: 'failed',
       continuationPending: false,
-      continuationClaimJobId: null,
-      continuationClaimDeferCount: null,
-      continuationClaimToken: null,
-      continuationClaimGeneration: null,
-      continuationClaimExpiresAt: null,
+      executionClaimJobId: null,
+      executionClaimDeferCount: null,
+      executionClaimToken: null,
+      executionClaimGeneration: null,
+      executionClaimExpiresAt: null,
     })
   })
 
@@ -2675,21 +3261,22 @@ describe('external material worker orchestration', () => {
       deferCount: 0,
       continuationPending: false,
       continuationGeneration: 1,
-      continuationClaimJobId: 'continuation-job',
-      continuationClaimDeferCount: 0,
-      continuationClaimGeneration: 1,
-      continuationClaimExpiresAt: new Date('2026-07-23T00:02:00.000Z'),
+      executionClaimJobId: 'continuation-job',
+      executionClaimAttempt: 2,
+      executionClaimDeferCount: 0,
+      executionClaimGeneration: 1,
+      executionClaimExpiresAt: new Date('2026-07-23T00:02:00.000Z'),
     }
     const baseRuns = workerDependencies().runs
-    const failClaimedContinuation = jest
+    const failClaimedDelivery = jest
       .fn()
       .mockRejectedValue(new Error('mongo unavailable'))
     const deps = workerDependencies({
       restoreAttempts: 2,
       runs: {
         ...baseRuns,
-        claimContinuation: jest.fn().mockResolvedValue(claimedRun),
-        failClaimedContinuation,
+        claimDelivery: jest.fn().mockResolvedValue(claimedRun),
+        failClaimedDelivery,
       },
     })
     deps.states.get.mockRejectedValueOnce(coreError)
@@ -2699,11 +3286,11 @@ describe('external material worker orchestration', () => {
     await expect(
       processExternalMaterialSyncJob(finalJob as any, deps),
     ).rejects.toThrow(coreError)
-    expect(failClaimedContinuation).toHaveBeenCalledTimes(2)
-    const claimToken = deps.runs.claimContinuation.mock.calls[0]?.[5]
+    expect(failClaimedDelivery).toHaveBeenCalledTimes(2)
+    const claimToken = deps.runs.claimDelivery.mock.calls[0]?.[3]
     const snapshot = {
       ...claimedRun,
-      continuationClaimToken: claimToken,
+      executionClaimToken: claimToken,
     }
     const expiredRuns = {
       findExpiredClaims: jest.fn().mockResolvedValue([snapshot]),
@@ -2728,9 +3315,10 @@ describe('external material worker orchestration', () => {
     ).resolves.toBe(1)
     expect(expiredRuns.failExpiredClaim).toHaveBeenCalledWith(
       expect.objectContaining({
-        continuationClaimToken: claimToken,
-        continuationClaimGeneration: 1,
-        continuationClaimJobId: 'continuation-job',
+        executionClaimToken: claimToken,
+        executionClaimGeneration: 1,
+        executionClaimJobId: 'continuation-job',
+        executionClaimAttempt: 2,
       }),
       new Date('2026-07-23T00:03:00.000Z'),
     )
@@ -2754,14 +3342,14 @@ describe('external material worker orchestration', () => {
       ),
     ).resolves.toMatchObject({ status: 'completed' })
 
-    deps.runs.restoreContinuation.mockResolvedValueOnce(null)
+    deps.runs.restoreDelivery.mockResolvedValueOnce(null)
     await handleExternalMaterialWorkerFailure(
       continuationJob('continuation-job', 1) as any,
       coreError,
       deps,
     )
 
-    expect(deps.runs.restoreContinuation).toHaveBeenCalledTimes(1)
+    expect(deps.runs.restoreDelivery).toHaveBeenCalledTimes(1)
     expect(getRun()).toMatchObject({
       status: 'completed',
       continuationPending: false,
@@ -2787,8 +3375,8 @@ describe('external material worker orchestration', () => {
       deps,
     )
 
-    expect(deps.runs.restoreContinuation).not.toHaveBeenCalled()
-    expect(deps.runs.failExhausted).not.toHaveBeenCalled()
+    expect(deps.runs.restoreDelivery).not.toHaveBeenCalled()
+    expect(deps.runs.failTerminalBackup).not.toHaveBeenCalled()
   })
 
   it('does not let a continuation failed event bypass the claim fence', async () => {
@@ -2799,9 +3387,9 @@ describe('external material worker orchestration', () => {
       deps,
     )
 
-    expect(deps.runs.restoreContinuation).not.toHaveBeenCalled()
-    expect(deps.runs.failExhausted).not.toHaveBeenCalled()
-    expect(deps.runs.failClaimedContinuation).not.toHaveBeenCalled()
+    expect(deps.runs.restoreDelivery).not.toHaveBeenCalled()
+    expect(deps.runs.failTerminalBackup).not.toHaveBeenCalled()
+    expect(deps.runs.failClaimedDelivery).not.toHaveBeenCalled()
   })
 
   it('only terminalizes an unexpected BullMQ failure after attempts are exhausted', async () => {
@@ -2813,20 +3401,22 @@ describe('external material worker orchestration', () => {
       unsafeError,
       deps,
     )
-    expect(deps.runs.failExhausted).not.toHaveBeenCalled()
+    expect(deps.runs.failTerminalBackup).not.toHaveBeenCalled()
 
     await handleExternalMaterialWorkerFailure(
       job({ attemptsMade: 3, opts: { attempts: 3 } }) as any,
       unsafeError,
       deps,
     )
-    expect(deps.runs.failExhausted).toHaveBeenCalledWith(
+    expect(deps.runs.failTerminalBackup).toHaveBeenCalledWith(
       'run-1',
+      'safe-job',
+      2,
       new Date('2026-07-23T00:00:00.000Z'),
     )
-    expect(JSON.stringify(deps.runs.failExhausted.mock.calls)).not.toContain(
-      'unsafe',
-    )
+    expect(
+      JSON.stringify(deps.runs.failTerminalBackup.mock.calls),
+    ).not.toContain('unsafe')
   })
 
   it('resumes backfill from a bounded cursor and persists the next page with progress', async () => {
@@ -2868,6 +3458,7 @@ describe('external material worker orchestration', () => {
       'run-1',
       null,
       expect.objectContaining({ cursor: '8', counters: expect.any(Object) }),
+      expect.any(Object),
     )
   })
 
@@ -2945,6 +3536,7 @@ describe('external material worker orchestration', () => {
         cursor: '17',
         counters: expect.objectContaining({ discovered: 1000 }),
       }),
+      expect.any(Object),
     )
     expect(deps.runs.checkpoint).toHaveBeenNthCalledWith(
       2,
@@ -2954,6 +3546,7 @@ describe('external material worker orchestration', () => {
         cursor: '27',
         counters: expect.objectContaining({ discovered: 2000 }),
       }),
+      expect.any(Object),
     )
     expect(result).toMatchObject({
       status: 'completed',
@@ -3110,6 +3703,7 @@ describe('external material worker orchestration', () => {
           alreadySeen: 1000,
         }),
       }),
+      expect.any(Object),
     )
     expect(restarted.runs.checkpoint).toHaveBeenNthCalledWith(
       2,
@@ -3122,6 +3716,7 @@ describe('external material worker orchestration', () => {
           alreadySeen: 2000,
         }),
       }),
+      expect.any(Object),
     )
     expect(result).toMatchObject({
       status: 'completed',

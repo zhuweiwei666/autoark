@@ -75,11 +75,12 @@ export interface IExternalMaterialSyncRun extends mongoose.Document {
   continuationJobId?: string | null
   continuationDueAt?: Date | null
   resumeRequired: boolean
-  continuationClaimJobId?: string | null
-  continuationClaimDeferCount?: number | null
-  continuationClaimToken?: string | null
-  continuationClaimGeneration?: number | null
-  continuationClaimExpiresAt?: Date | null
+  executionClaimJobId?: string | null
+  executionClaimAttempt?: number | null
+  executionClaimDeferCount?: number | null
+  executionClaimToken?: string | null
+  executionClaimGeneration?: number | null
+  executionClaimExpiresAt?: Date | null
   startedAt?: Date | null
   completedAt?: Date | null
   counters: ExternalMaterialSyncCounters
@@ -190,38 +191,54 @@ const externalMaterialSyncRunSchema =
         required: true,
         default: false,
       },
-      continuationClaimJobId: {
+      executionClaimJobId: {
         type: String,
         trim: true,
         maxlength: 200,
         match: /^[A-Za-z0-9_-]+$/,
         default: null,
       },
-      continuationClaimDeferCount: {
+      executionClaimAttempt: {
+        type: Number,
+        min: 0,
+        max: 100,
+        validate: {
+          validator: (value: number | null) =>
+            value === null || Number.isInteger(value),
+          message: 'executionClaimAttempt must be an integer',
+        },
+        default: null,
+      },
+      executionClaimDeferCount: {
         type: Number,
         min: 0,
         max: 3,
         validate: {
           validator: (value: number | null) =>
             value === null || Number.isInteger(value),
-          message: 'continuationClaimDeferCount must be an integer',
+          message: 'executionClaimDeferCount must be an integer',
         },
         default: null,
       },
-      continuationClaimToken: {
+      executionClaimToken: {
         type: String,
         trim: true,
         maxlength: 64,
         match: /^[A-Za-z0-9_-]+$/,
         default: null,
       },
-      continuationClaimGeneration: {
+      executionClaimGeneration: {
         type: Number,
         min: 0,
         max: 1_000_000,
+        validate: {
+          validator: (value: number | null) =>
+            value === null || Number.isInteger(value),
+          message: 'executionClaimGeneration must be an integer',
+        },
         default: null,
       },
-      continuationClaimExpiresAt: {
+      executionClaimExpiresAt: {
         type: Date,
         default: null,
       },

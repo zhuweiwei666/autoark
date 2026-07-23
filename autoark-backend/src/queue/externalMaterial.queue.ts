@@ -17,6 +17,7 @@ const RATE_LIMIT_MIN_MS = 60_000
 const RATE_LIMIT_MAX_MS = 60 * 60 * 1000
 const EXPIRED_CLAIM_SCAN_LIMIT = 50
 const EXPIRED_CLAIM_SCAN_LIMIT_MAX = 100
+const MAX_EXTERNAL_MATERIAL_DELIVERY_ATTEMPT = 100
 
 export const SYNC_DEFAULTS = Object.freeze({
   scheduled: Object.freeze({ recentDays: 3, limit: 500 }),
@@ -116,11 +117,12 @@ export interface ExpiredExternalMaterialClaim {
   provider: ExternalMaterialProvider
   status: 'running'
   continuationPending: false
-  continuationClaimJobId: string
-  continuationClaimDeferCount: number
-  continuationClaimToken: string
-  continuationClaimGeneration: number
-  continuationClaimExpiresAt: Date
+  executionClaimJobId: string
+  executionClaimAttempt: number
+  executionClaimDeferCount: number | null
+  executionClaimToken: string
+  executionClaimGeneration: number
+  executionClaimExpiresAt: Date
 }
 
 interface ExpiredClaimStore {
@@ -387,12 +389,13 @@ export const failExpiredExternalMaterialClaim = (
       provider: claim.provider,
       status: 'running',
       continuationPending: false,
-      continuationClaimJobId: claim.continuationClaimJobId,
-      continuationClaimDeferCount: claim.continuationClaimDeferCount,
-      continuationClaimToken: claim.continuationClaimToken,
-      continuationClaimGeneration: claim.continuationClaimGeneration,
-      continuationClaimExpiresAt: {
-        $eq: claim.continuationClaimExpiresAt,
+      executionClaimJobId: claim.executionClaimJobId,
+      executionClaimAttempt: claim.executionClaimAttempt,
+      executionClaimDeferCount: claim.executionClaimDeferCount,
+      executionClaimToken: claim.executionClaimToken,
+      executionClaimGeneration: claim.executionClaimGeneration,
+      executionClaimExpiresAt: {
+        $eq: claim.executionClaimExpiresAt,
         $lte: completedAt,
       },
     },
@@ -406,11 +409,12 @@ export const failExpiredExternalMaterialClaim = (
         continuationJobId: null,
         continuationDueAt: null,
         resumeRequired: false,
-        continuationClaimJobId: null,
-        continuationClaimDeferCount: null,
-        continuationClaimToken: null,
-        continuationClaimGeneration: null,
-        continuationClaimExpiresAt: null,
+        executionClaimJobId: null,
+        executionClaimAttempt: null,
+        executionClaimDeferCount: null,
+        executionClaimToken: null,
+        executionClaimGeneration: null,
+        executionClaimExpiresAt: null,
       },
       $push: {
         errorSamples: {
@@ -428,16 +432,28 @@ const defaultExpiredClaimStore: ExpiredClaimStore = {
       provider,
       status: 'running',
       continuationPending: false,
-      continuationClaimJobId: { $ne: null },
-      continuationClaimDeferCount: {
+      executionClaimJobId: { $ne: null },
+      executionClaimAttempt: {
         $gte: 0,
-        $lte: MAX_EXTERNAL_MATERIAL_DEFERS,
+        $lte: MAX_EXTERNAL_MATERIAL_DELIVERY_ATTEMPT,
       },
-      continuationClaimToken: { $ne: null },
-      continuationClaimGeneration: { $gte: 1 },
-      continuationClaimExpiresAt: { $lte: now },
+      executionClaimToken: { $ne: null },
+      executionClaimExpiresAt: { $lte: now },
+      $or: [
+        {
+          executionClaimGeneration: 0,
+          executionClaimDeferCount: null,
+        },
+        {
+          executionClaimGeneration: { $gte: 1 },
+          executionClaimDeferCount: {
+            $gte: 0,
+            $lte: MAX_EXTERNAL_MATERIAL_DEFERS,
+          },
+        },
+      ],
     })
-      .sort({ continuationClaimExpiresAt: 1 })
+      .sort({ executionClaimExpiresAt: 1 })
       .limit(limit)
       .lean() as unknown as Promise<ExpiredExternalMaterialClaim[]>,
   failExpiredClaim: failExpiredExternalMaterialClaim,
@@ -470,21 +486,27 @@ export const recoverExpiredExternalMaterialClaims = async (
       claim.provider !== input.provider ||
       claim.status !== 'running' ||
       claim.continuationPending !== false ||
-      typeof claim.continuationClaimJobId !== 'string' ||
-      claim.continuationClaimJobId.length === 0 ||
-      !Number.isInteger(claim.continuationClaimDeferCount) ||
-      claim.continuationClaimDeferCount < 0 ||
-      claim.continuationClaimDeferCount > MAX_EXTERNAL_MATERIAL_DEFERS ||
-      typeof claim.continuationClaimToken !== 'string' ||
-      claim.continuationClaimToken.length === 0 ||
-      !Number.isInteger(claim.continuationClaimGeneration) ||
-      claim.continuationClaimGeneration < 1 ||
-      !(claim.continuationClaimExpiresAt instanceof Date) ||
-      claim.continuationClaimExpiresAt.getTime() > now.getTime()
+      typeof claim.executionClaimJobId !== 'string' ||
+      claim.executionClaimJobId.length === 0 ||
+      !Number.isInteger(claim.executionClaimAttempt) ||
+      claim.executionClaimAttempt < 0 ||
+      claim.executionClaimAttempt > MAX_EXTERNAL_MATERIAL_DELIVERY_ATTEMPT ||
+      typeof claim.executionClaimToken !== 'string' ||
+      claim.executionClaimToken.length === 0 ||
+      !Number.isInteger(claim.executionClaimGeneration) ||
+      claim.executionClaimGeneration < 0 ||
+      (claim.executionClaimGeneration === 0
+        ? claim.executionClaimDeferCount !== null
+        : !Number.isInteger(claim.executionClaimDeferCount) ||
+          Number(claim.executionClaimDeferCount) < 0 ||
+          Number(claim.executionClaimDeferCount) >
+            MAX_EXTERNAL_MATERIAL_DEFERS) ||
+      !(claim.executionClaimExpiresAt instanceof Date) ||
+      claim.executionClaimExpiresAt.getTime() > now.getTime()
     ) {
       continue
     }
-    const job = await queue.getJob(claim.continuationClaimJobId)
+    const job = await queue.getJob(claim.executionClaimJobId)
     if (job) {
       const state = await job.getState()
       if (state !== 'completed' && state !== 'failed') continue
