@@ -71,9 +71,15 @@ export interface IExternalMaterialSyncRun extends mongoose.Document {
   retryAfterMs?: number | null
   deferCount: number
   continuationPending: boolean
+  continuationGeneration: number
+  continuationJobId?: string | null
+  continuationDueAt?: Date | null
+  resumeRequired: boolean
   continuationClaimJobId?: string | null
   continuationClaimDeferCount?: number | null
-  continuationClaimAttempt?: number | null
+  continuationClaimToken?: string | null
+  continuationClaimGeneration?: number | null
+  continuationClaimExpiresAt?: Date | null
   startedAt?: Date | null
   completedAt?: Date | null
   counters: ExternalMaterialSyncCounters
@@ -161,6 +167,29 @@ const externalMaterialSyncRunSchema =
         required: true,
         default: false,
       },
+      continuationGeneration: {
+        type: Number,
+        required: true,
+        min: 0,
+        max: 1_000_000,
+        default: 0,
+      },
+      continuationJobId: {
+        type: String,
+        trim: true,
+        maxlength: 200,
+        match: /^[A-Za-z0-9_-]+$/,
+        default: null,
+      },
+      continuationDueAt: {
+        type: Date,
+        default: null,
+      },
+      resumeRequired: {
+        type: Boolean,
+        required: true,
+        default: false,
+      },
       continuationClaimJobId: {
         type: String,
         trim: true,
@@ -174,10 +203,21 @@ const externalMaterialSyncRunSchema =
         max: 3,
         default: null,
       },
-      continuationClaimAttempt: {
+      continuationClaimToken: {
+        type: String,
+        trim: true,
+        maxlength: 64,
+        match: /^[A-Za-z0-9_-]+$/,
+        default: null,
+      },
+      continuationClaimGeneration: {
         type: Number,
         min: 0,
-        max: 100,
+        max: 1_000_000,
+        default: null,
+      },
+      continuationClaimExpiresAt: {
+        type: Date,
         default: null,
       },
       startedAt: {

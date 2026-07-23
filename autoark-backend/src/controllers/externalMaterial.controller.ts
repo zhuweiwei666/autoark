@@ -4,6 +4,7 @@ import ExternalMaterialSyncState from '../models/ExternalMaterialSyncState'
 import {
   enqueueExternalMaterialSync,
   parseExternalMaterialSyncRequest,
+  reconcileExternalMaterialContinuations,
 } from '../queue/externalMaterial.queue'
 import { writeAuditLog } from '../services/auditLog.service'
 import {
@@ -229,6 +230,15 @@ export const resumeGuangdadaExternal = async (req: Request, res: Response) => {
       },
       { upsert: true, new: true, setDefaultsOnInsert: true },
     )
+    if (
+      process.env.EXTERNAL_MATERIAL_SYNC_ENABLED === 'true' &&
+      Boolean(process.env.GUANGDADA_API_KEY?.trim())
+    ) {
+      await reconcileExternalMaterialContinuations({
+        provider: PROVIDER,
+        resumeOnly: true,
+      })
+    }
     await writeAuditLog(req, {
       category: 'external_material',
       action: 'external_material.resume',

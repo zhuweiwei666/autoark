@@ -62,12 +62,55 @@ export interface ExternalMaterialContinuationInput {
   runId: string
   provider: ExternalMaterialProvider
   request: ExternalMaterialSyncRequest
-  retryAfterMs: number
+  retryAfterMs?: number
   deferCount: number
+  generation?: number
+  jobId?: string
+  dueAt?: Date
 }
 
 export interface ExternalMaterialContinuationDependencies {
-  queue?: Pick<Queue, 'add'> | null
+  queue?: Pick<Queue, 'add' | 'getJob'> | null
+  now?: () => Date
+}
+
+export interface ExternalMaterialContinuationIntent {
+  runId: string
+  provider: ExternalMaterialProvider
+  request: ExternalMaterialSyncRequest
+  deferCount: number
+  generation: number
+  jobId: string
+  dueAt: Date
+}
+
+interface PendingContinuationRecord {
+  _id?: unknown
+  provider?: unknown
+  mode?: unknown
+  dryRun?: unknown
+  request?: {
+    recentDays?: unknown
+    limit?: unknown
+  }
+  status?: unknown
+  deferCount?: unknown
+  continuationPending?: unknown
+  continuationGeneration?: unknown
+  continuationJobId?: unknown
+  continuationDueAt?: unknown
+}
+
+interface ContinuationIntentStore {
+  findPending(
+    provider: ExternalMaterialProvider,
+    resumeOnly: boolean,
+  ): Promise<PendingContinuationRecord[]>
+}
+
+export interface ExternalMaterialContinuationReconcileDependencies extends ExternalMaterialContinuationDependencies {
+  runs?: ContinuationIntentStore
+  ensure?: typeof ensureContinuationScheduled
 }
 
 const emptyCounters = (): ExternalMaterialSyncCounters => ({
@@ -156,16 +199,12 @@ export const deterministicExternalMaterialJobId = (
 export const externalMaterialContinuationJobId = (
   provider: ExternalMaterialProvider,
   runId: string,
-  deferCount: number,
+  generation: number,
 ): string => {
   const safeRunId = runId.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 96)
   if (!safeRunId) throw new Error('invalid_external_material_run_id')
-  const boundedDeferCount = boundedInteger(
-    deferCount,
-    1,
-    MAX_EXTERNAL_MATERIAL_DEFERS,
-  )
-  return `external-material-${provider}-continuation-${safeRunId}-${boundedDeferCount}`
+  const boundedGeneration = boundedInteger(generation, 1, 1_000_000)
+  return `external-material-${provider}-continuation-${safeRunId}-${boundedGeneration}`
 }
 
 const defaultRunStore: RunStore = {
@@ -242,8 +281,8 @@ export const closeExternalMaterialQueue = async (): Promise<void> => {
   if (queue) await queue.close()
 }
 
-export const enqueueExternalMaterialContinuation = async (
-  input: ExternalMaterialContinuationInput,
+export const ensureContinuationScheduled = async (
+  intent: ExternalMaterialContinuationIntent,
   dependencies: ExternalMaterialContinuationDependencies = {},
 ) => {
   const queue =
@@ -251,6 +290,133 @@ export const enqueueExternalMaterialContinuation = async (
       ? externalMaterialQueue
       : dependencies.queue
   if (!queue) throw new Error('external_material_queue_unavailable')
+  if (
+    !Number.isInteger(intent.deferCount) ||
+    intent.deferCount < 0 ||
+    intent.deferCount > MAX_EXTERNAL_MATERIAL_DEFERS ||
+    !Number.isInteger(intent.generation) ||
+    intent.generation < 1 ||
+    intent.generation > 1_000_000 ||
+    intent.jobId !==
+      externalMaterialContinuationJobId(
+        intent.provider,
+        intent.runId,
+        intent.generation,
+      ) ||
+    !(intent.dueAt instanceof Date) ||
+    !Number.isFinite(intent.dueAt.getTime())
+  ) {
+    throw new Error('invalid_external_material_continuation_intent')
+  }
+
+  const existing = await queue.getJob(intent.jobId)
+  if (existing) {
+    const state = await existing.getState()
+    if (state === 'waiting' || state === 'delayed' || state === 'active') {
+      return existing
+    }
+    if (state === 'completed' || state === 'failed') {
+      await existing.remove()
+    } else {
+      return existing
+    }
+  }
+
+  const now = dependencies.now?.() ?? new Date()
+  const delay = Math.max(0, intent.dueAt.getTime() - now.getTime())
+  return queue.add(
+    'sync',
+    {
+      runId: intent.runId,
+      provider: intent.provider,
+      request: clampExternalMaterialSyncRequest(intent.request),
+      continuation: true,
+      deferCount: intent.deferCount,
+      generation: intent.generation,
+    },
+    {
+      jobId: intent.jobId,
+      delay,
+      attempts: 3,
+      backoff: { type: 'exponential', delay: 30_000 },
+    },
+  )
+}
+
+const defaultContinuationIntentStore: ContinuationIntentStore = {
+  findPending: (provider, resumeOnly) =>
+    ExternalMaterialSyncRun.find({
+      provider,
+      status: 'deferred',
+      continuationPending: true,
+      ...(resumeOnly ? { resumeRequired: true } : {}),
+    }).lean() as unknown as Promise<PendingContinuationRecord[]>,
+}
+
+export const reconcileExternalMaterialContinuations = async (
+  input: {
+    provider: ExternalMaterialProvider
+    resumeOnly?: boolean
+  },
+  dependencies: ExternalMaterialContinuationReconcileDependencies = {},
+): Promise<number> => {
+  const runs = dependencies.runs ?? defaultContinuationIntentStore
+  const ensure = dependencies.ensure ?? ensureContinuationScheduled
+  const pending = await runs.findPending(
+    input.provider,
+    input.resumeOnly === true,
+  )
+  let reconciled = 0
+  for (const run of pending) {
+    const runId = String(run._id ?? '')
+    const generation = Number(run.continuationGeneration)
+    const deferCount = Number(run.deferCount)
+    const jobId = run.continuationJobId
+    const dueAt = run.continuationDueAt
+    if (
+      run.status !== 'deferred' ||
+      run.continuationPending !== true ||
+      !Number.isInteger(generation) ||
+      generation < 1 ||
+      generation > 1_000_000 ||
+      !Number.isInteger(deferCount) ||
+      deferCount < 0 ||
+      deferCount > MAX_EXTERNAL_MATERIAL_DEFERS ||
+      typeof jobId !== 'string' ||
+      !(dueAt instanceof Date) ||
+      !Number.isFinite(dueAt.getTime()) ||
+      jobId !==
+        externalMaterialContinuationJobId(input.provider, runId, generation)
+    ) {
+      continue
+    }
+    await ensure(
+      {
+        runId,
+        provider: input.provider,
+        request: clampExternalMaterialSyncRequest({
+          provider: input.provider,
+          mode: run.mode,
+          dryRun: run.dryRun,
+          recentDays: run.request?.recentDays,
+          limit: run.request?.limit,
+        }),
+        deferCount,
+        generation,
+        jobId,
+        dueAt,
+      },
+      dependencies,
+    )
+    reconciled += 1
+  }
+  return reconciled
+}
+
+export const enqueueExternalMaterialContinuation = async (
+  input: ExternalMaterialContinuationInput,
+  dependencies: ExternalMaterialContinuationDependencies = {},
+) => {
   if (
     !Number.isInteger(input.deferCount) ||
     input.deferCount < 1 ||
@@ -264,25 +430,25 @@ export const enqueueExternalMaterialContinuation = async (
     RATE_LIMIT_MIN_MS,
     boundedInteger(input.retryAfterMs, RATE_LIMIT_MIN_MS, RATE_LIMIT_MAX_MS),
   )
-  return queue.add(
-    'sync',
+  const generation = input.generation ?? input.deferCount
+  const now = dependencies.now?.() ?? new Date()
+  return ensureContinuationScheduled(
     {
       runId: input.runId,
       provider: input.provider,
       request,
-      continuation: true,
       deferCount: input.deferCount,
+      generation,
+      jobId:
+        input.jobId ??
+        externalMaterialContinuationJobId(
+          input.provider,
+          input.runId,
+          generation,
+        ),
+      dueAt: input.dueAt ?? new Date(now.getTime() + retryAfterMs),
     },
-    {
-      jobId: externalMaterialContinuationJobId(
-        input.provider,
-        input.runId,
-        input.deferCount,
-      ),
-      delay: retryAfterMs,
-      attempts: 3,
-      backoff: { type: 'exponential', delay: 30_000 },
-    },
+    { ...dependencies, now: () => now },
   )
 }
 

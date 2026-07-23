@@ -23,7 +23,8 @@ import {
   ExternalMaterialSyncRequest,
   MAX_EXTERNAL_MATERIAL_DEFERS,
   clampExternalMaterialSyncRequest,
-  enqueueExternalMaterialContinuation,
+  ensureContinuationScheduled,
+  externalMaterialContinuationJobId,
 } from './externalMaterial.queue'
 
 const LOCK_TTL_DEFAULT_MS = 120_000
@@ -38,11 +39,26 @@ const RATE_LIMIT_MIN_MS = 60_000
 const RATE_LIMIT_MAX_MS = GUANGDADA_LIMITS.retryAfterMs
 const MAX_ERROR_SAMPLES = 5
 const MAX_CONTINUATION_JOB_ID_LENGTH = 200
-const MAX_CONTINUATION_CLAIM_ATTEMPT = 100
+const MAX_CONTINUATION_GENERATION = 1_000_000
+const MAX_BULL_ATTEMPT = 100
+const CLAIM_LEASE_TTL_DEFAULT_MS = 120_000
+const CLAIM_LEASE_TTL_MIN_MS = 30_000
+const CLAIM_LEASE_TTL_MAX_MS = 15 * 60_000
 const RESTORE_ATTEMPTS_DEFAULT = 2
 const RESTORE_ATTEMPTS_MAX = 3
 const RESTORE_TIMEOUT_DEFAULT_MS = 2_000
 const RESTORE_TIMEOUT_MAX_MS = 10_000
+
+class ContinuationSchedulingError extends Error {
+  constructor(originalError: unknown) {
+    super(
+      originalError instanceof Error
+        ? originalError.message
+        : 'external_material_continuation_schedule_failed',
+    )
+    this.name = 'ContinuationSchedulingError'
+  }
+}
 
 const RENEW_SCRIPT = `
 if redis.call("GET", KEYS[1]) == ARGV[1] then
@@ -67,9 +83,15 @@ interface SyncRunRecord {
   deferCount?: number
   status?: string
   continuationPending?: boolean
+  continuationGeneration?: number
+  continuationJobId?: string | null
+  continuationDueAt?: Date | null
+  resumeRequired?: boolean
   continuationClaimJobId?: string | null
   continuationClaimDeferCount?: number | null
-  continuationClaimAttempt?: number | null
+  continuationClaimToken?: string | null
+  continuationClaimGeneration?: number | null
+  continuationClaimExpiresAt?: Date | null
 }
 
 interface SyncStateRecord {
@@ -78,40 +100,61 @@ interface SyncStateRecord {
   backfillCursor?: string | null
 }
 
+export interface ExternalMaterialRunFence {
+  token: string
+  generation: number
+}
+
+const continuationFenceFilter = (
+  id: string,
+  fence: ExternalMaterialRunFence,
+) => ({
+  _id: id,
+  status: 'running' as const,
+  continuationClaimToken: fence.token,
+  continuationClaimGeneration: fence.generation,
+})
+
 interface RunStore {
   get(id: string): Promise<SyncRunRecord | null>
   findRunningConflict(
     provider: ExternalMaterialProvider,
     runId: string,
   ): Promise<unknown>
-  update(id: string, update: Record<string, unknown>): Promise<unknown>
+  update(
+    id: string,
+    update: Record<string, unknown>,
+    fence?: ExternalMaterialRunFence,
+  ): Promise<unknown>
   claimContinuation(
     id: string,
     provider: ExternalMaterialProvider,
     deferCount: number,
+    generation: number,
     jobId: string,
-    attempt: number,
+    claimToken: string,
     startedAt: Date,
+    expiresAt: Date,
   ): Promise<SyncRunRecord | null>
   restoreContinuation(
     id: string,
-    provider: ExternalMaterialProvider,
-    deferCount: number,
-    jobId: string,
-    attempt: number,
+    fence: ExternalMaterialRunFence,
+  ): Promise<unknown>
+  renewContinuationLease(
+    id: string,
+    fence: ExternalMaterialRunFence,
+    expiresAt: Date,
   ): Promise<unknown>
   checkpoint(
     id: string,
     expectedCursor: string | null,
     update: Record<string, unknown>,
+    fence?: ExternalMaterialRunFence,
   ): Promise<unknown>
   failExhausted(id: string, completedAt: Date): Promise<unknown>
   failClaimedContinuation(
     id: string,
-    provider: ExternalMaterialProvider,
-    deferCount: number,
-    jobId: string,
-    attempt: number,
+    fence: ExternalMaterialRunFence,
     completedAt: Date,
   ): Promise<unknown>
 }
@@ -133,13 +176,14 @@ interface WorkerDependencies {
   fetchAds: typeof fetchGuangdadaAds
   normalizeAds: typeof normalizeGuangdadaAds
   ingest: typeof ingestExternalMaterial
-  enqueueContinuation: typeof enqueueExternalMaterialContinuation
+  enqueueContinuation: typeof ensureContinuationScheduled
   sleep: (milliseconds: number) => Promise<void>
   setInterval: typeof setInterval
   clearInterval: typeof clearInterval
   now: () => Date
   lockTtlMs?: number
   lockRenewIntervalMs?: number
+  claimLeaseTtlMs?: number
   restoreAttempts?: number
   restoreTimeoutMs?: number
 }
@@ -150,6 +194,7 @@ interface ExternalMaterialJobData {
   request: ExternalMaterialSyncRequest
   continuation?: true
   deferCount?: number
+  generation?: number
 }
 
 interface ExternalMaterialProcessResult {
@@ -224,6 +269,14 @@ const lockRenewInterval = (value: number | undefined, ttl: number): number =>
     ),
   )
 
+const claimLeaseTtl = (value?: number): number =>
+  clampInteger(
+    value,
+    CLAIM_LEASE_TTL_DEFAULT_MS,
+    CLAIM_LEASE_TTL_MIN_MS,
+    CLAIM_LEASE_TTL_MAX_MS,
+  )
+
 export const acquireExternalMaterialLock = async (
   redis: RedisLockClient,
   provider: ExternalMaterialProvider,
@@ -277,23 +330,31 @@ export const claimExternalMaterialContinuation = (
   id: string,
   provider: ExternalMaterialProvider,
   deferCount: number,
+  generation: number,
   jobId: string,
-  attempt: number,
+  claimToken: string,
   startedAt: Date,
+  expiresAt: Date,
 ) =>
   ExternalMaterialSyncRun.findOneAndUpdate(
     {
       _id: id,
       provider,
       deferCount,
+      continuationGeneration: generation,
       $or: [
-        { status: 'deferred', continuationPending: true },
+        {
+          status: 'deferred',
+          continuationPending: true,
+          continuationJobId: jobId,
+        },
         {
           status: 'running',
           continuationPending: false,
           continuationClaimJobId: jobId,
           continuationClaimDeferCount: deferCount,
-          continuationClaimAttempt: { $lt: attempt },
+          continuationClaimGeneration: generation,
+          continuationClaimExpiresAt: { $lte: startedAt },
         },
       ],
     },
@@ -303,12 +364,53 @@ export const claimExternalMaterialContinuation = (
         continuationPending: false,
         continuationClaimJobId: jobId,
         continuationClaimDeferCount: deferCount,
-        continuationClaimAttempt: attempt,
+        continuationClaimToken: claimToken,
+        continuationClaimGeneration: generation,
+        continuationClaimExpiresAt: expiresAt,
         startedAt,
         deferredUntil: null,
         retryAfterMs: null,
       },
     },
+    { new: true, runValidators: true },
+  )
+
+export const renewExternalMaterialContinuationLease = (
+  id: string,
+  fence: ExternalMaterialRunFence,
+  expiresAt: Date,
+) =>
+  ExternalMaterialSyncRun.findOneAndUpdate(
+    continuationFenceFilter(id, fence),
+    { $set: { continuationClaimExpiresAt: expiresAt } },
+    { new: true, runValidators: true },
+  )
+
+export const checkpointExternalMaterialRunWithFence = (
+  id: string,
+  expectedCursor: string | null,
+  fence: ExternalMaterialRunFence,
+  update: Record<string, unknown>,
+) =>
+  ExternalMaterialSyncRun.findOneAndUpdate(
+    {
+      ...continuationFenceFilter(id, fence),
+      ...(expectedCursor === null
+        ? { $or: [{ cursor: null }, { cursor: { $exists: false } }] }
+        : { cursor: expectedCursor }),
+    },
+    { $set: update },
+    { new: true, runValidators: true },
+  )
+
+export const updateExternalMaterialRunWithFence = (
+  id: string,
+  fence: ExternalMaterialRunFence,
+  update: Record<string, unknown>,
+) =>
+  ExternalMaterialSyncRun.findOneAndUpdate(
+    continuationFenceFilter(id, fence),
+    { $set: update },
     { new: true, runValidators: true },
   )
 
@@ -320,62 +422,80 @@ const defaultRunStore: RunStore = {
       status: 'running',
       _id: { $ne: runId },
     }).lean(),
-  update: (id, update) =>
-    ExternalMaterialSyncRun.findByIdAndUpdate(
-      id,
-      { $set: update },
-      { new: true, runValidators: true },
-    ),
-  claimContinuation: (id, provider, deferCount, jobId, attempt, startedAt) =>
+  update: (id, update, fence) =>
+    fence
+      ? updateExternalMaterialRunWithFence(id, fence, update)
+      : ExternalMaterialSyncRun.findByIdAndUpdate(
+          id,
+          { $set: update },
+          { new: true, runValidators: true },
+        ),
+  claimContinuation: (
+    id,
+    provider,
+    deferCount,
+    generation,
+    jobId,
+    claimToken,
+    startedAt,
+    expiresAt,
+  ) =>
     claimExternalMaterialContinuation(
       id,
       provider,
       deferCount,
+      generation,
       jobId,
-      attempt,
+      claimToken,
       startedAt,
+      expiresAt,
     ),
-  restoreContinuation: (id, provider, deferCount, jobId, attempt) =>
+  restoreContinuation: (id, fence) =>
     ExternalMaterialSyncRun.findOneAndUpdate(
-      {
-        _id: id,
-        provider,
-        status: 'running',
-        continuationPending: false,
-        deferCount,
-        continuationClaimJobId: jobId,
-        continuationClaimDeferCount: deferCount,
-        continuationClaimAttempt: attempt,
-      },
+      continuationFenceFilter(id, fence),
       {
         $set: {
           status: 'deferred',
           continuationPending: true,
           continuationClaimJobId: null,
           continuationClaimDeferCount: null,
-          continuationClaimAttempt: null,
+          continuationClaimToken: null,
+          continuationClaimGeneration: null,
+          continuationClaimExpiresAt: null,
           startedAt: null,
         },
       },
       { new: true, runValidators: true },
     ),
-  checkpoint: (id, expectedCursor, update) =>
-    ExternalMaterialSyncRun.findOneAndUpdate(
-      {
-        _id: id,
-        status: 'running',
-        ...(expectedCursor === null
-          ? { $or: [{ cursor: null }, { cursor: { $exists: false } }] }
-          : { cursor: expectedCursor }),
-      },
-      { $set: update },
-      { new: true, runValidators: true },
-    ),
+  renewContinuationLease: (id, fence, expiresAt) =>
+    renewExternalMaterialContinuationLease(id, fence, expiresAt),
+  checkpoint: (id, expectedCursor, update, fence) =>
+    fence
+      ? checkpointExternalMaterialRunWithFence(
+          id,
+          expectedCursor,
+          fence,
+          update,
+        )
+      : ExternalMaterialSyncRun.findOneAndUpdate(
+          {
+            _id: id,
+            status: 'running',
+            ...(expectedCursor === null
+              ? { $or: [{ cursor: null }, { cursor: { $exists: false } }] }
+              : { cursor: expectedCursor }),
+          },
+          { $set: update },
+          { new: true, runValidators: true },
+        ),
   failExhausted: (id, completedAt) =>
     ExternalMaterialSyncRun.findOneAndUpdate(
       {
         _id: id,
-        status: { $in: ['queued', 'running', 'deferred'] },
+        $or: [
+          { status: { $in: ['queued', 'running'] } },
+          { status: 'deferred', continuationPending: { $ne: true } },
+        ],
       },
       {
         $set: {
@@ -384,9 +504,14 @@ const defaultRunStore: RunStore = {
           deferredUntil: null,
           retryAfterMs: null,
           continuationPending: false,
+          continuationJobId: null,
+          continuationDueAt: null,
+          resumeRequired: false,
           continuationClaimJobId: null,
           continuationClaimDeferCount: null,
-          continuationClaimAttempt: null,
+          continuationClaimToken: null,
+          continuationClaimGeneration: null,
+          continuationClaimExpiresAt: null,
         },
         $push: {
           errorSamples: {
@@ -397,25 +522,9 @@ const defaultRunStore: RunStore = {
       },
       { new: true, runValidators: true },
     ),
-  failClaimedContinuation: (
-    id,
-    provider,
-    deferCount,
-    jobId,
-    attempt,
-    completedAt,
-  ) =>
+  failClaimedContinuation: (id, fence, completedAt) =>
     ExternalMaterialSyncRun.findOneAndUpdate(
-      {
-        _id: id,
-        provider,
-        status: 'running',
-        continuationPending: false,
-        deferCount,
-        continuationClaimJobId: jobId,
-        continuationClaimDeferCount: deferCount,
-        continuationClaimAttempt: attempt,
-      },
+      continuationFenceFilter(id, fence),
       {
         $set: {
           status: 'failed',
@@ -423,9 +532,14 @@ const defaultRunStore: RunStore = {
           deferredUntil: null,
           retryAfterMs: null,
           continuationPending: false,
+          continuationJobId: null,
+          continuationDueAt: null,
+          resumeRequired: false,
           continuationClaimJobId: null,
           continuationClaimDeferCount: null,
-          continuationClaimAttempt: null,
+          continuationClaimToken: null,
+          continuationClaimGeneration: null,
+          continuationClaimExpiresAt: null,
         },
         $push: {
           errorSamples: {
@@ -468,7 +582,7 @@ const defaultDependencies = (): WorkerDependencies => {
     fetchAds: fetchGuangdadaAds,
     normalizeAds: normalizeGuangdadaAds,
     ingest: ingestExternalMaterial,
-    enqueueContinuation: enqueueExternalMaterialContinuation,
+    enqueueContinuation: ensureContinuationScheduled,
     sleep: wait,
     setInterval,
     clearInterval,
@@ -586,23 +700,90 @@ const fetchWithRetries = async (
 const finishRun = async (
   dependencies: WorkerDependencies,
   runId: string,
+  fence: ExternalMaterialRunFence | undefined,
   status: 'completed' | 'failed' | 'deferred' | 'disabled',
   counters: ExternalMaterialSyncCounters,
   errorSamples: Array<{ category: ExternalMaterialErrorCategory }>,
   extra: Record<string, unknown> = {},
 ) => {
-  await dependencies.runs.update(runId, {
+  const update = {
     status,
     counters,
     errorSamples,
     continuationPending: false,
+    continuationJobId: null,
+    continuationDueAt: null,
+    resumeRequired: false,
     continuationClaimJobId: null,
     continuationClaimDeferCount: null,
-    continuationClaimAttempt: null,
+    continuationClaimToken: null,
+    continuationClaimGeneration: null,
+    continuationClaimExpiresAt: null,
     completedAt: dependencies.now(),
     ...extra,
-  })
+  }
+  const updated = fence
+    ? await dependencies.runs.update(runId, update, fence)
+    : await dependencies.runs.update(runId, update)
+  if (!updated && fence) return { status: 'stale' as const, counters }
   return { status, counters, ...extra }
+}
+
+const deferForOperatorPause = async (
+  dependencies: WorkerDependencies,
+  runId: string,
+  provider: ExternalMaterialProvider,
+  run: SyncRunRecord,
+  fence: ExternalMaterialRunFence | undefined,
+  counters: ExternalMaterialSyncCounters,
+  errorSamples: Array<{ category: ExternalMaterialErrorCategory }>,
+  cursor: string | null,
+) => {
+  appendError(errorSamples, 'paused')
+  const generation =
+    clampInteger(
+      run.continuationGeneration,
+      0,
+      0,
+      MAX_CONTINUATION_GENERATION - 1,
+    ) + 1
+  const dueAt = dependencies.now()
+  const update = {
+    status: 'deferred',
+    counters,
+    cursor,
+    errorSamples,
+    deferredUntil: null,
+    retryAfterMs: null,
+    deferCount: clampInteger(
+      run.deferCount,
+      0,
+      0,
+      MAX_EXTERNAL_MATERIAL_DEFERS,
+    ),
+    continuationPending: true,
+    continuationGeneration: generation,
+    continuationJobId: externalMaterialContinuationJobId(
+      provider,
+      runId,
+      generation,
+    ),
+    continuationDueAt: dueAt,
+    resumeRequired: true,
+    continuationClaimJobId: null,
+    continuationClaimDeferCount: null,
+    continuationClaimToken: null,
+    continuationClaimGeneration: null,
+    continuationClaimExpiresAt: null,
+    completedAt: null,
+  }
+  const updated = fence
+    ? await dependencies.runs.update(runId, update, fence)
+    : await dependencies.runs.update(runId, update)
+  return {
+    status: updated || !fence ? ('deferred' as const) : ('stale' as const),
+    counters,
+  }
 }
 
 const processClaimedExternalMaterialSyncRun = async (
@@ -611,6 +792,7 @@ const processClaimedExternalMaterialSyncRun = async (
   run: SyncRunRecord,
   request: ExternalMaterialSyncRequest,
   isContinuation: boolean,
+  fence?: ExternalMaterialRunFence,
 ): Promise<ExternalMaterialProcessResult> => {
   const { runId, provider } = job.data
   let committedCounters: ExternalMaterialSyncCounters = {
@@ -624,6 +806,7 @@ const processClaimedExternalMaterialSyncRun = async (
     return finishRun(
       dependencies,
       runId,
+      fence,
       'disabled',
       committedCounters,
       errorSamples,
@@ -632,14 +815,15 @@ const processClaimedExternalMaterialSyncRun = async (
 
   const state = await dependencies.states.get(provider)
   if (state?.paused) {
-    committedCounters.deferred += 1
-    appendError(errorSamples, 'paused')
-    return finishRun(
+    return deferForOperatorPause(
       dependencies,
       runId,
-      'deferred',
+      provider,
+      run,
+      fence,
       committedCounters,
       errorSamples,
+      typeof run.cursor === 'string' ? run.cursor : null,
     )
   }
 
@@ -649,6 +833,7 @@ const processClaimedExternalMaterialSyncRun = async (
     return finishRun(
       dependencies,
       runId,
+      fence,
       'deferred',
       committedCounters,
       errorSamples,
@@ -656,6 +841,7 @@ const processClaimedExternalMaterialSyncRun = async (
   }
 
   const ttl = lockTtl(dependencies.lockTtlMs)
+  const leaseTtl = claimLeaseTtl(dependencies.claimLeaseTtlMs)
   const owner = await acquireExternalMaterialLock(
     dependencies.redis,
     provider,
@@ -667,6 +853,7 @@ const processClaimedExternalMaterialSyncRun = async (
     return finishRun(
       dependencies,
       runId,
+      fence,
       'deferred',
       committedCounters,
       errorSamples,
@@ -679,12 +866,21 @@ const processClaimedExternalMaterialSyncRun = async (
   const heartbeat = async (): Promise<boolean> => {
     if (lockLost) return false
     try {
-      const owned = await renewExternalMaterialLock(
+      let owned = await renewExternalMaterialLock(
         dependencies.redis,
         provider,
         owner,
         ttl,
       )
+      if (owned && fence) {
+        owned = Boolean(
+          await dependencies.runs.renewContinuationLease(
+            runId,
+            fence,
+            new Date(dependencies.now().getTime() + leaseTtl),
+          ),
+        )
+      }
       if (!owned) {
         lockLost = true
         controller.abort()
@@ -710,6 +906,7 @@ const processClaimedExternalMaterialSyncRun = async (
     finishRun(
       dependencies,
       runId,
+      fence,
       'failed',
       committedCounters,
       [{ category: 'lock_lost' }],
@@ -724,9 +921,14 @@ const processClaimedExternalMaterialSyncRun = async (
         counters: committedCounters,
         errorSamples,
         continuationPending: false,
+        continuationJobId: null,
+        continuationDueAt: null,
+        resumeRequired: false,
         continuationClaimJobId: null,
         continuationClaimDeferCount: null,
-        continuationClaimAttempt: null,
+        continuationClaimToken: null,
+        continuationClaimGeneration: null,
+        continuationClaimExpiresAt: null,
         deferredUntil: null,
         retryAfterMs: null,
       })
@@ -743,9 +945,25 @@ const processClaimedExternalMaterialSyncRun = async (
     let page = cursor ? pageFromCursor(cursor) : 1
     let processedCount =
       committedCounters.alreadySeen + committedCounters.downloaded
+    const pauseIfRequested = async () => {
+      const latestState = await dependencies.states.get(provider)
+      return latestState?.paused
+        ? deferForOperatorPause(
+            dependencies,
+            runId,
+            provider,
+            run,
+            fence,
+            committedCounters,
+            errorSamples,
+            persistedCursor,
+          )
+        : null
+    }
 
     if (
       request.mode === 'backfill' &&
+      !request.dryRun &&
       persistedCursor &&
       state?.backfillCursor !== persistedCursor
     ) {
@@ -789,6 +1007,7 @@ const processClaimedExternalMaterialSyncRun = async (
           return finishRun(
             dependencies,
             runId,
+            fence,
             'failed',
             committedCounters,
             errorSamples,
@@ -805,6 +1024,7 @@ const processClaimedExternalMaterialSyncRun = async (
             return finishRun(
               dependencies,
               runId,
+              fence,
               'failed',
               committedCounters,
               errorSamples,
@@ -819,28 +1039,19 @@ const processClaimedExternalMaterialSyncRun = async (
           const deferredUntil = new Date(
             dependencies.now().getTime() + retryAfterMs,
           )
-          try {
-            await dependencies.enqueueContinuation({
-              runId,
-              provider,
-              request,
-              retryAfterMs,
-              deferCount,
-            })
-          } catch {
-            return finishRun(
-              dependencies,
-              runId,
-              'failed',
-              committedCounters,
-              errorSamples,
-              {
-                deferredUntil: null,
-                retryAfterMs: null,
-              },
-            )
-          }
-          await dependencies.runs.update(runId, {
+          const generation =
+            clampInteger(
+              run.continuationGeneration,
+              0,
+              0,
+              MAX_CONTINUATION_GENERATION - 1,
+            ) + 1
+          const continuationJobId = externalMaterialContinuationJobId(
+            provider,
+            runId,
+            generation,
+          )
+          const deferredUpdate = {
             status: 'deferred',
             counters: committedCounters,
             errorSamples,
@@ -848,10 +1059,35 @@ const processClaimedExternalMaterialSyncRun = async (
             retryAfterMs,
             deferCount,
             continuationPending: true,
+            continuationGeneration: generation,
+            continuationJobId,
+            continuationDueAt: deferredUntil,
+            resumeRequired: false,
             continuationClaimJobId: null,
             continuationClaimDeferCount: null,
-            continuationClaimAttempt: null,
-          })
+            continuationClaimToken: null,
+            continuationClaimGeneration: null,
+            continuationClaimExpiresAt: null,
+          }
+          const deferred = fence
+            ? await dependencies.runs.update(runId, deferredUpdate, fence)
+            : await dependencies.runs.update(runId, deferredUpdate)
+          if (!deferred && fence) {
+            return { status: 'stale', counters: committedCounters }
+          }
+          try {
+            await dependencies.enqueueContinuation({
+              runId,
+              provider,
+              request,
+              deferCount,
+              generation,
+              jobId: continuationJobId,
+              dueAt: deferredUntil,
+            })
+          } catch (error) {
+            throw new ContinuationSchedulingError(error)
+          }
           return {
             status: 'deferred',
             counters: committedCounters,
@@ -861,6 +1097,7 @@ const processClaimedExternalMaterialSyncRun = async (
         return finishRun(
           dependencies,
           runId,
+          fence,
           'failed',
           committedCounters,
           errorSamples,
@@ -871,6 +1108,8 @@ const processClaimedExternalMaterialSyncRun = async (
       }
 
       if (lockLost) return finishLockLost()
+      const pauseAfterFetch = await pauseIfRequested()
+      if (pauseAfterFetch) return pauseAfterFetch
       const discoveredInBatch = Math.min(
         batchLimit,
         Array.isArray(fetched.data) ? fetched.data.length : 0,
@@ -892,6 +1131,8 @@ const processClaimedExternalMaterialSyncRun = async (
           if (!(await heartbeat())) {
             return finishLockLost()
           }
+          const pauseBeforeItem = await pauseIfRequested()
+          if (pauseBeforeItem) return pauseBeforeItem
 
           let outcome:
             | Awaited<ReturnType<typeof ingestExternalMaterial>>
@@ -914,6 +1155,8 @@ const processClaimedExternalMaterialSyncRun = async (
             }
           }
 
+          const pauseAfterIngest = await pauseIfRequested()
+          if (pauseAfterIngest) return pauseAfterIngest
           if (!outcome) {
             outcome = {
               kind: 'failed',
@@ -951,34 +1194,46 @@ const processClaimedExternalMaterialSyncRun = async (
         }
       }
 
+      const pauseBeforeCommit = await pauseIfRequested()
+      if (pauseBeforeCommit) return pauseBeforeCommit
       const nextCursor =
         request.mode === 'backfill'
           ? nextBackfillCursor(fetched.pagination as Record<string, unknown>)
           : null
       if (!(await heartbeat())) return finishLockLost()
       const checkpointCounters = mergeCounters(committedCounters, batchCounters)
-      const checkpointed = await dependencies.runs.checkpoint(
-        runId,
-        persistedCursor,
-        {
-          cursor: nextCursor,
-          counters: checkpointCounters,
-          errorSamples,
-        },
-      )
+      const checkpointUpdate = {
+        cursor: nextCursor,
+        counters: checkpointCounters,
+        errorSamples,
+      }
+      const checkpointed = fence
+        ? await dependencies.runs.checkpoint(
+            runId,
+            persistedCursor,
+            checkpointUpdate,
+            fence,
+          )
+        : await dependencies.runs.checkpoint(
+            runId,
+            persistedCursor,
+            checkpointUpdate,
+          )
       if (!checkpointed) {
         throw new Error('external_material_checkpoint_conflict')
       }
       committedCounters = checkpointCounters
       persistedCursor = nextCursor
 
-      if (request.mode === 'backfill') {
+      if (request.mode === 'backfill' && !request.dryRun) {
         cursor = nextCursor
         if (!(await heartbeat())) return finishLockLost()
         await dependencies.states.update(provider, {
           backfillCursor: cursor,
         })
         if (lockLost) return finishLockLost()
+      } else if (request.mode === 'backfill') {
+        cursor = nextCursor
       }
 
       if (
@@ -996,6 +1251,7 @@ const processClaimedExternalMaterialSyncRun = async (
     return finishRun(
       dependencies,
       runId,
+      fence,
       'completed',
       committedCounters,
       errorSamples,
@@ -1022,9 +1278,51 @@ const safeContinuationJobId = (value: unknown): string | null =>
 const safeClaimAttempt = (value: unknown): number | null =>
   Number.isInteger(value) &&
   Number(value) >= 0 &&
-  Number(value) <= MAX_CONTINUATION_CLAIM_ATTEMPT
+  Number(value) <= MAX_BULL_ATTEMPT
     ? Number(value)
     : null
+
+const safeContinuationGeneration = (value: unknown): number | null =>
+  Number.isInteger(value) &&
+  Number(value) >= 1 &&
+  Number(value) <= MAX_CONTINUATION_GENERATION
+    ? Number(value)
+    : null
+
+const pendingContinuationIntent = (
+  runId: string,
+  provider: ExternalMaterialProvider,
+  request: ExternalMaterialSyncRequest,
+  run: SyncRunRecord,
+) => {
+  const deferCount = Number(run.deferCount)
+  const generation = safeContinuationGeneration(run.continuationGeneration)
+  const jobId = safeContinuationJobId(run.continuationJobId)
+  const dueAt = run.continuationDueAt
+  if (
+    run.status !== 'deferred' ||
+    run.continuationPending !== true ||
+    !Number.isInteger(deferCount) ||
+    deferCount < 0 ||
+    deferCount > MAX_EXTERNAL_MATERIAL_DEFERS ||
+    generation === null ||
+    jobId === null ||
+    !(dueAt instanceof Date) ||
+    !Number.isFinite(dueAt.getTime()) ||
+    jobId !== externalMaterialContinuationJobId(provider, runId, generation)
+  ) {
+    return null
+  }
+  return {
+    runId,
+    provider,
+    request,
+    deferCount,
+    generation,
+    jobId,
+    dueAt,
+  }
+}
 
 const configuredJobAttempts = (
   job: Pick<Job<ExternalMaterialJobData>, 'opts'>,
@@ -1098,28 +1396,37 @@ export const processExternalMaterialSyncJob = async (
   const request = clampExternalMaterialSyncRequest(job.data.request)
   const isContinuation = job.data.continuation === true
   const continuationDeferCount = job.data.deferCount
+  const continuationGeneration = safeContinuationGeneration(job.data.generation)
   const continuationJobId = safeContinuationJobId(job.id)
-  const claimAttempt = safeClaimAttempt(job.attemptsMade)
   let run: SyncRunRecord | null
+  let fence: ExternalMaterialRunFence | undefined
 
   if (isContinuation) {
     if (
       !Number.isInteger(continuationDeferCount) ||
       continuationDeferCount === undefined ||
-      continuationDeferCount < 1 ||
+      continuationDeferCount < 0 ||
       continuationDeferCount > MAX_EXTERNAL_MATERIAL_DEFERS ||
+      continuationGeneration === null ||
       continuationJobId === null ||
-      claimAttempt === null
+      safeClaimAttempt(job.attemptsMade) === null
     ) {
       return { status: 'stale', counters: emptyCounters() }
     }
+    const startedAt = dependencies.now()
+    const claimToken = randomUUID()
+    fence = { token: claimToken, generation: continuationGeneration }
     run = await dependencies.runs.claimContinuation(
       runId,
       provider,
       continuationDeferCount,
+      continuationGeneration,
       continuationJobId,
-      claimAttempt,
-      dependencies.now(),
+      claimToken,
+      startedAt,
+      new Date(
+        startedAt.getTime() + claimLeaseTtl(dependencies.claimLeaseTtlMs),
+      ),
     )
     if (!run) {
       return { status: 'stale', counters: emptyCounters() }
@@ -1127,6 +1434,22 @@ export const processExternalMaterialSyncJob = async (
   } else {
     run = await dependencies.runs.get(runId)
     if (!run) throw new Error('external_material_run_not_found')
+    if (run.continuationPending === true) {
+      const intent = pendingContinuationIntent(runId, provider, request, run)
+      if (!intent) {
+        return { status: 'stale', counters: emptyCounters() }
+      }
+      if (dependencies.featureEnabled && dependencies.apiKeyPresent) {
+        await dependencies.enqueueContinuation(intent)
+      }
+      return {
+        status: 'deferred',
+        counters: {
+          ...emptyCounters(),
+          ...(run.counters || {}),
+        },
+      }
+    }
   }
 
   try {
@@ -1136,8 +1459,12 @@ export const processExternalMaterialSyncJob = async (
       run,
       request,
       isContinuation,
+      fence,
     )
   } catch (error) {
+    if (error instanceof ContinuationSchedulingError) {
+      throw error
+    }
     const currentAttempt = safeClaimAttempt(job.attemptsMade) ?? 0
     const isFinalAttempt = currentAttempt + 1 >= configuredJobAttempts(job)
     if (isFinalAttempt) {
@@ -1145,15 +1472,12 @@ export const processExternalMaterialSyncJob = async (
         isContinuation &&
         continuationDeferCount !== undefined &&
         continuationJobId !== null &&
-        claimAttempt !== null
+        fence
       ) {
         await persistBeforeRethrow(dependencies, () =>
           dependencies.runs.failClaimedContinuation(
             runId,
-            provider,
-            continuationDeferCount,
-            continuationJobId,
-            claimAttempt,
+            fence,
             dependencies.now(),
           ),
         )
@@ -1166,16 +1490,10 @@ export const processExternalMaterialSyncJob = async (
       isContinuation &&
       continuationDeferCount !== undefined &&
       continuationJobId !== null &&
-      claimAttempt !== null
+      fence
     ) {
       await persistBeforeRethrow(dependencies, () =>
-        dependencies.runs.restoreContinuation(
-          runId,
-          provider,
-          continuationDeferCount,
-          continuationJobId,
-          claimAttempt,
-        ),
+        dependencies.runs.restoreContinuation(runId, fence),
       )
     }
     throw error
@@ -1187,31 +1505,15 @@ export const handleExternalMaterialWorkerFailure = async (
     Job<ExternalMaterialJobData>,
     'data' | 'id' | 'attemptsMade' | 'opts'
   > | null,
-  _error: unknown,
+  error: unknown,
   suppliedDependencies?: Pick<WorkerDependencies, 'runs' | 'now'>,
 ): Promise<void> => {
   if (!job?.data?.runId) return
+  if (job.data.continuation === true) return
+  if (error instanceof ContinuationSchedulingError) return
   const dependencies = suppliedDependencies ?? defaultDependencies()
   const attempts = configuredJobAttempts(job)
-  if (job.attemptsMade < attempts) {
-    const jobId = safeContinuationJobId(job.id)
-    const claimAttempt = safeClaimAttempt(job.attemptsMade - 1)
-    if (
-      job.data.continuation === true &&
-      Number.isInteger(job.data.deferCount) &&
-      jobId !== null &&
-      claimAttempt !== null
-    ) {
-      await dependencies.runs.restoreContinuation(
-        job.data.runId,
-        job.data.provider,
-        job.data.deferCount as number,
-        jobId,
-        claimAttempt,
-      )
-    }
-    return
-  }
+  if (job.attemptsMade < attempts) return
   await dependencies.runs.failExhausted(job.data.runId, dependencies.now())
 }
 

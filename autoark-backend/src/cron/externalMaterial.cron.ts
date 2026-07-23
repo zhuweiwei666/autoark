@@ -4,6 +4,7 @@ import {
   ExternalMaterialEnqueueResult,
   ExternalMaterialSyncRequest,
   enqueueExternalMaterialSync,
+  reconcileExternalMaterialContinuations,
 } from '../queue/externalMaterial.queue'
 import logger from '../utils/logger'
 
@@ -22,6 +23,7 @@ interface ExternalMaterialCronDependencies {
   enqueue(
     request: ExternalMaterialSyncRequest,
   ): Promise<ExternalMaterialEnqueueResult>
+  reconcile(): Promise<number>
 }
 
 const defaultStateStore: CronStateStore = {
@@ -32,6 +34,8 @@ const defaultDependencies = (): ExternalMaterialCronDependencies => ({
   env: process.env,
   states: defaultStateStore,
   enqueue: enqueueExternalMaterialSync,
+  reconcile: () =>
+    reconcileExternalMaterialContinuations({ provider: 'guangdada' }),
 })
 
 export const runExternalMaterialCronTick = async (
@@ -47,6 +51,7 @@ export const runExternalMaterialCronTick = async (
   const state = await dependencies.states.get('guangdada')
   if (state?.paused || state?.recurringEnabled === false) return
 
+  await dependencies.reconcile()
   await dependencies.enqueue({
     provider: 'guangdada',
     mode: 'scheduled',

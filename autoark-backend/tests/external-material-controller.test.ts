@@ -6,6 +6,7 @@ import request from 'supertest'
 import { UserPermission, UserRole } from '../src/models/User'
 
 const mockEnqueue = jest.fn()
+const mockReconcileContinuations = jest.fn()
 const mockWriteAuditLog = jest.fn()
 const mockStateLean = jest.fn()
 const mockStateFindOne = jest.fn(() => ({ lean: mockStateLean }))
@@ -34,6 +35,7 @@ jest.mock('../src/queue/externalMaterial.queue', () => {
   return {
     ...actual,
     enqueueExternalMaterialSync: mockEnqueue,
+    reconcileExternalMaterialContinuations: mockReconcileContinuations,
   }
 })
 
@@ -175,6 +177,7 @@ describe('external material controller and routes', () => {
         limit: 2000,
       },
     })
+    mockReconcileContinuations.mockResolvedValue(1)
   })
 
   afterEach(() => {
@@ -395,10 +398,39 @@ describe('external material controller and routes', () => {
       pauseReason: null,
       recurringEnabled: true,
     })
+    expect(mockReconcileContinuations).toHaveBeenCalledWith({
+      provider: 'guangdada',
+      resumeOnly: true,
+    })
     expect(JSON.stringify(resumed.body)).not.toMatch(
       /apiKey|feature|configured|configUrl/i,
     )
   })
+
+  it.each([
+    ['feature disabled', 'false', 'unit-test-key'],
+    ['missing api key', 'true', ''],
+  ])(
+    'leaves resume intents pending without external scheduling when %s',
+    async (_case, featureEnabled, apiKey) => {
+      process.env.EXTERNAL_MATERIAL_SYNC_ENABLED = featureEnabled
+      process.env.GUANGDADA_API_KEY = apiKey
+      mockStateFindOneAndUpdate.mockResolvedValueOnce({
+        provider: 'guangdada',
+        paused: false,
+        pauseReason: null,
+        recurringEnabled: true,
+      })
+
+      const response = await request(app)
+        .post('/api/materials/external/guangdada/resume')
+        .set('x-test-role', 'manager')
+        .send({})
+
+      expect(response.status).toBe(200)
+      expect(mockReconcileContinuations).not.toHaveBeenCalled()
+    },
+  )
 
   it('returns a fixed sanitized server error instead of upstream or database details', async () => {
     mockStateLean.mockRejectedValueOnce(
