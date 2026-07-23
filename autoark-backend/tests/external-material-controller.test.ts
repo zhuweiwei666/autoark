@@ -147,6 +147,9 @@ describe('external material controller and routes', () => {
       request: { recentDays: 3, limit: 500 },
       status: 'completed',
       cursor: 'must-not-be-returned',
+      continuationClaimJobId: 'claim-job-must-not-be-returned',
+      continuationClaimDeferCount: 2,
+      continuationClaimAttempt: 1,
       counters: sampleCounters,
       errorSamples: [{ category: 'configuration' }],
       startedAt: new Date('2026-07-23T00:00:00.000Z'),
@@ -232,7 +235,7 @@ describe('external material controller and routes', () => {
       })
       const serialized = JSON.stringify(response.body)
       expect(serialized).not.toMatch(
-        /unit-test-key|run-secret|job-secret|must-not-be-returned|https?:|redis|configuration|errorSamples/i,
+        /unit-test-key|run-secret|job-secret|claim-job|must-not-be-returned|continuationClaim|https?:|redis|configuration|errorSamples/i,
       )
     }
   })

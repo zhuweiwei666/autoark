@@ -89,6 +89,9 @@ const workerDependencies = (overrides: Record<string, unknown> = {}) => {
     cursor: null,
     deferCount: 0,
     continuationPending: false,
+    continuationClaimJobId: null,
+    continuationClaimDeferCount: null,
+    continuationClaimAttempt: null,
   }
   return {
     featureEnabled: true,
@@ -100,7 +103,13 @@ const workerDependencies = (overrides: Record<string, unknown> = {}) => {
     runs: {
       get: jest.fn().mockResolvedValue(run),
       claimContinuation: jest.fn(
-        async (runId: string, provider: string, deferCount: number) =>
+        async (
+          runId: string,
+          provider: string,
+          deferCount: number,
+          jobId: string,
+          attempt: number,
+        ) =>
           runId === String(run._id) &&
           provider === run.provider &&
           run.status === 'deferred' &&
@@ -110,6 +119,9 @@ const workerDependencies = (overrides: Record<string, unknown> = {}) => {
                 ...run,
                 status: 'running',
                 continuationPending: false,
+                continuationClaimJobId: jobId,
+                continuationClaimDeferCount: deferCount,
+                continuationClaimAttempt: attempt,
               }
             : null,
       ),
@@ -118,6 +130,7 @@ const workerDependencies = (overrides: Record<string, unknown> = {}) => {
       update: jest.fn().mockResolvedValue(run),
       checkpoint: jest.fn().mockResolvedValue(run),
       failExhausted: jest.fn().mockResolvedValue(run),
+      failClaimedContinuation: jest.fn().mockResolvedValue(run),
     },
     states: {
       get: jest.fn().mockResolvedValue({
@@ -138,6 +151,176 @@ const workerDependencies = (overrides: Record<string, unknown> = {}) => {
     now: () => new Date('2026-07-23T00:00:00.000Z'),
     ...overrides,
   } as any
+}
+
+const continuationJob = (id: string, attemptsMade: number, deferCount = 2) =>
+  job({
+    id,
+    attemptsMade,
+    data: {
+      runId: 'run-1',
+      provider: 'guangdada',
+      request,
+      continuation: true,
+      deferCount,
+    },
+  })
+
+const statefulContinuationDependencies = (
+  restoreMode: 'success' | 'reject' | 'timeout',
+) => {
+  let run: Record<string, any> = {
+    _id: 'run-1',
+    provider: 'guangdada',
+    mode: request.mode,
+    dryRun: false,
+    request: { recentDays: 3, limit: 10 },
+    status: 'deferred',
+    counters: counters(),
+    cursor: null,
+    deferCount: 2,
+    continuationPending: true,
+    continuationClaimJobId: null,
+    continuationClaimDeferCount: null,
+    continuationClaimAttempt: null,
+  }
+  let resolveLateRestore: (() => void) | undefined
+  const deps = workerDependencies({
+    restoreAttempts: 1,
+    restoreTimeoutMs: 5,
+  })
+
+  deps.runs.claimContinuation.mockImplementation(
+    async (
+      runId: string,
+      provider: string,
+      deferCount: number,
+      jobId: string,
+      attempt: number,
+    ) => {
+      if (
+        runId !== String(run._id) ||
+        provider !== run.provider ||
+        deferCount !== run.deferCount ||
+        typeof jobId !== 'string' ||
+        !Number.isInteger(attempt)
+      ) {
+        return null
+      }
+      const deferredClaim =
+        run.status === 'deferred' && run.continuationPending === true
+      const retryClaim =
+        run.status === 'running' &&
+        run.continuationPending === false &&
+        run.continuationClaimJobId === jobId &&
+        run.continuationClaimDeferCount === deferCount &&
+        Number(run.continuationClaimAttempt) < attempt
+      if (!deferredClaim && !retryClaim) return null
+      run = {
+        ...run,
+        status: 'running',
+        continuationPending: false,
+        continuationClaimJobId: jobId,
+        continuationClaimDeferCount: deferCount,
+        continuationClaimAttempt: attempt,
+      }
+      return { ...run }
+    },
+  )
+  deps.runs.restoreContinuation.mockImplementation(
+    (
+      runId: string,
+      provider: string,
+      deferCount: number,
+      jobId: string,
+      attempt: number,
+    ) => {
+      const applyRestore = () => {
+        if (
+          runId === String(run._id) &&
+          provider === run.provider &&
+          deferCount === run.deferCount &&
+          run.status === 'running' &&
+          run.continuationPending === false &&
+          run.continuationClaimJobId === jobId &&
+          run.continuationClaimDeferCount === deferCount &&
+          run.continuationClaimAttempt === attempt
+        ) {
+          run = {
+            ...run,
+            status: 'deferred',
+            continuationPending: true,
+            continuationClaimJobId: null,
+            continuationClaimDeferCount: null,
+            continuationClaimAttempt: null,
+          }
+        }
+        return { ...run }
+      }
+      if (restoreMode === 'success') {
+        return Promise.resolve(applyRestore())
+      }
+      if (restoreMode === 'reject') {
+        return Promise.reject(new Error('unsafe restore detail'))
+      }
+      return new Promise((resolve) => {
+        resolveLateRestore = () => resolve(applyRestore())
+      })
+    },
+  )
+  deps.runs.update.mockImplementation(
+    async (_runId: string, update: Record<string, unknown>) => {
+      run = { ...run, ...update }
+      return { ...run }
+    },
+  )
+  deps.runs.checkpoint.mockImplementation(
+    async (
+      _runId: string,
+      _cursor: string | null,
+      update: Record<string, unknown>,
+    ) => {
+      run = { ...run, ...update }
+      return { ...run }
+    },
+  )
+  deps.runs.failClaimedContinuation.mockImplementation(
+    async (
+      runId: string,
+      provider: string,
+      deferCount: number,
+      jobId: string,
+      attempt: number,
+      completedAt: Date,
+    ) => {
+      if (
+        runId === String(run._id) &&
+        provider === run.provider &&
+        deferCount === run.deferCount &&
+        run.status === 'running' &&
+        run.continuationClaimJobId === jobId &&
+        run.continuationClaimDeferCount === deferCount &&
+        run.continuationClaimAttempt === attempt
+      ) {
+        run = {
+          ...run,
+          status: 'failed',
+          completedAt,
+          continuationPending: false,
+          continuationClaimJobId: null,
+          continuationClaimDeferCount: null,
+          continuationClaimAttempt: null,
+        }
+      }
+      return { ...run }
+    },
+  )
+
+  return {
+    deps,
+    getRun: () => ({ ...run }),
+    releaseLateRestore: () => resolveLateRestore?.(),
+  }
 }
 
 describe('external material sync models and request bounds', () => {
@@ -227,6 +410,11 @@ describe('external material sync models and request bounds', () => {
       default: false,
       required: true,
     })
+    expect(
+      runSchema.path('continuationClaimJobId').options.maxlength,
+    ).toBeLessThanOrEqual(200)
+    expect(runSchema.path('continuationClaimDeferCount').options.max).toBe(3)
+    expect(runSchema.path('continuationClaimAttempt').options.max).toBe(100)
     expect(runSchema.path('errorSamples.category')).toBeDefined()
     expect(runSchema.path('rawRecord')).toBeUndefined()
     expect(runSchema.path('mediaUrl')).toBeUndefined()
@@ -259,6 +447,9 @@ describe('external material sync models and request bounds', () => {
       retryAfterMs: '60000',
       deferCount: '1',
       continuationPending: false,
+      continuationClaimJobId: 'safe-job',
+      continuationClaimDeferCount: '1',
+      continuationClaimAttempt: '0',
       rawRecord: { secret: true },
       mediaUrl: 'https://secret.invalid/media',
     })
@@ -267,6 +458,9 @@ describe('external material sync models and request bounds', () => {
       retryAfterMs: 60_000,
       deferCount: 1,
       continuationPending: false,
+      continuationClaimJobId: 'safe-job',
+      continuationClaimDeferCount: 1,
+      continuationClaimAttempt: 0,
     })
     expect(cast).not.toHaveProperty('rawRecord')
     expect(cast).not.toHaveProperty('mediaUrl')
@@ -631,20 +825,38 @@ describe('external material worker orchestration', () => {
 
     try {
       await expect(
-        claimExternalMaterialContinuation('run-1', 'guangdada', 2, startedAt),
+        claimExternalMaterialContinuation(
+          'run-1',
+          'guangdada',
+          2,
+          'continuation-job',
+          1,
+          startedAt,
+        ),
       ).resolves.toBe(claimed)
       expect(findOneAndUpdate).toHaveBeenCalledWith(
         {
           _id: 'run-1',
           provider: 'guangdada',
-          status: 'deferred',
-          continuationPending: true,
           deferCount: 2,
+          $or: [
+            { status: 'deferred', continuationPending: true },
+            {
+              status: 'running',
+              continuationPending: false,
+              continuationClaimJobId: 'continuation-job',
+              continuationClaimDeferCount: 2,
+              continuationClaimAttempt: { $lt: 1 },
+            },
+          ],
         },
         {
           $set: {
             status: 'running',
             continuationPending: false,
+            continuationClaimJobId: 'continuation-job',
+            continuationClaimDeferCount: 2,
+            continuationClaimAttempt: 1,
             startedAt,
             deferredUntil: null,
             retryAfterMs: null,
@@ -874,6 +1086,7 @@ describe('external material worker orchestration', () => {
         update: jest.fn().mockResolvedValue(deferredRun),
         checkpoint: jest.fn().mockResolvedValue(deferredRun),
         failExhausted: jest.fn().mockResolvedValue(deferredRun),
+        failClaimedContinuation: jest.fn().mockResolvedValue(deferredRun),
       },
     })
 
@@ -894,6 +1107,8 @@ describe('external material worker orchestration', () => {
       'run-1',
       'guangdada',
       1,
+      'safe-job',
+      0,
       new Date('2026-07-23T00:00:00.000Z'),
     )
     expect(deps.runs.update.mock.calls).not.toEqual(
@@ -1010,6 +1225,8 @@ describe('external material worker orchestration', () => {
         'run-1',
         'guangdada',
         1,
+        'safe-job',
+        0,
         new Date('2026-07-23T00:00:00.000Z'),
       )
       expectNoStaleContinuationSideEffects(deps)
@@ -1067,6 +1284,8 @@ describe('external material worker orchestration', () => {
       'run-1',
       'guangdada',
       2,
+      'safe-job',
+      0,
       new Date('2026-07-23T00:00:00.000Z'),
     )
     expect(current.states.get).toHaveBeenCalledTimes(1)
@@ -1160,6 +1379,7 @@ describe('external material worker orchestration', () => {
         update: jest.fn().mockResolvedValue(deferredRun),
         checkpoint: jest.fn().mockResolvedValue(deferredRun),
         failExhausted: jest.fn().mockResolvedValue(deferredRun),
+        failClaimedContinuation: jest.fn().mockResolvedValue(deferredRun),
       },
       states: {
         get: jest.fn(async () => ({
@@ -1248,6 +1468,7 @@ describe('external material worker orchestration', () => {
         update: jest.fn().mockResolvedValue(run),
         checkpoint: jest.fn().mockResolvedValue(run),
         failExhausted: jest.fn().mockResolvedValue(run),
+        failClaimedContinuation: jest.fn().mockResolvedValue(run),
       },
       fetchAds: jest.fn().mockRejectedValue(
         new GuangdadaApiError({
@@ -1498,6 +1719,172 @@ describe('external material worker orchestration', () => {
     },
   )
 
+  it('awaits owned continuation restore before rethrowing a claimed core failure', async () => {
+    const coreError = new Error('unsafe claimed core failure')
+    const { deps, getRun } = statefulContinuationDependencies('success')
+    deps.states.get.mockRejectedValueOnce(coreError)
+
+    await expect(
+      processExternalMaterialSyncJob(
+        continuationJob('continuation-job', 0) as any,
+        deps,
+      ),
+    ).rejects.toThrow(coreError)
+
+    expect(deps.runs.restoreContinuation).toHaveBeenCalledWith(
+      'run-1',
+      'guangdada',
+      2,
+      'continuation-job',
+      0,
+    )
+    expect(getRun()).toMatchObject({
+      status: 'deferred',
+      continuationPending: true,
+      continuationClaimJobId: null,
+      continuationClaimDeferCount: null,
+      continuationClaimAttempt: null,
+    })
+  })
+
+  it.each(['reject', 'timeout'] as const)(
+    'allows only the same BullMQ job to reclaim after a bounded %s restore',
+    async (restoreMode) => {
+      const coreError = new Error('unsafe first-attempt failure')
+      const { deps, getRun, releaseLateRestore } =
+        statefulContinuationDependencies(restoreMode)
+      deps.states.get.mockRejectedValueOnce(coreError)
+
+      await expect(
+        processExternalMaterialSyncJob(
+          continuationJob('continuation-job', 0) as any,
+          deps,
+        ),
+      ).rejects.toThrow(coreError)
+      expect(getRun()).toMatchObject({
+        status: 'running',
+        continuationPending: false,
+        continuationClaimJobId: 'continuation-job',
+        continuationClaimDeferCount: 2,
+        continuationClaimAttempt: 0,
+      })
+
+      await expect(
+        processExternalMaterialSyncJob(
+          continuationJob('different-job', 1) as any,
+          deps,
+        ),
+      ).resolves.toMatchObject({ status: 'stale' })
+
+      let releaseFetch: (() => void) | undefined
+      let markFetchStarted: (() => void) | undefined
+      const fetchStarted = new Promise<void>((resolve) => {
+        markFetchStarted = resolve
+      })
+      deps.fetchAds.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            markFetchStarted?.()
+            releaseFetch = () => resolve({ data: [], pagination: {} })
+          }),
+      )
+      const retry = processExternalMaterialSyncJob(
+        continuationJob('continuation-job', 1) as any,
+        deps,
+      )
+      await fetchStarted
+      expect(getRun()).toMatchObject({
+        status: 'running',
+        continuationClaimJobId: 'continuation-job',
+        continuationClaimAttempt: 1,
+      })
+
+      releaseLateRestore()
+      await Promise.resolve()
+      expect(getRun()).toMatchObject({
+        status: 'running',
+        continuationClaimAttempt: 1,
+      })
+      releaseFetch?.()
+      await expect(retry).resolves.toMatchObject({ status: 'completed' })
+      expect(getRun()).toMatchObject({
+        status: 'completed',
+        continuationPending: false,
+        continuationClaimJobId: null,
+        continuationClaimDeferCount: null,
+        continuationClaimAttempt: null,
+      })
+    },
+  )
+
+  it('terminalizes a final claimed attempt in the processor before rethrowing', async () => {
+    const coreError = new Error('unsafe final-attempt failure')
+    const { deps, getRun } = statefulContinuationDependencies('reject')
+    deps.states.get.mockRejectedValueOnce(coreError)
+
+    await expect(
+      processExternalMaterialSyncJob(
+        continuationJob('continuation-job', 2) as any,
+        deps,
+      ),
+    ).rejects.toThrow(coreError)
+
+    expect(deps.runs.restoreContinuation).not.toHaveBeenCalled()
+    expect(deps.runs.failClaimedContinuation).toHaveBeenCalledWith(
+      'run-1',
+      'guangdada',
+      2,
+      'continuation-job',
+      2,
+      new Date('2026-07-23T00:00:00.000Z'),
+    )
+    expect(getRun()).toMatchObject({
+      status: 'failed',
+      continuationPending: false,
+      continuationClaimJobId: null,
+      continuationClaimDeferCount: null,
+      continuationClaimAttempt: null,
+    })
+  })
+
+  it('does not let a late intermediate failed event roll back a completed retry', async () => {
+    const coreError = new Error('unsafe first-attempt failure')
+    const { deps, getRun } = statefulContinuationDependencies('reject')
+    deps.states.get.mockRejectedValueOnce(coreError)
+
+    await expect(
+      processExternalMaterialSyncJob(
+        continuationJob('continuation-job', 0) as any,
+        deps,
+      ),
+    ).rejects.toThrow(coreError)
+    await expect(
+      processExternalMaterialSyncJob(
+        continuationJob('continuation-job', 1) as any,
+        deps,
+      ),
+    ).resolves.toMatchObject({ status: 'completed' })
+
+    deps.runs.restoreContinuation.mockResolvedValueOnce(null)
+    await handleExternalMaterialWorkerFailure(
+      continuationJob('continuation-job', 1) as any,
+      coreError,
+      deps,
+    )
+
+    expect(deps.runs.restoreContinuation).toHaveBeenLastCalledWith(
+      'run-1',
+      'guangdada',
+      2,
+      'continuation-job',
+      0,
+    )
+    expect(getRun()).toMatchObject({
+      status: 'completed',
+      continuationPending: false,
+    })
+  })
+
   it('restores a claimed continuation before BullMQ retries an intermediate failure', async () => {
     const deps = workerDependencies()
     await handleExternalMaterialWorkerFailure(
@@ -1520,6 +1907,8 @@ describe('external material worker orchestration', () => {
       'run-1',
       'guangdada',
       2,
+      'safe-job',
+      0,
     )
     expect(deps.runs.failExhausted).not.toHaveBeenCalled()
   })

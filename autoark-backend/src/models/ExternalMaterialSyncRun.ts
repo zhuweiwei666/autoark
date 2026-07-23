@@ -71,6 +71,9 @@ export interface IExternalMaterialSyncRun extends mongoose.Document {
   retryAfterMs?: number | null
   deferCount: number
   continuationPending: boolean
+  continuationClaimJobId?: string | null
+  continuationClaimDeferCount?: number | null
+  continuationClaimAttempt?: number | null
   startedAt?: Date | null
   completedAt?: Date | null
   counters: ExternalMaterialSyncCounters
@@ -157,6 +160,25 @@ const externalMaterialSyncRunSchema =
         type: Boolean,
         required: true,
         default: false,
+      },
+      continuationClaimJobId: {
+        type: String,
+        trim: true,
+        maxlength: 200,
+        match: /^[A-Za-z0-9_-]+$/,
+        default: null,
+      },
+      continuationClaimDeferCount: {
+        type: Number,
+        min: 1,
+        max: 3,
+        default: null,
+      },
+      continuationClaimAttempt: {
+        type: Number,
+        min: 0,
+        max: 100,
+        default: null,
       },
       startedAt: {
         type: Date,
