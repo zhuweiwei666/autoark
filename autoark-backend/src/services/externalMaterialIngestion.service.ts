@@ -20,6 +20,7 @@ export type ExternalIngestionOutcome =
 const ACTIVE_MATERIAL_STATUSES = ['uploaded', 'ready'] as const
 const ORIGIN_UPSERT_ATTEMPTS = 3
 const CLEANUP_ATTEMPTS = 2
+const FINGERPRINT_HOLDER_LOOKUP_ATTEMPTS = 3
 const MAX_IDENTITY_LENGTH = 512
 const MAX_LABEL_LENGTH = 240
 const MAX_ROLE_LENGTH = 80
@@ -78,11 +79,20 @@ type MaterialRecord = {
   organizationId?: unknown
   status?: string
   fingerprint?: { sha256?: unknown }
+  storage?: { key?: unknown; url?: unknown }
 }
 
 type OriginRecord = {
   materialId?: unknown
+  lastSeenAt?: unknown
 }
+
+type OriginResolution =
+  | { kind: 'resolved'; material: MaterialRecord }
+  | {
+      kind: 'failed'
+      category: 'origin_mapping_failed' | 'origin_mapping_stale'
+    }
 
 const errorField = (error: unknown, field: string): unknown => {
   if (!error || typeof error !== 'object') return undefined
@@ -96,6 +106,9 @@ const findMaterial = async (
 
 const materialId = (material: MaterialRecord): string =>
   String(material._id || '')
+
+const materialStorageKey = (material: MaterialRecord): string | undefined =>
+  typeof material.storage?.key === 'string' ? material.storage.key : undefined
 
 const boundedString = (
   value: unknown,
@@ -248,22 +261,41 @@ const observationUpdate = (
 const upsertOrigin = async (
   candidate: NormalizedGuangdadaAsset,
   canonical: MaterialRecord,
-): Promise<boolean> => {
+): Promise<OriginRecord | null> => {
   const observedAt = new Date()
   const update = observationUpdate(candidate, canonical, observedAt)
+  const filter = {
+    ...originFilter(candidate),
+    $or: [
+      { lastSeenAt: { $exists: false } },
+      { lastSeenAt: { $lte: observedAt } },
+    ],
+  }
   for (let attempt = 0; attempt < ORIGIN_UPSERT_ATTEMPTS; attempt += 1) {
     try {
-      await MaterialOriginMapping.findOneAndUpdate(
-        originFilter(candidate),
+      const mapping = (await MaterialOriginMapping.findOneAndUpdate(
+        filter,
         update,
         { upsert: true, new: true, setDefaultsOnInsert: true },
-      )
-      return true
+      )) as unknown as OriginRecord | null
+      if (mapping?.materialId) return mapping
+    } catch (error: unknown) {
+      if (errorField(error, 'code') !== 11000) {
+        // Retry the same idempotent observation after transient ambiguity.
+        continue
+      }
+    }
+
+    try {
+      const winner = (await MaterialOriginMapping.findOne(
+        originFilter(candidate),
+      )) as unknown as OriginRecord | null
+      if (winner?.materialId) return winner
     } catch {
-      // Retry the same idempotent mapping write without touching media storage.
+      // Bounded retry also covers delayed visibility after a unique upsert race.
     }
   }
-  return false
+  return null
 }
 
 const cleanupOwnObject = async (key: string): Promise<boolean> => {
@@ -278,23 +310,110 @@ const cleanupOwnObject = async (key: string): Promise<boolean> => {
   return false
 }
 
-const mappingFailed = (): ExternalIngestionOutcome => ({
+const mappingFailed = (
+  category:
+    | 'origin_mapping_failed'
+    | 'origin_mapping_stale' = 'origin_mapping_failed',
+): ExternalIngestionOutcome => ({
   kind: 'failed',
   retryable: true,
-  category: 'origin_mapping_failed',
+  category,
 })
+
+const resolveOriginMaterial = async (
+  candidate: NormalizedGuangdadaAsset,
+  mapping: OriginRecord,
+  attemptedCanonical: MaterialRecord,
+): Promise<OriginResolution> => {
+  try {
+    if (mapping.materialId) {
+      const winner = await globalMaterialById(mapping.materialId)
+      if (winner) return { kind: 'resolved', material: winner }
+    }
+
+    const attempted = await globalMaterialById(attemptedCanonical._id)
+    if (!attempted) {
+      return { kind: 'failed', category: 'origin_mapping_stale' }
+    }
+
+    const repairFilter: Record<string, unknown> = {
+      ...originFilter(candidate),
+      materialId: mapping.materialId,
+      lastSeenAt:
+        mapping.lastSeenAt === undefined
+          ? { $exists: false }
+          : mapping.lastSeenAt,
+    }
+    const repaired = (await MaterialOriginMapping.findOneAndUpdate(
+      repairFilter as never,
+      { $set: { materialId: attempted._id } } as never,
+      { new: true },
+    )) as unknown as OriginRecord | null
+    const effective = repaired?.materialId
+      ? repaired
+      : ((await MaterialOriginMapping.findOne(
+          originFilter(candidate),
+        )) as unknown as OriginRecord | null)
+    if (!effective?.materialId) {
+      return { kind: 'failed', category: 'origin_mapping_stale' }
+    }
+    const active = await globalMaterialById(effective.materialId)
+    return active
+      ? { kind: 'resolved', material: active }
+      : { kind: 'failed', category: 'origin_mapping_stale' }
+  } catch {
+    return { kind: 'failed', category: 'origin_mapping_failed' }
+  }
+}
+
+const observeCanonical = async (
+  candidate: NormalizedGuangdadaAsset,
+  canonical: MaterialRecord,
+): Promise<OriginResolution> => {
+  const mapping = await upsertOrigin(candidate, canonical)
+  if (!mapping) return { kind: 'failed', category: 'origin_mapping_failed' }
+  return resolveOriginMaterial(candidate, mapping, canonical)
+}
 
 const mapToCanonical = async (
   candidate: NormalizedGuangdadaAsset,
   canonical: MaterialRecord,
   kind: 'contentReused' | 'created',
 ): Promise<ExternalIngestionOutcome> => {
-  if (!(await upsertOrigin(candidate, canonical))) return mappingFailed()
-  return { kind, materialId: materialId(canonical) }
+  const resolution = await observeCanonical(candidate, canonical)
+  if (resolution.kind === 'failed') return mappingFailed(resolution.category)
+  return {
+    kind:
+      materialId(resolution.material) === materialId(canonical)
+        ? kind
+        : 'contentReused',
+    materialId: materialId(resolution.material),
+  }
 }
 
 const activeGlobalBySha = async (sha256: string) =>
   findMaterial(buildActiveShaQuery(undefined, sha256))
+
+const activeGlobalByFingerprintKey = async (fingerprintKey: string) =>
+  findMaterial({
+    organizationId: { $in: [null] },
+    status: { $in: ACTIVE_MATERIAL_STATUSES },
+    fingerprintKey,
+  })
+
+const deletedGlobalByFingerprintKey = async (fingerprintKey: string) =>
+  findMaterial({
+    organizationId: { $in: [null] },
+    status: 'deleted',
+    fingerprintKey,
+  })
+
+const deletedGlobalBySha = async (sha256: string) =>
+  findMaterial({
+    organizationId: { $in: [null] },
+    status: 'deleted',
+    'fingerprint.sha256': sha256,
+  })
 
 const preDownloadMapping = async (
   candidate: NormalizedGuangdadaAsset,
@@ -308,11 +427,14 @@ const preDownloadMapping = async (
     _id: mapping.materialId,
   })
   if (isActiveGlobalMaterial(mappedMaterial)) {
-    if (!(await upsertOrigin(candidate, mappedMaterial))) return mappingFailed()
-    const stillActive = await globalMaterialById(mappedMaterial._id)
-    if (stillActive) {
-      return { kind: 'alreadySeen', materialId: materialId(stillActive) }
+    const resolution = await observeCanonical(candidate, mappedMaterial)
+    if (resolution.kind === 'resolved') {
+      return {
+        kind: 'alreadySeen',
+        materialId: materialId(resolution.material),
+      }
     }
+    if (resolution.category === 'origin_mapping_failed') return mappingFailed()
   }
 
   const staleSha = boundedString(mappedMaterial?.fingerprint?.sha256, 128)
@@ -379,6 +501,17 @@ const createMaterialFields = (
   }
 }
 
+const plannedExternalStorageKey = (
+  candidate: NormalizedGuangdadaAsset,
+  sha256: string,
+): string => {
+  const assetHash = createHash('sha256')
+    .update(`${candidate.provider}:${candidate.providerAssetKey}`)
+    .digest('hex')
+    .slice(0, 24)
+  return `global/external/guangdada/${sha256}/${assetHash}`
+}
+
 const ingestValidatedCandidate = async (
   candidate: NormalizedGuangdadaAsset,
 ): Promise<ExternalIngestionOutcome> => {
@@ -414,16 +547,23 @@ const ingestValidatedCandidate = async (
   const sha256 = createHash('sha256').update(downloaded.buffer).digest('hex')
   const md5 = createHash('md5').update(downloaded.buffer).digest('hex')
   const fingerprintKey = buildMaterialFingerprintKey(undefined, sha256)
+  const plannedStorageKey = plannedExternalStorageKey(candidate, sha256)
 
   let deletedContent: MaterialRecord | null = null
   try {
-    const canonical = await activeGlobalBySha(sha256)
-    if (canonical) return mapToCanonical(candidate, canonical, 'contentReused')
-    deletedContent = await findMaterial({
-      organizationId: { $in: [null] },
-      status: 'deleted',
-      $or: [{ fingerprintKey }, { 'fingerprint.sha256': sha256 }],
-    })
+    const exactCanonical = await activeGlobalByFingerprintKey(fingerprintKey)
+    if (exactCanonical) {
+      return mapToCanonical(candidate, exactCanonical, 'contentReused')
+    }
+    deletedContent = await deletedGlobalByFingerprintKey(fingerprintKey)
+    if (deletedContent) {
+      // The exact unique-key holder is authoritative over same-SHA legacy rows.
+    } else {
+      const canonical = await activeGlobalBySha(sha256)
+      if (canonical)
+        return mapToCanonical(candidate, canonical, 'contentReused')
+      deletedContent = await deletedGlobalBySha(sha256)
+    }
   } catch {
     return {
       kind: 'failed',
@@ -439,6 +579,7 @@ const ingestValidatedCandidate = async (
       originalName: path.basename(downloaded.filename),
       mimeType: downloaded.mimeType,
       folder: 'global/external/guangdada',
+      key: plannedStorageKey,
     })
   } catch {
     return {
@@ -447,14 +588,7 @@ const ingestValidatedCandidate = async (
       category: 'storage_upload_failed',
     }
   }
-  if (!upload.success || !upload.key || !upload.url) {
-    if (upload.key && !(await cleanupOwnObject(upload.key))) {
-      return {
-        kind: 'failed',
-        retryable: true,
-        category: 'storage_cleanup_failed',
-      }
-    }
+  if (!upload.success || upload.key !== plannedStorageKey || !upload.url) {
     return {
       kind: 'failed',
       retryable: true,
@@ -465,50 +599,84 @@ const ingestValidatedCandidate = async (
   const materialFields = createMaterialFields(
     candidate,
     downloaded,
-    { key: upload.key, url: upload.url },
+    { key: plannedStorageKey, url: upload.url },
     sha256,
     md5,
   )
 
-  const resolveLosingUpload = async (): Promise<ExternalIngestionOutcome> => {
-    let winner: MaterialRecord | null = null
+  type RestoreResult =
+    | { kind: 'restored'; material: MaterialRecord }
+    | { kind: 'conflict' }
+    | { kind: 'failed' }
+
+  const restoreDeletedMaterial = async (
+    holder: MaterialRecord,
+  ): Promise<RestoreResult> => {
     try {
-      winner = await activeGlobalBySha(sha256)
-    } catch {
-      // Cleanup is still mandatory for the upload owned by this attempt.
+      const restored = (await Material.findOneAndUpdate(
+        {
+          _id: holder._id,
+          organizationId: { $in: [null] },
+          status: 'deleted',
+        } as never,
+        {
+          $set: materialFields,
+          $unset: { deduplicatedInto: 1 },
+        } as never,
+        { new: true },
+      )) as unknown as MaterialRecord | null
+      return restored
+        ? { kind: 'restored', material: restored }
+        : { kind: 'conflict' }
+    } catch (error: unknown) {
+      return errorField(error, 'code') === 11000
+        ? { kind: 'conflict' }
+        : { kind: 'failed' }
     }
-    if (!(await cleanupOwnObject(upload.key))) {
+  }
+
+  const reconciliationFailed = (): ExternalIngestionOutcome => ({
+    kind: 'failed',
+    retryable: true,
+    category: 'canonical_reconciliation_failed',
+  })
+
+  const cleanupDifferentWinner = async (
+    winner: MaterialRecord,
+    kind: 'created' | 'contentReused' = 'contentReused',
+  ): Promise<ExternalIngestionOutcome> => {
+    if (materialStorageKey(winner) === plannedStorageKey) {
+      return mapToCanonical(candidate, winner, 'created')
+    }
+    if (!(await cleanupOwnObject(plannedStorageKey))) {
       return {
         kind: 'failed',
         retryable: true,
         category: 'storage_cleanup_failed',
       }
     }
-    if (!winner) {
-      return {
-        kind: 'failed',
-        retryable: true,
-        category: 'canonical_conflict_unresolved',
-      }
-    }
-    return mapToCanonical(candidate, winner, 'contentReused')
+    return mapToCanonical(candidate, winner, kind)
   }
 
-  if (deletedContent) {
-    let rehydrated: MaterialRecord | null
-    try {
-      rehydrated = (await Material.findOneAndUpdate(
-        {
-          _id: deletedContent._id,
+  const reconcileUnknownMaterialWrite =
+    async (): Promise<ExternalIngestionOutcome> => {
+      let committed: MaterialRecord | null
+      let winner: MaterialRecord | null
+      try {
+        committed = await findMaterial({
           organizationId: { $in: [null] },
-          status: 'deleted',
-        } as never,
-        { $set: materialFields } as never,
-        { new: true },
-      )) as unknown as MaterialRecord | null
-    } catch (error: unknown) {
-      if (errorField(error, 'code') === 11000) return resolveLosingUpload()
-      if (!(await cleanupOwnObject(upload.key))) {
+          status: { $in: ACTIVE_MATERIAL_STATUSES },
+          fingerprintKey,
+          'storage.key': plannedStorageKey,
+        })
+        if (committed) return mapToCanonical(candidate, committed, 'created')
+        winner = await activeGlobalByFingerprintKey(fingerprintKey)
+      } catch {
+        return reconciliationFailed()
+      }
+
+      if (winner) return cleanupDifferentWinner(winner)
+      if (!(await cleanupOwnObject(plannedStorageKey))) {
         return {
           kind: 'failed',
           retryable: true,
@@ -521,8 +689,56 @@ const ingestValidatedCandidate = async (
         category: 'canonical_write_failed',
       }
     }
-    if (!rehydrated) return resolveLosingUpload()
-    return mapToCanonical(candidate, rehydrated, 'created')
+
+  const resolveLosingUpload = async (): Promise<ExternalIngestionOutcome> => {
+    let reconciliationUnavailable = false
+    for (
+      let attempt = 0;
+      attempt < FINGERPRINT_HOLDER_LOOKUP_ATTEMPTS;
+      attempt += 1
+    ) {
+      try {
+        const activeExact = await activeGlobalByFingerprintKey(fingerprintKey)
+        if (activeExact) {
+          return cleanupDifferentWinner(activeExact)
+        }
+
+        const deletedExact = await deletedGlobalByFingerprintKey(fingerprintKey)
+        if (deletedExact) {
+          const restored = await restoreDeletedMaterial(deletedExact)
+          if (restored.kind === 'restored') {
+            return mapToCanonical(candidate, restored.material, 'created')
+          }
+          if (restored.kind === 'failed') {
+            return reconcileUnknownMaterialWrite()
+          }
+        }
+      } catch {
+        reconciliationUnavailable = true
+        // Bounded reread closes delayed unique-holder visibility races.
+      }
+    }
+
+    let winner: MaterialRecord | null = null
+    try {
+      winner = await activeGlobalBySha(sha256)
+    } catch {
+      return reconciliationFailed()
+    }
+    if (winner) return cleanupDifferentWinner(winner)
+    if (reconciliationUnavailable) return reconciliationFailed()
+    return {
+      kind: 'failed',
+      retryable: true,
+      category: 'canonical_conflict_unresolved',
+    }
+  }
+
+  if (deletedContent) {
+    const restored = await restoreDeletedMaterial(deletedContent)
+    if (restored.kind === 'conflict') return resolveLosingUpload()
+    if (restored.kind === 'failed') return reconcileUnknownMaterialWrite()
+    return mapToCanonical(candidate, restored.material, 'created')
   }
 
   let created: MaterialRecord
@@ -532,19 +748,7 @@ const ingestValidatedCandidate = async (
     )) as unknown as MaterialRecord
   } catch (error: unknown) {
     if (errorField(error, 'code') === 11000) return resolveLosingUpload()
-
-    if (!(await cleanupOwnObject(upload.key))) {
-      return {
-        kind: 'failed',
-        retryable: true,
-        category: 'storage_cleanup_failed',
-      }
-    }
-    return {
-      kind: 'failed',
-      retryable: true,
-      category: 'canonical_write_failed',
-    }
+    return reconcileUnknownMaterialWrite()
   }
 
   return mapToCanonical(candidate, created, 'created')
