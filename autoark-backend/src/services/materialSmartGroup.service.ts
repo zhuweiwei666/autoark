@@ -275,11 +275,20 @@ export const buildFacebookSmartGroupPipeline = (materialFilter: any): any[] => [
   },
 ]
 
-export const buildExternalSmartGroupPipeline = (): any[] => [
-  { $match: { provider: EXTERNAL_PROVIDER } },
+export const buildExternalSmartGroupPipeline = ({
+  materialCollectionName = Material.collection?.name || 'materials',
+}: {
+  materialCollectionName?: string
+} = {}): any[] => [
+  {
+    $match: {
+      provider: EXTERNAL_PROVIDER,
+      packageKey: { $regex: EXTERNAL_PACKAGE_KEY_PATTERN },
+    },
+  },
   {
     $lookup: {
-      from: Material.collection?.name || 'materials',
+      from: materialCollectionName,
       let: { materialId: '$materialId' },
       pipeline: [
         {

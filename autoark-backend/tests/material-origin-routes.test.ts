@@ -1,8 +1,10 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import fs from 'fs'
 import path from 'path'
+import { randomBytes } from 'crypto'
 import express from 'express'
 import request from 'supertest'
+import { Db, MongoClient, ObjectId } from 'mongodb'
 
 const mockMaterialAggregate = jest.fn()
 const mockMaterialFind = jest.fn()
@@ -128,6 +130,9 @@ jest.mock('../src/controllers/externalMaterial.controller', () => ({
 }))
 
 import materialRoutes from '../src/routes/material.routes'
+import logger from '../src/utils/logger'
+import { buildMaterialPagePipeline } from '../src/services/materialQuery.service'
+import { buildExternalSmartGroupPipeline } from '../src/services/materialSmartGroup.service'
 
 const app = express()
 app.use(express.json())
@@ -165,6 +170,25 @@ const valueAtPath = (value: any, pathText: string): any => {
     .split('.')
     .reduce((current, segment) => current?.[segment], value)
 }
+
+const comparableMongoValue = (value: any): any => {
+  if (value?.toHexString instanceof Function) return value.toHexString()
+  if (value instanceof Date) return value.toISOString()
+  if (Array.isArray(value)) return value.map(comparableMongoValue)
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, child]) => [
+        key,
+        comparableMongoValue(child),
+      ]),
+    )
+  }
+  return value
+}
+
+const mongoValuesEqual = (left: any, right: any): boolean =>
+  JSON.stringify(comparableMongoValue(left)) ===
+  JSON.stringify(comparableMongoValue(right))
 
 const evaluateMongoExpression = (
   expression: any,
@@ -260,6 +284,14 @@ const evaluateMongoExpression = (
       ).values(),
     ]
   }
+  if ('$setIntersection' in expression) {
+    const [left, right] = expression.$setIntersection.map((value: any) =>
+      evaluateMongoExpression(value, document, variables),
+    )
+    return left.filter((value: any) =>
+      right.some((candidate: any) => mongoValuesEqual(value, candidate)),
+    )
+  }
   if ('$map' in expression) {
     const input = evaluateMongoExpression(
       expression.$map.input,
@@ -297,8 +329,8 @@ const evaluateMongoExpression = (
       const [left, right] = expression[operator].map((value: any) =>
         evaluateMongoExpression(value, document, variables),
       )
-      if (operator === '$eq') return left === right
-      if (operator === '$ne') return left !== right
+      if (operator === '$eq') return mongoValuesEqual(left, right)
+      if (operator === '$ne') return !mongoValuesEqual(left, right)
       if (operator === '$gt') return left > right
       return right.includes(left)
     }
@@ -323,6 +355,494 @@ const evaluateMongoExpression = (
     ]),
   )
 }
+
+const matchesFixtureFilter = (
+  document: any,
+  filter: any,
+  variables: Record<string, any> = {},
+): boolean =>
+  Object.entries(filter).every(([pathText, expected]: [string, any]) => {
+    if (pathText === '$and') {
+      return expected.every((part: any) =>
+        matchesFixtureFilter(document, part, variables),
+      )
+    }
+    if (pathText === '$or') {
+      return expected.some((part: any) =>
+        matchesFixtureFilter(document, part, variables),
+      )
+    }
+    if (pathText === '$expr') {
+      return Boolean(evaluateMongoExpression(expected, document, variables))
+    }
+
+    const actual = valueAtPath(document, pathText)
+    if (expected instanceof RegExp) {
+      return expected.test(String(actual ?? ''))
+    }
+    if (expected && typeof expected === 'object' && !Array.isArray(expected)) {
+      return Object.entries(expected).every(
+        ([operator, operand]: [string, any]) => {
+          if (operator === '$exists') return (actual !== undefined) === operand
+          if (operator === '$in') {
+            const values = actual === undefined ? [null] : [actual].flat()
+            return values.some((value) =>
+              operand.some((candidate: any) =>
+                mongoValuesEqual(value, candidate),
+              ),
+            )
+          }
+          if (operator === '$ne') return !mongoValuesEqual(actual, operand)
+          if (operator === '$eq') return mongoValuesEqual(actual, operand)
+          if (operator === '$regex') {
+            const pattern =
+              operand instanceof RegExp
+                ? operand
+                : new RegExp(String(operand), expected.$options || '')
+            return pattern.test(String(actual ?? ''))
+          }
+          if (operator === '$options') return true
+          throw new Error(`Unsupported fixture match operator: ${operator}`)
+        },
+      )
+    }
+    return mongoValuesEqual(actual, expected)
+  })
+
+const fixtureProject = (
+  document: any,
+  specification: Record<string, any>,
+  variables: Record<string, any>,
+): any => {
+  const entries = Object.entries(specification)
+  const inclusion = entries.some(([, value]) => value !== 0)
+  if (!inclusion) {
+    const projected = { ...document }
+    for (const [pathText] of entries) delete projected[pathText]
+    return projected
+  }
+
+  const projected: Record<string, any> = {}
+  if (specification._id !== 0 && document._id !== undefined) {
+    projected._id = document._id
+  }
+  for (const [field, expression] of entries) {
+    if (field === '_id') continue
+    if (expression === 1) {
+      if (document[field] !== undefined) projected[field] = document[field]
+    } else if (expression !== 0) {
+      projected[field] = evaluateMongoExpression(
+        expression,
+        document,
+        variables,
+      )
+    }
+  }
+  return projected
+}
+
+const compareFixtureValues = (left: any, right: any): number => {
+  const a = comparableMongoValue(left)
+  const b = comparableMongoValue(right)
+  if (a === b) return 0
+  if (a === undefined || a === null) return -1
+  if (b === undefined || b === null) return 1
+  return a < b ? -1 : 1
+}
+
+const executeFixturePipeline = (
+  input: any[],
+  pipeline: any[],
+  collections: Record<string, any[]>,
+  variables: Record<string, any> = {},
+): any[] => {
+  let documents = [...input]
+  for (const stage of pipeline) {
+    if (stage.$match) {
+      documents = documents.filter((document) =>
+        matchesFixtureFilter(document, stage.$match, variables),
+      )
+    } else if (stage.$lookup) {
+      documents = documents.map((document) => {
+        const lookupVariables = Object.fromEntries(
+          Object.entries(stage.$lookup.let || {}).map(([name, expression]) => [
+            name,
+            evaluateMongoExpression(expression, document, variables),
+          ]),
+        )
+        return {
+          ...document,
+          [stage.$lookup.as]: executeFixturePipeline(
+            collections[stage.$lookup.from] || [],
+            stage.$lookup.pipeline || [],
+            collections,
+            { ...variables, ...lookupVariables },
+          ),
+        }
+      })
+    } else if (stage.$unwind) {
+      const pathText = String(
+        typeof stage.$unwind === 'string' ? stage.$unwind : stage.$unwind.path,
+      ).replace(/^\$/, '')
+      documents = documents.flatMap((document) => {
+        const values = valueAtPath(document, pathText)
+        return Array.isArray(values)
+          ? values.map((value) => ({ ...document, [pathText]: value }))
+          : []
+      })
+    } else if (stage.$group) {
+      const groups: Array<{ key: any; rows: any[] }> = []
+      for (const document of documents) {
+        const key = evaluateMongoExpression(
+          stage.$group._id,
+          document,
+          variables,
+        )
+        let group = groups.find((candidate) =>
+          mongoValuesEqual(candidate.key, key),
+        )
+        if (!group) {
+          group = { key, rows: [] }
+          groups.push(group)
+        }
+        group.rows.push(document)
+      }
+      documents = groups.map(({ key, rows }) => {
+        const grouped: Record<string, any> = { _id: key }
+        for (const [field, accumulator] of Object.entries(stage.$group)) {
+          if (field === '_id') continue
+          const [operator, expression] = Object.entries(
+            accumulator as Record<string, any>,
+          )[0]
+          const values = rows.map((row) =>
+            expression === '$$ROOT'
+              ? row
+              : evaluateMongoExpression(expression, row, variables),
+          )
+          if (operator === '$addToSet') {
+            grouped[field] = values.filter(
+              (value, index) =>
+                values.findIndex((candidate) =>
+                  mongoValuesEqual(candidate, value),
+                ) === index,
+            )
+          } else if (operator === '$max') {
+            grouped[field] = values.reduce((maximum, value) =>
+              compareFixtureValues(value, maximum) > 0 ? value : maximum,
+            )
+          } else if (operator === '$sum') {
+            grouped[field] = values.reduce(
+              (sum, value) => sum + Number(value),
+              0,
+            )
+          } else if (operator === '$first') {
+            grouped[field] = values[0]
+          } else {
+            throw new Error(`Unsupported fixture group operator: ${operator}`)
+          }
+        }
+        return grouped
+      })
+    } else if (stage.$project) {
+      documents = documents.map((document) =>
+        fixtureProject(document, stage.$project, variables),
+      )
+    } else if (stage.$sort) {
+      const sort = Object.entries(stage.$sort) as Array<[string, number]>
+      documents.sort((left, right) => {
+        for (const [pathText, direction] of sort) {
+          const compared = compareFixtureValues(
+            valueAtPath(left, pathText),
+            valueAtPath(right, pathText),
+          )
+          if (compared !== 0) return compared * direction
+        }
+        return 0
+      })
+    } else if (stage.$skip !== undefined) {
+      documents = documents.slice(stage.$skip)
+    } else if (stage.$limit !== undefined) {
+      documents = documents.slice(0, stage.$limit)
+    } else if (stage.$count) {
+      documents =
+        documents.length > 0 ? [{ [stage.$count]: documents.length }] : []
+    } else if (stage.$facet) {
+      const source = [...documents]
+      documents = [
+        Object.fromEntries(
+          Object.entries(stage.$facet).map(([name, facetPipeline]) => [
+            name,
+            executeFixturePipeline(
+              source,
+              facetPipeline as any[],
+              collections,
+              variables,
+            ),
+          ]),
+        ),
+      ]
+    } else if (stage.$replaceRoot) {
+      documents = documents.map((document) =>
+        evaluateMongoExpression(
+          stage.$replaceRoot.newRoot,
+          document,
+          variables,
+        ),
+      )
+    } else {
+      throw new Error(
+        `Unsupported fixture pipeline stage: ${Object.keys(stage)[0]}`,
+      )
+    }
+  }
+  return documents
+}
+
+const FIXTURE_MATERIAL_COLLECTION = 'fixture_materials'
+const FIXTURE_ORIGIN_COLLECTION = 'fixture_material_origins'
+const SECOND_PACKAGE_KEY = `pkg_${'b'.repeat(64)}`
+const fixtureIds = {
+  externalAlpha: new ObjectId('665000000000000000000101'),
+  externalBeta: new ObjectId('665000000000000000000102'),
+  externalImage: new ObjectId('665000000000000000000103'),
+  externalOtherPackage: new ObjectId('665000000000000000000104'),
+  facebookReused: new ObjectId('665000000000000000000105'),
+  normal: new ObjectId('665000000000000000000106'),
+  inactive: new ObjectId('665000000000000000000107'),
+  private: new ObjectId('665000000000000000000108'),
+  invalidPackage: new ObjectId('665000000000000000000109'),
+}
+
+const externalSource = {
+  platform: 'guangdada',
+  importedBy: 'external-material-sync',
+}
+
+const fixtureMaterials = [
+  {
+    _id: fixtureIds.externalAlpha,
+    name: 'Alpha',
+    organizationId: null,
+    status: 'ready',
+    type: 'video',
+    source: externalSource,
+  },
+  {
+    _id: fixtureIds.externalBeta,
+    name: 'Beta',
+    organizationId: null,
+    status: 'uploaded',
+    type: 'video',
+    source: externalSource,
+  },
+  {
+    _id: fixtureIds.externalImage,
+    name: 'Delta image',
+    organizationId: null,
+    status: 'ready',
+    type: 'image',
+    source: externalSource,
+  },
+  {
+    _id: fixtureIds.externalOtherPackage,
+    name: 'Other package',
+    organizationId: null,
+    status: 'ready',
+    type: 'video',
+    source: externalSource,
+  },
+  {
+    _id: fixtureIds.facebookReused,
+    name: 'Gamma',
+    organizationId: null,
+    status: 'ready',
+    type: 'video',
+    source: externalSource,
+    facebookMappings: [{ accountId: '1234' }],
+  },
+  {
+    _id: fixtureIds.normal,
+    name: 'Normal upload',
+    organizationId: null,
+    status: 'ready',
+    type: 'video',
+    source: { platform: 'upload' },
+  },
+  {
+    _id: fixtureIds.inactive,
+    name: 'Inactive external',
+    organizationId: null,
+    status: 'processing',
+    type: 'video',
+    source: externalSource,
+  },
+  {
+    _id: fixtureIds.private,
+    name: 'Private external',
+    organizationId: new ObjectId('665000000000000000000999'),
+    status: 'ready',
+    type: 'video',
+    source: externalSource,
+  },
+  {
+    _id: fixtureIds.invalidPackage,
+    name: 'Invalid package',
+    organizationId: null,
+    status: 'ready',
+    type: 'video',
+    source: externalSource,
+  },
+]
+
+const fixtureOrigins = [
+  {
+    _id: new ObjectId('665000000000000000000201'),
+    materialId: fixtureIds.externalAlpha,
+    provider: 'guangdada',
+    providerAssetKey: 'alpha-1',
+    packageKey: PACKAGE_KEY,
+    packageName: 'com.example.one',
+    productName: 'Example One',
+  },
+  {
+    _id: new ObjectId('665000000000000000000202'),
+    materialId: fixtureIds.externalAlpha,
+    provider: 'guangdada',
+    providerAssetKey: 'alpha-2',
+    packageKey: PACKAGE_KEY,
+    packageName: 'com.example.one',
+    productName: 'Example One',
+  },
+  {
+    _id: new ObjectId('665000000000000000000203'),
+    materialId: fixtureIds.externalBeta,
+    provider: 'guangdada',
+    providerAssetKey: 'beta-1',
+    packageKey: PACKAGE_KEY,
+    packageName: 'com.example.one',
+    productName: 'Example One',
+  },
+  {
+    _id: new ObjectId('665000000000000000000204'),
+    materialId: fixtureIds.externalImage,
+    provider: 'guangdada',
+    providerAssetKey: 'image-1',
+    packageKey: PACKAGE_KEY,
+    packageName: 'com.example.one',
+    productName: 'Example One',
+  },
+  {
+    _id: new ObjectId('665000000000000000000205'),
+    materialId: fixtureIds.externalOtherPackage,
+    provider: 'guangdada',
+    providerAssetKey: 'other-1',
+    packageKey: SECOND_PACKAGE_KEY,
+    packageName: 'com.example.two',
+    productName: 'Example Two',
+  },
+  {
+    _id: new ObjectId('665000000000000000000206'),
+    materialId: fixtureIds.facebookReused,
+    provider: 'guangdada',
+    providerAssetKey: 'reused-1',
+    packageKey: PACKAGE_KEY,
+    packageName: 'com.example.one',
+    productName: 'Example One',
+  },
+  {
+    _id: new ObjectId('665000000000000000000207'),
+    materialId: fixtureIds.inactive,
+    provider: 'guangdada',
+    providerAssetKey: 'inactive-1',
+    packageKey: PACKAGE_KEY,
+  },
+  {
+    _id: new ObjectId('665000000000000000000208'),
+    materialId: fixtureIds.private,
+    provider: 'guangdada',
+    providerAssetKey: 'private-1',
+    packageKey: PACKAGE_KEY,
+  },
+  {
+    _id: new ObjectId('665000000000000000000209'),
+    materialId: fixtureIds.invalidPackage,
+    provider: 'guangdada',
+    providerAssetKey: 'invalid-1',
+    packageKey: 'pkg_invalid',
+  },
+]
+
+const externalPageQuery = {
+  filter: {
+    organizationId: { $in: [null] },
+    status: { $in: ['uploaded', 'ready'] },
+    type: 'video',
+    $or: [{ name: { $regex: /a/i } }],
+  },
+  sort: { name: 1, _id: 1 } as const,
+  skip: 1,
+  pageSize: 1,
+  externalPackageKey: PACKAGE_KEY,
+}
+
+describe('production material aggregation pipeline semantics', () => {
+  it('counts unique active global materials for valid package groups only', () => {
+    const pipeline = buildExternalSmartGroupPipeline({
+      materialCollectionName: FIXTURE_MATERIAL_COLLECTION,
+    })
+    const [result] = executeFixturePipeline(fixtureOrigins, pipeline, {
+      [FIXTURE_MATERIAL_COLLECTION]: fixtureMaterials,
+    })
+
+    expect(result.global).toEqual([{ count: 5 }])
+    expect(result.packages).toEqual([
+      expect.objectContaining({ _id: PACKAGE_KEY, count: 4 }),
+      expect.objectContaining({ _id: SECOND_PACKAGE_KEY, count: 1 }),
+    ])
+    expect(result.packages).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ _id: 'pkg_invalid' })]),
+    )
+  })
+
+  it('applies package, search, type, sort, page, and total through the production page pipeline', () => {
+    const pipeline = buildMaterialPagePipeline({
+      ...externalPageQuery,
+      originCollectionName: FIXTURE_ORIGIN_COLLECTION,
+    })
+    const [result] = executeFixturePipeline(fixtureMaterials, pipeline, {
+      [FIXTURE_ORIGIN_COLLECTION]: fixtureOrigins,
+    })
+
+    expect(result.data.map((row: any) => row._id)).toEqual([
+      fixtureIds.externalBeta,
+    ])
+    expect(result.total).toEqual([{ count: 3 }])
+  })
+
+  it('hides external-only materials from the ordinary list but retains Facebook reuse', () => {
+    const pipeline = buildMaterialPagePipeline({
+      filter: {
+        organizationId: { $in: [null] },
+        status: { $in: ['uploaded', 'ready'] },
+        type: 'video',
+      },
+      sort: { name: 1, _id: 1 },
+      skip: 0,
+      pageSize: 20,
+      excludeExternalOnly: true,
+      originCollectionName: FIXTURE_ORIGIN_COLLECTION,
+    })
+    const [result] = executeFixturePipeline(fixtureMaterials, pipeline, {
+      [FIXTURE_ORIGIN_COLLECTION]: fixtureOrigins,
+    })
+
+    expect(result.data.map((row: any) => row._id)).toEqual([
+      fixtureIds.facebookReused,
+      fixtureIds.normal,
+    ])
+    expect(result.total).toEqual([{ count: 2 }])
+  })
+})
 
 describe('restricted external material queries and origin routes', () => {
   beforeEach(() => {
@@ -697,29 +1217,65 @@ describe('restricted external material queries and origin routes', () => {
   it('sanitizes material-list and origin database failures', async () => {
     const sentinel =
       'mongodb://user:secret@private-host/materials?api_key=unsafe'
-    mockMaterialAggregate.mockRejectedValueOnce(new Error(sentinel))
-    const listResponse = await request(app)
-      .get('/api/materials')
-      .set('x-test-role', 'ordinary')
-
-    expect(listResponse.status).toBe(500)
-    expect(listResponse.body).toEqual({
-      success: false,
-      error: '获取素材列表失败，请稍后重试',
+    const failure = Object.assign(new Error(sentinel), {
+      cause: new Error('mongodb://cause-user:cause-secret@private-host'),
+      query: { uri: sentinel },
     })
-    expect(JSON.stringify(listResponse.body)).not.toContain(sentinel)
+    const loggerSpy = jest
+      .spyOn(logger, 'error')
+      .mockImplementation(() => logger)
 
-    mockOriginAggregate.mockRejectedValueOnce(new Error(sentinel))
-    const originsResponse = await request(app)
-      .get(`/api/materials/${VALID_MATERIAL_ID}/origins`)
-      .set('x-test-role', 'reader')
+    try {
+      mockMaterialAggregate.mockRejectedValueOnce(failure)
+      const listResponse = await request(app)
+        .get('/api/materials')
+        .set('x-test-role', 'ordinary')
 
-    expect(originsResponse.status).toBe(500)
-    expect(originsResponse.body).toEqual({
-      success: false,
-      error: '获取素材来源失败，请稍后重试',
-    })
-    expect(JSON.stringify(originsResponse.body)).not.toContain(sentinel)
+      expect(listResponse.status).toBe(500)
+      expect(listResponse.body).toEqual({
+        success: false,
+        error: '获取素材列表失败，请稍后重试',
+      })
+      expect(JSON.stringify(listResponse.body)).not.toContain(sentinel)
+
+      mockMaterialAggregate.mockRejectedValueOnce(failure)
+      const externalListResponse = await request(app)
+        .get('/api/materials')
+        .set('x-test-role', 'reader')
+        .query({
+          smartGroupType: 'external-package',
+          smartGroupKey: PACKAGE_KEY,
+        })
+
+      expect(externalListResponse.status).toBe(500)
+      expect(externalListResponse.body).toEqual({
+        success: false,
+        error: '获取素材列表失败，请稍后重试',
+      })
+      expect(JSON.stringify(externalListResponse.body)).not.toContain(sentinel)
+
+      mockOriginAggregate.mockRejectedValueOnce(failure)
+      const originsResponse = await request(app)
+        .get(`/api/materials/${VALID_MATERIAL_ID}/origins`)
+        .set('x-test-role', 'reader')
+
+      expect(originsResponse.status).toBe(500)
+      expect(originsResponse.body).toEqual({
+        success: false,
+        error: '获取素材来源失败，请稍后重试',
+      })
+      expect(JSON.stringify(originsResponse.body)).not.toContain(sentinel)
+      expect(loggerSpy.mock.calls).toEqual([
+        ['[Material] Get list failed'],
+        ['[Material] Get list failed'],
+        ['[Material] Get origins failed'],
+      ])
+      expect(JSON.stringify(loggerSpy.mock.calls)).not.toMatch(
+        /mongodb:\/\/|user:secret|cause-user|private-host|api_key|unsafe/i,
+      )
+    } finally {
+      loggerSpy.mockRestore()
+    }
   })
 
   it('registers external controls and origins before the dynamic GET route', () => {
@@ -743,3 +1299,71 @@ describe('restricted external material queries and origin routes', () => {
     }
   })
 })
+
+const runMongoIntegration =
+  process.env.RUN_MATERIAL_MONGO_INTEGRATION === '1' &&
+  Boolean(process.env.TEST_MONGO_URI)
+const describeMongoIntegration = runMongoIntegration ? describe : describe.skip
+
+describeMongoIntegration(
+  'material aggregation Mongo integration (double gated)',
+  () => {
+    jest.setTimeout(30_000)
+
+    const namespace = randomBytes(12).toString('hex')
+    const databaseName = `autoark_task8_${namespace}`
+    const materialCollectionName = `materials_${namespace}`
+    const originCollectionName = `origins_${namespace}`
+    let client: MongoClient | undefined
+    let database: Db | undefined
+
+    beforeAll(async () => {
+      try {
+        client = new MongoClient(process.env.TEST_MONGO_URI as string, {
+          serverSelectionTimeoutMS: 10_000,
+        })
+        await client.connect()
+        database = client.db(databaseName)
+        await database
+          .collection(materialCollectionName)
+          .insertMany(fixtureMaterials)
+        await database
+          .collection(originCollectionName)
+          .insertMany(fixtureOrigins)
+      } catch {
+        throw new Error('Material Mongo integration setup failed')
+      }
+    })
+
+    afterAll(async () => {
+      if (database) await database.dropDatabase()
+      if (client) await client.close()
+    })
+
+    it('executes the production smart-group and page pipelines against isolated collections', async () => {
+      const smartGroups = await database!
+        .collection(originCollectionName)
+        .aggregate(buildExternalSmartGroupPipeline({ materialCollectionName }))
+        .toArray()
+      expect(smartGroups[0].global).toEqual([{ count: 5 }])
+      expect(smartGroups[0].packages).toEqual([
+        expect.objectContaining({ _id: PACKAGE_KEY, count: 4 }),
+        expect.objectContaining({ _id: SECOND_PACKAGE_KEY, count: 1 }),
+      ])
+
+      const page = await database!
+        .collection(materialCollectionName)
+        .aggregate(
+          buildMaterialPagePipeline({
+            ...externalPageQuery,
+            originCollectionName,
+          }),
+        )
+        .toArray()
+      expect(page[0].data.map((row: any) => row._id)).toEqual([
+        fixtureIds.externalBeta,
+      ])
+      expect(page[0].total).toEqual([{ count: 3 }])
+    })
+  },
+)

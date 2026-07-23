@@ -1097,8 +1097,8 @@ export const getMaterialSmartGroups = async (req: Request, res: Response) => {
     }
 
     res.json({ success: true, data: groups })
-  } catch (error: any) {
-    logger.error('[Material] Get smart groups failed:', error)
+  } catch {
+    logger.error('[Material] Get smart groups failed')
     res.status(500).json({ success: false, error: '获取素材智能分组失败，请稍后重试' })
   }
 }

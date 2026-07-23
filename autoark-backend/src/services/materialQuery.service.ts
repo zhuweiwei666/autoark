@@ -70,9 +70,9 @@ const externalOnlyExpression = (): any => ({
   ],
 })
 
-const externalOriginLookup = (): any => ({
+const externalOriginLookup = (originCollectionName: string): any => ({
   $lookup: {
-    from: MaterialOriginMapping.collection?.name || 'materialoriginmappings',
+    from: originCollectionName,
     let: { materialId: '$_id' },
     pipeline: [
       {
@@ -92,9 +92,12 @@ const externalOriginLookup = (): any => ({
   },
 })
 
-const externalPackageLookup = (packageKey: string): any => ({
+const externalPackageLookup = (
+  packageKey: string,
+  originCollectionName: string,
+): any => ({
   $lookup: {
-    from: MaterialOriginMapping.collection?.name || 'materialoriginmappings',
+    from: originCollectionName,
     let: { materialId: '$_id' },
     pipeline: [
       {
@@ -125,12 +128,14 @@ export const buildMaterialPagePipeline = ({
   pageSize,
   externalPackageKey,
   excludeExternalOnly = false,
-}: MaterialPageQuery): any[] => {
+  originCollectionName = MaterialOriginMapping.collection?.name ||
+    'materialoriginmappings',
+}: MaterialPageQuery & { originCollectionName?: string }): any[] => {
   const pipeline: any[] = [{ $match: filter }]
 
   if (externalPackageKey) {
     pipeline.push(
-      externalPackageLookup(externalPackageKey),
+      externalPackageLookup(externalPackageKey, originCollectionName),
       { $match: { '__externalPackageOrigins.0': { $exists: true } } },
       { $project: { __externalPackageOrigins: 0 } },
     )
@@ -138,7 +143,7 @@ export const buildMaterialPagePipeline = ({
 
   if (excludeExternalOnly) {
     pipeline.push(
-      externalOriginLookup(),
+      externalOriginLookup(originCollectionName),
       { $match: { $expr: { $not: [externalOnlyExpression()] } } },
       { $project: { __externalOrigins: 0 } },
     )

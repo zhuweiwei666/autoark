@@ -648,7 +648,12 @@ describe('Facebook material smart groups', () => {
     )
 
     const pipeline = mockOriginAggregate.mock.calls[0][0]
-    expect(pipeline[0]).toEqual({ $match: { provider: 'guangdada' } })
+    expect(pipeline[0]).toEqual({
+      $match: {
+        provider: 'guangdada',
+        packageKey: { $regex: /^pkg_[a-f0-9]{64}$/ },
+      },
+    })
     expect(pipeline).toEqual(expect.arrayContaining([
       expect.objectContaining({
         $lookup: expect.objectContaining({
@@ -738,6 +743,10 @@ describe('Facebook material smart groups', () => {
         error: '获取素材智能分组失败，请稍后重试',
       })
       expect(JSON.stringify((res.json as jest.Mock).mock.calls[0][0])).not.toContain(sentinel)
+      expect(loggerSpy).toHaveBeenCalledWith('[Material] Get smart groups failed')
+      expect(JSON.stringify(loggerSpy.mock.calls)).not.toMatch(
+        /mongodb:\/\/|private-host|credential|secret/i,
+      )
     } finally {
       loggerSpy.mockRestore()
     }
@@ -753,7 +762,10 @@ describe('Facebook material smart groups', () => {
     try {
       await (materialController as any).getMaterialSmartGroups(createRequest(), res as any)
 
-      expect(loggerSpy).toHaveBeenCalledWith('[Material] Get smart groups failed:', failure)
+      expect(loggerSpy).toHaveBeenCalledWith('[Material] Get smart groups failed')
+      expect(JSON.stringify(loggerSpy.mock.calls)).not.toMatch(
+        /mongodb:\/\/|internal-user|sentinel-secret|private-host/i,
+      )
       expect(res.status).toHaveBeenCalledWith(500)
       expect(res.json).toHaveBeenCalledWith({
         success: false,
