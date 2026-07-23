@@ -183,6 +183,13 @@ router.post('/record-ad-mapping', materialController.recordAdMapping)
 // 批量记录广告-素材映射
 router.post('/record-ad-mappings', materialController.recordAdMappingsBatch)
 
+// 受限外部来源摘要（必须位于动态 /:id 路由之前）
+router.get(
+  '/:id/origins',
+  externalMaterialController.requireExternalMaterialRead,
+  (req, res) => materialController.getMaterialOrigins(req, res),
+)
+
 // 素材详情（含完整数据）
 router.get('/:id/full-data', materialController.getFullData)
 

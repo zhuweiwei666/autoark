@@ -39,8 +39,15 @@ import {
 } from '../utils/materialUploadLimits'
 import {
   buildFacebookSmartGroupFilter,
+  getExternalMaterialSmartGroups,
   getFacebookMaterialSmartGroups,
 } from '../services/materialSmartGroup.service'
+import {
+  isExternalPackageKey,
+  queryMaterialOrigins,
+  queryMaterialPage,
+} from '../services/materialQuery.service'
+import { canReadExternalMaterials } from '../utils/materialPermission'
 
 /**
  * 素材管理控制器
@@ -83,6 +90,7 @@ const MATERIAL_NOTES_MAX_LENGTH = 2000
 const MATERIAL_ID_MAX_LENGTH = 80
 const MATERIAL_BATCH_ID_MAX_COUNT = 100
 const MATERIAL_OBJECT_ID_MAX_LENGTH = 24
+const MATERIAL_PAGE_MAX = 10_000
 const MATERIAL_MAPPING_BATCH_MAX_COUNT = 500
 const MATERIAL_MAPPING_ID_MAX_LENGTH = 128
 const MATERIAL_MAPPING_HASH_MAX_LENGTH = 200
@@ -953,7 +961,39 @@ export const getMaterialList = async (req: Request, res: Response) => {
       sortBy = 'createdAt',
       sortOrder = 'desc',
     } = req.query
-    const { page, pageSize, skip } = parsePagination(req.query)
+    const rawSmartGroupType = typeof smartGroupType === 'string'
+      ? smartGroupType
+      : ''
+    const rawSmartGroupKey = typeof smartGroupKey === 'string'
+      ? smartGroupKey
+      : ''
+    const wantsExternalPackage = rawSmartGroupType === 'external-package'
+
+    if (
+      wantsExternalPackage
+      && (!req.user || !canReadExternalMaterials(req.user))
+    ) {
+      return res.status(403).json({ success: false, message: '权限不足' })
+    }
+
+    if (
+      (smartGroupType !== undefined && typeof smartGroupType !== 'string')
+      || (smartGroupKey !== undefined && typeof smartGroupKey !== 'string')
+      || !['', 'facebook-account', 'external-package'].includes(rawSmartGroupType)
+      || (rawSmartGroupType === '' && rawSmartGroupKey !== '')
+      || (rawSmartGroupType !== '' && rawSmartGroupKey === '')
+      || (wantsExternalPackage && !isExternalPackageKey(rawSmartGroupKey))
+    ) {
+      return res.status(400).json({
+        success: false,
+        error: '素材筛选参数无效',
+      })
+    }
+
+    const parsedPagination = parsePagination(req.query)
+    const page = Math.min(MATERIAL_PAGE_MAX, parsedPagination.page)
+    const pageSize = parsedPagination.pageSize
+    const skip = (page - 1) * pageSize
     
     // 根据用户权限过滤
     const safeStatus = status === undefined
@@ -963,39 +1003,65 @@ export const getMaterialList = async (req: Request, res: Response) => {
     const safeFolder = pickSafeQueryString(folder, MATERIAL_TEXT_FILTER_MAX_LENGTH)
     const safeTags = pickSafeTagList(tags)
     const safeSearch = pickSafeRegexLiteral(search, MATERIAL_TEXT_FILTER_MAX_LENGTH)
-    const safeSmartGroupType = pickAllowedString(smartGroupType, ['facebook-account'] as const, '')
     const safeSmartGroupKey = pickSafeQueryString(smartGroupKey, MATERIAL_SMART_GROUP_KEY_MAX_LENGTH)
-    let filter: any = combineFilters({ status: safeStatus }, getMaterialFilter(req))
+    let filter: any = wantsExternalPackage
+      ? {
+        organizationId: { $in: [null] },
+        status: { $in: ['uploaded', 'ready'] },
+      }
+      : combineFilters({ status: safeStatus }, getMaterialFilter(req))
 
-    if (safeType) filter = combineFilters(filter, { type: safeType })
-    if (safeFolder) filter = combineFilters(filter, { folder: safeFolder })
+    if (wantsExternalPackage && status !== undefined) {
+      filter = combineFilters(filter, { status: safeStatus })
+    }
+    if (safeType) {
+      filter = wantsExternalPackage
+        ? { ...filter, type: safeType }
+        : combineFilters(filter, { type: safeType })
+    }
+    if (safeFolder) {
+      filter = wantsExternalPackage
+        ? { ...filter, folder: safeFolder }
+        : combineFilters(filter, { folder: safeFolder })
+    }
     if (safeTags.length > 0) {
-      filter = combineFilters(filter, { tags: { $in: safeTags } })
+      filter = wantsExternalPackage
+        ? { ...filter, tags: { $in: safeTags } }
+        : combineFilters(filter, { tags: { $in: safeTags } })
     }
     if (safeSearch) {
-      filter = combineFilters(filter, {
+      const searchFilter = {
         $or: [
           { name: { $regex: safeSearch, $options: 'i' } },
           { notes: { $regex: safeSearch, $options: 'i' } },
         ],
-      })
+      }
+      filter = wantsExternalPackage
+        ? { ...filter, ...searchFilter }
+        : combineFilters(filter, searchFilter)
     }
-    if (safeSmartGroupType === 'facebook-account' && safeSmartGroupKey) {
+    if (rawSmartGroupType === 'facebook-account' && safeSmartGroupKey) {
       filter = combineFilters(filter, buildFacebookSmartGroupFilter(safeSmartGroupKey))
     }
     
-    const sort: any = {}
+    const sort: Record<string, 1 | -1> = {}
     const safeSortBy = MATERIAL_SORT_FIELDS.has(String(sortBy)) ? String(sortBy) : 'createdAt'
-    sort[safeSortBy] = sortOrder === 'asc' ? 1 : -1
-    
-    const [list, total] = await Promise.all([
-      Material.find(filter)
-        .sort(sort)
-        .skip(skip)
-        .limit(pageSize)
-        .lean(),
-      Material.countDocuments(filter),
-    ])
+    const safeSortOrder = sortOrder === 'asc' ? 1 : -1
+    sort[safeSortBy] = safeSortOrder
+    if (safeSortBy !== '_id') sort._id = safeSortOrder
+
+    const { list, total } = await queryMaterialPage({
+      filter,
+      sort,
+      skip,
+      pageSize,
+      ...(wantsExternalPackage ? { externalPackageKey: rawSmartGroupKey } : {}),
+      excludeExternalOnly: (
+        !wantsExternalPackage
+        && Boolean(req.user)
+        && !canReadExternalMaterials(req.user!)
+      ),
+    })
     
     res.json({
       success: true,
@@ -1007,9 +1073,12 @@ export const getMaterialList = async (req: Request, res: Response) => {
         totalPages: Math.ceil(total / pageSize),
       },
     })
-  } catch (error: any) {
-    logger.error('[Material] Get list failed:', error)
-    res.status(500).json({ success: false, error: error.message })
+  } catch {
+    logger.error('[Material] Get list failed')
+    res.status(500).json({
+      success: false,
+      error: '获取素材列表失败，请稍后重试',
+    })
   }
 }
 
@@ -1023,11 +1092,43 @@ export const getMaterialSmartGroups = async (req: Request, res: Response) => {
       materialFilter: getMaterialFilter(req),
       accountFilter: scopedOrgFilter(req),
     })
+    if (req.user && canReadExternalMaterials(req.user)) {
+      groups.push(...await getExternalMaterialSmartGroups())
+    }
 
     res.json({ success: true, data: groups })
   } catch (error: any) {
     logger.error('[Material] Get smart groups failed:', error)
     res.status(500).json({ success: false, error: '获取素材智能分组失败，请稍后重试' })
+  }
+}
+
+/**
+ * 获取受限的外部素材来源摘要
+ * GET /api/materials/:id/origins
+ */
+export const getMaterialOrigins = async (req: Request, res: Response) => {
+  if (!req.user || !canReadExternalMaterials(req.user)) {
+    return res.status(403).json({ success: false, message: '权限不足' })
+  }
+
+  const materialId = sanitizeMaterialObjectId(req.params.id)
+  if (!materialId) {
+    return res.status(400).json({ success: false, error: '请求无效' })
+  }
+
+  try {
+    const result = await queryMaterialOrigins(materialId)
+    if (!result) {
+      return res.status(404).json({ success: false, error: '素材不可用' })
+    }
+    return res.json({ success: true, data: result })
+  } catch {
+    logger.error('[Material] Get origins failed')
+    return res.status(500).json({
+      success: false,
+      error: '获取素材来源失败，请稍后重试',
+    })
   }
 }
 

@@ -1,5 +1,7 @@
 import Account from '../models/Account'
+import ExternalMaterialSyncState from '../models/ExternalMaterialSyncState'
 import Material from '../models/Material'
+import MaterialOriginMapping from '../models/MaterialOriginMapping'
 import { getAccountIdsForQuery, normalizeForStorage } from '../utils/accountId'
 import { combineFilters } from '../utils/accessControl'
 
@@ -9,6 +11,7 @@ export interface MaterialSmartGroupNode {
   label: string
   count: number
   status?: 'active' | 'disabled' | 'unavailable' | 'paused'
+  paused?: boolean
   children?: MaterialSmartGroupNode[]
 }
 
@@ -23,6 +26,8 @@ export const FACEBOOK_UNASSIGNED_SMART_GROUP_KEY = '__unassigned__'
 const ACTIVE_MATERIAL_STATUSES = ['uploaded', 'ready']
 const SMART_GROUP_KEY_MAX_LENGTH = 128
 const SMART_GROUP_LABEL_MAX_LENGTH = 120
+const EXTERNAL_PACKAGE_KEY_PATTERN = /^pkg_[a-f0-9]{64}$/
+const EXTERNAL_PROVIDER = 'guangdada'
 
 const asTrimmedStringExpression = (input: any): any => ({
   $trim: {
@@ -270,11 +275,77 @@ export const buildFacebookSmartGroupPipeline = (materialFilter: any): any[] => [
   },
 ]
 
+export const buildExternalSmartGroupPipeline = (): any[] => [
+  { $match: { provider: EXTERNAL_PROVIDER } },
+  {
+    $lookup: {
+      from: Material.collection?.name || 'materials',
+      let: { materialId: '$materialId' },
+      pipeline: [
+        {
+          $match: {
+            $expr: { $eq: ['$_id', '$$materialId'] },
+            organizationId: { $in: [null] },
+            status: { $in: ACTIVE_MATERIAL_STATUSES },
+          },
+        },
+        { $project: { _id: 1 } },
+      ],
+      as: 'material',
+    },
+  },
+  { $match: { 'material.0': { $exists: true } } },
+  {
+    $facet: {
+      global: [
+        { $group: { _id: null, materialIds: { $addToSet: '$materialId' } } },
+        { $project: { _id: 0, count: { $size: '$materialIds' } } },
+      ],
+      packages: [
+        {
+          $group: {
+            _id: '$packageKey',
+            materialIds: { $addToSet: '$materialId' },
+            packageName: { $max: '$packageName' },
+            productName: { $max: '$productName' },
+          },
+        },
+        {
+          $project: {
+            _id: 1,
+            packageName: 1,
+            productName: 1,
+            count: { $size: '$materialIds' },
+          },
+        },
+        { $sort: { productName: 1, packageName: 1, _id: 1 } },
+      ],
+    },
+  },
+]
+
 const safeLabelText = (value: any): string => String(value || '')
+  // eslint-disable-next-line no-control-regex
   .replace(/[\u0000-\u001F\u007F]/g, ' ')
   .replace(/\s+/g, ' ')
   .trim()
   .slice(0, SMART_GROUP_LABEL_MAX_LENGTH)
+
+const safeCount = (value: any): number => {
+  const count = Number(value)
+  return Number.isFinite(count) && count > 0
+    ? Math.min(10_000_000, Math.trunc(count))
+    : 0
+}
+
+const externalPackageLabel = (productName: any, packageName: any): string => {
+  const product = safeLabelText(productName)
+  const packageLabel = safeLabelText(packageName)
+  if (product && packageLabel && product !== packageLabel) {
+    return safeLabelText(`${product} · ${packageLabel}`)
+  }
+  return product || packageLabel || '未识别产品'
+}
 
 const safeLastFour = (accountId: string): string => {
   const suffix = accountId.slice(-4).replace(/[^a-zA-Z0-9_-]/g, '•')
@@ -386,4 +457,48 @@ export const getFacebookMaterialSmartGroups = async ({
   }
 
   return [root]
+}
+
+export const getExternalMaterialSmartGroups = async (): Promise<MaterialSmartGroupNode[]> => {
+  const [aggregationRows, state] = await Promise.all([
+    MaterialOriginMapping.aggregate(buildExternalSmartGroupPipeline()),
+    ExternalMaterialSyncState.findOne({ provider: EXTERNAL_PROVIDER })
+      .select('paused')
+      .lean(),
+  ])
+  const aggregation = aggregationRows?.[0]
+  const globalCount = safeCount(aggregation?.global?.[0]?.count)
+  const packages = (aggregation?.packages || [])
+    .map((row: any): MaterialSmartGroupNode | undefined => {
+      const key = String(row?._id || '').trim()
+      if (!EXTERNAL_PACKAGE_KEY_PATTERN.test(key)) return undefined
+      return {
+        key,
+        type: 'external-package',
+        label: externalPackageLabel(row?.productName, row?.packageName),
+        count: safeCount(row?.count),
+      }
+    })
+    .filter((row: MaterialSmartGroupNode | undefined): row is MaterialSmartGroupNode => Boolean(row))
+    .sort((a: MaterialSmartGroupNode, b: MaterialSmartGroupNode) => (
+      a.label.localeCompare(b.label) || a.key.localeCompare(b.key)
+    ))
+  const paused = state?.paused === true
+  const provider: MaterialSmartGroupNode = {
+    key: EXTERNAL_PROVIDER,
+    type: 'external-provider',
+    label: '广大大',
+    count: globalCount,
+    paused,
+    status: paused ? 'paused' : 'active',
+    children: packages,
+  }
+
+  return [{
+    key: 'external',
+    type: 'external-root',
+    label: '外部优质素材',
+    count: globalCount,
+    children: [provider],
+  }]
 }

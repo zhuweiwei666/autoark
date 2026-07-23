@@ -5,6 +5,10 @@ const mockMaterialAggregate = jest.fn()
 const mockMaterialFind = jest.fn()
 const mockMaterialCountDocuments = jest.fn()
 const mockAccountFind = jest.fn()
+const mockOriginAggregate = jest.fn()
+const mockStateLean = jest.fn()
+const mockStateSelect = jest.fn(() => ({ lean: mockStateLean }))
+const mockStateFindOne = jest.fn(() => ({ select: mockStateSelect }))
 
 jest.mock('../src/models/Material', () => ({
   __esModule: true,
@@ -20,6 +24,20 @@ jest.mock('../src/models/Account', () => ({
   default: {
     find: mockAccountFind,
     findOne: jest.fn(),
+  },
+}))
+
+jest.mock('../src/models/MaterialOriginMapping', () => ({
+  __esModule: true,
+  default: {
+    aggregate: mockOriginAggregate,
+  },
+}))
+
+jest.mock('../src/models/ExternalMaterialSyncState', () => ({
+  __esModule: true,
+  default: {
+    findOne: mockStateFindOne,
   },
 }))
 
@@ -60,12 +78,14 @@ import logger from '../src/utils/logger'
 
 const ORG_ID = '665000000000000000000001'
 
-const createRequest = (query: any = {}) => ({
+const createRequest = (query: any = {}, user: any = {}) => ({
   query,
   user: {
     userId: '665000000000000000000002',
     organizationId: ORG_ID,
     role: 'org_admin',
+    permissions: [],
+    ...user,
   },
 }) as any
 
@@ -234,6 +254,8 @@ describe('Facebook material smart groups', () => {
     jest.clearAllMocks()
     mockMaterialFind.mockReturnValue(mockListQuery())
     mockMaterialCountDocuments.mockResolvedValue(0)
+    mockOriginAggregate.mockResolvedValue([{ global: [], packages: [] }])
+    mockStateLean.mockResolvedValue({ paused: false })
   })
 
   it('resolves raw visible material fixtures before grouping and counts A+B once globally', async () => {
@@ -482,7 +504,7 @@ describe('Facebook material smart groups', () => {
       smartGroupKey: '  act_1234  ',
     }), res as any)
 
-    const filter = mockMaterialFind.mock.calls[0][0]
+    const filter = mockMaterialAggregate.mock.calls[0][0][0].$match
     expect(filter).toEqual({
       $and: [
         {
@@ -514,7 +536,7 @@ describe('Facebook material smart groups', () => {
       smartGroupKey: key,
     }), res as any)
 
-    const filter = mockMaterialFind.mock.calls[0][0]
+    const filter = mockMaterialAggregate.mock.calls[0][0][0].$match
     const appliedSmartGroupFilter = filter.$and[1]
     if (kind === 'all') {
       expect(appliedSmartGroupFilter).toEqual({
@@ -547,7 +569,178 @@ describe('Facebook material smart groups', () => {
       success: true,
       data: [expect.objectContaining({ key: 'facebook', type: 'facebook-root' })],
     })
+    const serialized = JSON.stringify((res.json as jest.Mock).mock.calls[0][0])
+    expect(serialized).not.toMatch(/external-root|external-provider|external-package|广大大|外部优质素材/)
+    expect(mockOriginAggregate).not.toHaveBeenCalled()
+    expect(mockStateFindOne).not.toHaveBeenCalled()
     expect(mockMaterialFind).not.toHaveBeenCalled()
+  })
+
+  it('appends a restricted external/provider/package tree with unique material counts and safe labels', async () => {
+    const service = loadSmartGroupService()
+    expect(service).toBeDefined()
+    expect(service.buildExternalSmartGroupPipeline).toEqual(expect.any(Function))
+
+    const packageA = `pkg_${'a'.repeat(64)}`
+    const packageB = `pkg_${'b'.repeat(64)}`
+    mockMaterialAggregate.mockResolvedValue([{ global: [], accounts: [] }])
+    mockAccountQuery([])
+    mockOriginAggregate.mockResolvedValue([{
+      global: [{ count: 3 }],
+      packages: [
+        {
+          _id: packageB,
+          productName: '  Same Name ',
+          packageName: 'Same Name',
+          count: 1,
+        },
+        {
+          _id: packageA,
+          productName: ' Product\u0000Name ',
+          packageName: ' com.example.package ',
+          count: 2,
+        },
+      ],
+    }])
+    mockStateLean.mockResolvedValue({ paused: false, pauseReason: 'must-not-leak' })
+    const res = createResponse()
+
+    await materialController.getMaterialSmartGroups(createRequest({}, {
+      permissions: ['materials:external:read'],
+    }), res as any)
+
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      data: [
+        expect.objectContaining({ key: 'facebook', type: 'facebook-root' }),
+        {
+          key: 'external',
+          type: 'external-root',
+          label: '外部优质素材',
+          count: 3,
+          children: [{
+            key: 'guangdada',
+            type: 'external-provider',
+            label: '广大大',
+            count: 3,
+            paused: false,
+            status: 'active',
+            children: [
+              {
+                key: packageA,
+                type: 'external-package',
+                label: 'Product Name · com.example.package',
+                count: 2,
+              },
+              {
+                key: packageB,
+                type: 'external-package',
+                label: 'Same Name',
+                count: 1,
+              },
+            ],
+          }],
+        },
+      ],
+    })
+    expect(JSON.stringify((res.json as jest.Mock).mock.calls[0][0])).not.toMatch(
+      /pauseReason|providerAssetKey|redis|job|run|config/i,
+    )
+
+    const pipeline = mockOriginAggregate.mock.calls[0][0]
+    expect(pipeline[0]).toEqual({ $match: { provider: 'guangdada' } })
+    expect(pipeline).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        $lookup: expect.objectContaining({
+          from: 'materials',
+          pipeline: expect.arrayContaining([
+            {
+              $match: {
+                $expr: { $eq: ['$_id', '$$materialId'] },
+                organizationId: { $in: [null] },
+                status: { $in: ['uploaded', 'ready'] },
+              },
+            },
+          ]),
+        }),
+      }),
+    ]))
+    const packageGroup = pipeline
+      .find((stage: any) => stage.$facet)
+      .$facet.packages.find((stage: any) => stage.$group)
+    expect(packageGroup.$group).toMatchObject({
+      _id: '$packageKey',
+      materialIds: { $addToSet: '$materialId' },
+    })
+    const packageProjection = pipeline
+      .find((stage: any) => stage.$facet)
+      .$facet.packages.find((stage: any) => stage.$project)
+    expect(packageProjection.$project.count).toEqual({ $size: '$materialIds' })
+    expect(JSON.stringify(pipeline)).not.toContain('providerAssetKey')
+  })
+
+  it('returns only a safe paused boolean and status badge for the external provider', async () => {
+    const packageKey = `pkg_${'c'.repeat(64)}`
+    mockMaterialAggregate.mockResolvedValue([{ global: [], accounts: [] }])
+    mockAccountQuery([])
+    mockOriginAggregate.mockResolvedValue([{
+      global: [{ count: 1 }],
+      packages: [{
+        _id: packageKey,
+        productName: '',
+        packageName: '',
+        count: 1,
+      }],
+    }])
+    mockStateLean.mockResolvedValue({
+      paused: true,
+      pauseReason: 'manual-secret-reason',
+      recurringEnabled: false,
+      backfillCursor: 'secret-cursor',
+    })
+    const res = createResponse()
+
+    await materialController.getMaterialSmartGroups(createRequest({}, {
+      permissions: ['materials:external:read'],
+    }), res as any)
+
+    const body = (res.json as jest.Mock).mock.calls[0][0]
+    expect(body.data[1].children[0]).toEqual(expect.objectContaining({
+      paused: true,
+      status: 'paused',
+      children: [expect.objectContaining({
+        key: packageKey,
+        label: '未识别产品',
+      })],
+    }))
+    expect(JSON.stringify(body)).not.toMatch(
+      /manual-secret|pauseReason|recurringEnabled|backfillCursor|secret-cursor/i,
+    )
+  })
+
+  it('fails closed with a generic smart-group error when external provider state cannot be read', async () => {
+    const sentinel = 'mongodb://private-host/state?credential=secret'
+    mockMaterialAggregate.mockResolvedValue([{ global: [], accounts: [] }])
+    mockAccountQuery([])
+    mockOriginAggregate.mockResolvedValue([{ global: [], packages: [] }])
+    mockStateLean.mockRejectedValueOnce(new Error(sentinel))
+    const loggerSpy = jest.spyOn(logger, 'error').mockImplementation(() => logger)
+    const res = createResponse()
+
+    try {
+      await materialController.getMaterialSmartGroups(createRequest({}, {
+        permissions: ['materials:external:read'],
+      }), res as any)
+
+      expect(res.status).toHaveBeenCalledWith(500)
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        error: '获取素材智能分组失败，请稍后重试',
+      })
+      expect(JSON.stringify((res.json as jest.Mock).mock.calls[0][0])).not.toContain(sentinel)
+    } finally {
+      loggerSpy.mockRestore()
+    }
   })
 
   it('logs smart-group failures without exposing infrastructure details to the caller', async () => {
