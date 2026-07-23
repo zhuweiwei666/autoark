@@ -1,5 +1,20 @@
 import { useState, useEffect, useRef } from 'react'
+import { useAuth } from '../contexts/AuthContext'
 import { authFetch } from '../services/api'
+import {
+  buildMaterialQuery,
+  EXTERNAL_SYNC_MODES,
+  loadExternalMaterialStatus,
+  loadMaterialOrigins,
+  loadMaterialSmartGroups,
+  MaterialSmartGroupRequestError,
+  requestExternalMaterialSync,
+  setExternalMaterialPaused,
+  type ExternalMaterialStatus,
+  type MaterialOriginsResult,
+  type MaterialSelection,
+  type MaterialSmartGroupNode,
+} from '../services/materialSmartGroups'
 
 const API_BASE = '/api'
 
@@ -90,6 +105,14 @@ interface Material {
   folder: string
   usageCount: number
   createdAt: string
+  source?: {
+    platform?: string
+    externalAccountId?: string
+  }
+  facebookMappings?: Array<{ accountId?: string }>
+  usage?: {
+    accounts?: string[]
+  }
 }
 
 interface Folder {
@@ -102,15 +125,23 @@ interface Folder {
 }
 
 export default function MaterialLibraryPage() {
+  const { user, isSuperAdmin } = useAuth()
   const [materials, setMaterials] = useState<Material[]>([])
   const [folders, setFolders] = useState<Folder[]>([])
   const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
   
-  // 当前选中的文件夹路径
-  const [currentPath, setCurrentPath] = useState<string>('')
+  const [selection, setSelection] = useState<MaterialSelection>({ kind: 'all' })
+  const currentPath = selection.kind === 'folder' ? selection.path : ''
+  const setCurrentPath = (path: string) => {
+    setSelection(path ? { kind: 'folder', path } : { kind: 'all' })
+    setPage(1)
+  }
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set())
+  const [smartGroups, setSmartGroups] = useState<MaterialSmartGroupNode[]>([])
+  const [smartGroupsLoading, setSmartGroupsLoading] = useState(true)
+  const [smartGroupsError, setSmartGroupsError] = useState(false)
   
   // 筛选
   const [filter, setFilter] = useState({ type: '', search: '' })
@@ -122,6 +153,13 @@ export default function MaterialLibraryPage() {
   // 选中状态
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [viewMaterial, setViewMaterial] = useState<Material | null>(null)
+  const [showOriginDetails, setShowOriginDetails] = useState(false)
+  const [origins, setOrigins] = useState<MaterialOriginsResult | null>(null)
+  const [originsLoading, setOriginsLoading] = useState(false)
+  const [originsError, setOriginsError] = useState<'forbidden' | 'unavailable' | null>(null)
+  const [externalStatus, setExternalStatus] = useState<ExternalMaterialStatus | null>(null)
+  const [externalStatusError, setExternalStatusError] = useState(false)
+  const [externalActionPending, setExternalActionPending] = useState(false)
   
   // 配置状态
   const [configStatus, setConfigStatus] = useState<{ configured: boolean; missing: string[] } | null>(null)
@@ -135,15 +173,58 @@ export default function MaterialLibraryPage() {
   
   const fileInputRef = useRef<HTMLInputElement>(null)
   const newFolderInputRef = useRef<HTMLInputElement>(null)
+  const canReadExternal = isSuperAdmin || Boolean(
+    user?.permissions?.includes('materials:external:read') ||
+    user?.permissions?.includes('materials:external:manage'),
+  )
+  const canManageExternal = isSuperAdmin ||
+    Boolean(user?.permissions?.includes('materials:external:manage'))
   
   useEffect(() => {
     checkConfig()
     loadFolders()
+    void refreshSmartGroups()
   }, [])
   
   useEffect(() => {
     loadMaterials()
-  }, [currentPath, filter, page])
+  }, [selection, filter, page])
+
+  useEffect(() => {
+    if (!canManageExternal) {
+      setExternalStatus(null)
+      return
+    }
+    void refreshExternalStatus()
+  }, [canManageExternal])
+
+  useEffect(() => {
+    setOrigins(null)
+    setOriginsError(null)
+    if (!viewMaterial || !canReadExternal || !showOriginDetails) return
+
+    let cancelled = false
+    setOriginsLoading(true)
+    loadMaterialOrigins(viewMaterial._id)
+      .then((result) => {
+        if (!cancelled) setOrigins(result)
+      })
+      .catch((error) => {
+        if (cancelled) return
+        if (error instanceof MaterialSmartGroupRequestError && error.status === 403) {
+          setOriginsError('forbidden')
+        } else {
+          setOriginsError('unavailable')
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setOriginsLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [viewMaterial?._id, canReadExternal, showOriginDetails])
   
   useEffect(() => {
     if ((creatingInParent !== null || creatingInParent === '') && newFolderInputRef.current) {
@@ -157,6 +238,72 @@ export default function MaterialLibraryPage() {
     document.addEventListener('click', handleClick)
     return () => document.removeEventListener('click', handleClick)
   }, [])
+
+  const refreshSmartGroups = async () => {
+    setSmartGroupsLoading(true)
+    setSmartGroupsError(false)
+    try {
+      setSmartGroups(await loadMaterialSmartGroups())
+    } catch {
+      setSmartGroups([])
+      setSmartGroupsError(true)
+    } finally {
+      setSmartGroupsLoading(false)
+    }
+  }
+
+  const refreshExternalStatus = async () => {
+    setExternalStatusError(false)
+    try {
+      setExternalStatus(await loadExternalMaterialStatus())
+    } catch {
+      setExternalStatus(null)
+      setExternalStatusError(true)
+    }
+  }
+
+  const selectSmartGroup = (group: MaterialSmartGroupNode) => {
+    if (group.type !== 'facebook-account' && group.type !== 'external-package') return
+    setSelection({
+      kind: 'smart',
+      type: group.type,
+      key: group.key,
+      label: group.label,
+    })
+    setSelectedIds([])
+    setPage(1)
+  }
+
+  const handleExternalSync = async (dryRun: boolean) => {
+    const action = dryRun ? '试运行' : '立即同步 10 条素材'
+    if (!confirm(`确定要${action}吗？`)) return
+    setExternalActionPending(true)
+    try {
+      await requestExternalMaterialSync({
+        ...(dryRun ? EXTERNAL_SYNC_MODES.dryRun : EXTERNAL_SYNC_MODES.syncNow),
+      })
+      alert(`${action}请求已提交`)
+      await refreshExternalStatus()
+    } catch (error: any) {
+      alert(error?.message || `${action}失败`)
+    } finally {
+      setExternalActionPending(false)
+    }
+  }
+
+  const handleExternalPause = async (paused: boolean) => {
+    const action = paused ? '暂停同步' : '恢复同步'
+    if (!confirm(`确定要${action}吗？`)) return
+    setExternalActionPending(true)
+    try {
+      await setExternalMaterialPaused(paused)
+      await Promise.all([refreshExternalStatus(), refreshSmartGroups()])
+    } catch (error: any) {
+      alert(error?.message || `${action}失败`)
+    } finally {
+      setExternalActionPending(false)
+    }
+  }
   
   const checkConfig = async () => {
     try {
@@ -186,13 +333,13 @@ export default function MaterialLibraryPage() {
   const loadMaterials = async () => {
     setLoading(true)
     try {
-      const params = new URLSearchParams({
-        page: String(page),
-        pageSize: String(pageSize),
+      const params = buildMaterialQuery({
+        selection,
+        page,
+        pageSize,
+        type: filter.type,
+        search: filter.search,
       })
-      if (filter.type) params.append('type', filter.type)
-      if (currentPath) params.append('folder', currentPath)
-      if (filter.search) params.append('search', filter.search)
       
       const res = await authFetch(`${API_BASE}/materials?${params}`)
       const data = await res.json()
@@ -524,6 +671,7 @@ export default function MaterialLibraryPage() {
   
   // 获取当前路径下的子文件夹（用于右侧内容区显示）
   const getCurrentSubfolders = (): Folder[] => {
+    if (selection.kind === 'smart') return []
     if (!currentPath) {
       // 根目录时，返回所有根级文件夹
       return rootFolders
@@ -537,6 +685,89 @@ export default function MaterialLibraryPage() {
   }
   
   const currentSubfolders = getCurrentSubfolders()
+  const hasExternalRoot = smartGroups.some((group) => group.type === 'external-root')
+
+  const materialFacebookAccountIds = (material: Material) => {
+    const mapped = (material.facebookMappings || [])
+      .map((mapping) => mapping.accountId?.trim())
+      .filter((accountId): accountId is string => Boolean(accountId))
+    const fallback = material.source?.externalAccountId
+      ? [material.source.externalAccountId]
+      : material.usage?.accounts || []
+    return [...new Set(mapped.length > 0 ? mapped : fallback)]
+  }
+
+  const materialSourceBadges = (material: Material) => {
+    const badges: string[] = []
+    const platform = material.source?.platform?.trim().toLowerCase()
+    if (platform === 'facebook' || materialFacebookAccountIds(material).length > 0) {
+      badges.push('Facebook')
+    }
+    if (
+      platform === 'guangdada' ||
+      (selection.kind === 'smart' && selection.type === 'external-package')
+    ) {
+      badges.push('广大大')
+    }
+    return badges
+  }
+
+  const smartGroupStatusLabel = (group: MaterialSmartGroupNode) => {
+    if (group.status === 'disabled') return '已停用'
+    if (group.status === 'unavailable') return '不可用'
+    if (group.status === 'paused' || group.paused) return '同步已暂停'
+    return null
+  }
+
+  const renderSmartGroupNode = (group: MaterialSmartGroupNode, depth = 0) => {
+    const selectable = group.type === 'facebook-account' || group.type === 'external-package'
+    const isSelected = selection.kind === 'smart' &&
+      selection.type === group.type &&
+      selection.key === group.key
+    const sourceLabel = group.type === 'facebook-root'
+      ? 'Facebook'
+      : group.type === 'external-root'
+        ? '外部优质素材'
+        : group.label
+    const statusLabel = smartGroupStatusLabel(group)
+
+    return (
+      <div key={`${group.type}:${group.key}`}>
+        <button
+          type="button"
+          disabled={!selectable}
+          onClick={() => selectSmartGroup(group)}
+          className={`w-full rounded px-2 py-1.5 text-sm flex items-center gap-2 ${
+            isSelected
+              ? 'bg-indigo-100 text-indigo-700'
+              : selectable
+                ? 'text-slate-700 hover:bg-slate-100'
+                : 'text-slate-600 cursor-default'
+          }`}
+          style={{ paddingLeft: `${8 + depth * 14}px` }}
+        >
+          <span
+            className={`flex h-5 w-5 items-center justify-center rounded ${
+              group.type.startsWith('external')
+                ? 'bg-violet-100 text-violet-700'
+                : 'bg-blue-100 text-blue-700'
+            }`}
+            aria-hidden="true"
+          >
+            {group.type.startsWith('external') ? '◆' : 'f'}
+          </span>
+          <span className="min-w-0 flex-1 truncate text-left">{sourceLabel}</span>
+          {statusLabel && (
+            <span className="rounded bg-slate-200 px-1.5 py-0.5 text-[10px] text-slate-600">
+              {statusLabel}
+            </span>
+          )}
+          <span className="text-xs text-slate-400">{group.count}</span>
+        </button>
+        {group.children?.map((child) => renderSmartGroupNode(child, depth + 1))}
+      </div>
+    )
+  }
   
   // 渲染文件夹树节点
   const renderFolderNode = (folder: Folder, depth: number = 0) => {
@@ -673,11 +904,12 @@ export default function MaterialLibraryPage() {
           className="hidden"
           onChange={(e) => handleUpload(e.target.files)}
         />
-        <button
-          onClick={() => fileInputRef.current?.click()}
-          disabled={uploading}
-          className="px-3 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1.5 text-sm relative overflow-hidden min-w-[80px]"
-        >
+        {selection.kind !== 'smart' && (
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploading}
+            className="px-3 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1.5 text-sm relative overflow-hidden min-w-[80px]"
+          >
           {uploading && (
             <div 
               className="absolute inset-0 bg-blue-500 transition-all duration-300"
@@ -702,21 +934,25 @@ export default function MaterialLibraryPage() {
               </>
             )}
           </span>
-        </button>
+          </button>
+        )}
         
-        <div className="w-px h-6 bg-slate-200" />
+        {selection.kind !== 'smart' && (
+          <>
+            <div className="w-px h-6 bg-slate-200" />
+            <button
+              onClick={() => { setCreatingInParent(''); setNewFolderName('') }}
+              className="px-3 py-1.5 text-slate-700 hover:bg-slate-100 rounded flex items-center gap-1.5 text-sm"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-4 h-4">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 10.5v6m3-3H9m4.06-7.19l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
+              </svg>
+              新建文件夹
+            </button>
+          </>
+        )}
         
-        <button
-          onClick={() => { setCreatingInParent(''); setNewFolderName('') }}
-          className="px-3 py-1.5 text-slate-700 hover:bg-slate-100 rounded flex items-center gap-1.5 text-sm"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-4 h-4">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 10.5v6m3-3H9m4.06-7.19l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
-          </svg>
-          新建文件夹
-        </button>
-        
-        {selectedIds.length > 0 && (
+        {selection.kind !== 'smart' && selectedIds.length > 0 && (
           <>
             <div className="w-px h-6 bg-slate-200" />
             
@@ -806,7 +1042,9 @@ export default function MaterialLibraryPage() {
             <button
               onClick={() => { setCurrentPath(''); setPage(1) }}
               className={`w-full px-2 py-1.5 rounded flex items-center gap-2 text-sm ${
-                currentPath === '' ? 'bg-blue-100 text-blue-700' : 'hover:bg-slate-100 text-slate-700'
+                selection.kind === 'all'
+                  ? 'bg-blue-100 text-blue-700'
+                  : 'hover:bg-slate-100 text-slate-700'
               }`}
             >
               <span className="w-4" />
@@ -816,6 +1054,20 @@ export default function MaterialLibraryPage() {
               <span className="flex-1 text-left">全部文件</span>
               <span className="text-xs text-slate-400">{totalCount}</span>
             </button>
+
+            <div className="mt-2 border-t border-slate-200 pt-2">
+              <div className="flex items-center justify-between px-2 py-1 text-xs uppercase tracking-wider text-slate-400">
+                <span>智能分组</span>
+                <span className="normal-case">只读</span>
+              </div>
+              {smartGroupsLoading ? (
+                <div className="px-2 py-3 text-xs text-slate-400">智能分组加载中...</div>
+              ) : smartGroupsError ? (
+                <div className="px-2 py-3 text-xs text-rose-500">智能分组暂不可用</div>
+              ) : (
+                smartGroups.map((group) => renderSmartGroupNode(group))
+              )}
+            </div>
             
             <div className="mt-2 pt-2 border-t border-slate-200">
               <div className="px-2 py-1 text-xs text-slate-400 uppercase tracking-wider flex items-center justify-between">
@@ -864,6 +1116,15 @@ export default function MaterialLibraryPage() {
             <button onClick={() => { setCurrentPath(''); setPage(1) }} className="hover:text-blue-600">
               素材库
             </button>
+            {selection.kind === 'smart' && (
+              <>
+                <span>/</span>
+                <span className="font-medium text-indigo-700">{selection.label}</span>
+                <span className="rounded bg-indigo-50 px-1.5 py-0.5 text-xs text-indigo-600">
+                  只读
+                </span>
+              </>
+            )}
             {currentPath && currentPath.split('/').map((part, i, arr) => {
               const path = arr.slice(0, i + 1).join('/')
               return (
@@ -882,10 +1143,81 @@ export default function MaterialLibraryPage() {
               {currentPath && currentSubfolders.length > 0 && `${currentSubfolders.length} 个文件夹`}
               {currentPath && currentSubfolders.length > 0 && total > 0 && '，'}
               {total > 0 && `${total} 个素材`}
-              {!currentPath && `${totalCount} 项`}
+              {selection.kind === 'all' && `${totalCount} 项`}
               {currentPath && currentSubfolders.length === 0 && total === 0 && '0 项'}
+              {selection.kind === 'smart' && total === 0 && '0 个素材'}
             </span>
           </div>
+
+          {canManageExternal && hasExternalRoot && (
+            <div className="mb-4 rounded-lg border border-violet-200 bg-violet-50 p-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="mr-auto">
+                  <div className="text-sm font-medium text-violet-900">广大大同步</div>
+                  {externalStatusError ? (
+                    <div className="text-xs text-rose-600">同步状态暂不可用</div>
+                  ) : externalStatus ? (
+                    <div className="mt-0.5 text-xs text-violet-700">
+                      {externalStatus.paused ? '同步已暂停' : '同步运行中'}
+                      {externalStatus.lastRun && (
+                        <>
+                          {' · 最近任务 '}
+                          {externalStatus.lastRun.status}
+                          {' · 发现 '}
+                          {externalStatus.lastRun.counters.discovered}
+                          {' · 下载 '}
+                          {externalStatus.lastRun.counters.downloaded}
+                          {' · 复用 '}
+                          {externalStatus.lastRun.counters.contentReused}
+                          {' · 新增 '}
+                          {externalStatus.lastRun.counters.newlyCreated}
+                          {' · 失败 '}
+                          {externalStatus.lastRun.counters.failed}
+                        </>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="text-xs text-violet-700">同步状态加载中...</div>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  disabled={externalActionPending}
+                  onClick={() => handleExternalSync(true)}
+                  className="rounded border border-violet-300 bg-white px-2.5 py-1.5 text-xs text-violet-700 disabled:opacity-50"
+                >
+                  试运行
+                </button>
+                <button
+                  type="button"
+                  disabled={externalActionPending || externalStatus?.paused}
+                  onClick={() => handleExternalSync(false)}
+                  className="rounded bg-violet-700 px-2.5 py-1.5 text-xs text-white disabled:opacity-50"
+                >
+                  立即同步
+                </button>
+                {externalStatus?.paused ? (
+                  <button
+                    type="button"
+                    disabled={externalActionPending}
+                    onClick={() => handleExternalPause(false)}
+                    className="rounded border border-emerald-300 bg-white px-2.5 py-1.5 text-xs text-emerald-700 disabled:opacity-50"
+                  >
+                    恢复同步
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={externalActionPending}
+                    onClick={() => handleExternalPause(true)}
+                    className="rounded border border-rose-300 bg-white px-2.5 py-1.5 text-xs text-rose-700 disabled:opacity-50"
+                  >
+                    暂停同步
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
           
           {/* Subfolders Grid - 显示当前路径下的子文件夹 */}
           {currentPath && currentSubfolders.length > 0 && (
@@ -939,13 +1271,17 @@ export default function MaterialLibraryPage() {
               <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1" stroke="currentColor" className="w-16 h-16 mb-4">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
               </svg>
-              <p>文件夹为空</p>
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                className="mt-4 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm"
-              >
-                上传素材
-              </button>
+              <p>
+                {selection.kind === 'smart' ? '该智能分组暂无素材' : '文件夹为空'}
+              </p>
+              {selection.kind !== 'smart' && (
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="mt-4 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm"
+                >
+                  上传素材
+                </button>
+              )}
             </div>
           ) : materials.length === 0 && currentSubfolders.length > 0 ? (
             // 只有子文件夹，没有素材时，不显示"文件夹为空"
@@ -960,32 +1296,35 @@ export default function MaterialLibraryPage() {
                       selectedIds.includes(m._id) ? 'ring-2 ring-blue-500 rounded-lg' : ''
                     }`}
                     onClick={(e) => {
-                      if (e.ctrlKey || e.metaKey) {
+                      if (selection.kind !== 'smart' && (e.ctrlKey || e.metaKey)) {
                         toggleSelect(m._id)
                       } else {
                         setViewMaterial(m)
+                        setShowOriginDetails(false)
                       }
                     }}
                   >
                     {/* Checkbox */}
-                    <div
-                      className={`absolute top-1 left-1 z-10 transition-opacity ${
-                        selectedIds.includes(m._id) ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
-                      }`}
-                      onClick={(e) => { e.stopPropagation(); toggleSelect(m._id) }}
-                    >
-                      <div className={`w-5 h-5 rounded border-2 flex items-center justify-center ${
-                        selectedIds.includes(m._id) 
-                          ? 'bg-blue-600 border-blue-600' 
-                          : 'bg-white/90 border-slate-300'
-                      }`}>
-                        {selectedIds.includes(m._id) && (
-                          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="3" stroke="white" className="w-3 h-3">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
-                          </svg>
-                        )}
+                    {selection.kind !== 'smart' && (
+                      <div
+                        className={`absolute top-1 left-1 z-10 transition-opacity ${
+                          selectedIds.includes(m._id) ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+                        }`}
+                        onClick={(e) => { e.stopPropagation(); toggleSelect(m._id) }}
+                      >
+                        <div className={`w-5 h-5 rounded border-2 flex items-center justify-center ${
+                          selectedIds.includes(m._id)
+                            ? 'bg-blue-600 border-blue-600'
+                            : 'bg-white/90 border-slate-300'
+                        }`}>
+                          {selectedIds.includes(m._id) && (
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="3" stroke="white" className="w-3 h-3">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                            </svg>
+                          )}
+                        </div>
                       </div>
-                    </div>
+                    )}
                     
                     {/* Preview */}
                     <div className="aspect-square bg-slate-100 rounded-lg overflow-hidden">
@@ -1000,11 +1339,40 @@ export default function MaterialLibraryPage() {
                         <VideoThumbnail src={m.storage.url} className="w-full h-full" />
                       )}
                     </div>
+
+                    <div className="mt-1 flex flex-wrap items-center justify-center gap-1">
+                      {materialSourceBadges(m).map((badge) => (
+                        <span
+                          key={badge}
+                          className={`rounded px-1.5 py-0.5 text-[10px] ${
+                            badge === 'Facebook'
+                              ? 'bg-blue-50 text-blue-700'
+                              : 'bg-violet-50 text-violet-700'
+                          }`}
+                          title={`来源：${badge}`}
+                        >
+                          {badge}
+                        </span>
+                      ))}
+                      {materialFacebookAccountIds(m).length > 1 && (
+                        <span
+                          className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-600"
+                          title={`关联账户：${materialFacebookAccountIds(m).join('、')}`}
+                        >
+                          关联账户 {materialFacebookAccountIds(m).length}
+                        </span>
+                      )}
+                    </div>
                     
                     {/* Name */}
                     <p className="mt-1 text-xs text-slate-600 truncate text-center" title={m.name}>
                       {m.name}
                     </p>
+                    {selection.kind === 'smart' && selection.type === 'external-package' && (
+                      <p className="mt-0.5 truncate text-center text-[10px] text-violet-600">
+                        产品/包：{selection.label}
+                      </p>
+                    )}
                   </div>
                 ))}
               </div>
@@ -1125,7 +1493,78 @@ export default function MaterialLibraryPage() {
                   <span className="text-slate-500">上传时间：</span>
                   <span className="ml-2">{new Date(viewMaterial.createdAt).toLocaleString('zh-CN')}</span>
                 </div>
+                <div>
+                  <span className="text-slate-500">来源：</span>
+                  <span className="ml-2">
+                    {materialSourceBadges(viewMaterial).join('、') || '手动上传'}
+                  </span>
+                </div>
+                {materialFacebookAccountIds(viewMaterial).length > 0 && (
+                  <div>
+                    <span className="text-slate-500">关联账户：</span>
+                    <span className="ml-2">
+                      {materialFacebookAccountIds(viewMaterial).length} 个
+                    </span>
+                  </div>
+                )}
               </div>
+              {materialFacebookAccountIds(viewMaterial).length > 0 && (
+                <details className="mt-3 rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm">
+                  <summary className="cursor-pointer text-blue-700">查看 Facebook 关联账户</summary>
+                  <div className="mt-2 break-all text-xs text-blue-800">
+                    {materialFacebookAccountIds(viewMaterial).join('、')}
+                  </div>
+                </details>
+              )}
+              {canReadExternal && !showOriginDetails && (
+                <button
+                  type="button"
+                  onClick={() => setShowOriginDetails(true)}
+                  className="mt-3 rounded-lg border border-violet-200 px-3 py-2 text-sm text-violet-700 hover:bg-violet-50"
+                >
+                  查看外部来源
+                </button>
+              )}
+              {canReadExternal && showOriginDetails && (
+                <div className="mt-3 rounded-lg border border-violet-100 bg-violet-50 p-3 text-sm">
+                  <div className="font-medium text-violet-900">外部来源详情</div>
+                  {originsLoading ? (
+                    <div className="mt-2 text-xs text-violet-700">来源详情加载中...</div>
+                  ) : originsError === 'forbidden' ? (
+                    <div className="mt-2 text-xs text-slate-500">无权查看来源详情</div>
+                  ) : originsError === 'unavailable' ? (
+                    <div className="mt-2 text-xs text-slate-500">来源详情暂不可用</div>
+                  ) : origins && origins.origins.length > 0 ? (
+                    <div className="mt-2 space-y-2">
+                      {origins.origins.map((origin, index) => (
+                        <div
+                          key={`${origin.provider}:${origin.label}:${index}`}
+                          className="rounded bg-white p-2 text-xs text-slate-700"
+                        >
+                          <div>
+                            <span className="font-medium text-violet-700">{origin.provider}</span>
+                            <span className="ml-2">产品/包：{origin.label}</span>
+                          </div>
+                          {(origin.advertiser || origin.heat !== undefined || origin.estimatedValue !== undefined) && (
+                            <div className="mt-1 text-slate-500">
+                              {origin.advertiser && `广告主：${origin.advertiser}`}
+                              {origin.heat !== undefined && ` · 热度：${origin.heat}`}
+                              {origin.estimatedValue !== undefined && ` · 预估价值：${origin.estimatedValue}`}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                      {origins.hasMore && (
+                        <div className="text-xs text-violet-700">
+                          共 {origins.total} 条来源，当前展示前 {origins.origins.length} 条
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="mt-2 text-xs text-slate-500">暂无外部来源</div>
+                  )}
+                </div>
+              )}
               <div className="mt-4">
                 <span className="text-slate-500 text-sm">URL：</span>
                 <div className="flex items-center gap-2 mt-1">
@@ -1144,15 +1583,17 @@ export default function MaterialLibraryPage() {
                 </div>
               </div>
               <div className="flex justify-end mt-4 pt-4 border-t border-slate-200">
-                <button
-                  onClick={() => handleDelete(viewMaterial._id)}
-                  className="px-4 py-2 text-red-600 hover:bg-red-50 rounded text-sm flex items-center gap-1"
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-4 h-4">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
-                  </svg>
-                  删除素材
-                </button>
+                {selection.kind !== 'smart' && (
+                  <button
+                    onClick={() => handleDelete(viewMaterial._id)}
+                    className="px-4 py-2 text-red-600 hover:bg-red-50 rounded text-sm flex items-center gap-1"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-4 h-4">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+                    </svg>
+                    删除素材
+                  </button>
+                )}
               </div>
             </div>
           </div>
