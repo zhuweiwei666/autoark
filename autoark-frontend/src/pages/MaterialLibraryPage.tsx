@@ -3,7 +3,9 @@ import { useAuth } from '../contexts/AuthContext'
 import { authFetch } from '../services/api'
 import {
   buildMaterialQuery,
+  createLatestRequestRunner,
   EXTERNAL_SYNC_MODES,
+  externalMaterialSyncFeedback,
   loadExternalMaterialStatus,
   loadMaterialOrigins,
   loadMaterialSmartGroups,
@@ -173,6 +175,7 @@ export default function MaterialLibraryPage() {
   
   const fileInputRef = useRef<HTMLInputElement>(null)
   const newFolderInputRef = useRef<HTMLInputElement>(null)
+  const materialRequestRunnerRef = useRef(createLatestRequestRunner())
   const canReadExternal = isSuperAdmin || Boolean(
     user?.permissions?.includes('materials:external:read') ||
     user?.permissions?.includes('materials:external:manage'),
@@ -189,6 +192,10 @@ export default function MaterialLibraryPage() {
   useEffect(() => {
     loadMaterials()
   }, [selection, filter, page])
+
+  useEffect(() => (
+    () => materialRequestRunnerRef.current.abort()
+  ), [])
 
   useEffect(() => {
     if (!canManageExternal) {
@@ -279,10 +286,10 @@ export default function MaterialLibraryPage() {
     if (!confirm(`确定要${action}吗？`)) return
     setExternalActionPending(true)
     try {
-      await requestExternalMaterialSync({
+      const result = await requestExternalMaterialSync({
         ...(dryRun ? EXTERNAL_SYNC_MODES.dryRun : EXTERNAL_SYNC_MODES.syncNow),
       })
-      alert(`${action}请求已提交`)
+      alert(externalMaterialSyncFeedback(result, action))
       await refreshExternalStatus()
     } catch (error: any) {
       alert(error?.message || `${action}失败`)
@@ -330,29 +337,39 @@ export default function MaterialLibraryPage() {
     }
   }
   
-  const loadMaterials = async () => {
-    setLoading(true)
-    try {
-      const params = buildMaterialQuery({
-        selection,
-        page,
-        pageSize,
-        type: filter.type,
-        search: filter.search,
-      })
-      
-      const res = await authFetch(`${API_BASE}/materials?${params}`)
-      const data = await res.json()
-      if (data.success) {
-        setMaterials(data.data.list || [])
-        setTotal(data.data.total || 0)
-      }
-    } catch (err) {
-      console.error('Failed to load materials:', err)
-    } finally {
-      setLoading(false)
-    }
-  }
+  const loadMaterials = () => (
+    materialRequestRunnerRef.current.run(
+      async (signal) => {
+        const params = buildMaterialQuery({
+          selection,
+          page,
+          pageSize,
+          type: filter.type,
+          search: filter.search,
+        })
+        const res = await authFetch(`${API_BASE}/materials?${params}`, { signal })
+        const data = await res.json()
+        if (!res.ok || !data.success) {
+          throw new Error(data.error || data.message || '获取素材失败')
+        }
+        return {
+          list: (data.data.list || []) as Material[],
+          total: Number(data.data.total) || 0,
+        }
+      },
+      {
+        onStart: () => setLoading(true),
+        onSuccess: (result) => {
+          setMaterials(result.list)
+          setTotal(result.total)
+        },
+        onError: (error) => {
+          console.error('Failed to load materials:', error)
+        },
+        onSettled: () => setLoading(false),
+      },
+    )
+  )
   
   // 直传 R2 上传（更快，跳过服务器）
   const handleUpload = async (files: FileList | null) => {
@@ -581,12 +598,14 @@ export default function MaterialLibraryPage() {
       })
       const data = await res.json()
       if (data.success) {
-        // 如果当前选中的是被重命名的文件夹，更新路径
-        if (currentPath === folder.path) {
-          setCurrentPath(data.data.path)
+        const selectionAffected = currentPath === folder.path ||
+          currentPath.startsWith(`${folder.path}/`)
+        if (selectionAffected) {
+          setCurrentPath(`${data.data.path}${currentPath.slice(folder.path.length)}`)
+        } else {
+          loadMaterials()
         }
         loadFolders()
-        loadMaterials()
       } else {
         alert(data.error)
       }
@@ -616,11 +635,14 @@ export default function MaterialLibraryPage() {
       })
       const data = await res.json()
       if (data.success) {
-        if (currentPath === folder.path || currentPath.startsWith(folder.path + '/')) {
+        const selectionAffected = currentPath === folder.path ||
+          currentPath.startsWith(`${folder.path}/`)
+        if (selectionAffected) {
           setCurrentPath('')
+        } else {
+          loadMaterials()
         }
         loadFolders()
-        loadMaterials()
       } else {
         alert(data.error)
       }
@@ -1024,7 +1046,6 @@ export default function MaterialLibraryPage() {
             placeholder="搜索..."
             value={filter.search}
             onChange={(e) => setFilter(f => ({ ...f, search: e.target.value }))}
-            onKeyDown={(e) => e.key === 'Enter' && loadMaterials()}
             className="w-48 px-3 py-1.5 pl-8 border border-slate-200 rounded text-sm"
           />
           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-4 h-4 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400">

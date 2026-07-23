@@ -68,6 +68,18 @@ export interface ExternalMaterialStatus {
   }
 }
 
+export interface ExternalMaterialSyncResult {
+  provider: 'guangdada'
+  mode: string
+  dryRun: boolean
+  request: {
+    recentDays: number
+    limit: number
+  }
+  status: 'queued' | 'duplicate' | 'disabled' | 'unavailable'
+  enqueued: boolean
+}
+
 export const EXTERNAL_SYNC_MODES = {
   dryRun: { mode: 'scheduled', dryRun: true },
   syncNow: { mode: 'canary10', dryRun: false },
@@ -81,6 +93,53 @@ export class MaterialSmartGroupRequestError extends Error {
     this.name = 'MaterialSmartGroupRequestError'
     this.status = status
   }
+}
+
+export interface LatestRequestHandlers<T> {
+  onStart?: () => void
+  onSuccess: (value: T) => void
+  onError?: (error: unknown) => void
+  onSettled?: () => void
+}
+
+export const createLatestRequestRunner = () => {
+  let latestRequestId = 0
+  let activeController: AbortController | null = null
+
+  const abort = () => {
+    latestRequestId += 1
+    activeController?.abort()
+    activeController = null
+  }
+
+  const run = async <T>(
+    request: (signal: AbortSignal) => Promise<T>,
+    handlers: LatestRequestHandlers<T>,
+  ): Promise<void> => {
+    const requestId = ++latestRequestId
+    activeController?.abort()
+    const controller = new AbortController()
+    activeController = controller
+    handlers.onStart?.()
+
+    try {
+      const value = await request(controller.signal)
+      if (requestId === latestRequestId) {
+        handlers.onSuccess(value)
+      }
+    } catch (error) {
+      if (requestId === latestRequestId && !controller.signal.aborted) {
+        handlers.onError?.(error)
+      }
+    } finally {
+      if (requestId === latestRequestId) {
+        activeController = null
+        handlers.onSettled?.()
+      }
+    }
+  }
+
+  return { run, abort }
 }
 
 const readJson = async <T>(response: Response, fallback: string): Promise<T> => {
@@ -132,6 +191,15 @@ export const loadMaterialOrigins = async (
   materialId: string,
 ): Promise<MaterialOriginsResult> => {
   const response = await authFetch(`/api/materials/${encodeURIComponent(materialId)}/origins`)
+  return readMaterialOriginsResponse(response)
+}
+
+export const readMaterialOriginsResponse = async (
+  response: Response,
+): Promise<MaterialOriginsResult> => {
+  if (response.status === 404) {
+    return { origins: [], total: 0, hasMore: false }
+  }
   return readJson<MaterialOriginsResult>(response, '来源详情暂不可用')
 }
 
@@ -146,14 +214,41 @@ export const requestExternalMaterialSync = async ({
 }: {
   dryRun: boolean
   mode: 'scheduled' | 'canary10'
-}): Promise<void> => {
+}): Promise<ExternalMaterialSyncResult> => {
   const response = await authFetch('/api/materials/external/guangdada/sync', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ dryRun, mode }),
   })
-  await readJson(response, '同步请求失败')
+  return readExternalMaterialSyncResponse(response)
 }
+
+export const readExternalMaterialSyncResponse = async (
+  response: Response,
+): Promise<ExternalMaterialSyncResult> => {
+  const payload = await response.json().catch(() => null)
+  const isDuplicate = response.status === 409 &&
+    payload?.success === true &&
+    payload?.data?.status === 'duplicate' &&
+    payload?.data?.enqueued === false
+  if (isDuplicate) {
+    return payload.data as ExternalMaterialSyncResult
+  }
+  if (!response.ok || !payload?.success) {
+    throw new MaterialSmartGroupRequestError(
+      payload?.message || payload?.error || '同步请求失败',
+      response.status,
+    )
+  }
+  return payload.data as ExternalMaterialSyncResult
+}
+
+export const externalMaterialSyncFeedback = (
+  result: ExternalMaterialSyncResult,
+  action: string,
+): string => (
+  result.status === 'duplicate' ? '已有任务运行中' : `${action}请求已提交`
+)
 
 export const setExternalMaterialPaused = async (paused: boolean): Promise<void> => {
   const action = paused ? 'pause' : 'resume'
