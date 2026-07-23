@@ -36,6 +36,7 @@ import {
 } from '../src/queue/externalMaterial.queue'
 import {
   acquireExternalMaterialLock,
+  claimExternalMaterialContinuation,
   handleExternalMaterialWorkerFailure,
   processExternalMaterialSyncJob,
   releaseExternalMaterialLock,
@@ -98,6 +99,21 @@ const workerDependencies = (overrides: Record<string, unknown> = {}) => {
     },
     runs: {
       get: jest.fn().mockResolvedValue(run),
+      claimContinuation: jest.fn(
+        async (runId: string, provider: string, deferCount: number) =>
+          runId === String(run._id) &&
+          provider === run.provider &&
+          run.status === 'deferred' &&
+          run.continuationPending === true &&
+          deferCount === run.deferCount
+            ? {
+                ...run,
+                status: 'running',
+                continuationPending: false,
+              }
+            : null,
+      ),
+      restoreContinuation: jest.fn().mockResolvedValue(run),
       findRunningConflict: jest.fn().mockResolvedValue(null),
       update: jest.fn().mockResolvedValue(run),
       checkpoint: jest.fn().mockResolvedValue(run),
@@ -600,6 +616,47 @@ describe('external material redis lock', () => {
 })
 
 describe('external material worker orchestration', () => {
+  it('claims a continuation with one atomic guarded run transition', async () => {
+    const claimed = {
+      _id: 'run-1',
+      provider: 'guangdada',
+      status: 'running',
+      continuationPending: false,
+      deferCount: 2,
+    }
+    const findOneAndUpdate = jest
+      .spyOn(ExternalMaterialSyncRun, 'findOneAndUpdate')
+      .mockResolvedValue(claimed as any)
+    const startedAt = new Date('2026-07-23T00:00:00.000Z')
+
+    try {
+      await expect(
+        claimExternalMaterialContinuation('run-1', 'guangdada', 2, startedAt),
+      ).resolves.toBe(claimed)
+      expect(findOneAndUpdate).toHaveBeenCalledWith(
+        {
+          _id: 'run-1',
+          provider: 'guangdada',
+          status: 'deferred',
+          continuationPending: true,
+          deferCount: 2,
+        },
+        {
+          $set: {
+            status: 'running',
+            continuationPending: false,
+            startedAt,
+            deferredUntil: null,
+            retryAfterMs: null,
+          },
+        },
+        { new: true, runValidators: true },
+      )
+    } finally {
+      findOneAndUpdate.mockRestore()
+    }
+  })
+
   it('never fetches or ingests when the feature or key is unavailable', async () => {
     const deps = workerDependencies({ apiKeyPresent: false })
 
@@ -807,6 +864,12 @@ describe('external material worker orchestration', () => {
     const deps = workerDependencies({
       runs: {
         get: jest.fn().mockResolvedValue(deferredRun),
+        claimContinuation: jest.fn().mockResolvedValue({
+          ...deferredRun,
+          status: 'running',
+          continuationPending: false,
+        }),
+        restoreContinuation: jest.fn().mockResolvedValue(deferredRun),
         findRunningConflict: jest.fn().mockResolvedValue(null),
         update: jest.fn().mockResolvedValue(deferredRun),
         checkpoint: jest.fn().mockResolvedValue(deferredRun),
@@ -827,16 +890,187 @@ describe('external material worker orchestration', () => {
       deps,
     )
 
-    expect(deps.runs.update).toHaveBeenNthCalledWith(
-      1,
+    expect(deps.runs.claimContinuation).toHaveBeenCalledWith(
       'run-1',
-      expect.objectContaining({
-        status: 'running',
-        continuationPending: false,
-        deferredUntil: null,
-        retryAfterMs: null,
-      }),
+      'guangdada',
+      1,
+      new Date('2026-07-23T00:00:00.000Z'),
     )
+    expect(deps.runs.update.mock.calls).not.toEqual(
+      expect.arrayContaining([
+        [
+          'run-1',
+          expect.objectContaining({
+            status: 'running',
+          }),
+        ],
+      ]),
+    )
+  })
+
+  const expectNoStaleContinuationSideEffects = (deps: any) => {
+    expect(deps.runs.get).not.toHaveBeenCalled()
+    expect(deps.runs.update).not.toHaveBeenCalled()
+    expect(deps.states.get).not.toHaveBeenCalled()
+    expect(deps.states.update).not.toHaveBeenCalled()
+    expect(deps.redis.set).not.toHaveBeenCalled()
+    expect(deps.redis.eval).not.toHaveBeenCalled()
+    expect(deps.fetchAds).not.toHaveBeenCalled()
+    expect(deps.normalizeAds).not.toHaveBeenCalled()
+    expect(deps.ingest).not.toHaveBeenCalled()
+    expect(deps.enqueueContinuation).not.toHaveBeenCalled()
+  }
+
+  it('ignores an orphan delayed job when queue add succeeded but deferred persistence failed', async () => {
+    const persistenceError = new Error('deferred persistence unavailable')
+    const original = workerDependencies({
+      fetchAds: jest.fn().mockRejectedValue(
+        new GuangdadaApiError({
+          message: 'rate limited',
+          category: 'rate_limit',
+          status: 429,
+          retryable: true,
+          retryAfterMs: 60_000,
+        }),
+      ),
+    })
+    original.runs.update.mockImplementation(
+      async (_runId: string, update: Record<string, unknown>) => {
+        if (update.status === 'deferred') throw persistenceError
+        return { _id: 'run-1', ...update }
+      },
+    )
+
+    await expect(
+      processExternalMaterialSyncJob(job(), original),
+    ).rejects.toThrow(persistenceError)
+    expect(original.enqueueContinuation).toHaveBeenCalledTimes(1)
+
+    const orphan = workerDependencies()
+    orphan.runs.claimContinuation.mockResolvedValue(null)
+    await expect(
+      processExternalMaterialSyncJob(
+        job({
+          data: {
+            runId: 'run-1',
+            provider: 'guangdada',
+            request,
+            continuation: true,
+            deferCount: 1,
+          },
+        }),
+        orphan,
+      ),
+    ).resolves.toMatchObject({
+      status: 'stale',
+      counters: counters(),
+    })
+    expectNoStaleContinuationSideEffects(orphan)
+  })
+
+  it.each(['completed', 'failed'])(
+    'ignores a continuation for a terminal %s run',
+    async (status) => {
+      const deps = workerDependencies()
+      const terminalRun = {
+        _id: 'run-1',
+        provider: 'guangdada',
+        status,
+        continuationPending: false,
+        deferCount: 1,
+      }
+      deps.runs.claimContinuation.mockImplementation(
+        async (_runId: string, provider: string, deferCount: number) =>
+          terminalRun.status === 'deferred' &&
+          terminalRun.continuationPending === true &&
+          terminalRun.provider === provider &&
+          terminalRun.deferCount === deferCount
+            ? terminalRun
+            : null,
+      )
+
+      await expect(
+        processExternalMaterialSyncJob(
+          job({
+            data: {
+              runId: 'run-1',
+              provider: 'guangdada',
+              request,
+              continuation: true,
+              deferCount: 1,
+            },
+          }),
+          deps,
+        ),
+      ).resolves.toMatchObject({
+        status: 'stale',
+        counters: counters(),
+      })
+      expect(deps.runs.claimContinuation).toHaveBeenCalledWith(
+        'run-1',
+        'guangdada',
+        1,
+        new Date('2026-07-23T00:00:00.000Z'),
+      )
+      expectNoStaleContinuationSideEffects(deps)
+    },
+  )
+
+  it('ignores an older defer count while atomically resuming the current count', async () => {
+    const old = workerDependencies()
+    old.runs.claimContinuation.mockResolvedValue(null)
+    await expect(
+      processExternalMaterialSyncJob(
+        job({
+          data: {
+            runId: 'run-1',
+            provider: 'guangdada',
+            request,
+            continuation: true,
+            deferCount: 1,
+          },
+        }),
+        old,
+      ),
+    ).resolves.toMatchObject({ status: 'stale' })
+    expectNoStaleContinuationSideEffects(old)
+
+    const currentRun = {
+      _id: 'run-1',
+      provider: 'guangdada',
+      mode: request.mode,
+      dryRun: false,
+      request: { recentDays: 3, limit: 10 },
+      status: 'running',
+      counters: counters(),
+      cursor: null,
+      deferCount: 2,
+      continuationPending: false,
+    }
+    const current = workerDependencies()
+    current.runs.claimContinuation.mockResolvedValue(currentRun)
+    await expect(
+      processExternalMaterialSyncJob(
+        job({
+          data: {
+            runId: 'run-1',
+            provider: 'guangdada',
+            request,
+            continuation: true,
+            deferCount: 2,
+          },
+        }),
+        current,
+      ),
+    ).resolves.toMatchObject({ status: 'completed' })
+    expect(current.runs.claimContinuation).toHaveBeenCalledWith(
+      'run-1',
+      'guangdada',
+      2,
+      new Date('2026-07-23T00:00:00.000Z'),
+    )
+    expect(current.states.get).toHaveBeenCalledTimes(1)
+    expect(current.fetchAds).toHaveBeenCalledTimes(1)
   })
 
   it('terminalizes a paused sync so resume can enqueue a new run', async () => {
@@ -916,6 +1150,12 @@ describe('external material worker orchestration', () => {
     const deps = workerDependencies({
       runs: {
         get: jest.fn().mockResolvedValue(deferredRun),
+        claimContinuation: jest.fn().mockResolvedValue({
+          ...deferredRun,
+          status: 'running',
+          continuationPending: false,
+        }),
+        restoreContinuation: jest.fn().mockResolvedValue(deferredRun),
         findRunningConflict: jest.fn().mockResolvedValue(null),
         update: jest.fn().mockResolvedValue(deferredRun),
         checkpoint: jest.fn().mockResolvedValue(deferredRun),
@@ -1257,6 +1497,32 @@ describe('external material worker orchestration', () => {
       ).toBe(false)
     },
   )
+
+  it('restores a claimed continuation before BullMQ retries an intermediate failure', async () => {
+    const deps = workerDependencies()
+    await handleExternalMaterialWorkerFailure(
+      job({
+        attemptsMade: 1,
+        opts: { attempts: 3 },
+        data: {
+          runId: 'run-1',
+          provider: 'guangdada',
+          request,
+          continuation: true,
+          deferCount: 2,
+        },
+      }) as any,
+      new Error('unsafe transient failure'),
+      deps,
+    )
+
+    expect(deps.runs.restoreContinuation).toHaveBeenCalledWith(
+      'run-1',
+      'guangdada',
+      2,
+    )
+    expect(deps.runs.failExhausted).not.toHaveBeenCalled()
+  })
 
   it('only terminalizes an unexpected BullMQ failure after attempts are exhausted', async () => {
     const deps = workerDependencies()
