@@ -69,12 +69,19 @@ if [ -n "$(git status --porcelain)" ] && [ "${AUTOARK_ALLOW_DIRTY:-false}" != "t
 fi
 
 REMOTE_ENV_UPLOAD_CANDIDATE=''
+REMOTE_ENV_UPLOAD_EXPECTED_GENERATION=''
 if [ -n "${AUTOARK_ENV_FILE:-}" ]; then
   if [ ! -f "$AUTOARK_ENV_FILE" ]; then
     echo "AUTOARK_ENV_FILE does not exist: $AUTOARK_ENV_FILE"
     exit 1
   fi
   require_command scp
+  require_command openssl
+  REMOTE_ENV_UPLOAD_EXPECTED_GENERATION="$(openssl rand -hex 32)"
+  if [[ ! "$REMOTE_ENV_UPLOAD_EXPECTED_GENERATION" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "Failed to generate production environment ownership token."
+    exit 1
+  fi
   REMOTE_ENV_UPLOAD_CANDIDATE="${REMOTE_ENV_UPLOAD_STAGE}.uploading.$$.${RANDOM}"
   printf -v QUOTED_REMOTE_ENV_UPLOAD_CANDIDATE '%q' "$REMOTE_ENV_UPLOAD_CANDIDATE"
   log "Staging production environment file"
@@ -89,11 +96,17 @@ if [ -n "${AUTOARK_ENV_FILE:-}" ]; then
 
   read -r -d '' REMOTE_PUBLISH_ENV_UPLOAD_SCRIPT <<'REMOTE_SCRIPT' || true
 # AUTOARK_PUBLISH_ENV_UPLOAD_V1
+set +x
 set -euo pipefail
 
 upload_candidate_path="$1"
 upload_pending_path="$2"
 deploy_lock_file="$3"
+upload_generation="$4"
+if [[ ! "$upload_generation" =~ ^[0-9a-f]{64}$ ]]; then
+  echo 'Invalid production environment ownership token.'
+  exit 1
+fi
 if ! command -v flock >/dev/null 2>&1; then
   echo 'flock is required for production deployment.'
   exit 1
@@ -104,6 +117,16 @@ if [ ! -f "$upload_candidate_path" ]; then
   echo 'Missing staged production environment upload.'
   exit 1
 fi
+tagged_candidate="$(mktemp "${upload_candidate_path}.tagged.XXXXXX")"
+chmod 600 "$tagged_candidate"
+printf 'AUTOARK_DEPLOY_UPLOAD_GENERATION=%s\n' "$upload_generation" > "$tagged_candidate"
+while IFS= read -r line || [ -n "$line" ]; do
+  case "$line" in
+    AUTOARK_DEPLOY_UPLOAD_GENERATION=*) ;;
+    *) printf '%s\n' "$line" ;;
+  esac
+done < "$upload_candidate_path" >> "$tagged_candidate"
+mv -f -- "$tagged_candidate" "$upload_candidate_path"
 mv -f -- "$upload_candidate_path" "$upload_pending_path"
 chmod 600 "$upload_pending_path"
 REMOTE_SCRIPT
@@ -111,7 +134,8 @@ REMOTE_SCRIPT
   printf -v QUOTED_REMOTE_PUBLISH_ENV_UPLOAD_SCRIPT '%q' "$REMOTE_PUBLISH_ENV_UPLOAD_SCRIPT"
   printf -v QUOTED_REMOTE_ENV_UPLOAD_STAGE '%q' "$REMOTE_ENV_UPLOAD_STAGE"
   printf -v QUOTED_REMOTE_DEPLOY_LOCK_FILE '%q' "$REMOTE_DEPLOY_LOCK_FILE"
-  REMOTE_PUBLISH_ENV_UPLOAD_COMMAND="bash -c $QUOTED_REMOTE_PUBLISH_ENV_UPLOAD_SCRIPT -- $QUOTED_REMOTE_ENV_UPLOAD_CANDIDATE $QUOTED_REMOTE_ENV_UPLOAD_STAGE $QUOTED_REMOTE_DEPLOY_LOCK_FILE"
+  printf -v QUOTED_REMOTE_ENV_UPLOAD_EXPECTED_GENERATION '%q' "$REMOTE_ENV_UPLOAD_EXPECTED_GENERATION"
+  REMOTE_PUBLISH_ENV_UPLOAD_COMMAND="bash -c $QUOTED_REMOTE_PUBLISH_ENV_UPLOAD_SCRIPT -- $QUOTED_REMOTE_ENV_UPLOAD_CANDIDATE $QUOTED_REMOTE_ENV_UPLOAD_STAGE $QUOTED_REMOTE_DEPLOY_LOCK_FILE $QUOTED_REMOTE_ENV_UPLOAD_EXPECTED_GENERATION"
   ssh "$PROD_HOST" "$REMOTE_PUBLISH_ENV_UPLOAD_COMMAND"
   REMOTE_ENV_UPLOAD_CANDIDATE=''
 fi
@@ -128,7 +152,8 @@ backup_env_path="$4"
 deploy_env_path="$app_dir/deploy/.env"
 upload_env_path="$5"
 upload_candidate_path="$6"
-deploy_lock_file="$7"
+expected_upload_generation="$7"
+deploy_lock_file="$8"
 
 key_override_set=''
 key_override=''
@@ -181,6 +206,32 @@ transaction_active='false'
 base_payload_temp=''
 payload_temp=''
 marker_temp=''
+
+if [ -n "$expected_upload_generation" ]; then
+  if [[ ! "$expected_upload_generation" =~ ^[0-9a-f]{64}$ ]]; then
+    echo 'Invalid expected production environment ownership token.'
+    exit 1
+  fi
+  if [ ! -f "$upload_env_path" ]; then
+    echo 'Expected production environment generation is unavailable.'
+    exit 1
+  fi
+  observed_upload_generation=''
+  observed_upload_generation_count=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      AUTOARK_DEPLOY_UPLOAD_GENERATION=*)
+        observed_upload_generation="${line#AUTOARK_DEPLOY_UPLOAD_GENERATION=}"
+        observed_upload_generation_count=$((observed_upload_generation_count + 1))
+        ;;
+    esac
+  done < "$upload_env_path"
+  if [ "$observed_upload_generation_count" -ne 1 ] ||
+    [ "$observed_upload_generation" != "$expected_upload_generation" ]; then
+    echo 'Production environment generation ownership changed; refusing deployment.'
+    exit 1
+  fi
+fi
 
 atomic_restore() {
   local before_path="$1"
@@ -303,6 +354,7 @@ while IFS= read -r line || [ -n "$line" ]; do
     EXTERNAL_MATERIAL_SYNC_ENABLED=*)
       source_flag="${line#EXTERNAL_MATERIAL_SYNC_ENABLED=}"
       ;;
+    AUTOARK_DEPLOY_UPLOAD_GENERATION=*) ;;
     *)
       printf '%s\n' "$line"
       ;;
@@ -404,8 +456,9 @@ printf -v QUOTED_AUTOARK_REF '%q' "$AUTOARK_REF"
 printf -v QUOTED_REMOTE_ENV_BACKUP '%q' "$REMOTE_ENV_BACKUP"
 printf -v QUOTED_REMOTE_ENV_UPLOAD_STAGE '%q' "$REMOTE_ENV_UPLOAD_STAGE"
 printf -v QUOTED_REMOTE_ENV_UPLOAD_CANDIDATE '%q' "$REMOTE_ENV_UPLOAD_CANDIDATE"
+printf -v QUOTED_REMOTE_ENV_UPLOAD_EXPECTED_GENERATION '%q' "$REMOTE_ENV_UPLOAD_EXPECTED_GENERATION"
 printf -v QUOTED_REMOTE_DEPLOY_LOCK_FILE '%q' "$REMOTE_DEPLOY_LOCK_FILE"
-REMOTE_DEPLOY_TRANSACTION_COMMAND="bash -c $QUOTED_REMOTE_DEPLOY_TRANSACTION_SCRIPT -- $QUOTED_APP_DIR $QUOTED_REPO_URL $QUOTED_AUTOARK_REF $QUOTED_REMOTE_ENV_BACKUP $QUOTED_REMOTE_ENV_UPLOAD_STAGE $QUOTED_REMOTE_ENV_UPLOAD_CANDIDATE $QUOTED_REMOTE_DEPLOY_LOCK_FILE"
+REMOTE_DEPLOY_TRANSACTION_COMMAND="bash -c $QUOTED_REMOTE_DEPLOY_TRANSACTION_SCRIPT -- $QUOTED_APP_DIR $QUOTED_REPO_URL $QUOTED_AUTOARK_REF $QUOTED_REMOTE_ENV_BACKUP $QUOTED_REMOTE_ENV_UPLOAD_STAGE $QUOTED_REMOTE_ENV_UPLOAD_CANDIDATE $QUOTED_REMOTE_ENV_UPLOAD_EXPECTED_GENERATION $QUOTED_REMOTE_DEPLOY_LOCK_FILE"
 
 log "Deploying verified commit=$AUTOARK_REF"
 log "Synchronizing GUANGDADA_API_KEY and EXTERNAL_MATERIAL_SYNC_ENABLED"

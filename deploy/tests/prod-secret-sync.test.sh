@@ -84,6 +84,12 @@ remote_command="${1:-}"
 case "$remote_command" in
   *AUTOARK_PUBLISH_ENV_UPLOAD_V1*)
     bash -c "$remote_command"
+    if [ -n "${PAUSE_AFTER_UPLOAD_PUBLISH_SIGNAL:-}" ]; then
+      : > "$PAUSE_AFTER_UPLOAD_PUBLISH_SIGNAL"
+      while [ ! -e "${PAUSE_AFTER_UPLOAD_PUBLISH_RELEASE:?}" ]; do
+        sleep 0.01
+      done
+    fi
     if [ -n "${FAIL_AFTER_UPLOAD_PUBLISH_ONCE_FILE:-}" ] &&
       [ ! -e "$FAIL_AFTER_UPLOAD_PUBLISH_ONCE_FILE" ]; then
       : > "$FAIL_AFTER_UPLOAD_PUBLISH_ONCE_FILE"
@@ -215,6 +221,10 @@ assert_consistent_pair() {
   test "$(file_mode "$DEPLOY_ENV")" = '600'
   test "$(grep -c '^GUANGDADA_API_KEY=' "$ROOT_ENV")" -eq 1
   test "$(grep -c '^EXTERNAL_MATERIAL_SYNC_ENABLED=' "$ROOT_ENV")" -eq 1
+  if grep -Fq 'AUTOARK_DEPLOY_UPLOAD_GENERATION=' "$ROOT_ENV"; then
+    echo 'internal upload generation leaked into runtime configuration'
+    exit 1
+  fi
 }
 
 run_deploy() {
@@ -409,6 +419,61 @@ run_deploy >"$TEST_DIR/publish-retry.log"
 assert_consistent_pair
 grep -qx 'PUBLISH_NEW=preserved' "$ROOT_ENV"
 test ! -e "$PENDING_ENV"
+
+# Two interleaved full-env deployments must never consume each other's
+# generation. B replaces the stable pending generation while A is paused. A
+# then fails closed without touching the canonical pair, and a plain recovery
+# consumes B.
+seed_pair 'INTERLEAVE_OLD=preserved' 'INTERLEAVE_OLD=preserved'
+cp "$ROOT_ENV" "$DEPLOY_ENV"
+chmod 600 "$DEPLOY_ENV"
+reset_observation_logs
+ENV_A="$TEST_DIR/interleave-a.env"
+ENV_B="$TEST_DIR/interleave-b.env"
+make_full_env "$ENV_A" 'SHA_A_ENV=must-not-commit'
+make_full_env "$ENV_B" 'SHA_B_ENV=preserved'
+SHA_A='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+SHA_B='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+A_PUBLISHED="$TEST_DIR/a-published"
+A_RELEASE="$TEST_DIR/a-release"
+run_deploy \
+  AUTOARK_ENV_FILE="$ENV_A" \
+  AUTOARK_REF="$SHA_A" \
+  PAUSE_AFTER_UPLOAD_PUBLISH_SIGNAL="$A_PUBLISHED" \
+  PAUSE_AFTER_UPLOAD_PUBLISH_RELEASE="$A_RELEASE" >"$TEST_DIR/interleave-a.log" 2>&1 &
+A_PID=$!
+for _attempt in $(seq 1 500); do
+  [ -e "$A_PUBLISHED" ] && break
+  sleep 0.01
+done
+test -e "$A_PUBLISHED"
+
+B_PUBLISH_FAILURE="$TEST_DIR/b-publish-failed"
+if run_deploy \
+  AUTOARK_ENV_FILE="$ENV_B" \
+  AUTOARK_REF="$SHA_B" \
+  FAIL_AFTER_UPLOAD_PUBLISH_ONCE_FILE="$B_PUBLISH_FAILURE" >"$TEST_DIR/interleave-b.log" 2>&1; then
+  echo 'interleaved B publish unexpectedly reached its transaction'
+  exit 1
+fi
+touch "$A_RELEASE"
+if wait "$A_PID"; then
+  echo 'A consumed B environment after its generation was replaced'
+  exit 1
+fi
+assert_consistent_pair
+grep -qx 'INTERLEAVE_OLD=preserved' "$ROOT_ENV"
+if grep -Eq 'SHA_A_ENV|SHA_B_ENV' "$ROOT_ENV"; then
+  echo 'interleaving changed canonical environment before ownership validation'
+  exit 1
+fi
+run_deploy AUTOARK_REF="$SHA_B" >"$TEST_DIR/interleave-recovery.log"
+assert_consistent_pair
+grep -qx 'SHA_B_ENV=preserved' "$ROOT_ENV"
+if grep -Fq 'SHA_A_ENV' "$ROOT_ENV"; then
+  echo 'ordinary recovery consumed the wrong pending generation'
+  exit 1
+fi
 
 # Prepare failure after a successful upload leaves the old pair untouched.
 # A plain retry consumes the pending upload and converges both files.
