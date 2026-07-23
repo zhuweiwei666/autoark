@@ -311,10 +311,16 @@ const upsertOrigin = async (
 const cleanupOwnObject = async (key: string): Promise<boolean> => {
   for (let attempt = 0; attempt < CLEANUP_ATTEMPTS; attempt += 1) {
     try {
+      const reference = await findMaterial({
+        status: { $in: ACTIVE_MATERIAL_STATUSES },
+        'storage.key': key,
+      })
+      if (reference) return true
+
       const result = await deleteR2Object(key)
       if (result?.success) return true
     } catch {
-      // Retry once, then return a fixed redacted failure category.
+      // Retry the guarded cleanup, then return a fixed redacted category.
     }
   }
   return false
@@ -559,19 +565,35 @@ const ingestValidatedCandidate = async (
   const fingerprintKey = buildMaterialFingerprintKey(undefined, sha256)
   const plannedStorageKey = plannedExternalStorageKey(candidate, sha256)
 
+  const cleanupAndMapWinner = async (
+    winner: MaterialRecord,
+    kind: 'created' | 'contentReused' = 'contentReused',
+  ): Promise<ExternalIngestionOutcome> => {
+    if (
+      materialStorageKey(winner) !== plannedStorageKey &&
+      !(await cleanupOwnObject(plannedStorageKey))
+    ) {
+      return {
+        kind: 'failed',
+        retryable: true,
+        category: 'storage_cleanup_failed',
+      }
+    }
+    return mapToCanonical(candidate, winner, kind)
+  }
+
   let deletedContent: MaterialRecord | null = null
   try {
     const exactCanonical = await activeGlobalByFingerprintKey(fingerprintKey)
     if (exactCanonical) {
-      return mapToCanonical(candidate, exactCanonical, 'contentReused')
+      return cleanupAndMapWinner(exactCanonical)
     }
     deletedContent = await deletedGlobalByFingerprintKey(fingerprintKey)
     if (deletedContent) {
       // The exact unique-key holder is authoritative over same-SHA legacy rows.
     } else {
       const canonical = await activeGlobalBySha(sha256)
-      if (canonical)
-        return mapToCanonical(candidate, canonical, 'contentReused')
+      if (canonical) return cleanupAndMapWinner(canonical)
       deletedContent = await deletedGlobalBySha(sha256)
     }
   } catch {
@@ -654,19 +676,7 @@ const ingestValidatedCandidate = async (
   const cleanupDifferentWinner = async (
     winner: MaterialRecord,
     kind: 'created' | 'contentReused' = 'contentReused',
-  ): Promise<ExternalIngestionOutcome> => {
-    if (materialStorageKey(winner) === plannedStorageKey) {
-      return mapToCanonical(candidate, winner, 'created')
-    }
-    if (!(await cleanupOwnObject(plannedStorageKey))) {
-      return {
-        kind: 'failed',
-        retryable: true,
-        category: 'storage_cleanup_failed',
-      }
-    }
-    return mapToCanonical(candidate, winner, kind)
-  }
+  ): Promise<ExternalIngestionOutcome> => cleanupAndMapWinner(winner, kind)
 
   const reconcileUnknownMaterialWrite =
     async (): Promise<ExternalIngestionOutcome> => {

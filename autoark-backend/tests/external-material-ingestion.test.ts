@@ -879,6 +879,118 @@ describe('external material ingestion', () => {
     expect(mockDeleteR2Object).not.toHaveBeenCalledWith(winner.storage.key)
   })
 
+  it('retries a failed loser cleanup before mapping to an active downloaded-content winner', async () => {
+    const bytes = Buffer.from('shared-video-bytes')
+    const plannedKey = plannedExternalKey('asset-cleanup-retry', bytes)
+    const fingerprintKey = buildMaterialFingerprintKey(
+      undefined,
+      createHash('sha256').update(bytes).digest('hex'),
+    )
+    const winner = material('material-cleanup-retry-winner', {
+      fingerprintKey,
+      storage: {
+        key: 'global/external/guangdada/existing-cleanup-winner',
+        url: 'https://r2.example/global/external/guangdada/existing-cleanup-winner',
+      },
+    })
+    let createAttempted = false
+    mockMaterialCreate.mockImplementation(async () => {
+      createAttempted = true
+      throw duplicateKeyError()
+    })
+    mockMaterialFindOne.mockImplementation(async (query: any) => {
+      if (query?._id && String(query._id) === 'material-cleanup-retry-winner') {
+        return winner
+      }
+      if (query?.['storage.key'] === plannedKey) return null
+      if (
+        createAttempted &&
+        query?.fingerprintKey === fingerprintKey &&
+        Array.isArray(query?.status?.$in)
+      ) {
+        return winner
+      }
+      return null
+    })
+    mockDeleteR2Object
+      .mockResolvedValueOnce({ success: false })
+      .mockResolvedValueOnce({ success: false })
+      .mockResolvedValueOnce({ success: true })
+
+    const first = await ingestExternalMaterial(candidate('asset-cleanup-retry'))
+    const second = await ingestExternalMaterial(
+      candidate('asset-cleanup-retry'),
+    )
+
+    expect(first).toEqual({
+      kind: 'failed',
+      retryable: true,
+      category: 'storage_cleanup_failed',
+    })
+    expect(second).toEqual({
+      kind: 'contentReused',
+      materialId: 'material-cleanup-retry-winner',
+    })
+    expect(mockDeleteR2Object).toHaveBeenCalledTimes(3)
+    expect(mockDeleteR2Object).toHaveBeenNthCalledWith(3, plannedKey)
+    expect(mockUploadBufferToR2).toHaveBeenCalledTimes(1)
+    expect(mockMaterialCreate).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not delete a planned key referenced by another active material', async () => {
+    const bytes = Buffer.from('shared-video-bytes')
+    const plannedKey = plannedExternalKey('asset-referenced-key', bytes)
+    const fingerprintKey = buildMaterialFingerprintKey(
+      undefined,
+      createHash('sha256').update(bytes).digest('hex'),
+    )
+    const winner = material('material-referenced-key-winner', {
+      fingerprintKey,
+      storage: {
+        key: 'global/external/guangdada/other-winner-key',
+        url: 'https://r2.example/global/external/guangdada/other-winner-key',
+      },
+    })
+    const privateReference = material('material-private-key-reference', {
+      organizationId: '665000000000000000000001',
+      storage: {
+        key: plannedKey,
+        url: `https://r2.example/${plannedKey}`,
+      },
+    })
+    mockMaterialFindOne.mockImplementation(async (query: any) => {
+      if (
+        query?._id &&
+        String(query._id) === 'material-referenced-key-winner'
+      ) {
+        return winner
+      }
+      if (query?.['storage.key'] === plannedKey) return privateReference
+      if (
+        query?.fingerprintKey === fingerprintKey &&
+        Array.isArray(query?.status?.$in)
+      ) {
+        return winner
+      }
+      return null
+    })
+
+    const result = await ingestExternalMaterial(
+      candidate('asset-referenced-key'),
+    )
+
+    expect(result).toEqual({
+      kind: 'contentReused',
+      materialId: 'material-referenced-key-winner',
+    })
+    expect(mockMaterialFindOne).toHaveBeenCalledWith({
+      status: { $in: ['uploaded', 'ready'] },
+      'storage.key': plannedKey,
+    })
+    expect(mockDeleteR2Object).not.toHaveBeenCalled()
+    expect(mockUploadBufferToR2).not.toHaveBeenCalled()
+  })
+
   it('reuses an existing global Facebook material when downloaded bytes match', async () => {
     const facebook = material('material-facebook', {
       source: { platform: 'facebook', isOriginal: true },
@@ -1014,6 +1126,64 @@ describe('external material ingestion', () => {
     expect(mockDeleteR2Object).not.toHaveBeenCalledWith(winner.storage.key)
     expect([...retainedKeys]).toEqual([winner.storage.key])
     expect(mockOriginFindOneAndUpdate).toHaveBeenCalledTimes(2)
+  })
+
+  it('returns contentReused for the same-key loser when identical provider candidates race', async () => {
+    const bytes = Buffer.from('shared-video-bytes')
+    const fingerprintKey = buildMaterialFingerprintKey(
+      undefined,
+      createHash('sha256').update(bytes).digest('hex'),
+    )
+    let shaLookupCount = 0
+    let releaseInitialShaLookups: (() => void) | undefined
+    const initialShaLookupsComplete = new Promise<void>((resolve) => {
+      releaseInitialShaLookups = resolve
+    })
+    let winner: any = null
+    mockMaterialFindOne.mockImplementation(async (query: any) => {
+      if (query?._id && winner && String(query._id) === String(winner._id)) {
+        return winner
+      }
+      if (
+        query?.fingerprintKey === fingerprintKey &&
+        Array.isArray(query?.status?.$in)
+      ) {
+        return winner
+      }
+      if (!query?.['fingerprint.sha256']) return null
+      shaLookupCount += 1
+      if (shaLookupCount <= 2) {
+        if (shaLookupCount === 2) releaseInitialShaLookups?.()
+        await initialShaLookupsComplete
+        return null
+      }
+      return winner
+    })
+    mockMaterialCreate.mockImplementation(async (fields: any) => {
+      if (!winner) {
+        winner = material('material-same-key-race-winner', fields)
+        return winner
+      }
+      throw duplicateKeyError()
+    })
+
+    const outcomes = await Promise.all([
+      ingestExternalMaterial(candidate('asset-same-key-race')),
+      ingestExternalMaterial(candidate('asset-same-key-race')),
+    ])
+
+    expect(outcomes.map((outcome) => outcome.kind).sort()).toEqual([
+      'contentReused',
+      'created',
+    ])
+    expect(
+      outcomes.every(
+        (outcome: any) =>
+          outcome.materialId === 'material-same-key-race-winner',
+      ),
+    ).toBe(true)
+    expect(mockMaterialCreate).toHaveBeenCalledTimes(2)
+    expect(mockDeleteR2Object).not.toHaveBeenCalled()
   })
 
   it('retries only loser cleanup and reports a redacted failure when cleanup stays broken', async () => {
@@ -1356,29 +1526,29 @@ describe('external material ingestion', () => {
   })
 
   it('keeps a canonical object after mapping failure and reuses it on the next call', async () => {
-    const canonical = material('material-mapping-failure')
-    let canonicalAvailable = false
+    let canonical: any = null
     mockMaterialFindOne.mockImplementation(async (query: any) => {
       if (
         query?._id &&
-        canonicalAvailable &&
+        canonical &&
         String(query._id) === String(canonical._id)
       ) {
         return canonical
       }
-      if (query?.['fingerprint.sha256'])
-        return canonicalAvailable ? canonical : null
+      if (query?.['fingerprint.sha256']) return canonical
       return null
     })
     mockMaterialCreate.mockImplementation(async (fields: any) => {
-      canonicalAvailable = true
-      return { ...canonical, ...fields }
+      canonical = material('material-mapping-failure', fields)
+      return canonical
     })
     mockOriginFindOneAndUpdate
       .mockRejectedValueOnce(new Error('db unavailable with signed URL'))
       .mockRejectedValueOnce(new Error('db unavailable with signed URL'))
       .mockRejectedValueOnce(new Error('db unavailable with signed URL'))
-      .mockResolvedValueOnce({ materialId: canonical._id })
+      .mockResolvedValueOnce({
+        materialId: { toString: () => 'material-mapping-failure' },
+      })
 
     const first = await ingestExternalMaterial(
       candidate('asset-mapping-failure'),
