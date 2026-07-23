@@ -10,13 +10,32 @@ ROOT_ENV="$TEST_DIR/root.env"
 APP_DIR="$TEST_DIR/app"
 DEPLOY_ENV="$APP_DIR/deploy/.env"
 SSH_ARG_LOG="$TEST_DIR/ssh-args.log"
-mkdir -p "$FAKE_BIN" "$(dirname "$DEPLOY_ENV")"
+REMOTE_ORDER_LOG="$TEST_DIR/remote-order.log"
+mkdir -p "$FAKE_BIN" "$(dirname "$DEPLOY_ENV")" "$APP_DIR/.git"
 
 cat > "$FAKE_BIN/git" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 case "${1:-}" in
   rev-parse | status)
+    exit 0
+    ;;
+  clone)
+    target_path="$3"
+    if [ -d "$target_path" ] && [ -n "$(ls -A "$target_path")" ]; then
+      echo 'fatal: destination path already exists and is not an empty directory' >&2
+      exit 128
+    fi
+    mkdir -p "$target_path/.git" "$target_path/deploy"
+    cat > "$target_path/deploy/server-deploy.sh" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'server-deploy-executed\n' >> "$REMOTE_ORDER_LOG"
+SCRIPT
+    chmod +x "$target_path/deploy/server-deploy.sh"
+    exit 0
+    ;;
+  show-ref)
     exit 0
     ;;
 esac
@@ -29,9 +48,18 @@ set -euo pipefail
 printf '%s\n' "$*" >> "$SSH_ARG_LOG"
 shift
 remote_command="${1:-}"
-if [[ "$remote_command" == *AUTOARK_SECRET_SYNC_V1* ]]; then
-  bash -c "$remote_command"
-fi
+case "$remote_command" in
+  *AUTOARK_PREPARE_DEPLOY_V1*)
+    printf 'prepare\n' >> "$REMOTE_ORDER_LOG"
+    ;;
+  *AUTOARK_SECRET_SYNC_V1*)
+    printf 'secret-sync\n' >> "$REMOTE_ORDER_LOG"
+    ;;
+  *AUTOARK_SERVER_DEPLOY_V1*)
+    printf 'server-command\n' >> "$REMOTE_ORDER_LOG"
+    ;;
+esac
+bash -c "$remote_command"
 EOF
 
 cat > "$FAKE_BIN/scp" <<'EOF'
@@ -46,6 +74,13 @@ cp "$source_path" "$remote_path"
 EOF
 
 chmod +x "$FAKE_BIN/git" "$FAKE_BIN/ssh" "$FAKE_BIN/scp"
+
+cat > "$APP_DIR/deploy/server-deploy.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'server-deploy-executed\n' >> "$REMOTE_ORDER_LOG"
+EOF
+chmod +x "$APP_DIR/deploy/server-deploy.sh"
 
 cat > "$ROOT_ENV" <<'EOF'
 MONGO_URI=mongodb://root-example
@@ -67,6 +102,7 @@ run_deploy() {
   env \
     PATH="$FAKE_BIN:$PATH" \
     SSH_ARG_LOG="$SSH_ARG_LOG" \
+    REMOTE_ORDER_LOG="$REMOTE_ORDER_LOG" \
     PROD_HOST=unit-test-host \
     APP_DIR="$APP_DIR" \
     REMOTE_ENV_BACKUP="$ROOT_ENV" \
@@ -108,6 +144,7 @@ TRACE_SENTINEL='TRACE_MODE_MUST_NOT_PRINT_THIS_VALUE'
 env \
   PATH="$FAKE_BIN:$PATH" \
   SSH_ARG_LOG="$SSH_ARG_LOG" \
+  REMOTE_ORDER_LOG="$REMOTE_ORDER_LOG" \
   PROD_HOST=unit-test-host \
   APP_DIR="$APP_DIR" \
   REMOTE_ENV_BACKUP="$ROOT_ENV" \
@@ -178,5 +215,31 @@ grep -qx 'UPLOAD_ONLY=preserved' "$ROOT_ENV"
 grep -qx 'GUANGDADA_API_KEY=rotated-placeholder' "$ROOT_ENV"
 grep -qx 'EXTERNAL_MATERIAL_SYNC_ENABLED=true' "$ROOT_ENV"
 test "$(stat -f '%Lp' "$ROOT_ENV" 2>/dev/null || stat -c '%a' "$ROOT_ENV")" = '600'
+grep -qx 'UPLOAD_ONLY=preserved' "$DEPLOY_ENV"
+grep -qx 'GUANGDADA_API_KEY=rotated-placeholder' "$DEPLOY_ENV"
+grep -qx 'EXTERNAL_MATERIAL_SYNC_ENABLED=true' "$DEPLOY_ENV"
+if grep -Fq 'DEPLOY_ONLY=preserved' "$DEPLOY_ENV"; then
+  echo 'full environment rotation preserved a stale runtime-only entry'
+  exit 1
+fi
+test "$(stat -f '%Lp' "$DEPLOY_ENV" 2>/dev/null || stat -c '%a' "$DEPLOY_ENV")" = '600'
+
+rm -rf "$APP_DIR"
+: > "$REMOTE_ORDER_LOG"
+cat > "$ROOT_ENV" <<'EOF'
+MONGO_URI=mongodb://cold-start-example
+COLD_START_ONLY=preserved
+GUANGDADA_API_KEY=old-cold-start-placeholder
+EXTERNAL_MATERIAL_SYNC_ENABLED=false
+EOF
+run_deploy \
+  GUANGDADA_API_KEY='cold-start-placeholder' \
+  EXTERNAL_MATERIAL_SYNC_ENABLED=true >"$TEST_DIR/cold-start.log"
+test -d "$APP_DIR/.git"
+grep -qx 'COLD_START_ONLY=preserved' "$DEPLOY_ENV"
+grep -qx 'GUANGDADA_API_KEY=cold-start-placeholder' "$DEPLOY_ENV"
+test "$(stat -f '%Lp' "$DEPLOY_ENV" 2>/dev/null || stat -c '%a' "$DEPLOY_ENV")" = '600'
+expected_order=$'prepare\nsecret-sync\nserver-command\nserver-deploy-executed'
+test "$(cat "$REMOTE_ORDER_LOG")" = "$expected_order"
 
 echo 'prod secret sync tests passed'

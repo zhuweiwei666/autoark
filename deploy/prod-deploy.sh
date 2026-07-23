@@ -66,6 +66,73 @@ if [ -n "${AUTOARK_ENV_FILE:-}" ]; then
   ssh "$PROD_HOST" "chmod 600 '$REMOTE_ENV_BACKUP'"
 fi
 
+REMOTE_ENV_ROTATION_MODE='preserve'
+if [ -n "${AUTOARK_ENV_FILE:-}" ]; then
+  REMOTE_ENV_ROTATION_MODE='full'
+fi
+
+read -r -d '' REMOTE_PREPARE_DEPLOY_SCRIPT <<'REMOTE_SCRIPT' || true
+# AUTOARK_PREPARE_DEPLOY_V1
+set -euo pipefail
+
+app_dir="$1"
+repo_url="$2"
+autoark_ref="$3"
+backup_env_path="$4"
+env_rotation_mode="$5"
+deploy_env_path="$app_dir/deploy/.env"
+
+mkdir -p -- "$(dirname -- "$app_dir")"
+if [ ! -d "$app_dir/.git" ]; then
+  git clone "$repo_url" "$app_dir"
+fi
+
+cd "$app_dir"
+git fetch origin
+if git show-ref --verify --quiet "refs/remotes/origin/$autoark_ref"; then
+  git checkout -B "$autoark_ref" "origin/$autoark_ref"
+  git pull --ff-only origin "$autoark_ref"
+else
+  git checkout --detach "$autoark_ref"
+fi
+
+mkdir -p -- "$app_dir/deploy"
+if [ "$env_rotation_mode" = 'full' ]; then
+  if [ ! -f "$backup_env_path" ]; then
+    echo "Missing uploaded production env at $backup_env_path"
+    exit 1
+  fi
+  deploy_env_temp="$(mktemp "$app_dir/deploy/.env.tmp.XXXXXX")"
+  trap 'rm -f -- "$deploy_env_temp"' EXIT
+  cp -- "$backup_env_path" "$deploy_env_temp"
+  chmod 600 "$deploy_env_temp"
+  mv -f -- "$deploy_env_temp" "$deploy_env_path"
+  trap - EXIT
+elif [ ! -f "$deploy_env_path" ]; then
+  if [ ! -f "$backup_env_path" ]; then
+    echo "Missing deploy/.env and no remote env backup found at $backup_env_path"
+    exit 1
+  fi
+  cp -- "$backup_env_path" "$deploy_env_path"
+fi
+
+if [ ! -f "$backup_env_path" ]; then
+  cp -- "$deploy_env_path" "$backup_env_path"
+fi
+chmod 600 "$backup_env_path" "$deploy_env_path"
+REMOTE_SCRIPT
+
+printf -v QUOTED_REMOTE_PREPARE_DEPLOY_SCRIPT '%q' "$REMOTE_PREPARE_DEPLOY_SCRIPT"
+printf -v QUOTED_APP_DIR '%q' "$APP_DIR"
+printf -v QUOTED_REPO_URL '%q' "$REPO_URL"
+printf -v QUOTED_AUTOARK_REF '%q' "$AUTOARK_REF"
+printf -v QUOTED_REMOTE_ENV_BACKUP '%q' "$REMOTE_ENV_BACKUP"
+printf -v QUOTED_REMOTE_ENV_ROTATION_MODE '%q' "$REMOTE_ENV_ROTATION_MODE"
+REMOTE_PREPARE_DEPLOY_COMMAND="bash -c $QUOTED_REMOTE_PREPARE_DEPLOY_SCRIPT -- $QUOTED_APP_DIR $QUOTED_REPO_URL $QUOTED_AUTOARK_REF $QUOTED_REMOTE_ENV_BACKUP $QUOTED_REMOTE_ENV_ROTATION_MODE"
+
+log "Preparing ref=$AUTOARK_REF at $PROD_HOST:$APP_DIR"
+ssh "$PROD_HOST" "$REMOTE_PREPARE_DEPLOY_COMMAND"
+
 read -r -d '' REMOTE_SECRET_SYNC_SCRIPT <<'REMOTE_SCRIPT' || true
 # AUTOARK_SECRET_SYNC_V1
 set +x
@@ -97,15 +164,12 @@ case "$provider_key" in
     ;;
 esac
 
-umask 077
-mkdir -p -- "$(dirname -- "$backup_env_path")" "$(dirname -- "$deploy_env_path")"
-if [ ! -e "$backup_env_path" ] && [ -e "$deploy_env_path" ]; then
-  cp -- "$deploy_env_path" "$backup_env_path"
-elif [ ! -e "$deploy_env_path" ] && [ -e "$backup_env_path" ]; then
-  cp -- "$backup_env_path" "$deploy_env_path"
-fi
-[ -e "$backup_env_path" ] || : > "$backup_env_path"
-[ -e "$deploy_env_path" ] || : > "$deploy_env_path"
+for env_path in "$backup_env_path" "$deploy_env_path"; do
+  if [ ! -f "$env_path" ]; then
+    echo "Missing prepared production environment file: $env_path"
+    exit 1
+  fi
+done
 
 update_named_env_entry() {
   local env_path="$1"
@@ -150,7 +214,6 @@ done
 REMOTE_SCRIPT
 
 printf -v QUOTED_REMOTE_SECRET_SYNC_SCRIPT '%q' "$REMOTE_SECRET_SYNC_SCRIPT"
-printf -v QUOTED_REMOTE_ENV_BACKUP '%q' "$REMOTE_ENV_BACKUP"
 printf -v QUOTED_REMOTE_DEPLOY_ENV '%q' "$APP_DIR/deploy/.env"
 REMOTE_SECRET_SYNC_COMMAND="bash -c $QUOTED_REMOTE_SECRET_SYNC_SCRIPT -- $QUOTED_REMOTE_ENV_BACKUP $QUOTED_REMOTE_DEPLOY_ENV"
 
@@ -158,31 +221,23 @@ log "Synchronizing GUANGDADA_API_KEY and EXTERNAL_MATERIAL_SYNC_ENABLED"
 printf '%s\0%s\0' "$GUANGDADA_API_KEY" "$EXTERNAL_MATERIAL_SYNC_ENABLED" |
   ssh "$PROD_HOST" "$REMOTE_SECRET_SYNC_COMMAND"
 
+read -r -d '' REMOTE_SERVER_DEPLOY_SCRIPT <<'REMOTE_SCRIPT' || true
+# AUTOARK_SERVER_DEPLOY_V1
+set -euo pipefail
+
+app_dir="$1"
+repo_url="$2"
+autoark_ref="$3"
+cd "$app_dir"
+APP_DIR="$app_dir" REPO_URL="$repo_url" AUTOARK_REF="$autoark_ref" \
+  bash deploy/server-deploy.sh
+REMOTE_SCRIPT
+
+printf -v QUOTED_REMOTE_SERVER_DEPLOY_SCRIPT '%q' "$REMOTE_SERVER_DEPLOY_SCRIPT"
+REMOTE_SERVER_DEPLOY_COMMAND="bash -c $QUOTED_REMOTE_SERVER_DEPLOY_SCRIPT -- $QUOTED_APP_DIR $QUOTED_REPO_URL $QUOTED_AUTOARK_REF"
+
 log "Deploying ref=$AUTOARK_REF to $PROD_HOST:$APP_DIR"
-ssh "$PROD_HOST" "set -euo pipefail
-  if [ ! -d '$APP_DIR/.git' ]; then
-    mkdir -p '$APP_DIR'
-    git clone '$REPO_URL' '$APP_DIR'
-  fi
-  cd '$APP_DIR'
-  git fetch origin
-  if git show-ref --verify --quiet 'refs/remotes/origin/$AUTOARK_REF'; then
-    git checkout -B '$AUTOARK_REF' 'origin/$AUTOARK_REF'
-    git pull --ff-only origin '$AUTOARK_REF'
-  else
-    git checkout --detach '$AUTOARK_REF'
-  fi
-  if [ ! -f deploy/.env ]; then
-    if [ -f '$REMOTE_ENV_BACKUP' ]; then
-      cp '$REMOTE_ENV_BACKUP' deploy/.env
-      chmod 600 deploy/.env
-    else
-      echo 'Missing deploy/.env and no remote env backup found at $REMOTE_ENV_BACKUP'
-      exit 1
-    fi
-  fi
-  APP_DIR='$APP_DIR' REPO_URL='$REPO_URL' AUTOARK_REF='$AUTOARK_REF' bash deploy/server-deploy.sh
-"
+ssh "$PROD_HOST" "$REMOTE_SERVER_DEPLOY_COMMAND"
 
 if [ "${AUTOARK_SKIP_VERIFY:-false}" != "true" ]; then
   log "Running production verification"

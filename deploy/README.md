@@ -49,8 +49,9 @@ AUTOARK_SKIP_VERIFY=true bash deploy/prod-deploy.sh
 GitHub Actions supplies `GUANGDADA_API_KEY` from the repository secret of the
 same name and `EXTERNAL_MATERIAL_SYNC_ENABLED` from the repository variable of
 the same name only to the deploy step. `AUTOARK_ENV_FILE` remains supported for
-full environment-file rotation; the two external-material entries are reconciled
-after that upload.
+full environment-file rotation: after checkout, the uploaded file atomically
+replaces the complete runtime `deploy/.env`, then the two external-material
+entries are reconciled from the deploy-step environment.
 
 ## First Server Bootstrap
 
