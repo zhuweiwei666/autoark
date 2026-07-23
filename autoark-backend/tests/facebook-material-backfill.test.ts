@@ -31,8 +31,11 @@ import { backfillFacebookOriginalImages } from '../src/services/facebookMaterial
 const leanQuery = (value: any) => ({ lean: jest.fn().mockResolvedValue(value) })
 
 describe('Facebook original image backfill', () => {
+  const originalSyncEnabled = process.env.FACEBOOK_SYNC_ENABLED
+
   beforeEach(() => {
     jest.clearAllMocks()
+    process.env.FACEBOOK_SYNC_ENABLED = 'true'
     const creatives = [
       {
         creativeId: 'creative-1',
@@ -53,15 +56,32 @@ describe('Facebook original image backfill', () => {
     mockCreativeFind.mockReturnValue({
       limit: jest.fn().mockReturnValue(leanQuery(creatives)),
     })
-    mockAccountFind.mockReturnValue(leanQuery([
-      { accountId: 'act_123', token: 'TOKEN_123', organizationId: { toString: () => 'org-account' } },
-    ]))
+    mockAccountFind.mockReturnValue(
+      leanQuery([
+        {
+          accountId: 'act_123',
+          token: 'TOKEN_123',
+          organizationId: { toString: () => 'org-account' },
+        },
+      ]),
+    )
     mockGetJob.mockResolvedValue(null)
     mockAdd.mockResolvedValue({ id: 'queued' })
   })
 
+  afterAll(() => {
+    if (originalSyncEnabled === undefined) {
+      delete process.env.FACEBOOK_SYNC_ENABLED
+    } else {
+      process.env.FACEBOOK_SYNC_ENABLED = originalSyncEnabled
+    }
+  })
+
   it('previews eligible originals without mutating the queue', async () => {
-    const result = await backfillFacebookOriginalImages({ dryRun: true, maxJobs: 100 })
+    const result = await backfillFacebookOriginalImages({
+      dryRun: true,
+      maxJobs: 100,
+    })
 
     expect(result).toMatchObject({
       dryRun: true,
@@ -75,10 +95,12 @@ describe('Facebook original image backfill', () => {
   })
 
   it('requires confirmation and queues a bounded original-image-only job', async () => {
-    await expect(backfillFacebookOriginalImages({
-      dryRun: false,
-      confirmation: 'wrong',
-    })).rejects.toThrow('BACKFILL_FACEBOOK_ORIGINAL_IMAGES')
+    await expect(
+      backfillFacebookOriginalImages({
+        dryRun: false,
+        confirmation: 'wrong',
+      }),
+    ).rejects.toThrow('BACKFILL_FACEBOOK_ORIGINAL_IMAGES')
 
     const result = await backfillFacebookOriginalImages({
       dryRun: false,
@@ -105,5 +127,25 @@ describe('Facebook original image backfill', () => {
       }),
     )
     expect(result).toMatchObject({ eligible: 1, queued: 1, skippedNoToken: 1 })
+  })
+
+  it('keeps previews available but blocks applied backfills while sync is disabled', async () => {
+    process.env.FACEBOOK_SYNC_ENABLED = 'false'
+
+    const preview = await backfillFacebookOriginalImages({
+      dryRun: true,
+      maxJobs: 100,
+    })
+
+    expect(preview).toMatchObject({ dryRun: true, eligible: 1, queued: 0 })
+
+    await expect(
+      backfillFacebookOriginalImages({
+        dryRun: false,
+        confirmation: 'BACKFILL_FACEBOOK_ORIGINAL_IMAGES',
+        maxJobs: 100,
+      }),
+    ).rejects.toThrow('Facebook sync is disabled')
+    expect(mockAdd).not.toHaveBeenCalled()
   })
 })

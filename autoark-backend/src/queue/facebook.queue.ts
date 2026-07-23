@@ -19,6 +19,31 @@ let campaignQueue: Queue | null = null
 let adQueue: Queue | null = null
 let materialQueue: Queue | null = null
 
+type FacebookQueueEntry = {
+  name: string
+  queue: Queue
+}
+
+type PauseableFacebookQueueEntry = {
+  name: string
+  queue: Pick<Queue, 'isPaused' | 'pause'>
+}
+
+const getFacebookQueueEntries = (): FacebookQueueEntry[] => {
+  const queues: FacebookQueueEntry[] = []
+  if (accountQueue) {
+    queues.push({ name: 'facebook.account.sync', queue: accountQueue })
+  }
+  if (campaignQueue) {
+    queues.push({ name: 'facebook.campaign.sync', queue: campaignQueue })
+  }
+  if (adQueue) queues.push({ name: 'facebook.ad.sync', queue: adQueue })
+  if (materialQueue) {
+    queues.push({ name: 'facebook.material.sync', queue: materialQueue })
+  }
+  return queues
+}
+
 if (isRedisAvailable()) {
   try {
     queueOptions = {
@@ -60,14 +85,8 @@ if (isRedisAvailable()) {
 }
 
 export const initQueues = () => {
-  if (!accountQueue || !campaignQueue || !adQueue || !materialQueue) return
-
-  const queues = [
-    { name: 'facebook.account.sync', queue: accountQueue },
-    { name: 'facebook.campaign.sync', queue: campaignQueue },
-    { name: 'facebook.ad.sync', queue: adQueue },
-    { name: 'facebook.material.sync', queue: materialQueue },
-  ]
+  const queues = getFacebookQueueEntries()
+  if (queues.length !== 4) return
 
   queues.forEach(({ name, queue }) => {
     queue.on('error', (err) => {
@@ -77,6 +96,29 @@ export const initQueues = () => {
   })
 
   logger.info('[Queue] Facebook sync queues initialized')
+}
+
+export const pauseFacebookSyncQueues = async (
+  queues: PauseableFacebookQueueEntry[] = getFacebookQueueEntries(),
+) => {
+  if (queues.length === 0) {
+    logger.warn('[Queue] Facebook sync queues unavailable; nothing to pause')
+    return { available: false, pausedQueues: [] as string[] }
+  }
+
+  await Promise.all(
+    queues.map(async ({ queue }) => {
+      if (!(await queue.isPaused())) {
+        await queue.pause()
+      }
+    }),
+  )
+
+  const pausedQueues = queues.map(({ name }) => name)
+  logger.warn(
+    `[Queue] Facebook sync disabled; globally paused: ${pausedQueues.join(', ')}`,
+  )
+  return { available: true, pausedQueues }
 }
 
 export { accountQueue, campaignQueue, adQueue, materialQueue, queueOptions }

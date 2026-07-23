@@ -49,8 +49,13 @@ const accounts = [
 ]
 
 describe('facebook queue scheduler safety', () => {
+  const originalSyncEnabled = process.env.FACEBOOK_SYNC_ENABLED
+  const originalBatchLimit = process.env.FACEBOOK_SYNC_ACCOUNT_BATCH_LIMIT
+
   beforeEach(() => {
     jest.clearAllMocks()
+    process.env.FACEBOOK_SYNC_ENABLED = 'true'
+    delete process.env.FACEBOOK_SYNC_ACCOUNT_BATCH_LIMIT
     mockAccountFind.mockResolvedValue(accounts)
     mockGetWorkersCount.mockResolvedValue(1)
     mockGetJobs.mockResolvedValue([])
@@ -58,6 +63,30 @@ describe('facebook queue scheduler safety', () => {
     mockIsPaused.mockResolvedValue(false)
     mockResume.mockResolvedValue(undefined)
     mockAdd.mockImplementation(async (_name, data, options) => ({ data, opts: options }))
+  })
+
+  afterAll(() => {
+    if (originalSyncEnabled === undefined) {
+      delete process.env.FACEBOOK_SYNC_ENABLED
+    } else {
+      process.env.FACEBOOK_SYNC_ENABLED = originalSyncEnabled
+    }
+    if (originalBatchLimit === undefined) {
+      delete process.env.FACEBOOK_SYNC_ACCOUNT_BATCH_LIMIT
+    } else {
+      process.env.FACEBOOK_SYNC_ACCOUNT_BATCH_LIMIT = originalBatchLimit
+    }
+  })
+
+  it('refuses scheduled and manual queue writes while the production stop is active', async () => {
+    process.env.FACEBOOK_SYNC_ENABLED = 'false'
+
+    await expect(syncCampaignsFromAdAccountsV2()).rejects.toThrow(
+      'Facebook sync is disabled',
+    )
+
+    expect(mockGetWorkersCount).not.toHaveBeenCalled()
+    expect(mockAdd).not.toHaveBeenCalled()
   })
 
   it('fails closed when no account worker is consuming the queue', async () => {
@@ -162,6 +191,25 @@ describe('facebook queue scheduler safety', () => {
     expect(result).toMatchObject({ syncedAccounts: 1, jobsQueued: 1 })
   })
 
+  it('limits a scheduled cycle even when the caller omits a limit', async () => {
+    process.env.FACEBOOK_SYNC_ACCOUNT_BATCH_LIMIT = '25'
+    mockAccountFind.mockResolvedValue(Array.from({ length: 80 }, (_, index) => ({
+      accountId: String(index + 1).padStart(3, '0'),
+      token: `TOKEN_${index + 1}`,
+      status: 'active',
+    })))
+
+    const result = await syncCampaignsFromAdAccountsV2()
+
+    expect(mockAdd).toHaveBeenCalledTimes(25)
+    expect(result).toMatchObject({
+      syncedAccounts: 25,
+      jobsQueued: 25,
+      totalActiveAccounts: 80,
+      batchLimit: 25,
+    })
+  })
+
   it('previews recovery without removing jobs and requires exact confirmation to apply', async () => {
     const prioritized = { id: 'p1', remove: jest.fn() }
     const failed = { id: 'f1', remove: jest.fn() }
@@ -206,6 +254,18 @@ describe('facebook queue scheduler safety', () => {
     expect(mockResume).toHaveBeenCalledTimes(4)
     expect(jobs.every((job) => job.remove.mock.calls.length === 1)).toBe(true)
     expect(mockGetJobs).not.toHaveBeenCalledWith(expect.arrayContaining(['active']), expect.anything(), expect.anything())
+  })
+
+  it('does not resume queues while the production stop is active', async () => {
+    process.env.FACEBOOK_SYNC_ENABLED = 'false'
+
+    await expect(recoverFacebookAccountQueue({
+      dryRun: false,
+      confirmation: 'RECOVER_FACEBOOK_ACCOUNT_QUEUE',
+      maxJobs: 10,
+    })).rejects.toThrow('Facebook sync is disabled')
+
+    expect(mockResume).not.toHaveBeenCalled()
   })
 
   it('previews and then retries bounded failed jobs for one selected queue', async () => {

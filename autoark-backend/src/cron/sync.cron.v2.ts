@@ -1,12 +1,18 @@
 import cron from 'node-cron'
 import * as facebookCampaignsV2Service from '../services/facebook.campaigns.v2.service'
 import logger from '../utils/logger'
+import { isFacebookSyncEnabled } from '../config/facebookSync'
 
 /**
  * 新版本的同步 Cron
  * 使用 BullMQ 队列 + 并发 Worker
  */
 const initSyncCronV2 = () => {
+  if (!isFacebookSyncEnabled()) {
+    logger.warn('[Sync Cron V2] Facebook sync disabled; cron not scheduled')
+    return
+  }
+
   const interval = process.env.CRON_SYNC_INTERVAL || '10' // Default 10 mins
   const schedule = `*/${interval} * * * *`
 

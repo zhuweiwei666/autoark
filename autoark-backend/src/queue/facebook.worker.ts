@@ -17,6 +17,12 @@ import { fetchFacebookEdgePages } from '../integration/facebook/pagination'
 import { parseFacebookPurchaseRoas } from '../utils/facebookMetrics'
 import { quarantineTerminalFacebookAccount } from '../services/facebookAccountAuthFailure.service'
 import { canProcessFacebookOriginalImageJob } from '../services/facebookMaterialEligibility.service'
+import {
+  FACEBOOK_INSIGHTS_DATE_PRESETS,
+  getFacebookQueueRateLimitPerMinute,
+  getFacebookWorkerConcurrency,
+  isFacebookSyncEnabled,
+} from '../config/facebookSync'
 
 // Worker 实例（延迟初始化）
 let accountWorker: Worker | null = null
@@ -57,6 +63,11 @@ const extractVideoIdFromSpec = (spec: any): string | undefined => {
 
 // 初始化 Workers（延迟调用，确保 Redis 已连接）
 export const initWorkers = async (): Promise<void> => {
+  if (!isFacebookSyncEnabled()) {
+    logger.warn('[Worker] Facebook sync workers not initialized (sync disabled)')
+    return
+  }
+
   const client = getRedisClient()
   if (!client) {
     logger.warn('[Worker] Workers not initialized (Redis not configured)')
@@ -72,7 +83,7 @@ export const initWorkers = async (): Promise<void> => {
       connection,
       concurrency,
       limiter: {
-        max: 80,
+        max: getFacebookQueueRateLimitPerMinute(),
         duration: 60000,
       },
     }
@@ -142,7 +153,7 @@ export const initWorkers = async (): Promise<void> => {
         throw error
       }
     },
-    createWorkerOptions(5)
+    createWorkerOptions(getFacebookWorkerConcurrency('account'))
   )
 
   // ==================== 2. Campaign Sync Worker ====================
@@ -300,7 +311,7 @@ export const initWorkers = async (): Promise<void> => {
         throw error
       }
     },
-    createWorkerOptions(10)
+    createWorkerOptions(getFacebookWorkerConcurrency('campaign'))
   )
 
   // ==================== 3. Ad Sync Worker ====================
@@ -310,7 +321,7 @@ export const initWorkers = async (): Promise<void> => {
       const { accountId, campaignId, adId, adsetId, token } = job.data
 
       try {
-        const datePresets = ['today', 'yesterday', 'last_3d', 'last_7d']
+        const datePresets = FACEBOOK_INSIGHTS_DATE_PRESETS
         
         const promises = datePresets.map(async (preset) => {
           const insights = await fetchInsights(adId, 'ad', preset, token, ['country'])
@@ -342,7 +353,6 @@ export const initWorkers = async (): Promise<void> => {
               datePreset: preset,
               adId: adId,
               country: country,
-              raw: insight,
               accountId: normalizeForStorage(accountId),
               campaignId: campaignId,
               adsetId: adsetId,
@@ -375,7 +385,6 @@ export const initWorkers = async (): Promise<void> => {
                 actions: insight.actions,
                 action_values: insight.action_values,
                 mobile_app_install_count: mobileAppInstall,
-                raw: insight,
               })
             }
           }
@@ -388,7 +397,7 @@ export const initWorkers = async (): Promise<void> => {
         throw error
       }
     },
-    createWorkerOptions(20)
+    createWorkerOptions(getFacebookWorkerConcurrency('ad'))
   )
 
   // ==================== 4. Material Ingestion Worker ====================
@@ -412,7 +421,7 @@ export const initWorkers = async (): Promise<void> => {
       }
       return result
     },
-    createWorkerOptions(2),
+    createWorkerOptions(getFacebookWorkerConcurrency('material')),
   )
 
   // 设置错误处理

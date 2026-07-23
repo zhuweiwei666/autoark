@@ -4,12 +4,13 @@ import './config/env'
 import app from './app'
 import connectDB from './config/db'
 import { initRedis } from './config/redis'
+import { isFacebookSyncEnabled } from './config/facebookSync'
 import logger from './utils/logger'
 import { tokenPool } from './services/facebook.token.pool'
 import { ensureMetricsDailyIndexCompatibility } from './services/facebook.upsert.service'
 
 // Queues & Workers
-import { initQueues } from './queue/facebook.queue'
+import { initQueues, pauseFacebookSyncQueues } from './queue/facebook.queue'
 import { initWorkers } from './queue/facebook.worker'
 import { initBulkAdWorker } from './queue/bulkAd.worker'
 import { initAutomationWorker } from './queue/automation.worker'
@@ -55,7 +56,12 @@ async function bootstrap() {
 
   // 4) Queues & Workers (only if Redis is configured)
   initQueues()
-  await initWorkers()
+  if (isFacebookSyncEnabled()) {
+    await initWorkers()
+  } else {
+    await pauseFacebookSyncQueues()
+    logger.warn('[Bootstrap] Facebook sync workers are disabled for storage protection')
+  }
   initBulkAdWorker()
   initAutomationWorker()
 

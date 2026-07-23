@@ -2,6 +2,11 @@ import Account from '../models/Account'
 import { accountQueue, campaignQueue, adQueue, materialQueue } from '../queue/facebook.queue'
 import logger from '../utils/logger'
 import { normalizeForStorage } from '../utils/accountId'
+import {
+  FACEBOOK_SYNC_DISABLED_MESSAGE,
+  getFacebookSyncAccountBatchLimit,
+  isFacebookSyncEnabled,
+} from '../config/facebookSync'
 
 // 检查队列是否可用
 const isQueueAvailable = (): boolean => {
@@ -16,6 +21,10 @@ export const syncCampaignsFromAdAccountsV2 = async (options?: {
   limit?: number
   preventOverlap?: boolean
 }) => {
+  if (!isFacebookSyncEnabled()) {
+    throw new Error(FACEBOOK_SYNC_DISABLED_MESSAGE)
+  }
+
   if (!isQueueAvailable()) {
     throw new Error('Queue system not available. Please configure REDIS_URL environment variable.')
   }
@@ -94,11 +103,30 @@ export const syncCampaignsFromAdAccountsV2 = async (options?: {
       const requested = new Set(options.accountIds.map(normalizeForStorage).filter(Boolean))
       accounts = accounts.filter((account) => requested.has(normalizeForStorage(account.accountId)))
     }
-    if (options?.limit !== undefined) {
-      const limit = Math.min(100, Math.max(1, Math.floor(Number(options.limit) || 1)))
-      accounts = accounts.slice(0, limit)
+    accounts = accounts.sort((left, right) => (
+      normalizeForStorage(left.accountId).localeCompare(normalizeForStorage(right.accountId))
+    ))
+    const totalActiveAccounts = accounts.length
+    const requestedLimit = options?.limit ?? (
+      options?.accountIds?.length
+        ? options.accountIds.length
+        : getFacebookSyncAccountBatchLimit()
+    )
+    const batchLimit = Math.min(100, Math.max(1, Math.floor(Number(requestedLimit) || 1)))
+    if (accounts.length > batchLimit) {
+      if (options?.accountIds?.length) {
+        accounts = accounts.slice(0, batchLimit)
+      } else {
+        const offset = (slot * batchLimit) % accounts.length
+        accounts = Array.from(
+          { length: batchLimit },
+          (_, index) => accounts[(offset + index) % accounts.length],
+        )
+      }
     }
-    logger.info(`[Scheduler] Starting sync for ${accounts.length} active ad accounts`)
+    logger.info(
+      `[Scheduler] Starting bounded sync for ${accounts.length}/${totalActiveAccounts} active ad accounts`,
+    )
 
     if (accounts.length === 0) {
       logger.warn('[Scheduler] No active accounts found')
@@ -151,6 +179,8 @@ export const syncCampaignsFromAdAccountsV2 = async (options?: {
       syncedAccounts: accounts.length,
       jobsQueued: jobs.length,
       jobsSkippedPending,
+      totalActiveAccounts,
+      batchLimit,
     }
   } catch (error: any) {
     logger.error('[Scheduler] Failed to queue account sync jobs:', error)
@@ -160,6 +190,9 @@ export const syncCampaignsFromAdAccountsV2 = async (options?: {
 
 // 兼容旧接口
 export const addAccountSyncJob = async (accountId: string, token: string) => {
+  if (!isFacebookSyncEnabled()) {
+    return false
+  }
   if (accountQueue) {
     await accountQueue.add('sync-account', { accountId, token })
     return true
@@ -182,6 +215,9 @@ export const recoverFacebookAccountQueue = async (options?: {
   if (!accountQueue) throw new Error('Queue system not available')
 
   const dryRun = options?.dryRun !== false
+  if (!dryRun && !isFacebookSyncEnabled()) {
+    throw new Error(FACEBOOK_SYNC_DISABLED_MESSAGE)
+  }
   if (!dryRun && options?.confirmation !== RECOVERY_CONFIRMATION) {
     throw new Error(`Queue recovery requires confirmation: ${RECOVERY_CONFIRMATION}`)
   }
@@ -261,6 +297,9 @@ export const retryFacebookQueueFailures = async (options: {
   if (!queue) throw new Error('Queue system not available')
 
   const dryRun = options?.dryRun !== false
+  if (!dryRun && !isFacebookSyncEnabled()) {
+    throw new Error(FACEBOOK_SYNC_DISABLED_MESSAGE)
+  }
   if (!dryRun && options?.confirmation !== RETRY_CONFIRMATION) {
     throw new Error(`Queue retry requires confirmation: ${RETRY_CONFIRMATION}`)
   }
