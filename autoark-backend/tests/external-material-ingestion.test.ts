@@ -728,6 +728,94 @@ describe('external material ingestion', () => {
     expect(mockDeleteR2Object).not.toHaveBeenCalled()
   })
 
+  it('keeps the planned object when an ambiguous Material write has no visible winner', async () => {
+    mockMaterialCreate.mockRejectedValue(
+      new Error('write result unknown after request dispatch'),
+    )
+    mockMaterialFindOne.mockResolvedValue(null)
+
+    const result = await ingestExternalMaterial(
+      candidate('asset-db-ambiguous-no-winner'),
+    )
+
+    expect(result).toEqual({
+      kind: 'failed',
+      retryable: true,
+      category: 'canonical_write_failed',
+    })
+    expect(mockDeleteR2Object).not.toHaveBeenCalled()
+  })
+
+  it('keeps the planned object when the canonical commits after the final reconciliation query', async () => {
+    const bytes = Buffer.from('shared-video-bytes')
+    const plannedKey = plannedExternalKey('asset-db-commit-after-query', bytes)
+    const fingerprintKey = buildMaterialFingerprintKey(
+      undefined,
+      createHash('sha256').update(bytes).digest('hex'),
+    )
+    let createAttempted = false
+    let canonical: any = null
+    let markFinalLookupStarted: (() => void) | undefined
+    let releaseFinalLookup: (() => void) | undefined
+    const finalLookupStarted = new Promise<void>((resolve) => {
+      markFinalLookupStarted = resolve
+    })
+    const finalLookupReleased = new Promise<void>((resolve) => {
+      releaseFinalLookup = resolve
+    })
+    mockMaterialCreate.mockImplementation(async () => {
+      createAttempted = true
+      throw new Error('client disconnected while Material write was in flight')
+    })
+    mockMaterialFindOne.mockImplementation(async (query: any) => {
+      if (
+        query?._id &&
+        canonical &&
+        String(query._id) === String(canonical._id)
+      ) {
+        return canonical
+      }
+      if (!createAttempted) return null
+      if (query?.['storage.key'] === plannedKey) return null
+      if (query?.fingerprintKey === fingerprintKey) {
+        const snapshot = canonical
+        markFinalLookupStarted?.()
+        await finalLookupReleased
+        return snapshot
+      }
+      return null
+    })
+
+    const firstResultPromise = ingestExternalMaterial(
+      candidate('asset-db-commit-after-query'),
+    )
+    await finalLookupStarted
+    canonical = material('material-committed-after-query', {
+      fingerprintKey,
+      storage: {
+        key: plannedKey,
+        url: `https://r2.example/${plannedKey}`,
+      },
+    })
+    releaseFinalLookup?.()
+    const firstResult = await firstResultPromise
+    const retryResult = await ingestExternalMaterial(
+      candidate('asset-db-commit-after-query'),
+    )
+
+    expect(firstResult).toEqual({
+      kind: 'failed',
+      retryable: true,
+      category: 'canonical_write_failed',
+    })
+    expect(retryResult).toEqual({
+      kind: 'contentReused',
+      materialId: 'material-committed-after-query',
+    })
+    expect(mockDeleteR2Object).not.toHaveBeenCalled()
+    expect(mockUploadBufferToR2).toHaveBeenCalledTimes(1)
+  })
+
   it('keeps the planned object when database reconciliation is unavailable', async () => {
     let createAttempted = false
     mockMaterialCreate.mockImplementation(async () => {
@@ -1110,6 +1198,75 @@ describe('external material ingestion', () => {
     }
   })
 
+  it('retries the full newer observation after its insert loses to an older origin row', async () => {
+    jest.useFakeTimers()
+    try {
+      const attempted = material('material-newer-origin-observation')
+      const older = material('material-older-origin-observation')
+      const observedAt = new Date('2026-07-22T04:00:00.000Z')
+      let storedMapping: any = {
+        provider: 'guangdada',
+        providerAssetKey: 'asset-newer-origin-insert-race',
+        materialId: older._id,
+        packageName: 'Older package',
+        productName: 'Older product',
+        heat: 1,
+        lastMediaUrl: 'https://cdn.example/older.mp4',
+        lastSeenAt: new Date('2026-07-22T03:00:00.000Z'),
+      }
+      let writeAttempts = 0
+      mockOriginFindOne
+        .mockResolvedValueOnce(null)
+        .mockImplementation(async () => storedMapping)
+      mockOriginFindOneAndUpdate.mockImplementation(
+        async (_filter: any, update: any) => {
+          writeAttempts += 1
+          if (writeAttempts === 1) throw duplicateKeyError()
+          storedMapping = { ...storedMapping, ...update.$set }
+          return storedMapping
+        },
+      )
+      mockMaterialFindOne.mockImplementation(async (query: any) => {
+        if (query?._id) {
+          if (String(query._id) === String(attempted._id)) return attempted
+          if (String(query._id) === String(older._id)) return older
+        }
+        if (query?.fingerprintKey && Array.isArray(query?.status?.$in)) {
+          return attempted
+        }
+        return null
+      })
+
+      jest.setSystemTime(observedAt)
+      const result = await ingestExternalMaterial(
+        candidate('asset-newer-origin-insert-race', {
+          packageName: 'Newer package',
+          productName: 'Newer product',
+          heat: 99,
+          mediaUrl: 'https://cdn.example/newer.mp4?secret=newer',
+        }),
+      )
+
+      expect(result).toEqual({
+        kind: 'contentReused',
+        materialId: 'material-newer-origin-observation',
+      })
+      expect(writeAttempts).toBe(2)
+      expect(storedMapping).toEqual(
+        expect.objectContaining({
+          materialId: attempted._id,
+          packageName: 'Newer package',
+          productName: 'Newer product',
+          heat: 99,
+          lastMediaUrl: 'https://cdn.example/newer.mp4',
+          lastSeenAt: observedAt,
+        }),
+      )
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
   it('returns a retryable failure when the mapped material is deleted immediately after the origin write', async () => {
     const canonical = material('material-deleted-after-origin-write')
     mockMaterialFindOne.mockImplementation(async (query: any) => {
@@ -1138,38 +1295,44 @@ describe('external material ingestion', () => {
   })
 
   it('rereads the winning origin mapping after a unique upsert race', async () => {
-    const attempted = material('material-origin-attempt')
-    const winner = material('material-origin-winner')
-    const winningMapping = {
-      provider: 'guangdada',
-      providerAssetKey: 'asset-origin-unique-race',
-      materialId: winner._id,
-      packageName: 'Winning package',
-      lastSeenAt: new Date('2026-07-22T03:00:00.000Z'),
-    }
-    mockOriginFindOne
-      .mockResolvedValueOnce(null)
-      .mockResolvedValue(winningMapping)
-    mockOriginFindOneAndUpdate.mockRejectedValue(duplicateKeyError())
-    mockMaterialFindOne.mockImplementation(async (query: any) => {
-      if (query?._id && String(query._id) === 'material-origin-winner') {
-        return winner
+    jest.useFakeTimers()
+    try {
+      const attempted = material('material-origin-attempt')
+      const winner = material('material-origin-winner')
+      const winningMapping = {
+        provider: 'guangdada',
+        providerAssetKey: 'asset-origin-unique-race',
+        materialId: winner._id,
+        packageName: 'Winning package',
+        lastSeenAt: new Date('2026-07-22T03:00:00.000Z'),
       }
-      if (query?.fingerprintKey) return attempted
-      return null
-    })
+      mockOriginFindOne
+        .mockResolvedValueOnce(null)
+        .mockResolvedValue(winningMapping)
+      mockOriginFindOneAndUpdate.mockRejectedValue(duplicateKeyError())
+      mockMaterialFindOne.mockImplementation(async (query: any) => {
+        if (query?._id && String(query._id) === 'material-origin-winner') {
+          return winner
+        }
+        if (query?.fingerprintKey) return attempted
+        return null
+      })
 
-    const result = await ingestExternalMaterial(
-      candidate('asset-origin-unique-race'),
-    )
+      jest.setSystemTime(new Date('2026-07-22T02:00:00.000Z'))
+      const result = await ingestExternalMaterial(
+        candidate('asset-origin-unique-race'),
+      )
 
-    expect(result).toEqual({
-      kind: 'contentReused',
-      materialId: 'material-origin-winner',
-    })
-    expect(mockOriginFindOneAndUpdate).toHaveBeenCalledTimes(1)
-    expect(mockDownloadRemoteMedia).toHaveBeenCalledTimes(1)
-    expect(mockUploadBufferToR2).not.toHaveBeenCalled()
+      expect(result).toEqual({
+        kind: 'contentReused',
+        materialId: 'material-origin-winner',
+      })
+      expect(mockOriginFindOneAndUpdate).toHaveBeenCalledTimes(1)
+      expect(mockDownloadRemoteMedia).toHaveBeenCalledTimes(1)
+      expect(mockUploadBufferToR2).not.toHaveBeenCalled()
+    } finally {
+      jest.useRealTimers()
+    }
   })
 
   it('retries only the mapping after creating a canonical material', async () => {

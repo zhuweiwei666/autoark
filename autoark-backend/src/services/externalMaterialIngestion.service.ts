@@ -110,6 +110,14 @@ const materialId = (material: MaterialRecord): string =>
 const materialStorageKey = (material: MaterialRecord): string | undefined =>
   typeof material.storage?.key === 'string' ? material.storage.key : undefined
 
+const observationIsAtLeastAsNew = (
+  mapping: OriginRecord,
+  observedAt: Date,
+): boolean =>
+  mapping.lastSeenAt instanceof Date &&
+  Number.isFinite(mapping.lastSeenAt.getTime()) &&
+  mapping.lastSeenAt.getTime() >= observedAt.getTime()
+
 const boundedString = (
   value: unknown,
   maxLength: number,
@@ -290,7 +298,9 @@ const upsertOrigin = async (
       const winner = (await MaterialOriginMapping.findOne(
         originFilter(candidate),
       )) as unknown as OriginRecord | null
-      if (winner?.materialId) return winner
+      if (winner?.materialId && observationIsAtLeastAsNew(winner, observedAt)) {
+        return winner
+      }
     } catch {
       // Bounded retry also covers delayed visibility after a unique upsert race.
     }
@@ -676,13 +686,8 @@ const ingestValidatedCandidate = async (
       }
 
       if (winner) return cleanupDifferentWinner(winner)
-      if (!(await cleanupOwnObject(plannedStorageKey))) {
-        return {
-          kind: 'failed',
-          retryable: true,
-          category: 'storage_cleanup_failed',
-        }
-      }
+      // Empty snapshots cannot prove the ambiguous write did not commit.
+      // Keep the deterministic key so a later retry can reconcile it safely.
       return {
         kind: 'failed',
         retryable: true,
