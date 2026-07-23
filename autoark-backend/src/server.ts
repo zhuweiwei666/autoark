@@ -13,6 +13,14 @@ import { initQueues } from './queue/facebook.queue'
 import { initWorkers } from './queue/facebook.worker'
 import { initBulkAdWorker } from './queue/bulkAd.worker'
 import { initAutomationWorker } from './queue/automation.worker'
+import {
+  closeExternalMaterialQueue,
+  initExternalMaterialQueue,
+} from './queue/externalMaterial.queue'
+import {
+  closeExternalMaterialWorker,
+  initExternalMaterialWorker,
+} from './queue/externalMaterial.worker'
 
 // Agent System V2
 import { initializeAgentSystem } from './agent'
@@ -24,29 +32,59 @@ import initCronJobs from './cron'
 import initSyncCronV2 from './cron/sync.cron.v2'
 import initPreaggregationCron from './cron/preaggregation.cron'
 import initTokenValidationCron from './cron/tokenValidation.cron'
+import { closeExternalMaterialCron } from './cron/externalMaterial.cron'
 
 const PORT = process.env.PORT || 3001
 
-// Handle Uncaught Exceptions
-process.on('uncaughtException', (err) => {
-  logger.error('UNCAUGHT EXCEPTION! Shutting down...', err)
-  process.exit(1)
-})
+let httpServer: ReturnType<typeof app.listen> | null = null
+let shuttingDown: Promise<void> | null = null
+let processHandlersRegistered = false
 
-// Handle Unhandled Rejections
-process.on('unhandledRejection', (err: any) => {
-  logger.error('UNHANDLED REJECTION! Shutting down...', err)
-  // Ideally we should close the server gracefully, but process.exit is acceptable here
-  process.exit(1)
-})
+export const shutdown = async (): Promise<void> => {
+  if (shuttingDown) return shuttingDown
+  shuttingDown = (async () => {
+    closeExternalMaterialCron()
+    await closeExternalMaterialWorker()
+    await closeExternalMaterialQueue()
+    const server = httpServer
+    httpServer = null
+    if (server) {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve())
+      })
+    }
+  })()
+  return shuttingDown
+}
 
-async function bootstrap() {
+const registerProcessHandlers = () => {
+  if (processHandlersRegistered) return
+  processHandlersRegistered = true
+
+  process.on('uncaughtException', (err) => {
+    logger.error('UNCAUGHT EXCEPTION! Shutting down...', err)
+    void shutdown().finally(() => process.exit(1))
+  })
+
+  process.on('unhandledRejection', (err: unknown) => {
+    logger.error('UNHANDLED REJECTION! Shutting down...', err)
+    void shutdown().finally(() => process.exit(1))
+  })
+
+  for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+    process.once(signal, () => {
+      void shutdown().finally(() => process.exit(0))
+    })
+  }
+}
+
+export async function bootstrap() {
   // 1) DB
   await connectDB()
   await ensureMetricsDailyIndexCompatibility()
 
   // 2) Redis (optional)
-  initRedis()
+  const redis = initRedis()
 
   // 3) Token Pool
   tokenPool.initialize().catch((error) => {
@@ -58,6 +96,8 @@ async function bootstrap() {
   await initWorkers()
   initBulkAdWorker()
   initAutomationWorker()
+  await initExternalMaterialQueue(redis)
+  await initExternalMaterialWorker(redis)
 
   // 5) Agent System V2 (register all tools)
   initializeAgentSystem()
@@ -70,12 +110,16 @@ async function bootstrap() {
   initTokenValidationCron()
 
   // 7) HTTP Server
-  app.listen(PORT, () => {
+  httpServer = app.listen(PORT, () => {
     logger.info(`AutoArk backend running on port ${PORT}`)
   })
+  return httpServer
 }
 
-bootstrap().catch((err) => {
-  logger.error('[Bootstrap] Failed to start server:', err)
-  process.exit(1)
-})
+if (require.main === module) {
+  registerProcessHandlers()
+  bootstrap().catch((err) => {
+    logger.error('[Bootstrap] Failed to start server:', err)
+    void shutdown().finally(() => process.exit(1))
+  })
+}

@@ -1,9 +1,9 @@
-import cron from 'node-cron'
 import { initAggregationCron } from './aggregation.cron'
 import { initAccountSyncCron } from './accountSync.cron'
 import { initFacebookUserAssetsCron } from './facebookUserAssets.cron'
 import { initAgentAutoRunCron } from './agentAutoRun.cron'
 import { initTiktokSyncCron } from './tiktokSync.cron'
+import { initExternalMaterialCron } from './externalMaterial.cron'
 import logger from '../utils/logger'
 
 const initCronJobs = () => {
@@ -21,6 +21,9 @@ const initCronJobs = () => {
 
   // 📊 TikTok 资产同步 (Hourly + Startup)
   initTiktokSyncCron()
+
+  // 🌐 外部素材同步（Every 6 hours，内部 feature gate）
+  initExternalMaterialCron()
 
   logger.info('Cron jobs initialized')
 }
