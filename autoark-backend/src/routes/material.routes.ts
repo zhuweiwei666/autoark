@@ -1,6 +1,13 @@
-import { NextFunction, Request, RequestHandler, Response, Router } from 'express'
+import {
+  NextFunction,
+  Request,
+  RequestHandler,
+  Response,
+  Router,
+} from 'express'
 import multer from 'multer'
 import * as materialController from '../controllers/material.controller'
+import * as externalMaterialController from '../controllers/externalMaterial.controller'
 import { authenticate } from '../middlewares/auth'
 import {
   MAX_DIRECT_UPLOAD_FILES,
@@ -25,7 +32,10 @@ const upload = multer({
   },
   fileFilter: (req, file, cb) => {
     // 只允许图片和视频
-    if (file.mimetype.startsWith('image/') || file.mimetype.startsWith('video/')) {
+    if (
+      file.mimetype.startsWith('image/') ||
+      file.mimetype.startsWith('video/')
+    ) {
       cb(null, true)
     } else {
       cb(new Error('只支持图片和视频文件'))
@@ -33,22 +43,33 @@ const upload = multer({
   },
 })
 
-const uploadErrorMessage = (error: any): string => {
+const uploadErrorMessage = (error: unknown): string => {
   if (error instanceof multer.MulterError) {
     if (error.code === 'LIMIT_FILE_SIZE') {
       return `文件大小超过限制（最大 ${formatBytes(MAX_MATERIAL_FILE_SIZE)}）`
     }
-    if (error.code === 'LIMIT_FILE_COUNT' || error.code === 'LIMIT_UNEXPECTED_FILE') {
+    if (
+      error.code === 'LIMIT_FILE_COUNT' ||
+      error.code === 'LIMIT_UNEXPECTED_FILE'
+    ) {
       return `一次最多上传 ${MAX_DIRECT_UPLOAD_FILES} 个文件`
     }
   }
 
-  return error?.message || '素材上传失败，请稍后重试'
+  if (
+    error &&
+    typeof error === 'object' &&
+    'message' in error &&
+    typeof error.message === 'string'
+  ) {
+    return error.message
+  }
+  return '素材上传失败，请稍后重试'
 }
 
 const handleUpload = (middleware: RequestHandler): RequestHandler => {
   return (req: Request, res: Response, next: NextFunction) => {
-    middleware(req, res, (error: any) => {
+    middleware(req, res, (error?: unknown) => {
       if (!error) return next()
       return res.status(400).json({
         success: false,
@@ -57,6 +78,28 @@ const handleUpload = (middleware: RequestHandler): RequestHandler => {
     })
   }
 }
+
+// 外部素材同步管理（必须位于动态 /:id 路由之前）
+router.get(
+  '/external/guangdada/status',
+  externalMaterialController.requireExternalMaterialRead,
+  externalMaterialController.getGuangdadaExternalStatus,
+)
+router.post(
+  '/external/guangdada/sync',
+  externalMaterialController.requireExternalMaterialManage,
+  externalMaterialController.syncGuangdadaExternal,
+)
+router.post(
+  '/external/guangdada/pause',
+  externalMaterialController.requireExternalMaterialManage,
+  externalMaterialController.pauseGuangdadaExternal,
+)
+router.post(
+  '/external/guangdada/resume',
+  externalMaterialController.requireExternalMaterialManage,
+  externalMaterialController.resumeGuangdadaExternal,
+)
 
 // R2 配置状态
 router.get('/config-status', materialController.getConfigStatus)
@@ -78,13 +121,24 @@ router.post('/confirm-uploads', materialController.confirmUploads)
 // ==================== 传统上传接口（经过服务器） ====================
 
 // 单文件上传
-router.post('/upload', handleUpload(upload.single('file')), materialController.uploadMaterial)
+router.post(
+  '/upload',
+  handleUpload(upload.single('file')),
+  materialController.uploadMaterial,
+)
 
 // 批量上传
-router.post('/upload-batch', handleUpload(upload.array('files', MAX_DIRECT_UPLOAD_FILES)), materialController.uploadMaterialBatch)
+router.post(
+  '/upload-batch',
+  handleUpload(upload.array('files', MAX_DIRECT_UPLOAD_FILES)),
+  materialController.uploadMaterialBatch,
+)
 
 // 素材列表
 router.get('/', materialController.getMaterialList)
+
+// 只读智能分组树（必须位于动态 /:id 路由之前）
+router.get('/smart-groups', materialController.getMaterialSmartGroups)
 
 // 文件夹列表（旧接口，保留兼容）
 router.get('/folders', materialController.getFolders)
@@ -128,6 +182,13 @@ router.post('/record-ad-mapping', materialController.recordAdMapping)
 
 // 批量记录广告-素材映射
 router.post('/record-ad-mappings', materialController.recordAdMappingsBatch)
+
+// 受限外部来源摘要（必须位于动态 /:id 路由之前）
+router.get(
+  '/:id/origins',
+  externalMaterialController.requireExternalMaterialRead,
+  (req, res) => materialController.getMaterialOrigins(req, res),
+)
 
 // 素材详情（含完整数据）
 router.get('/:id/full-data', materialController.getFullData)

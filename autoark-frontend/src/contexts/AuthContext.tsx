@@ -8,6 +8,7 @@ interface User {
   email: string
   role: 'super_admin' | 'org_admin' | 'member'
   organizationId?: string
+  permissions?: string[]
   status: string
 }
 

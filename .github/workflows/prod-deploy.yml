@@ -18,33 +18,66 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    environment: production
 
     steps:
       - uses: actions/checkout@v6
         with:
           ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
 
-      - name: Install production SSH key
+      - name: Validate merged deployment ref
+        id: validate-ref
+        run: |
+          git fetch --no-tags origin main
+          DEPLOY_SHA="$(git rev-parse --verify 'HEAD^{commit}')"
+          if ! git merge-base --is-ancestor "$DEPLOY_SHA" origin/main; then
+            echo 'Deployment ref must already be merged into origin/main.'
+            exit 1
+          fi
+          printf 'sha=%s\n' "$DEPLOY_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Install production SSH identity
         env:
           AUTOARK_PROD_SSH_KEY: ${{ secrets.AUTOARK_PROD_SSH_KEY }}
+          AUTOARK_PROD_HOST_KEY: ${{ secrets.AUTOARK_PROD_HOST_KEY }}
         run: |
           test -n "$AUTOARK_PROD_SSH_KEY"
+          test -n "$AUTOARK_PROD_HOST_KEY"
+          case "$AUTOARK_PROD_HOST_KEY" in
+            *$'\n'* | *$'\r'*)
+              echo 'AUTOARK_PROD_HOST_KEY must contain one public-key line.'
+              exit 1
+              ;;
+            ssh-ed25519\ * | ecdsa-sha2-nistp256\ * | ecdsa-sha2-nistp384\ * | ecdsa-sha2-nistp521\ * | ssh-rsa\ *) ;;
+            *)
+              echo 'AUTOARK_PROD_HOST_KEY must be a trusted SSH host public key.'
+              exit 1
+              ;;
+          esac
           install -d -m 700 ~/.ssh
           printf '%s\n' "$AUTOARK_PROD_SSH_KEY" > ~/.ssh/autoark_prod_key
           chmod 600 ~/.ssh/autoark_prod_key
+          printf 'autoark-prod-production %s\n' "$AUTOARK_PROD_HOST_KEY" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
           cat > ~/.ssh/config <<'EOF'
           Host autoark-prod
             HostName 45.33.103.31
             User root
             IdentityFile ~/.ssh/autoark_prod_key
             IdentitiesOnly yes
-            StrictHostKeyChecking accept-new
+            HostKeyAlias autoark-prod-production
+            UserKnownHostsFile ~/.ssh/known_hosts
+            StrictHostKeyChecking yes
             ServerAliveInterval 10
           EOF
           chmod 600 ~/.ssh/config
 
       - name: Deploy to production
         env:
-          AUTOARK_REF: ${{ inputs.ref }}
+          AUTOARK_REF: ${{ steps.validate-ref.outputs.sha }}
           PROD_HOST: autoark-prod
+          GUANGDADA_API_KEY: ${{ secrets.GUANGDADA_API_KEY }}
+          EXTERNAL_MATERIAL_SYNC_ENABLED: ${{ vars.EXTERNAL_MATERIAL_SYNC_ENABLED || 'false' }}
         run: bash deploy/prod-deploy.sh

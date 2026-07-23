@@ -8,8 +8,51 @@ interface User {
   email: string
   role: string
   status: string
+  permissions?: string[]
   organizationId?: any
   createdAt: string
+}
+
+const MATERIALS_EXTERNAL_READ = 'materials:external:read'
+const MATERIALS_EXTERNAL_MANAGE = 'materials:external:manage'
+const EXTERNAL_MATERIAL_PERMISSIONS = [
+  MATERIALS_EXTERNAL_READ,
+  MATERIALS_EXTERNAL_MANAGE,
+] as const
+type ExternalMaterialPermission = (typeof EXTERNAL_MATERIAL_PERMISSIONS)[number]
+
+const sanitizeExternalPermissions = (permissions: string[] = []) => {
+  const selected = new Set<ExternalMaterialPermission>(
+    permissions.filter((permission) =>
+      EXTERNAL_MATERIAL_PERMISSIONS.includes(
+        permission as ExternalMaterialPermission,
+      ),
+    ) as ExternalMaterialPermission[],
+  )
+  if (selected.has(MATERIALS_EXTERNAL_MANAGE)) {
+    selected.add(MATERIALS_EXTERNAL_READ)
+  }
+  return EXTERNAL_MATERIAL_PERMISSIONS.filter((permission) => selected.has(permission))
+}
+
+const toggleExternalPermission = (
+  permissions: string[],
+  permission: ExternalMaterialPermission,
+  checked: boolean,
+) => {
+  const selected = new Set(sanitizeExternalPermissions(permissions))
+  if (checked) {
+    selected.add(permission)
+    if (permission === MATERIALS_EXTERNAL_MANAGE) {
+      selected.add(MATERIALS_EXTERNAL_READ)
+    }
+  } else {
+    selected.delete(permission)
+    if (permission === MATERIALS_EXTERNAL_READ) {
+      selected.delete(MATERIALS_EXTERNAL_MANAGE)
+    }
+  }
+  return sanitizeExternalPermissions([...selected])
 }
 
 const UserManagementPage: React.FC = () => {
@@ -26,6 +69,7 @@ const UserManagementPage: React.FC = () => {
     email: '',
     role: 'member',
     organizationId: '',
+    permissions: [] as string[],
   })
   const [editFormData, setEditFormData] = useState({
     username: '',
@@ -33,6 +77,7 @@ const UserManagementPage: React.FC = () => {
     role: 'member',
     organizationId: '',
     status: 'active',
+    permissions: [] as string[],
   })
 
   const getCurrentOrganizationId = () => {
@@ -48,6 +93,7 @@ const UserManagementPage: React.FC = () => {
       email: '',
       role: 'member',
       organizationId: isOrgAdmin ? getCurrentOrganizationId() : '',
+      permissions: [],
     })
   }
 
@@ -108,13 +154,23 @@ const UserManagementPage: React.FC = () => {
   const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault()
     try {
+      const createPayload: Record<string, unknown> = {
+        username: formData.username,
+        password: formData.password,
+        email: formData.email,
+        role: formData.role,
+        organizationId: formData.organizationId,
+      }
+      if (isSuperAdmin) {
+        createPayload.permissions = sanitizeExternalPermissions(formData.permissions)
+      }
       const response = await authFetch('/api/users', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`,
         },
-        body: JSON.stringify(formData),
+        body: JSON.stringify(createPayload),
       })
       const data = await response.json()
       if (data.success) {
@@ -162,6 +218,7 @@ const UserManagementPage: React.FC = () => {
       role: userToEdit.role,
       organizationId: userToEdit.organizationId?._id || userToEdit.organizationId || '',
       status: userToEdit.status,
+      permissions: sanitizeExternalPermissions(userToEdit.permissions),
     })
     setShowEditModal(true)
   }
@@ -180,6 +237,7 @@ const UserManagementPage: React.FC = () => {
         updatePayload.role = editFormData.role
         updatePayload.organizationId = editFormData.organizationId
         updatePayload.status = editFormData.status
+        updatePayload.permissions = sanitizeExternalPermissions(editFormData.permissions)
       }
 
       const response = await authFetch(`/api/users/${editingUser._id}`, {
@@ -421,6 +479,45 @@ const UserManagementPage: React.FC = () => {
                         </select>
                       </div>
                     )}
+                    <fieldset className="rounded-lg border border-gray-200 p-3">
+                      <legend className="px-1 text-sm font-medium text-gray-700">
+                        外部素材权限
+                      </legend>
+                      <label className="mt-1 flex items-center gap-2 text-sm text-gray-700">
+                        <input
+                          type="checkbox"
+                          checked={editFormData.permissions.includes(MATERIALS_EXTERNAL_READ)}
+                          onChange={(event) =>
+                            setEditFormData({
+                              ...editFormData,
+                              permissions: toggleExternalPermission(
+                                editFormData.permissions,
+                                MATERIALS_EXTERNAL_READ,
+                                event.target.checked,
+                              ),
+                            })
+                          }
+                        />
+                        查看外部优质素材
+                      </label>
+                      <label className="mt-2 flex items-center gap-2 text-sm text-gray-700">
+                        <input
+                          type="checkbox"
+                          checked={editFormData.permissions.includes(MATERIALS_EXTERNAL_MANAGE)}
+                          onChange={(event) =>
+                            setEditFormData({
+                              ...editFormData,
+                              permissions: toggleExternalPermission(
+                                editFormData.permissions,
+                                MATERIALS_EXTERNAL_MANAGE,
+                                event.target.checked,
+                              ),
+                            })
+                          }
+                        />
+                        管理外部素材同步
+                      </label>
+                    </fieldset>
                   </>
                 )}
                 <div>
@@ -550,6 +647,45 @@ const UserManagementPage: React.FC = () => {
                         </select>
                       </div>
                     )}
+                    <fieldset className="rounded-lg border border-gray-200 p-3">
+                      <legend className="px-1 text-sm font-medium text-gray-700">
+                        外部素材权限
+                      </legend>
+                      <label className="mt-1 flex items-center gap-2 text-sm text-gray-700">
+                        <input
+                          type="checkbox"
+                          checked={formData.permissions.includes(MATERIALS_EXTERNAL_READ)}
+                          onChange={(event) =>
+                            setFormData({
+                              ...formData,
+                              permissions: toggleExternalPermission(
+                                formData.permissions,
+                                MATERIALS_EXTERNAL_READ,
+                                event.target.checked,
+                              ),
+                            })
+                          }
+                        />
+                        查看外部优质素材
+                      </label>
+                      <label className="mt-2 flex items-center gap-2 text-sm text-gray-700">
+                        <input
+                          type="checkbox"
+                          checked={formData.permissions.includes(MATERIALS_EXTERNAL_MANAGE)}
+                          onChange={(event) =>
+                            setFormData({
+                              ...formData,
+                              permissions: toggleExternalPermission(
+                                formData.permissions,
+                                MATERIALS_EXTERNAL_MANAGE,
+                                event.target.checked,
+                              ),
+                            })
+                          }
+                        />
+                        管理外部素材同步
+                      </label>
+                    </fieldset>
                   </>
                 )}
                 {isOrgAdmin && user?.organizationId && (

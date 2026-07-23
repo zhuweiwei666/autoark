@@ -1,5 +1,5 @@
 import jwt from 'jsonwebtoken'
-import { IUser, UserRole } from '../models/User'
+import { IUser, UserPermission, UserRole } from '../models/User'
 
 const DEFAULT_JWT_SECRET = 'your-secret-key-change-in-production'
 const JWT_SECRET = process.env.JWT_SECRET || DEFAULT_JWT_SECRET
@@ -14,6 +14,7 @@ export interface JwtPayload {
   username: string
   email: string
   role: UserRole
+  permissions?: UserPermission[]
   organizationId?: string
 }
 
@@ -37,6 +38,7 @@ export const generateToken = (user: IUser): string => {
     username: user.username,
     email: user.email,
     role: user.role,
+    permissions: user.permissions,
     organizationId: orgId,
   }
 

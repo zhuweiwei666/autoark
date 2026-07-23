@@ -1,5 +1,6 @@
 import {
   deleteFolder,
+  getFolderTree,
   renameFolder,
 } from '../src/controllers/material.controller'
 import Material from '../src/models/Material'
@@ -8,6 +9,7 @@ import Folder from '../src/models/Folder'
 jest.mock('../src/models/Material', () => ({
   __esModule: true,
   default: {
+    aggregate: jest.fn(),
     updateMany: jest.fn(),
   },
 }))
@@ -15,6 +17,7 @@ jest.mock('../src/models/Material', () => ({
 jest.mock('../src/models/Folder', () => ({
   __esModule: true,
   default: {
+    find: jest.fn(),
     findOne: jest.fn(),
     updateMany: jest.fn(),
     deleteMany: jest.fn(),
@@ -123,5 +126,38 @@ describe('material folder path regex safety', () => {
       path: { $regex: '^A\\.B/' },
     })
     expect(res.json).toHaveBeenCalledWith({ success: true })
+  })
+
+  it('counts both uploaded and ready materials in the tenant-scoped folder tree', async () => {
+    const folderQuery: any = {
+      sort: jest.fn(),
+      lean: jest.fn().mockResolvedValue([
+        { path: 'Ready', name: 'Ready' },
+      ]),
+    }
+    folderQuery.sort.mockReturnValue(folderQuery)
+    ;(Folder.find as jest.Mock).mockReturnValue(folderQuery)
+    ;(Material.aggregate as jest.Mock).mockResolvedValue([
+      { _id: 'Ready', count: 2 },
+      { _id: '默认', count: 1 },
+    ])
+    const res = createResponse()
+
+    await getFolderTree(createRequest(), res as any)
+
+    const pipeline = (Material.aggregate as jest.Mock).mock.calls[0][0]
+    expect(pipeline[0].$match).toEqual({
+      $and: [
+        { status: { $in: ['uploaded', 'ready'] } },
+        { organizationId: expect.anything() },
+      ],
+    })
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      data: {
+        folders: [{ path: 'Ready', name: 'Ready', count: 2 }],
+        totalCount: 3,
+      },
+    })
   })
 })

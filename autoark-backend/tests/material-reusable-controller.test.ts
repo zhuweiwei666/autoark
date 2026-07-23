@@ -5,8 +5,8 @@ import { getReusableMaterials } from '../src/services/materialTracking.service'
 jest.mock('../src/models/Material', () => ({
   __esModule: true,
   default: {
+    aggregate: jest.fn(),
     find: jest.fn(),
-    countDocuments: jest.fn(),
   },
 }))
 
@@ -105,14 +105,10 @@ describe('material reusable controller', () => {
   })
 
   it('sanitizes material list filters before querying materials', async () => {
-    const listChain = {
-      sort: jest.fn().mockReturnThis(),
-      skip: jest.fn().mockReturnThis(),
-      limit: jest.fn().mockReturnThis(),
-      lean: jest.fn().mockResolvedValue([]),
-    }
-    ;(Material.find as jest.Mock).mockReturnValue(listChain)
-    ;(Material.countDocuments as jest.Mock).mockResolvedValue(0)
+    ;(Material.aggregate as jest.Mock).mockResolvedValue([{
+      data: [],
+      total: [],
+    }])
 
     const res = createResponse()
 
@@ -126,17 +122,28 @@ describe('material reusable controller', () => {
       sortBy: 'unsafeField',
     }), res as any)
 
-    const query = (Material.find as jest.Mock).mock.calls[0][0]
-    const serialized = JSON.stringify(query)
+    const pipeline = (Material.aggregate as jest.Mock).mock.calls[0][0]
+    const match = pipeline[0].$match
+    const serialized = JSON.stringify(match)
 
     expect(serialized).toContain('"status":"uploaded"')
     expect(serialized).toContain('\\\\.\\\\*')
     expect(serialized).not.toContain('not-real-status')
     expect(serialized).not.toContain('document')
     expect(serialized).not.toContain('$ne')
-    expect(listChain.sort).toHaveBeenCalledWith({ createdAt: -1 })
-    expect(listChain.limit).toHaveBeenCalledWith(100)
-    expect(Material.countDocuments).toHaveBeenCalledWith(query)
+    expect(pipeline).toEqual([
+      { $match: match },
+      {
+        $facet: {
+          data: [
+            { $sort: { createdAt: -1, _id: -1 } },
+            { $skip: 0 },
+            { $limit: 100 },
+          ],
+          total: [{ $count: 'count' }],
+        },
+      },
+    ])
     expect(res.json).toHaveBeenCalledWith({
       success: true,
       data: {
@@ -150,26 +157,31 @@ describe('material reusable controller', () => {
   })
 
   it('shows uploaded and ready materials when the library has no status filter', async () => {
-    const listChain = {
-      sort: jest.fn().mockReturnThis(),
-      skip: jest.fn().mockReturnThis(),
-      limit: jest.fn().mockReturnThis(),
-      lean: jest.fn().mockResolvedValue([]),
-    }
-    ;(Material.find as jest.Mock).mockReturnValue(listChain)
-    ;(Material.countDocuments as jest.Mock).mockResolvedValue(0)
+    ;(Material.aggregate as jest.Mock).mockResolvedValue([{
+      data: [],
+      total: [],
+    }])
 
     const res = createResponse()
 
     await getMaterialList(createRequest(), res as any)
 
-    const query = (Material.find as jest.Mock).mock.calls[0][0]
-    expect(query).toEqual({
+    const pipeline = (Material.aggregate as jest.Mock).mock.calls[0][0]
+    expect(pipeline[0].$match).toEqual({
       $and: [
         { status: { $in: ['uploaded', 'ready'] } },
         { organizationId: expect.anything() },
       ],
     })
-    expect(Material.countDocuments).toHaveBeenCalledWith(query)
+    expect(pipeline[1]).toEqual({
+      $facet: {
+        data: [
+          { $sort: { createdAt: -1, _id: -1 } },
+          { $skip: 0 },
+          { $limit: 20 },
+        ],
+        total: [{ $count: 'count' }],
+      },
+    })
   })
 })

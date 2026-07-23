@@ -26,7 +26,7 @@ jest.mock('../src/services/auth.service', () => ({
 }))
 
 import userService from '../src/services/user.service'
-import { UserRole, UserStatus } from '../src/models/User'
+import { UserPermission, UserRole, UserStatus } from '../src/models/User'
 
 const orgId = '665000000000000000000001'
 const currentOrgAdmin = {
@@ -91,6 +91,49 @@ describe('user service permission boundaries', () => {
     expect(mockCreateUser).not.toHaveBeenCalled()
   })
 
+  it('strips external material permissions when org admins create members', async () => {
+    mockCreateUser.mockResolvedValue(createUserDoc())
+
+    await userService.createUser(
+      {
+        username: 'permissionless-member',
+        password: 'secret123',
+        email: 'permissionless@example.com',
+        role: UserRole.MEMBER,
+        permissions: [UserPermission.MATERIALS_EXTERNAL_MANAGE],
+      },
+      currentOrgAdmin as any,
+    )
+
+    expect(mockCreateUser).toHaveBeenCalledWith(
+      expect.not.objectContaining({ permissions: expect.anything() }),
+      currentOrgAdmin.userId,
+    )
+  })
+
+  it('allows super administrators to grant external material permissions at creation', async () => {
+    const userDoc = createUserDoc({ permissions: [] })
+    mockCreateUser.mockResolvedValue(userDoc)
+
+    await userService.createUser(
+      {
+        username: 'external-reader',
+        password: 'secret123',
+        email: 'external-reader@example.com',
+        role: UserRole.MEMBER,
+        organizationId: orgId,
+        permissions: [UserPermission.MATERIALS_EXTERNAL_READ],
+      },
+      {
+        userId: '665000000000000000000001',
+        role: UserRole.SUPER_ADMIN,
+      } as any,
+    )
+
+    expect(userDoc.permissions).toEqual([UserPermission.MATERIALS_EXTERNAL_READ])
+    expect(userDoc.save).toHaveBeenCalledTimes(1)
+  })
+
   it('blocks org admins from resetting another admin password', async () => {
     mockUserFindById.mockResolvedValue(createUserDoc({
       username: 'peer-admin',
@@ -148,6 +191,61 @@ describe('user service permission boundaries', () => {
     expect(userDoc.status).toBe(UserStatus.ACTIVE)
     expect(userDoc.organizationId.toString()).toBe(orgId)
     expect(userDoc.save).toHaveBeenCalled()
+  })
+
+  it('only allows super administrators to grant external material permissions', async () => {
+    const userDoc = createUserDoc({ permissions: [] })
+    mockUserFindById.mockResolvedValue(userDoc)
+
+    await userService.updateUser(
+      '665000000000000000000020',
+      { permissions: [UserPermission.MATERIALS_EXTERNAL_READ] },
+      currentOrgAdmin as any,
+    )
+
+    expect(userDoc.permissions).toEqual([])
+
+    await userService.updateUser(
+      '665000000000000000000020',
+      { permissions: [UserPermission.MATERIALS_EXTERNAL_READ] },
+      {
+        userId: '665000000000000000000001',
+        role: UserRole.SUPER_ADMIN,
+      } as any,
+    )
+
+    expect(userDoc.permissions).toEqual([UserPermission.MATERIALS_EXTERNAL_READ])
+  })
+
+  it('only allows super administrators to revoke external material permissions', async () => {
+    const userDoc = createUserDoc({
+      id: '665000000000000000000030',
+      permissions: [UserPermission.MATERIALS_EXTERNAL_READ],
+    })
+    mockUserFindById.mockResolvedValue(userDoc)
+
+    await userService.updateUser(
+      '665000000000000000000030',
+      { permissions: [] },
+      {
+        userId: '665000000000000000000030',
+        role: UserRole.MEMBER,
+        organizationId: orgId,
+      } as any,
+    )
+
+    expect(userDoc.permissions).toEqual([UserPermission.MATERIALS_EXTERNAL_READ])
+
+    await userService.updateUser(
+      '665000000000000000000030',
+      { permissions: [] },
+      {
+        userId: '665000000000000000000001',
+        role: UserRole.SUPER_ADMIN,
+      } as any,
+    )
+
+    expect(userDoc.permissions).toEqual([])
   })
 
   it('whitelists super admin user updates and drops unsafe fields', async () => {

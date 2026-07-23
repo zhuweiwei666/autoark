@@ -118,7 +118,13 @@ class UserController {
         targetType: 'user',
         targetId: String((user as any)._id),
         summary: `创建用户 ${user.username}`,
-        after: { username: user.username, email: user.email, role: user.role, status: user.status },
+        after: {
+          username: user.username,
+          email: user.email,
+          role: user.role,
+          status: user.status,
+          permissions: user.permissions || [],
+        },
       })
 
       res.status(201).json({
@@ -159,7 +165,13 @@ class UserController {
         targetType: 'user',
         targetId: req.params.id,
         summary: `更新用户 ${user.username}`,
-        after: { username: user.username, email: user.email, role: user.role, status: user.status },
+        after: {
+          username: user.username,
+          email: user.email,
+          role: user.role,
+          status: user.status,
+          permissions: user.permissions || [],
+        },
       })
 
       res.json({

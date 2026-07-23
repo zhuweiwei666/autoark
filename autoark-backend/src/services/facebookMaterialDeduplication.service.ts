@@ -4,7 +4,7 @@ import Ad from '../models/Ad'
 import AdMaterialMapping from '../models/AdMaterialMapping'
 import MaterialMetrics from '../models/MaterialMetrics'
 import AdTask from '../models/AdTask'
-import { buildFacebookMaterialFingerprintKey } from '../utils/facebookMaterialIdentity'
+import { buildMaterialFingerprintKey } from '../utils/materialContentIdentity'
 
 const CONFIRMATION = 'DEDUPLICATE_FACEBOOK_MATERIALS'
 const DEFAULT_MAX_GROUPS = 1000
@@ -70,7 +70,7 @@ export const buildFacebookMaterialDedupGroups = (
   }
 
   return [...bySha.entries()].map(([sha256, group]) => {
-    const fingerprintKey = buildFacebookMaterialFingerprintKey(undefined, sha256)
+    const fingerprintKey = buildMaterialFingerprintKey(undefined, sha256)
     const ordered = [...group].sort((left, right) => {
       const leftGlobal = left.fingerprintKey === fingerprintKey ? 1 : 0
       const rightGlobal = right.fingerprintKey === fingerprintKey ? 1 : 0
