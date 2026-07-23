@@ -15,6 +15,8 @@ export const EXTERNAL_MATERIAL_QUEUE_NAME = 'external-material.sync'
 export const MAX_EXTERNAL_MATERIAL_DEFERS = 3
 const RATE_LIMIT_MIN_MS = 60_000
 const RATE_LIMIT_MAX_MS = 60 * 60 * 1000
+const EXPIRED_CLAIM_SCAN_LIMIT = 50
+const EXPIRED_CLAIM_SCAN_LIMIT_MAX = 100
 
 export const SYNC_DEFAULTS = Object.freeze({
   scheduled: Object.freeze({ recentDays: 3, limit: 500 }),
@@ -49,6 +51,7 @@ export interface ExternalMaterialEnqueueDependencies {
   runs?: RunStore
   featureEnabled?: boolean
   apiKeyPresent?: boolean
+  recoverExpiredClaims?: (provider: ExternalMaterialProvider) => Promise<number>
 }
 
 export interface ExternalMaterialEnqueueResult {
@@ -106,6 +109,37 @@ interface ContinuationIntentStore {
     provider: ExternalMaterialProvider,
     resumeOnly: boolean,
   ): Promise<PendingContinuationRecord[]>
+}
+
+export interface ExpiredExternalMaterialClaim {
+  _id: unknown
+  provider: ExternalMaterialProvider
+  status: 'running'
+  continuationPending: false
+  continuationClaimJobId: string
+  continuationClaimDeferCount: number
+  continuationClaimToken: string
+  continuationClaimGeneration: number
+  continuationClaimExpiresAt: Date
+}
+
+interface ExpiredClaimStore {
+  findExpiredClaims(
+    provider: ExternalMaterialProvider,
+    now: Date,
+    limit: number,
+  ): Promise<ExpiredExternalMaterialClaim[]>
+  failExpiredClaim(
+    claim: ExpiredExternalMaterialClaim,
+    completedAt: Date,
+  ): Promise<unknown>
+}
+
+export interface ExpiredClaimRecoveryDependencies {
+  queue?: Partial<Pick<Queue, 'getJob'>> | null
+  runs?: ExpiredClaimStore
+  now?: () => Date
+  scanLimit?: number
 }
 
 export interface ExternalMaterialContinuationReconcileDependencies extends ExternalMaterialContinuationDependencies {
@@ -343,6 +377,124 @@ export const ensureContinuationScheduled = async (
   )
 }
 
+export const failExpiredExternalMaterialClaim = (
+  claim: ExpiredExternalMaterialClaim,
+  completedAt: Date,
+) =>
+  ExternalMaterialSyncRun.findOneAndUpdate(
+    {
+      _id: claim._id,
+      provider: claim.provider,
+      status: 'running',
+      continuationPending: false,
+      continuationClaimJobId: claim.continuationClaimJobId,
+      continuationClaimDeferCount: claim.continuationClaimDeferCount,
+      continuationClaimToken: claim.continuationClaimToken,
+      continuationClaimGeneration: claim.continuationClaimGeneration,
+      continuationClaimExpiresAt: {
+        $eq: claim.continuationClaimExpiresAt,
+        $lte: completedAt,
+      },
+    },
+    {
+      $set: {
+        status: 'failed',
+        completedAt,
+        deferredUntil: null,
+        retryAfterMs: null,
+        continuationPending: false,
+        continuationJobId: null,
+        continuationDueAt: null,
+        resumeRequired: false,
+        continuationClaimJobId: null,
+        continuationClaimDeferCount: null,
+        continuationClaimToken: null,
+        continuationClaimGeneration: null,
+        continuationClaimExpiresAt: null,
+      },
+      $push: {
+        errorSamples: {
+          $each: [{ category: 'unexpected', at: completedAt }],
+          $slice: -5,
+        },
+      },
+    },
+    { new: true, runValidators: true },
+  )
+
+const defaultExpiredClaimStore: ExpiredClaimStore = {
+  findExpiredClaims: (provider, now, limit) =>
+    ExternalMaterialSyncRun.find({
+      provider,
+      status: 'running',
+      continuationPending: false,
+      continuationClaimJobId: { $ne: null },
+      continuationClaimDeferCount: {
+        $gte: 0,
+        $lte: MAX_EXTERNAL_MATERIAL_DEFERS,
+      },
+      continuationClaimToken: { $ne: null },
+      continuationClaimGeneration: { $gte: 1 },
+      continuationClaimExpiresAt: { $lte: now },
+    })
+      .sort({ continuationClaimExpiresAt: 1 })
+      .limit(limit)
+      .lean() as unknown as Promise<ExpiredExternalMaterialClaim[]>,
+  failExpiredClaim: failExpiredExternalMaterialClaim,
+}
+
+export const recoverExpiredExternalMaterialClaims = async (
+  input: { provider: ExternalMaterialProvider },
+  dependencies: ExpiredClaimRecoveryDependencies = {},
+): Promise<number> => {
+  const queue =
+    dependencies.queue === undefined
+      ? externalMaterialQueue
+      : dependencies.queue
+  if (!queue?.getJob) return 0
+  const runs = dependencies.runs ?? defaultExpiredClaimStore
+  const now = dependencies.now?.() ?? new Date()
+  const limit = Math.min(
+    EXPIRED_CLAIM_SCAN_LIMIT_MAX,
+    Math.max(
+      1,
+      Number.isInteger(dependencies.scanLimit)
+        ? Number(dependencies.scanLimit)
+        : EXPIRED_CLAIM_SCAN_LIMIT,
+    ),
+  )
+  const expired = await runs.findExpiredClaims(input.provider, now, limit)
+  let recovered = 0
+  for (const claim of expired) {
+    if (
+      claim.provider !== input.provider ||
+      claim.status !== 'running' ||
+      claim.continuationPending !== false ||
+      typeof claim.continuationClaimJobId !== 'string' ||
+      claim.continuationClaimJobId.length === 0 ||
+      !Number.isInteger(claim.continuationClaimDeferCount) ||
+      claim.continuationClaimDeferCount < 0 ||
+      claim.continuationClaimDeferCount > MAX_EXTERNAL_MATERIAL_DEFERS ||
+      typeof claim.continuationClaimToken !== 'string' ||
+      claim.continuationClaimToken.length === 0 ||
+      !Number.isInteger(claim.continuationClaimGeneration) ||
+      claim.continuationClaimGeneration < 1 ||
+      !(claim.continuationClaimExpiresAt instanceof Date) ||
+      claim.continuationClaimExpiresAt.getTime() > now.getTime()
+    ) {
+      continue
+    }
+    const job = await queue.getJob(claim.continuationClaimJobId)
+    if (job) {
+      const state = await job.getState()
+      if (state !== 'completed' && state !== 'failed') continue
+    }
+    const failed = await runs.failExpiredClaim(claim, now)
+    if (failed) recovered += 1
+  }
+  return recovered
+}
+
 const defaultContinuationIntentStore: ContinuationIntentStore = {
   findPending: (provider, resumeOnly) =>
     ExternalMaterialSyncRun.find({
@@ -509,6 +661,15 @@ export const enqueueExternalMaterialSync = async (
         request: bounded,
       }
     }
+  }
+
+  if (dependencies.recoverExpiredClaims) {
+    await dependencies.recoverExpiredClaims(bounded.provider)
+  } else if (dependencies.runs === undefined) {
+    await recoverExpiredExternalMaterialClaims(
+      { provider: bounded.provider },
+      { queue },
+    )
   }
 
   if (await runs.findActive(bounded.provider)) {

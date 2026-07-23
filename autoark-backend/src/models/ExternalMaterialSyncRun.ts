@@ -199,8 +199,13 @@ const externalMaterialSyncRunSchema =
       },
       continuationClaimDeferCount: {
         type: Number,
-        min: 1,
+        min: 0,
         max: 3,
+        validate: {
+          validator: (value: number | null) =>
+            value === null || Number.isInteger(value),
+          message: 'continuationClaimDeferCount must be an integer',
+        },
         default: null,
       },
       continuationClaimToken: {

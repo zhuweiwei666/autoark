@@ -33,7 +33,9 @@ import {
   enqueueExternalMaterialSync,
   ensureContinuationScheduled,
   externalMaterialContinuationJobId,
+  failExpiredExternalMaterialClaim,
   parseExternalMaterialSyncRequest,
+  recoverExpiredExternalMaterialClaims,
   reconcileExternalMaterialContinuations,
 } from '../src/queue/externalMaterial.queue'
 import {
@@ -479,6 +481,7 @@ describe('external material sync models and request bounds', () => {
       runSchema.path('continuationClaimJobId').options.maxlength,
     ).toBeLessThanOrEqual(200)
     expect(runSchema.path('continuationClaimDeferCount').options.max).toBe(3)
+    expect(runSchema.path('continuationClaimDeferCount').options.min).toBe(0)
     expect(runSchema.path('continuationGeneration').options).toMatchObject({
       type: Number,
       default: 0,
@@ -563,6 +566,32 @@ describe('external material sync models and request bounds', () => {
     expect(cast).not.toHaveProperty('rawRecord')
     expect(cast).not.toHaveProperty('mediaUrl')
     expect(new ExternalMaterialSyncRun(cast).validateSync()).toBeUndefined()
+  })
+
+  it('validates a zero-defer pause claim as an integer-bounded Mongoose document', async () => {
+    const claimedPause = new ExternalMaterialSyncRun({
+      provider: 'guangdada',
+      mode: 'backfill',
+      dryRun: false,
+      request: { recentDays: 30, limit: 2000 },
+      status: 'running',
+      counters: counters(),
+      deferCount: 0,
+      continuationPending: false,
+      continuationGeneration: 1,
+      continuationClaimJobId:
+        'external-material-guangdada-continuation-run-1-1',
+      continuationClaimDeferCount: 0,
+      continuationClaimToken: 'claim-token-1',
+      continuationClaimGeneration: 1,
+      continuationClaimExpiresAt: new Date('2026-07-23T00:02:00.000Z'),
+    })
+
+    await expect(claimedPause.validate()).resolves.toBeUndefined()
+    claimedPause.continuationClaimDeferCount = 0.5
+    await expect(claimedPause.validate()).rejects.toThrow()
+    claimedPause.continuationClaimDeferCount = -1
+    await expect(claimedPause.validate()).rejects.toThrow()
   })
 })
 
@@ -723,6 +752,206 @@ describe('external material queue admission', () => {
     )
   })
 
+  const expiredClaim = {
+    _id: 'run-expired',
+    provider: 'guangdada' as const,
+    status: 'running',
+    continuationPending: false,
+    continuationClaimJobId:
+      'external-material-guangdada-continuation-run-expired-2',
+    continuationClaimDeferCount: 0,
+    continuationClaimToken: 'expired-token',
+    continuationClaimGeneration: 2,
+    continuationClaimExpiresAt: new Date('2026-07-23T00:01:00.000Z'),
+  }
+
+  it.each(['failed', 'completed', 'missing'])(
+    'recovers an expired claim only when its BullMQ job is terminal or proven %s',
+    async (state) => {
+      const failExpiredClaim = jest
+        .fn()
+        .mockResolvedValue({ _id: 'run-expired', status: 'failed' })
+      const runs = {
+        findExpiredClaims: jest.fn().mockResolvedValue([expiredClaim]),
+        failExpiredClaim,
+      }
+      const queue = {
+        getJob: jest
+          .fn()
+          .mockResolvedValue(
+            state === 'missing'
+              ? null
+              : { getState: jest.fn().mockResolvedValue(state) },
+          ),
+      }
+
+      await expect(
+        recoverExpiredExternalMaterialClaims(
+          { provider: 'guangdada' },
+          {
+            runs,
+            queue: queue as any,
+            now: () => new Date('2026-07-23T00:02:00.000Z'),
+          },
+        ),
+      ).resolves.toBe(1)
+      expect(runs.findExpiredClaims).toHaveBeenCalledWith(
+        'guangdada',
+        new Date('2026-07-23T00:02:00.000Z'),
+        50,
+      )
+      expect(failExpiredClaim).toHaveBeenCalledWith(
+        expiredClaim,
+        new Date('2026-07-23T00:02:00.000Z'),
+      )
+    },
+  )
+
+  it.each(['waiting', 'delayed', 'active'])(
+    'retains an expired claim while its BullMQ job is %s',
+    async (state) => {
+      const runs = {
+        findExpiredClaims: jest.fn().mockResolvedValue([expiredClaim]),
+        failExpiredClaim: jest.fn(),
+      }
+      const queue = {
+        getJob: jest.fn().mockResolvedValue({
+          getState: jest.fn().mockResolvedValue(state),
+        }),
+      }
+
+      await expect(
+        recoverExpiredExternalMaterialClaims(
+          { provider: 'guangdada' },
+          {
+            runs,
+            queue: queue as any,
+            now: () => new Date('2026-07-23T00:02:00.000Z'),
+          },
+        ),
+      ).resolves.toBe(0)
+      expect(runs.failExpiredClaim).not.toHaveBeenCalled()
+    },
+  )
+
+  it('treats a successor token CAS miss as a zero-side-effect stale snapshot', async () => {
+    const runs = {
+      findExpiredClaims: jest.fn().mockResolvedValue([expiredClaim]),
+      failExpiredClaim: jest.fn().mockResolvedValue(null),
+    }
+    const queue = {
+      getJob: jest.fn().mockResolvedValue({
+        getState: jest.fn().mockResolvedValue('failed'),
+      }),
+    }
+
+    await expect(
+      recoverExpiredExternalMaterialClaims(
+        { provider: 'guangdada' },
+        {
+          runs,
+          queue: queue as any,
+          now: () => new Date('2026-07-23T00:02:00.000Z'),
+        },
+      ),
+    ).resolves.toBe(0)
+    expect(runs.failExpiredClaim).toHaveBeenCalledWith(
+      expect.objectContaining({
+        continuationClaimToken: 'expired-token',
+        continuationClaimGeneration: 2,
+      }),
+      expect.any(Date),
+    )
+  })
+
+  it('CAS-fences expired-claim terminalization by token, generation, job, and expiry', async () => {
+    const completedAt = new Date('2026-07-23T00:02:00.000Z')
+    const findOneAndUpdate = jest
+      .spyOn(ExternalMaterialSyncRun, 'findOneAndUpdate')
+      .mockResolvedValue(null)
+
+    try {
+      await expect(
+        failExpiredExternalMaterialClaim(expiredClaim, completedAt),
+      ).resolves.toBeNull()
+      expect(findOneAndUpdate.mock.calls[0]?.[0]).toEqual(
+        expect.objectContaining({
+          _id: 'run-expired',
+          provider: 'guangdada',
+          status: 'running',
+          continuationPending: false,
+          continuationClaimJobId:
+            'external-material-guangdada-continuation-run-expired-2',
+          continuationClaimDeferCount: 0,
+          continuationClaimToken: 'expired-token',
+          continuationClaimGeneration: 2,
+          continuationClaimExpiresAt: {
+            $eq: expiredClaim.continuationClaimExpiresAt,
+            $lte: completedAt,
+          },
+        }),
+      )
+      expect(findOneAndUpdate.mock.calls[0]?.[1]).toEqual({
+        $set: expect.objectContaining({
+          status: 'failed',
+          completedAt,
+          continuationPending: false,
+          continuationJobId: null,
+          continuationClaimJobId: null,
+          continuationClaimDeferCount: null,
+          continuationClaimToken: null,
+          continuationClaimGeneration: null,
+          continuationClaimExpiresAt: null,
+        }),
+        $push: {
+          errorSamples: {
+            $each: [{ category: 'unexpected', at: completedAt }],
+            $slice: -5,
+          },
+        },
+      })
+    } finally {
+      findOneAndUpdate.mockRestore()
+    }
+  })
+
+  it('retains expired claims when Mongo is unavailable and retries next time', async () => {
+    const runs = {
+      findExpiredClaims: jest
+        .fn()
+        .mockRejectedValueOnce(new Error('unsafe mongo details'))
+        .mockResolvedValueOnce([expiredClaim]),
+      failExpiredClaim: jest
+        .fn()
+        .mockResolvedValue({ _id: 'run-expired', status: 'failed' }),
+    }
+    const queue = {
+      getJob: jest.fn().mockResolvedValue({
+        getState: jest.fn().mockResolvedValue('failed'),
+      }),
+    }
+    const dependencies = {
+      runs,
+      queue: queue as any,
+      now: () => new Date('2026-07-23T00:02:00.000Z'),
+    }
+
+    await expect(
+      recoverExpiredExternalMaterialClaims(
+        { provider: 'guangdada' },
+        dependencies,
+      ),
+    ).rejects.toThrow()
+    expect(runs.failExpiredClaim).not.toHaveBeenCalled()
+    await expect(
+      recoverExpiredExternalMaterialClaims(
+        { provider: 'guangdada' },
+        dependencies,
+      ),
+    ).resolves.toBe(1)
+    expect(runs.failExpiredClaim).toHaveBeenCalledTimes(1)
+  })
+
   it('rejects a scheduled overlap before creating a run', async () => {
     const queue = {
       getJobs: jest
@@ -779,6 +1008,39 @@ describe('external material queue admission', () => {
     expect(runs.create).not.toHaveBeenCalled()
     expect(queue.add).not.toHaveBeenCalled()
   })
+
+  it.each(['canary10', 'scheduled'] as const)(
+    'recovers expired claims before the %s enqueue active-run guard',
+    async (mode) => {
+      const queue = {
+        getJobs: jest.fn().mockResolvedValue([]),
+        getJob: jest.fn().mockResolvedValue(null),
+        add: jest.fn().mockResolvedValue({ id: `${mode}-job` }),
+      }
+      const recoverExpiredClaims = jest.fn().mockResolvedValue(1)
+      const runs = {
+        findActive: jest.fn().mockResolvedValue(null),
+        create: jest
+          .fn()
+          .mockResolvedValue({ _id: 'run-new', status: 'queued' }),
+        update: jest.fn(),
+      }
+
+      await expect(
+        enqueueExternalMaterialSync({ ...request, mode }, {
+          queue,
+          runs,
+          featureEnabled: true,
+          apiKeyPresent: true,
+          recoverExpiredClaims,
+        } as any),
+      ).resolves.toMatchObject({ enqueued: true, runId: 'run-new' })
+      expect(recoverExpiredClaims).toHaveBeenCalledWith('guangdada')
+      expect(recoverExpiredClaims.mock.invocationCallOrder[0]).toBeLessThan(
+        runs.findActive.mock.invocationCallOrder[0],
+      )
+    },
+  )
 
   it('queries only queued, running, and continuation-backed deferred runs as active', async () => {
     const lean = jest.fn().mockResolvedValue({
@@ -1014,6 +1276,59 @@ describe('external material redis lock', () => {
 })
 
 describe('external material worker orchestration', () => {
+  it('atomically claims a pause continuation with deferCount zero', async () => {
+    const claimed = new ExternalMaterialSyncRun({
+      provider: 'guangdada',
+      mode: 'backfill',
+      dryRun: false,
+      request: { recentDays: 30, limit: 2000 },
+      status: 'running',
+      counters: counters(),
+      deferCount: 0,
+      continuationPending: false,
+      continuationGeneration: 1,
+      continuationClaimJobId:
+        'external-material-guangdada-continuation-run-1-1',
+      continuationClaimDeferCount: 0,
+      continuationClaimToken: 'claim-token-1',
+      continuationClaimGeneration: 1,
+      continuationClaimExpiresAt: new Date('2026-07-23T00:02:00.000Z'),
+    })
+    const findOneAndUpdate = jest
+      .spyOn(ExternalMaterialSyncRun, 'findOneAndUpdate')
+      .mockResolvedValue(claimed as any)
+
+    try {
+      await expect(
+        claimExternalMaterialContinuation(
+          'run-1',
+          'guangdada',
+          0,
+          1,
+          'external-material-guangdada-continuation-run-1-1',
+          'claim-token-1',
+          new Date('2026-07-23T00:00:00.000Z'),
+          new Date('2026-07-23T00:02:00.000Z'),
+        ),
+      ).resolves.toBe(claimed)
+      await expect(claimed.validate()).resolves.toBeUndefined()
+      expect(findOneAndUpdate.mock.calls[0]?.[0]).toEqual(
+        expect.objectContaining({
+          deferCount: 0,
+          continuationGeneration: 1,
+        }),
+      )
+      expect(findOneAndUpdate.mock.calls[0]?.[1]).toEqual({
+        $set: expect.objectContaining({
+          continuationClaimDeferCount: 0,
+          continuationClaimGeneration: 1,
+        }),
+      })
+    } finally {
+      findOneAndUpdate.mockRestore()
+    }
+  })
+
   it('claims a continuation with one atomic guarded run transition', async () => {
     const claimed = {
       _id: 'run-1',
@@ -2346,6 +2661,81 @@ describe('external material worker orchestration', () => {
     })
   })
 
+  it('recovers an expired terminal job after final fenced persistence repeatedly fails', async () => {
+    const coreError = new Error('unsafe final-attempt failure')
+    const claimedRun = {
+      _id: 'run-1',
+      provider: 'guangdada',
+      mode: request.mode,
+      dryRun: false,
+      request: { recentDays: 3, limit: 10 },
+      status: 'running',
+      counters: counters(),
+      cursor: null,
+      deferCount: 0,
+      continuationPending: false,
+      continuationGeneration: 1,
+      continuationClaimJobId: 'continuation-job',
+      continuationClaimDeferCount: 0,
+      continuationClaimGeneration: 1,
+      continuationClaimExpiresAt: new Date('2026-07-23T00:02:00.000Z'),
+    }
+    const baseRuns = workerDependencies().runs
+    const failClaimedContinuation = jest
+      .fn()
+      .mockRejectedValue(new Error('mongo unavailable'))
+    const deps = workerDependencies({
+      restoreAttempts: 2,
+      runs: {
+        ...baseRuns,
+        claimContinuation: jest.fn().mockResolvedValue(claimedRun),
+        failClaimedContinuation,
+      },
+    })
+    deps.states.get.mockRejectedValueOnce(coreError)
+    const finalJob = continuationJob('continuation-job', 2, 0)
+    finalJob.data.generation = 1
+
+    await expect(
+      processExternalMaterialSyncJob(finalJob as any, deps),
+    ).rejects.toThrow(coreError)
+    expect(failClaimedContinuation).toHaveBeenCalledTimes(2)
+    const claimToken = deps.runs.claimContinuation.mock.calls[0]?.[5]
+    const snapshot = {
+      ...claimedRun,
+      continuationClaimToken: claimToken,
+    }
+    const expiredRuns = {
+      findExpiredClaims: jest.fn().mockResolvedValue([snapshot]),
+      failExpiredClaim: jest
+        .fn()
+        .mockResolvedValue({ _id: 'run-1', status: 'failed' }),
+    }
+
+    await expect(
+      recoverExpiredExternalMaterialClaims(
+        { provider: 'guangdada' },
+        {
+          runs: expiredRuns,
+          queue: {
+            getJob: jest.fn().mockResolvedValue({
+              getState: jest.fn().mockResolvedValue('failed'),
+            }),
+          } as any,
+          now: () => new Date('2026-07-23T00:03:00.000Z'),
+        },
+      ),
+    ).resolves.toBe(1)
+    expect(expiredRuns.failExpiredClaim).toHaveBeenCalledWith(
+      expect.objectContaining({
+        continuationClaimToken: claimToken,
+        continuationClaimGeneration: 1,
+        continuationClaimJobId: 'continuation-job',
+      }),
+      new Date('2026-07-23T00:03:00.000Z'),
+    )
+  })
+
   it('does not let a late intermediate failed event roll back a completed retry', async () => {
     const coreError = new Error('unsafe first-attempt failure')
     const { deps, getRun } = statefulContinuationDependencies('success')
@@ -2770,14 +3160,17 @@ describe('external material cron', () => {
     const states = { get: jest.fn() }
     const enqueue = jest.fn()
     const reconcile = jest.fn()
+    const recoverExpiredClaims = jest.fn()
     await runExternalMaterialCronTick({
       env,
       states,
       enqueue,
       reconcile,
+      recoverExpiredClaims,
     } as any)
     expect(states.get).not.toHaveBeenCalled()
     expect(reconcile).not.toHaveBeenCalled()
+    expect(recoverExpiredClaims).not.toHaveBeenCalled()
     expect(enqueue).not.toHaveBeenCalled()
   })
 
@@ -2798,6 +3191,7 @@ describe('external material cron', () => {
       states,
       enqueue,
       reconcile: jest.fn().mockResolvedValue(0),
+      recoverExpiredClaims: jest.fn().mockResolvedValue(0),
     }
 
     await runExternalMaterialCronTick(deps as any)
@@ -2806,7 +3200,14 @@ describe('external material cron', () => {
 
     expect(enqueue).toHaveBeenCalledTimes(1)
     expect(deps.reconcile).toHaveBeenCalledTimes(1)
+    expect(deps.recoverExpiredClaims).toHaveBeenCalledTimes(2)
+    expect(deps.recoverExpiredClaims.mock.invocationCallOrder[0]).toBeLessThan(
+      deps.reconcile.mock.invocationCallOrder[0],
+    )
     expect(deps.reconcile.mock.invocationCallOrder[0]).toBeLessThan(
+      deps.recoverExpiredClaims.mock.invocationCallOrder[1],
+    )
+    expect(deps.recoverExpiredClaims.mock.invocationCallOrder[1]).toBeLessThan(
       enqueue.mock.invocationCallOrder[0],
     )
     expect(enqueue).toHaveBeenCalledWith(
