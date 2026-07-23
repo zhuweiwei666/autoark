@@ -224,6 +224,7 @@ describe('external material controller and routes', () => {
           provider: 'guangdada',
           paused: false,
           pauseReason: null,
+          status: 'active',
           recurringEnabled: true,
           lastRun: {
             mode: 'scheduled',
@@ -242,6 +243,27 @@ describe('external material controller and routes', () => {
       )
     }
   })
+
+  it.each([
+    ['false', 'provider-key', 'disabled'],
+    ['true', '', 'unavailable'],
+  ])(
+    'reports the effective runtime gate for flag=%s key=%s',
+    async (featureFlag, apiKey, expectedStatus) => {
+      process.env.EXTERNAL_MATERIAL_SYNC_ENABLED = featureFlag
+      process.env.GUANGDADA_API_KEY = apiKey
+
+      const response = await request(app)
+        .get('/api/materials/external/guangdada/status')
+        .set('x-test-role', 'manager')
+
+      expect(response.status).toBe(200)
+      expect(response.body.data).toEqual(expect.objectContaining({
+        status: expectedStatus,
+        recurringEnabled: false,
+      }))
+    },
+  )
 
   it('requires manage permission for sync and returns only a clamped safe summary', async () => {
     const forbidden = await request(app)
@@ -431,7 +453,8 @@ describe('external material controller and routes', () => {
         provider: 'guangdada',
         paused: true,
         pauseReason: 'manual',
-        recurringEnabled: true,
+        status: 'paused',
+        recurringEnabled: false,
       },
     })
 
@@ -463,6 +486,7 @@ describe('external material controller and routes', () => {
       provider: 'guangdada',
       paused: false,
       pauseReason: null,
+      status: 'active',
       recurringEnabled: true,
     })
     expect(mockReconcileContinuations).toHaveBeenCalledWith({

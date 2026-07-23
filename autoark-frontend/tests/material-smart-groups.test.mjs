@@ -46,6 +46,8 @@ describe('material smart groups', () => {
     assert.match(page, /已停用/)
     assert.match(page, /不可用/)
     assert.match(page, /同步已暂停/)
+    assert.match(page, /外部同步未启用/)
+    assert.match(page, /外部同步配置不完整/)
     assert.match(page, /智能分组加载中/)
     assert.match(page, /该智能分组暂无素材/)
     assert.match(page, /智能分组暂不可用/)
@@ -79,6 +81,15 @@ describe('material smart groups', () => {
     assert.match(service, /mode:\s*['"]canary10['"]/)
     assert.match(service, /\/api\/materials\/external\/guangdada\/status/)
     assert.match(service, /\/api\/materials\/external\/guangdada\/(sync|pause|resume)/)
+    assert.match(service, /status:\s*MaterialSmartGroupStatus/)
+    assert.match(
+      page,
+      /externalCanSync\s*=\s*externalStatus\?\.status\s*===\s*['"]active['"]/,
+    )
+    assert.match(
+      page,
+      /disabled=\{externalActionPending\s*\|\|\s*!externalCanSync\}/,
+    )
   })
 
   it('protects smart groups and external status with independent latest-request runners', () => {

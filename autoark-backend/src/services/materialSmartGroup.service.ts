@@ -1,5 +1,6 @@
 import Account from '../models/Account'
 import ExternalMaterialSyncState from '../models/ExternalMaterialSyncState'
+import { resolveExternalMaterialRuntime } from './externalMaterialRuntime.service'
 import Material from '../models/Material'
 import MaterialOriginMapping from '../models/MaterialOriginMapping'
 import { getAccountIdsForQuery, normalizeForStorage } from '../utils/accountId'
@@ -474,7 +475,7 @@ export const getExternalMaterialSmartGroups = async (): Promise<MaterialSmartGro
   const [aggregationRows, state] = await Promise.all([
     MaterialOriginMapping.aggregate(buildExternalSmartGroupPipeline()),
     ExternalMaterialSyncState.findOne({ provider: EXTERNAL_PROVIDER })
-      .select('paused')
+      .select('paused recurringEnabled')
       .lean(),
   ])
   const aggregation = aggregationRows?.[0]
@@ -495,13 +496,17 @@ export const getExternalMaterialSmartGroups = async (): Promise<MaterialSmartGro
       a.label.localeCompare(b.label) || a.key.localeCompare(b.key)
     ))
   const paused = state?.paused === true
+  const runtime = resolveExternalMaterialRuntime({
+    paused,
+    recurringEnabled: state?.recurringEnabled !== false,
+  })
   const provider: MaterialSmartGroupNode = {
     key: EXTERNAL_PROVIDER,
     type: 'external-provider',
     label: '广大大',
     count: globalCount,
     paused,
-    status: paused ? 'paused' : 'active',
+    status: runtime.status,
     children: packages,
   }
 
