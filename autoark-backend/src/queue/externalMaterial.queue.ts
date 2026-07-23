@@ -24,7 +24,6 @@ export const SYNC_DEFAULTS = Object.freeze({
 })
 
 const MODES = Object.keys(SYNC_DEFAULTS) as ExternalMaterialSyncMode[]
-const ACTIVE_STATUSES = ['queued', 'running', 'deferred'] as const
 const REQUEST_KEYS = new Set(['mode', 'dryRun', 'recentDays', 'limit'])
 
 export interface ExternalMaterialSyncRequest {
@@ -173,7 +172,10 @@ const defaultRunStore: RunStore = {
   findActive: (provider) =>
     ExternalMaterialSyncRun.findOne({
       provider,
-      status: { $in: ACTIVE_STATUSES },
+      $or: [
+        { status: { $in: ['queued', 'running'] } },
+        { status: 'deferred', continuationPending: true },
+      ],
     }).lean(),
   create: (input) =>
     ExternalMaterialSyncRun.create(
@@ -307,6 +309,7 @@ export const enqueueExternalMaterialSync = async (
         limit: bounded.limit,
       },
       status: 'disabled',
+      continuationPending: false,
       completedAt: new Date(),
       counters: emptyCounters(),
       errorSamples: [{ category: 'configuration' }],
@@ -381,6 +384,7 @@ export const enqueueExternalMaterialSync = async (
         limit: bounded.limit,
       },
       status: 'queued',
+      continuationPending: false,
       counters: emptyCounters(),
       errorSamples: [],
     })
@@ -413,6 +417,7 @@ export const enqueueExternalMaterialSync = async (
   } catch {
     await runs.update(runId, {
       status: 'failed',
+      continuationPending: false,
       completedAt: new Date(),
       errorSamples: [{ category: 'queue' }],
     })

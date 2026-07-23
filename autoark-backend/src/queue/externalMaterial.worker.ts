@@ -59,6 +59,7 @@ interface SyncRunRecord {
   cursor?: string | null
   deferCount?: number
   status?: string
+  continuationPending?: boolean
 }
 
 interface SyncStateRecord {
@@ -151,8 +152,17 @@ const mergeCounters = (
   deferred: committed.deferred + batch.deferred,
 })
 
-const lockKey = (provider: ExternalMaterialProvider): string =>
-  `external-material:sync-lock:${provider}`
+const lockKey = (
+  provider: ExternalMaterialProvider,
+  trustedTestKeyPrefix?: string,
+): string => {
+  const productionKey = `external-material:sync-lock:${provider}`
+  if (trustedTestKeyPrefix === undefined) return productionKey
+  if (!/^[A-Za-z0-9_-]{8,128}$/.test(trustedTestKeyPrefix)) {
+    throw new Error('invalid_external_material_lock_prefix')
+  }
+  return `${trustedTestKeyPrefix}:${productionKey}`
+}
 
 const clampInteger = (
   value: unknown,
@@ -183,10 +193,11 @@ export const acquireExternalMaterialLock = async (
   redis: RedisLockClient,
   provider: ExternalMaterialProvider,
   requestedTtlMs?: number,
+  trustedTestKeyPrefix?: string,
 ): Promise<string | null> => {
   const owner = randomUUID()
   const result = await redis.set(
-    lockKey(provider),
+    lockKey(provider, trustedTestKeyPrefix),
     owner,
     'PX',
     lockTtl(requestedTtlMs),
@@ -200,11 +211,12 @@ export const renewExternalMaterialLock = async (
   provider: ExternalMaterialProvider,
   owner: string,
   requestedTtlMs?: number,
+  trustedTestKeyPrefix?: string,
 ): Promise<boolean> => {
   const result = await redis.eval(
     RENEW_SCRIPT,
     1,
-    lockKey(provider),
+    lockKey(provider, trustedTestKeyPrefix),
     owner,
     String(lockTtl(requestedTtlMs)),
   )
@@ -215,8 +227,14 @@ export const releaseExternalMaterialLock = async (
   redis: RedisLockClient,
   provider: ExternalMaterialProvider,
   owner: string,
+  trustedTestKeyPrefix?: string,
 ): Promise<boolean> => {
-  const result = await redis.eval(RELEASE_SCRIPT, 1, lockKey(provider), owner)
+  const result = await redis.eval(
+    RELEASE_SCRIPT,
+    1,
+    lockKey(provider, trustedTestKeyPrefix),
+    owner,
+  )
   return result === 1
 }
 
@@ -258,6 +276,7 @@ const defaultRunStore: RunStore = {
           completedAt,
           deferredUntil: null,
           retryAfterMs: null,
+          continuationPending: false,
         },
         $push: {
           errorSamples: {
@@ -427,6 +446,7 @@ const finishRun = async (
     status,
     counters,
     errorSamples,
+    continuationPending: false,
     completedAt: dependencies.now(),
     ...extra,
   })
@@ -551,6 +571,7 @@ export const processExternalMaterialSyncJob = async (
       startedAt: dependencies.now(),
       counters: committedCounters,
       errorSamples,
+      continuationPending: false,
       deferredUntil: null,
       retryAfterMs: null,
     })
@@ -642,14 +663,6 @@ export const processExternalMaterialSyncJob = async (
           const deferredUntil = new Date(
             dependencies.now().getTime() + retryAfterMs,
           )
-          await dependencies.runs.update(runId, {
-            status: 'deferred',
-            counters: committedCounters,
-            errorSamples,
-            deferredUntil,
-            retryAfterMs,
-            deferCount,
-          })
           try {
             await dependencies.enqueueContinuation({
               runId,
@@ -671,6 +684,15 @@ export const processExternalMaterialSyncJob = async (
               },
             )
           }
+          await dependencies.runs.update(runId, {
+            status: 'deferred',
+            counters: committedCounters,
+            errorSamples,
+            deferredUntil,
+            retryAfterMs,
+            deferCount,
+            continuationPending: true,
+          })
           return {
             status: 'deferred',
             counters: committedCounters,

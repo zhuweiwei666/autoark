@@ -70,6 +70,7 @@ export interface IExternalMaterialSyncRun extends mongoose.Document {
   deferredUntil?: Date | null
   retryAfterMs?: number | null
   deferCount: number
+  continuationPending: boolean
   startedAt?: Date | null
   completedAt?: Date | null
   counters: ExternalMaterialSyncCounters
@@ -152,6 +153,11 @@ const externalMaterialSyncRunSchema =
         max: 3,
         default: 0,
       },
+      continuationPending: {
+        type: Boolean,
+        required: true,
+        default: false,
+      },
       startedAt: {
         type: Date,
         default: null,
@@ -205,7 +211,10 @@ externalMaterialSyncRunSchema.index(
     unique: true,
     name: 'uniq_external_material_active_provider',
     partialFilterExpression: {
-      status: { $in: ['queued', 'running', 'deferred'] },
+      $or: [
+        { status: { $in: ['queued', 'running'] } },
+        { status: 'deferred', continuationPending: true },
+      ],
     },
   },
 )
