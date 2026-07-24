@@ -27,6 +27,7 @@ jest.mock('../src/services/facebookUser.service', () => ({
   getCachedPixels: jest.fn(),
   getCachedAccounts: jest.fn(),
   getCachedAccountsWithMeta: jest.fn(),
+  getCachedPages: jest.fn(),
   getCachedCatalogs: jest.fn(),
   getSyncStatus: jest.fn(),
 }))
@@ -54,6 +55,7 @@ import * as oauthService from '../src/services/facebook.oauth.service'
 import * as facebookUserService from '../src/services/facebookUser.service'
 import * as facebookAccountsService from '../src/services/facebook.accounts.service'
 import FacebookApp from '../src/models/FacebookApp'
+import FacebookUser from '../src/models/FacebookUser'
 import Account from '../src/models/Account'
 import FbToken from '../src/models/FbToken'
 import TargetingPackage from '../src/models/TargetingPackage'
@@ -146,6 +148,7 @@ describe('bulk ad controller', () => {
       fetchedPageCount: 0,
       paginationTruncated: false,
     } as any)
+    mockFacebookUserService.getCachedPages.mockResolvedValue([] as any)
   })
 
   afterEach(() => {
@@ -896,6 +899,67 @@ describe('bulk ad controller', () => {
         paginationTruncated: true,
       }),
     })
+  })
+
+  it('serves cached account pages without spending another Meta Graph request', async () => {
+    jest.spyOn(FbToken, 'find').mockResolvedValue([{
+      _id: '665000000000000000000901',
+      token: 'TOKEN_A',
+      fbUserId: 'fb_user_1',
+      fbUserName: 'Operator A',
+      organizationId: '665000000000000000000001',
+    }] as any)
+    jest.spyOn(FacebookUser, 'findOne').mockReturnValue(modelQuery({
+      tokenId: '665000000000000000000901',
+    }) as any)
+    mockFacebookUserService.getCachedPages.mockResolvedValue([{
+      pageId: 'page_cached',
+      name: 'Cached Page',
+      accessToken: 'PAGE_SECRET',
+    }] as any)
+
+    const req: any = {
+      query: { accountId: 'act_123' },
+      user: {
+        role: UserRole.SUPER_ADMIN,
+        userId: '665000000000000000000002',
+      },
+    }
+    const res = resMock()
+
+    await getAuthPages(req, res as any)
+
+    const expectedScope = {
+      tokenId: '665000000000000000000901',
+      organizationId: '665000000000000000000001',
+    }
+    expect(FacebookUser.findOne).toHaveBeenCalledWith({
+      tokenId: { $in: ['665000000000000000000901'] },
+      syncStatus: 'completed',
+      'adAccounts.accountId': { $in: ['123', 'act_123'] },
+    })
+    expect(mockFacebookUserService.getCachedPages).toHaveBeenCalledWith(
+      'fb_user_1',
+      '123',
+      expectedScope,
+    )
+    expect(mockFacebookClient.get).not.toHaveBeenCalled()
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      data: [expect.objectContaining({
+        id: 'page_cached',
+        pageId: 'page_cached',
+        name: 'Cached Page',
+      })],
+      meta: expect.objectContaining({
+        source: 'cache',
+        pageCount: 1,
+        fetchedPageCount: 0,
+        paginationTruncated: false,
+        promotePagesFailed: false,
+      }),
+    })
+    expect((res.json as jest.Mock).mock.calls[0][0].data[0]).not.toHaveProperty('accessToken')
   })
 
   it('paginates and deduplicates promote pages for an authorized ad account', async () => {

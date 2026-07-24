@@ -27,26 +27,29 @@ describe('facebook user asset security', () => {
   })
 
   it('removes page access tokens from cached pages service responses', async () => {
-    jest.spyOn(FacebookUser, 'findOne').mockResolvedValue({
-      pages: [
-        {
-          pageId: 'page_1',
-          name: 'Page 1',
-          accessToken: 'PAGE_ACCESS_TOKEN',
-          access_token: 'PAGE_ACCESS_TOKEN_SNAKE',
-          accounts: [{ accountId: 'act_1' }],
-        },
-        {
-          pageId: 'page_2',
-          name: 'Page 2',
-          accessToken: 'PAGE_ACCESS_TOKEN_2',
-          accounts: [{ accountId: 'act_2' }],
-        },
-      ],
+    const cachedUser = {
+      pages: [{
+        pageId: 'page_1',
+        name: 'Page 1',
+        accessToken: 'PAGE_ACCESS_TOKEN',
+        access_token: 'PAGE_ACCESS_TOKEN_SNAKE',
+        accounts: [{ accountId: 'act_1' }],
+      }, {
+        pageId: 'page_2',
+        name: 'Page 2',
+        accessToken: 'PAGE_ACCESS_TOKEN_2',
+        accounts: [{ accountId: 'act_2' }],
+      }],
+    }
+    const lean = jest.fn().mockResolvedValue(cachedUser)
+    const select = jest.fn().mockReturnValue({ lean })
+    jest.spyOn(FacebookUser, 'findOne').mockReturnValue({
+      select,
     } as any)
 
     const pages = await getCachedPages('fb_123', 'act_1')
 
+    expect(select).toHaveBeenCalledWith('pages')
     expect(pages).toHaveLength(1)
     expect(pages[0]).toMatchObject({
       pageId: 'page_1',

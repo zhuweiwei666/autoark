@@ -540,6 +540,8 @@ export const getCachedAccountsWithMeta = async (fbUserId: string, scope: Faceboo
  */
 export const getCachedPages = async (fbUserId: string, accountId?: string, scope: FacebookUserScope = {}) => {
   const user = await FacebookUser.findOne(buildFacebookUserFilter(fbUserId, scope))
+    .select('pages')
+    .lean()
   if (!user?.pages) return []
   
   if (accountId) {
