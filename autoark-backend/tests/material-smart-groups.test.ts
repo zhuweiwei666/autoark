@@ -252,10 +252,17 @@ const matchesMongoFilter = (document: any, filter: any): boolean => {
 describe('Facebook material smart groups', () => {
   beforeEach(() => {
     jest.clearAllMocks()
+    process.env.EXTERNAL_MATERIAL_SYNC_ENABLED = 'true'
+    process.env.GUANGDADA_API_KEY = 'unit-test-provider-key'
     mockMaterialFind.mockReturnValue(mockListQuery())
     mockMaterialCountDocuments.mockResolvedValue(0)
     mockOriginAggregate.mockResolvedValue([{ global: [], packages: [] }])
     mockStateLean.mockResolvedValue({ paused: false })
+  })
+
+  afterEach(() => {
+    delete process.env.EXTERNAL_MATERIAL_SYNC_ENABLED
+    delete process.env.GUANGDADA_API_KEY
   })
 
   it('resolves raw visible material fixtures before grouping and counts A+B once globally', async () => {
@@ -739,6 +746,27 @@ describe('Facebook material smart groups', () => {
       /manual-secret|pauseReason|recurringEnabled|backfillCursor|secret-cursor/i,
     )
   })
+
+  it.each([
+    ['false', 'unit-test-provider-key', 'disabled'],
+    ['true', '', 'unavailable'],
+    ['true', 'unit-test-provider-key', 'active'],
+  ])(
+    'reports the external provider as %s/%s => %s',
+    async (featureFlag, apiKey, expectedStatus) => {
+      process.env.EXTERNAL_MATERIAL_SYNC_ENABLED = featureFlag
+      process.env.GUANGDADA_API_KEY = apiKey
+      const service = loadSmartGroupService()
+      mockOriginAggregate.mockResolvedValue([{ global: [], packages: [] }])
+      mockStateLean.mockResolvedValue({ paused: false })
+
+      const groups = await service.getExternalMaterialSmartGroups()
+
+      expect(groups[0].children[0]).toEqual(expect.objectContaining({
+        status: expectedStatus,
+      }))
+    },
+  )
 
   it('fails closed with a generic smart-group error when external provider state cannot be read', async () => {
     const sentinel = 'mongodb://private-host/state?credential=secret'

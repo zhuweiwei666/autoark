@@ -7,6 +7,7 @@ import {
   reconcileExternalMaterialContinuations,
 } from '../queue/externalMaterial.queue'
 import { writeAuditLog } from '../services/auditLog.service'
+import { resolveExternalMaterialRuntime } from '../services/externalMaterialRuntime.service'
 import {
   canManageExternalMaterials,
   canReadExternalMaterials,
@@ -81,6 +82,10 @@ const safeRun = (value: unknown) => {
 
 const safeState = (value: unknown) => {
   const state = recordValue(value)
+  const runtime = resolveExternalMaterialRuntime({
+    paused: state.paused === true,
+    recurringEnabled: state.recurringEnabled !== false,
+  })
   return {
     provider: PROVIDER,
     paused: state.paused === true,
@@ -88,7 +93,7 @@ const safeState = (value: unknown) => {
       typeof state.pauseReason === 'string'
         ? state.pauseReason.slice(0, 120)
         : null,
-    recurringEnabled: state.recurringEnabled !== false,
+    ...runtime,
   }
 }
 

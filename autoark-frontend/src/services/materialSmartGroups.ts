@@ -54,6 +54,7 @@ export interface ExternalSyncCounters {
 
 export interface ExternalMaterialStatus {
   provider: 'guangdada'
+  status: MaterialSmartGroupStatus
   paused: boolean
   pauseReason: string | null
   recurringEnabled: boolean

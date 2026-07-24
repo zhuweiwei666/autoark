@@ -16,6 +16,7 @@ import {
   type MaterialOriginsResult,
   type MaterialSelection,
   type MaterialSmartGroupNode,
+  type MaterialSmartGroupStatus,
 } from '../services/materialSmartGroups'
 
 const API_BASE = '/api'
@@ -756,6 +757,17 @@ export default function MaterialLibraryPage() {
     return null
   }
 
+  const externalRuntimeStatusLabel = (status: MaterialSmartGroupStatus) => {
+    if (status === 'disabled') return '外部同步未启用'
+    if (status === 'unavailable') return '外部同步配置不完整'
+    if (status === 'paused') return '同步已暂停'
+    return '同步运行中'
+  }
+
+  const externalActionsAvailable = externalStatus?.status === 'active' ||
+    externalStatus?.status === 'paused'
+  const externalCanSync = externalStatus?.status === 'active'
+
   const renderSmartGroupNode = (group: MaterialSmartGroupNode, depth = 0) => {
     const selectable = group.type === 'facebook-account' || group.type === 'external-package'
     const isSelected = selection.kind === 'smart' &&
@@ -1194,7 +1206,7 @@ export default function MaterialLibraryPage() {
                     <div className="text-xs text-rose-600">同步状态暂不可用</div>
                   ) : externalStatus ? (
                     <div className="mt-0.5 text-xs text-violet-700">
-                      {externalStatus.paused ? '同步已暂停' : '同步运行中'}
+                      {externalRuntimeStatusLabel(externalStatus.status)}
                       {externalStatus.lastRun && (
                         <>
                           {' · 最近任务 '}
@@ -1218,7 +1230,7 @@ export default function MaterialLibraryPage() {
                 </div>
                 <button
                   type="button"
-                  disabled={externalActionPending}
+                  disabled={externalActionPending || !externalCanSync}
                   onClick={() => handleExternalSync(true)}
                   className="rounded border border-violet-300 bg-white px-2.5 py-1.5 text-xs text-violet-700 disabled:opacity-50"
                 >
@@ -1226,7 +1238,7 @@ export default function MaterialLibraryPage() {
                 </button>
                 <button
                   type="button"
-                  disabled={externalActionPending || externalStatus?.paused}
+                  disabled={externalActionPending || !externalCanSync}
                   onClick={() => handleExternalSync(false)}
                   className="rounded bg-violet-700 px-2.5 py-1.5 text-xs text-white disabled:opacity-50"
                 >
@@ -1235,7 +1247,7 @@ export default function MaterialLibraryPage() {
                 {externalStatus?.paused ? (
                   <button
                     type="button"
-                    disabled={externalActionPending}
+                    disabled={externalActionPending || !externalActionsAvailable}
                     onClick={() => handleExternalPause(false)}
                     className="rounded border border-emerald-300 bg-white px-2.5 py-1.5 text-xs text-emerald-700 disabled:opacity-50"
                   >
@@ -1244,7 +1256,7 @@ export default function MaterialLibraryPage() {
                 ) : (
                   <button
                     type="button"
-                    disabled={externalActionPending}
+                    disabled={externalActionPending || !externalActionsAvailable}
                     onClick={() => handleExternalPause(true)}
                     className="rounded border border-rose-300 bg-white px-2.5 py-1.5 text-xs text-rose-700 disabled:opacity-50"
                   >
