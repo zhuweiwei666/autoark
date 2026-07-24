@@ -330,6 +330,7 @@ export default function BulkAdCreatePage() {
   const syncStatusPollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const syncStatusPollGenerationRef = useRef(0)
   const authStatusCheckGenerationRef = useRef(0)
+  const activeFacebookTokenIdRef = useRef<string | null>(null)
   const isMountedRef = useRef(true)
   const [currentStep, setCurrentStep] = useState(1)
   
@@ -459,6 +460,33 @@ export default function BulkAdCreatePage() {
     schedule: 'IMMEDIATE',
   })
 
+  const withFacebookTokenId = (url: string, tokenId = authStatus?.tokenId) => {
+    if (!tokenId) return url
+    const separator = url.includes('?') ? '&' : '?'
+    return `${url}${separator}tokenId=${encodeURIComponent(tokenId)}`
+  }
+
+  const isActiveFacebookToken = (tokenId?: string) => (
+    Boolean(tokenId && activeFacebookTokenIdRef.current === tokenId)
+  )
+
+  const resetFacebookAssetSelection = () => {
+    accountSelectionPromiseRef.current = null
+    accountPageRequestsRef.current.clear()
+    setAccounts([])
+    setAccountsLoading(false)
+    setAllPixels([])
+    setPixelsLoading(false)
+    setSelectedPixel(null)
+    setFilteredAccounts([])
+    setAccountPages({})
+    setSelectedAccounts([])
+    setAssetWarningMap({})
+    setAuthDiagnostics(null)
+    setDiagnosticsLoading(false)
+    setResyncMessage(null)
+  }
+
   // 🎯 自动生成系列名称模板
   // 格式: autoark用户名_渠道_文案包产品名_定向包名_{accountName}_{date}
   // 定向包名称实时更新：如果已选择定向包，显示实际名称；否则显示变量占位符
@@ -498,10 +526,10 @@ export default function BulkAdCreatePage() {
   
   // 授权后立即加载缓存的 Pixels（不等到步骤2）
   useEffect(() => {
-    if (authStatus?.authorized && allPixels.length === 0 && !pixelsLoading) {
-      loadCachedPixels()
+    if (authStatus?.authorized && authStatus.tokenId && allPixels.length === 0 && !pixelsLoading) {
+      loadCachedPixels(authStatus.tokenId)
     }
-  }, [authStatus?.authorized])
+  }, [authStatus?.authorized, authStatus?.tokenId])
   
   // 检查授权状态
   const checkAuthStatus = async () => {
@@ -511,6 +539,8 @@ export default function BulkAdCreatePage() {
 
     if (!token) {
       if (isMountedRef.current && authStatusCheckGenerationRef.current === checkGeneration) {
+        activeFacebookTokenIdRef.current = null
+        resetFacebookAssetSelection()
         setAuthLoading(false)
         setAuthStatus({ authorized: false })
         setResyncing(false)
@@ -524,12 +554,20 @@ export default function BulkAdCreatePage() {
       const data = await res.json()
       if (!isMountedRef.current || authStatusCheckGenerationRef.current !== checkGeneration) return
       if (data.success) {
-        setAuthStatus(data.data)
         // 如果已授权，自动加载账户
-        if (data.data.authorized) {
-          loadAdAccounts()
-          loadAuthDiagnostics()
-          const syncStatus = await fetchSyncStatus()
+        if (data.data.authorized && data.data.tokenId) {
+          const nextTokenId = String(data.data.tokenId)
+          if (
+            activeFacebookTokenIdRef.current &&
+            activeFacebookTokenIdRef.current !== nextTokenId
+          ) {
+            resetFacebookAssetSelection()
+          }
+          activeFacebookTokenIdRef.current = nextTokenId
+          setAuthStatus({ ...data.data, tokenId: nextTokenId })
+          loadAdAccounts(nextTokenId)
+          loadAuthDiagnostics(nextTokenId)
+          const syncStatus = await fetchSyncStatus(nextTokenId)
           if (!isMountedRef.current || authStatusCheckGenerationRef.current !== checkGeneration) return
           if (syncStatus) {
             setSyncStatus(syncStatus)
@@ -538,20 +576,25 @@ export default function BulkAdCreatePage() {
           if (!syncStatus) {
             setResyncing(true)
             setResyncMessage('暂时无法读取同步状态，系统会继续自动重试。')
-            startSyncStatusPolling()
+            startSyncStatusPolling(Date.now(), nextTokenId)
           } else if (syncStatus.status === 'syncing') {
             setResyncMessage('Facebook 资产仍在后台同步，完成前不会重复启动。')
-            startSyncStatusPolling()
+            startSyncStatusPolling(Date.now(), nextTokenId)
           } else if (syncStatus.stale) {
             setResyncMessage(syncStatus.error || '上次同步已中断，可以重新同步。')
           }
         } else {
+          activeFacebookTokenIdRef.current = null
+          resetFacebookAssetSelection()
+          setAuthStatus({ authorized: false })
           setResyncing(false)
         }
       }
     } catch (err) {
       console.error('Failed to check auth status:', err)
       if (isMountedRef.current && authStatusCheckGenerationRef.current === checkGeneration) {
+        activeFacebookTokenIdRef.current = null
+        resetFacebookAssetSelection()
         setAuthStatus({ authorized: false })
         setResyncing(false)
       }
@@ -562,24 +605,46 @@ export default function BulkAdCreatePage() {
     }
   }
 
-  const loadAuthDiagnostics = async () => {
+  const loadAuthDiagnostics = async (facebookTokenId = authStatus?.tokenId) => {
+    if (!facebookTokenId) return
     setDiagnosticsLoading(true)
     try {
-      const res = await authFetch(`${API_BASE}/bulk-ad/auth/diagnostics`)
+      const res = await authFetch(withFacebookTokenId(
+        `${API_BASE}/bulk-ad/auth/diagnostics`,
+        facebookTokenId,
+      ))
       const data = await res.json()
+      if (!isActiveFacebookToken(facebookTokenId)) return
       if (data.success) {
         setAuthDiagnostics(data.data)
       }
     } catch (err) {
       console.error('Failed to load auth diagnostics:', err)
     } finally {
-      setDiagnosticsLoading(false)
+      if (isActiveFacebookToken(facebookTokenId)) {
+        setDiagnosticsLoading(false)
+      }
     }
+  }
+
+  const refreshAuthorizationAfterLogin = () => {
+    setLoginAttempt(null)
+    void checkAuthStatus().finally(() => {
+      if (isMountedRef.current) {
+        setLoginLoading(false)
+      }
+    })
   }
   
   // Facebook 登录（弹窗方式）
   const handleFacebookLogin = async () => {
     clearFacebookLoginWait()
+    authStatusCheckGenerationRef.current += 1
+    stopSyncStatusPolling()
+    activeFacebookTokenIdRef.current = null
+    resetFacebookAssetSelection()
+    setAuthStatus({ authorized: false })
+    setAuthLoading(true)
     setLoginLoading(true)
     setError(null)
     setPublishBlocker(null)
@@ -659,10 +724,8 @@ export default function BulkAdCreatePage() {
       checkPopup = setInterval(() => {
         if (popup.closed) {
           cleanup()
-          setLoginLoading(false)
-          setLoginAttempt(null)
           // 弹窗关闭后检查授权状态
-          checkAuthStatus()
+          refreshAuthorizationAfterLogin()
         }
       }, 500)
       
@@ -673,14 +736,11 @@ export default function BulkAdCreatePage() {
         }
         if (event.data?.type === 'oauth-success') {
           cleanup({ closePopup: true })
-          setLoginLoading(false)
-          setLoginAttempt(null)
-          checkAuthStatus()
+          refreshAuthorizationAfterLogin()
         } else if (event.data?.type === 'oauth-error') {
           cleanup({ closePopup: true })
-          setLoginLoading(false)
-          setLoginAttempt(null)
           setError(event.data.error || '授权失败')
+          refreshAuthorizationAfterLogin()
         }
       }
       window.addEventListener('message', handleMessage)
@@ -690,10 +750,8 @@ export default function BulkAdCreatePage() {
       timeoutId = setTimeout(() => {
         if (!popup.closed) {
           cleanup({ closePopup: true })
-          setLoginLoading(false)
-          setLoginAttempt(null)
           setError('Facebook 授权窗口等待超时，已自动关闭授权窗口。请重新点击登录；若弹窗显示“功能不可用”，请检查 Facebook App 的 Public OAuth 与 Login for Business 配置。')
-          checkAuthStatus()
+          refreshAuthorizationAfterLogin()
         }
       }, FACEBOOK_LOGIN_POPUP_TIMEOUT_MS)
       
@@ -702,35 +760,41 @@ export default function BulkAdCreatePage() {
         ? '获取 Facebook 登录链接超时，请刷新后重试。'
         : err.message || '登录失败'
       setError(message)
-      setLoginLoading(false)
-      setLoginAttempt(null)
+      refreshAuthorizationAfterLogin()
     }
   }
 
   const stopFacebookLoginWait = () => {
     clearFacebookLoginWait({ closePopup: true })
-    setLoginLoading(false)
-    setLoginAttempt(null)
     setPublishBlocker(null)
     setError('已停止等待 Facebook 授权窗口，并回查当前授权状态。若弹窗显示“功能不可用”，请到 App 管理检查 Public OAuth 与 Login for Business 配置。')
-    checkAuthStatus()
+    refreshAuthorizationAfterLogin()
   }
   
   // 加载广告账户
-  const loadAdAccounts = async () => {
+  const loadAdAccounts = async (facebookTokenId = authStatus?.tokenId) => {
+    if (!facebookTokenId) return
     setAccountsLoading(true)
     try {
-      const res = await authFetch(`${API_BASE}/bulk-ad/auth/ad-accounts`)
+      const res = await authFetch(withFacebookTokenId(
+        `${API_BASE}/bulk-ad/auth/ad-accounts`,
+        facebookTokenId,
+      ))
       const data = await res.json()
+      if (!isActiveFacebookToken(facebookTokenId)) return
       if (data.success) {
         setAccounts(data.data || [])
         setAssetWarning('ad-accounts', buildAdAccountAssetWarning(data.meta))
       }
     } catch (err) {
       console.error('Failed to load ad accounts:', err)
-      setAssetWarning('ad-accounts', '广告账户读取失败，请检查 Facebook 授权后重新同步。')
+      if (isActiveFacebookToken(facebookTokenId)) {
+        setAssetWarning('ad-accounts', '广告账户读取失败，请检查 Facebook 授权后重新同步。')
+      }
     } finally {
-      setAccountsLoading(false)
+      if (isActiveFacebookToken(facebookTokenId)) {
+        setAccountsLoading(false)
+      }
     }
   }
   
@@ -741,11 +805,16 @@ export default function BulkAdCreatePage() {
   const [_syncStatus, setSyncStatus] = useState<any>(null)
   
   // 加载缓存的 Pixels（快速，从数据库读取）
-  const loadCachedPixels = async () => {
+  const loadCachedPixels = async (facebookTokenId = authStatus?.tokenId) => {
+    if (!facebookTokenId) return false
     setPixelsLoading(true)
     try {
-      const res = await authFetch(`${API_BASE}/bulk-ad/auth/cached-pixels`)
+      const res = await authFetch(withFacebookTokenId(
+        `${API_BASE}/bulk-ad/auth/cached-pixels`,
+        facebookTokenId,
+      ))
       const data = await res.json()
+      if (!isActiveFacebookToken(facebookTokenId)) return false
       if (data.success && data.data?.length > 0) {
         const pixels = data.data
         setAllPixels(pixels)
@@ -759,7 +828,9 @@ export default function BulkAdCreatePage() {
       console.error('Failed to load cached pixels:', err)
       return false
     } finally {
-      setPixelsLoading(false)
+      if (isActiveFacebookToken(facebookTokenId)) {
+        setPixelsLoading(false)
+      }
     }
   }
   
@@ -783,10 +854,15 @@ export default function BulkAdCreatePage() {
   }
   
   // 只读取同步状态；调用方确认请求仍属于当前轮询代次后再写入 React 状态。
-  const fetchSyncStatus = async () => {
+  const fetchSyncStatus = async (facebookTokenId = authStatus?.tokenId) => {
+    if (!facebookTokenId) return null
     try {
-      const res = await authFetch(`${API_BASE}/bulk-ad/auth/sync-status`)
+      const res = await authFetch(withFacebookTokenId(
+        `${API_BASE}/bulk-ad/auth/sync-status`,
+        facebookTokenId,
+      ))
       const data = await res.json()
+      if (!isActiveFacebookToken(facebookTokenId)) return null
       if (data.success) {
         return data.data
       }
@@ -796,10 +872,10 @@ export default function BulkAdCreatePage() {
     return null
   }
 
-  const refreshFacebookAssets = () => {
-    loadCachedPixels()
-    loadAdAccounts()
-    loadAuthDiagnostics()
+  const refreshFacebookAssets = (facebookTokenId = authStatus?.tokenId) => {
+    loadCachedPixels(facebookTokenId)
+    loadAdAccounts(facebookTokenId)
+    loadAuthDiagnostics(facebookTokenId)
   }
 
   const stopSyncStatusPolling = () => {
@@ -810,13 +886,16 @@ export default function BulkAdCreatePage() {
     }
   }
 
-  const startSyncStatusPolling = (startedAt = Date.now()) => {
+  const startSyncStatusPolling = (
+    startedAt = Date.now(),
+    facebookTokenId = authStatus?.tokenId,
+  ) => {
     stopSyncStatusPolling()
     const pollGeneration = syncStatusPollGenerationRef.current
 
     const poll = async () => {
       syncStatusPollTimeoutRef.current = null
-      const status = await fetchSyncStatus()
+      const status = await fetchSyncStatus(facebookTokenId)
       if (
         !isMountedRef.current ||
         syncStatusPollGenerationRef.current !== pollGeneration
@@ -830,7 +909,7 @@ export default function BulkAdCreatePage() {
         syncStatusPollGenerationRef.current += 1
         setResyncing(false)
         setResyncMessage('资产同步完成，已刷新账户和 Pixel。')
-        refreshFacebookAssets()
+        refreshFacebookAssets(facebookTokenId)
         return
       }
       if (status?.status === 'failed') {
@@ -860,13 +939,18 @@ export default function BulkAdCreatePage() {
   // 手动触发重新同步
   const triggerResync = async () => {
     if (resyncing) return
+    const facebookTokenId = authStatus?.tokenId
+    if (!facebookTokenId) return
     authStatusCheckGenerationRef.current += 1
     stopSyncStatusPolling()
     const resyncGeneration = syncStatusPollGenerationRef.current
     setResyncing(true)
     setResyncMessage('正在重新同步 Facebook 资产...')
     try {
-      const res = await authFetch(`${API_BASE}/bulk-ad/auth/resync`, { method: 'POST' })
+      const res = await authFetch(withFacebookTokenId(
+        `${API_BASE}/bulk-ad/auth/resync`,
+        facebookTokenId,
+      ), { method: 'POST' })
       const data = await res.json().catch(() => ({}))
       if (
         !isMountedRef.current ||
@@ -875,7 +959,7 @@ export default function BulkAdCreatePage() {
       if (!res.ok || data.success === false) {
         throw new Error(data.error || '触发同步失败')
       }
-      startSyncStatusPolling()
+      startSyncStatusPolling(Date.now(), facebookTokenId)
     } catch (err: any) {
       console.error('Failed to trigger resync:', err)
       if (
@@ -890,9 +974,11 @@ export default function BulkAdCreatePage() {
   
   // 传统方式加载 Pixels（作为后备）
   const loadAllPixels = async () => {
+    const facebookTokenId = authStatus?.tokenId
+    if (!facebookTokenId) return
     clearAssetWarningsByPrefix('pixels:')
     // 先尝试从缓存加载
-    const cached = await loadCachedPixels()
+    const cached = await loadCachedPixels(facebookTokenId)
     if (cached) return
     
     // 缓存为空，实时抓取
@@ -904,8 +990,12 @@ export default function BulkAdCreatePage() {
       for (const account of accounts) {
         const accountId = account.account_id || account.id?.replace('act_', '')
         try {
-          const res = await authFetch(`${API_BASE}/bulk-ad/auth/pixels?accountId=${accountId}`)
+          const res = await authFetch(withFacebookTokenId(
+            `${API_BASE}/bulk-ad/auth/pixels?accountId=${accountId}`,
+            facebookTokenId,
+          ))
           const data = await res.json()
+          if (!isActiveFacebookToken(facebookTokenId)) return
           if (data.success && data.data) {
             setAssetWarning(`pixels:${accountId}`, buildPixelAssetWarning(data.meta, account.name || accountId))
             for (const pixel of data.data) {
@@ -922,21 +1012,31 @@ export default function BulkAdCreatePage() {
           }
         } catch (err) {
           console.error(`Failed to load pixels for account ${accountId}:`, err)
-          setAssetWarning(`pixels:${accountId}`, `账户 ${account.name || accountId} 的 Pixel 读取失败，请检查 Facebook 授权或重新同步。`)
+          if (isActiveFacebookToken(facebookTokenId)) {
+            setAssetWarning(`pixels:${accountId}`, `账户 ${account.name || accountId} 的 Pixel 读取失败，请检查 Facebook 授权或重新同步。`)
+          }
         }
       }
       
+      if (!isActiveFacebookToken(facebookTokenId)) return
       const pixels = Array.from(pixelMap.values())
       setAllPixels(pixels)
       autoSelectMatchingPixel(pixels)
     } catch (err) {
       console.error('Failed to load all pixels:', err)
     } finally {
-      setPixelsLoading(false)
+      if (isActiveFacebookToken(facebookTokenId)) {
+        setPixelsLoading(false)
+      }
     }
   }
   
-  const fetchPagesForAccount = (accountId: string, accountName: string): Promise<any[]> => {
+  const fetchPagesForAccount = (
+    accountId: string,
+    accountName: string,
+    facebookTokenId = authStatus?.tokenId,
+  ): Promise<any[]> => {
+    if (!facebookTokenId) return Promise.resolve([])
     if (accountPages[accountId] !== undefined) {
       return Promise.resolve(accountPages[accountId])
     }
@@ -946,10 +1046,14 @@ export default function BulkAdCreatePage() {
 
     const request = (async () => {
       try {
-        const res = await authFetch(`${API_BASE}/bulk-ad/auth/pages?accountId=${accountId}`)
+        const res = await authFetch(withFacebookTokenId(
+          `${API_BASE}/bulk-ad/auth/pages?accountId=${accountId}`,
+          facebookTokenId,
+        ))
         const data = await res.json()
+        if (!isActiveFacebookToken(facebookTokenId)) return []
         if (data.success && Array.isArray(data.data)) {
-          if (isMountedRef.current) {
+          if (isMountedRef.current && isActiveFacebookToken(facebookTokenId)) {
             setAssetWarning(`pages:${accountId}`, buildPageAssetWarning(data.meta, accountName))
           }
           return data.data
@@ -958,7 +1062,7 @@ export default function BulkAdCreatePage() {
         console.error(`Failed to load pages for account ${accountId}:`, err)
       }
 
-      if (isMountedRef.current) {
+      if (isMountedRef.current && isActiveFacebookToken(facebookTokenId)) {
         setAssetWarning(
           `pages:${accountId}`,
           `账户 ${accountName} 的主页读取失败，请检查主页授权或重新同步。`,
@@ -997,6 +1101,8 @@ export default function BulkAdCreatePage() {
   
   // 批量选择多个账户（pixel 参数用于避免 React 状态异步更新问题）
   const selectMultipleAccounts = async (accountsToSelect: any[], pixelOverride?: any) => {
+    const facebookTokenId = authStatus?.tokenId
+    if (!facebookTokenId) return
     if (accountSelectionPromiseRef.current) {
       return accountSelectionPromiseRef.current
     }
@@ -1019,6 +1125,7 @@ export default function BulkAdCreatePage() {
       })
 
       // 先提交选择状态，让“已选”数量和勾选框即时响应。
+      if (!isActiveFacebookToken(facebookTokenId)) return
       setSelectedAccounts(newSelectedAccounts)
 
       const loadedPageEntries = await mapWithConcurrency(
@@ -1026,14 +1133,18 @@ export default function BulkAdCreatePage() {
         ACCOUNT_PAGE_FETCH_CONCURRENCY,
         async account => {
           const accountId = account.account_id || account.id?.replace('act_', '')
-          const pages = await fetchPagesForAccount(accountId, account.name || accountId)
+          const pages = await fetchPagesForAccount(
+            accountId,
+            account.name || accountId,
+            facebookTokenId,
+          )
           return [accountId, pages] as const
         },
       )
       const loadedPages = Object.fromEntries(loadedPageEntries)
       const allPages = { ...accountPages, ...loadedPages }
 
-      if (!isMountedRef.current) return
+      if (!isMountedRef.current || !isActiveFacebookToken(facebookTokenId)) return
       setAccountPages(prev => ({ ...prev, ...loadedPages }))
       setSelectedAccounts(autoAssignPages(newSelectedAccounts, allPages))
     })()
@@ -1044,7 +1155,9 @@ export default function BulkAdCreatePage() {
     } finally {
       if (accountSelectionPromiseRef.current === selectionOperation) {
         accountSelectionPromiseRef.current = null
-        if (isMountedRef.current) setSelectingAccounts(false)
+        if (isMountedRef.current && isActiveFacebookToken(facebookTokenId)) {
+          setSelectingAccounts(false)
+        }
       }
     }
   }
@@ -1107,8 +1220,8 @@ export default function BulkAdCreatePage() {
   
   // 选择/取消选择账户
   const toggleAccount = async (account: any) => {
-    if (selectingAccounts) return
-
+    const facebookTokenId = authStatus?.tokenId
+    if (selectingAccounts || !facebookTokenId) return
     const accountId = account.account_id || account.id?.replace('act_', '')
     const exists = selectedAccounts.find(a => a.accountId === accountId)
     if (exists) {
@@ -1116,7 +1229,7 @@ export default function BulkAdCreatePage() {
     } else {
       // 先加载该账户的主页
       const pagesForAccount = await loadPagesForAccount(accountId)
-      if (!isMountedRef.current) return
+      if (!isMountedRef.current || !isActiveFacebookToken(facebookTokenId)) return
       
       // 自动设置已选的 Pixel，并自动分配主页
       const newAccount = {
@@ -1138,13 +1251,20 @@ export default function BulkAdCreatePage() {
   
   // 加载单个账户的主页
   const loadPagesForAccount = async (accountId: string): Promise<any[]> => {
+    const facebookTokenId = authStatus?.tokenId
+    if (!facebookTokenId) return []
     // 如果已经加载过，直接返回
     if (accountPages[accountId] !== undefined) {
       return accountPages[accountId]
     }
 
-    const pages = await fetchPagesForAccount(accountId, getAccountDisplayName(accountId))
-    if (isMountedRef.current) {
+    const pages = await fetchPagesForAccount(
+      accountId,
+      getAccountDisplayName(accountId),
+      facebookTokenId,
+    )
+    if (!isActiveFacebookToken(facebookTokenId)) return []
+    if (isMountedRef.current && isActiveFacebookToken(facebookTokenId)) {
       setAccountPages(prev => ({ ...prev, [accountId]: pages }))
     }
     return pages
@@ -1206,8 +1326,16 @@ export default function BulkAdCreatePage() {
     setError(null)
     setPublishBlocker(null)
     try {
+      if (authLoading || loginLoading) {
+        throw new Error('Facebook 个人号授权正在切换或校验，请等待资产加载完成后再发布')
+      }
+      const facebookTokenId = authStatus?.tokenId
+      if (!facebookTokenId || !isActiveFacebookToken(facebookTokenId)) {
+        throw new Error('请先选择并授权一个 Facebook 个人号')
+      }
       const draft = {
         name: `批量广告_${new Date().toISOString().slice(0, 10)}`,
+        facebookTokenId,
         accounts: selectedAccounts,
         campaign, adset, ad,
         publishStrategy,
@@ -1291,6 +1419,8 @@ export default function BulkAdCreatePage() {
     (authDiagnostics.summary.readyAccountCount || 0) <= 0
   )
   const nextDisabled = (
+    authLoading ||
+    loginLoading ||
     (currentStep === 1 && (!authStatus?.authorized || !selectedProduct || facebookAssetsBlocked)) ||
     (currentStep === 2 && !selectedPixel) ||
     (currentStep === 3 && (selectingAccounts || selectedAccounts.length === 0 || selectedAccounts.some(acc => !acc.pageId)))
@@ -1416,6 +1546,9 @@ export default function BulkAdCreatePage() {
                         <span className="text-sm font-medium text-green-800">已授权: {authStatus.fbUserName}</span>
                         {pixelsLoading && <span className="text-xs text-green-600 ml-2">（正在加载 Pixel...）</span>}
                         {allPixels.length > 0 && <span className="text-xs text-green-600 ml-2">（已加载 {allPixels.length} 个 Pixel）</span>}
+                        <div className="mt-0.5 text-[11px] text-green-700">
+                          本次仅展示并使用此个人号 Token 下的广告账户、Page 和 Pixel
+                        </div>
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
@@ -2382,7 +2515,7 @@ export default function BulkAdCreatePage() {
           ) : (
             <button 
               onClick={handlePublish} 
-              disabled={loading || selectedAccounts.some(acc => !acc.pageId)} 
+              disabled={loading || authLoading || loginLoading || selectedAccounts.some(acc => !acc.pageId)}
               className="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50"
             >
               {loading ? '发布中...' : '发布广告'}

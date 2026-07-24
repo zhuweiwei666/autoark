@@ -147,6 +147,9 @@ const adDraftSchema = new mongoose.Schema(
     
     // 草稿基本信息
     name: { type: String, required: true },
+    // 本次创建广告使用的 Facebook 个人号授权。账户、Page、Pixel 和发布
+    // 执行必须来自同一枚 token，避免跨个人号拼接资产。
+    facebookTokenId: { type: mongoose.Schema.Types.ObjectId, ref: 'FbToken' },
     status: { 
       type: String, 
       default: 'draft',

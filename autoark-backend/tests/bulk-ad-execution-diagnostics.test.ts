@@ -16,6 +16,7 @@ jest.mock('../src/integration/facebook/facebookClient', () => ({
 import Ad from '../src/models/Ad'
 import AdMaterialMapping from '../src/models/AdMaterialMapping'
 import AdTask from '../src/models/AdTask'
+import Account from '../src/models/Account'
 import CopywritingPackage from '../src/models/CopywritingPackage'
 import CreativeGroup from '../src/models/CreativeGroup'
 import FbToken from '../src/models/FbToken'
@@ -28,11 +29,14 @@ import {
 import { executeTaskForAccount } from '../src/services/bulkAd.service'
 
 const taskId = '665000000000000000000701'
+const facebookTokenId = '665000000000000000000702'
+const facebookTokenOwnerUserId = '665000000000000000000703'
+const publisherUserId = '665000000000000000000704'
 
 const buildTask = () => ({
   _id: taskId,
   organizationId: '665000000000000000000001',
-  createdBy: '665000000000000000000002',
+  createdBy: publisherUserId,
   items: [{
     accountId: '123',
     accountName: 'Account 123',
@@ -40,6 +44,8 @@ const buildTask = () => ({
     result: {},
   }],
   configSnapshot: {
+    facebookTokenId,
+    facebookTokenOwnerUserId,
     accounts: [{
       accountId: '123',
       accountName: 'Account 123',
@@ -75,6 +81,16 @@ const buildTask = () => ({
 })
 
 describe('bulk ad execution diagnostics', () => {
+  beforeEach(() => {
+    jest.spyOn(Account, 'findOne').mockReturnValue({
+      select: jest.fn().mockReturnValue({
+        lean: jest.fn().mockResolvedValue({
+          _id: '665000000000000000000705',
+        }),
+      }),
+    } as any)
+  })
+
   afterEach(() => {
     jest.restoreAllMocks()
     jest.clearAllMocks()
@@ -130,6 +146,12 @@ describe('bulk ad execution diagnostics', () => {
 
     await executeTaskForAccount(taskId, '123')
 
+    expect(FbToken.findOne).toHaveBeenCalledWith({
+      _id: facebookTokenId,
+      status: 'active',
+      organizationId: task.organizationId,
+      userId: facebookTokenOwnerUserId,
+    })
     const finalUpdate = (AdTask.findOneAndUpdate as jest.Mock).mock.calls.find((call: any[]) => (
       call[1]?.$set?.['items.$.errors']
     ))
@@ -151,6 +173,46 @@ describe('bulk ad execution diagnostics', () => {
       source: 'meta',
     })
     expect(storedErrors[0].operatorMessage).toContain('Invalid image hash')
+  })
+
+  it('stops before creating a campaign when the preflight token is no longer active', async () => {
+    const task = buildTask()
+    jest.spyOn(AdTask, 'findById').mockResolvedValue(task as any)
+    jest.spyOn(AdTask, 'findOneAndUpdate').mockResolvedValue(task as any)
+    jest.spyOn(FbToken, 'findOne').mockResolvedValue(null)
+
+    await expect(executeTaskForAccount(taskId, '123')).rejects.toThrow(
+      '预检使用的 Facebook 个人号授权已失效，请重新验证草稿后再发布',
+    )
+
+    expect(FbToken.findOne).toHaveBeenCalledWith({
+      _id: facebookTokenId,
+      status: 'active',
+      organizationId: task.organizationId,
+      userId: facebookTokenOwnerUserId,
+    })
+    expect(createCampaign).not.toHaveBeenCalled()
+    expect(AdTask.findOneAndUpdate).not.toHaveBeenCalled()
+  })
+
+  it('stops before token lookup when the task account is outside the organization inventory', async () => {
+    const task = buildTask()
+    jest.spyOn(AdTask, 'findById').mockResolvedValue(task as any)
+    ;(Account.findOne as jest.Mock).mockReturnValue({
+      select: jest.fn().mockReturnValue({
+        lean: jest.fn().mockResolvedValue(null),
+      }),
+    })
+    const tokenLookup = jest.spyOn(FbToken, 'findOne')
+    const taskUpdate = jest.spyOn(AdTask, 'findOneAndUpdate')
+
+    await expect(executeTaskForAccount(taskId, '123')).rejects.toThrow(
+      '广告账户 Account 123 不属于当前组织，任务已停止',
+    )
+
+    expect(tokenLookup).not.toHaveBeenCalled()
+    expect(createCampaign).not.toHaveBeenCalled()
+    expect(taskUpdate).not.toHaveBeenCalled()
   })
 
   it('stores organization scope on created ads and material mappings', async () => {

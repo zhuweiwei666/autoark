@@ -62,14 +62,37 @@ const getControlFilter = (req: Request): any => {
   )
 }
 
-const getScopedActiveToken = (req: Request) => {
-  return FbToken.findOne({ status: 'active', ...scopedTokenFilter(req) }).sort({ updatedAt: -1 })
-}
-
 const createHttpError = (message: string, statusCode: number) => {
   const error: any = new Error(message)
   error.statusCode = statusCode
   return error
+}
+
+const currentFacebookTokenOwnerFilter = (req: Request) => ({
+  ...(req.user?.userId ? { userId: req.user.userId } : {}),
+  ...(req.user?.organizationId ? { organizationId: req.user.organizationId } : {}),
+})
+
+const selectedFacebookTokenFilter = (req: Request) => {
+  const ownerFilter = currentFacebookTokenOwnerFilter(req)
+  const rawTokenId = Array.isArray(req.query.tokenId)
+    ? req.query.tokenId[0]
+    : req.query.tokenId
+  if (rawTokenId === undefined) return ownerFilter
+
+  const tokenId = typeof rawTokenId === 'string' ? rawTokenId.trim() : ''
+  if (!tokenId || !mongoose.Types.ObjectId.isValid(tokenId)) {
+    throw createHttpError('tokenId is invalid', 400)
+  }
+  return { ...ownerFilter, _id: tokenId }
+}
+
+const getScopedActiveToken = (req: Request) => {
+  return FbToken.findOne({
+    status: 'active',
+    ...scopedTokenFilter(req),
+    ...selectedFacebookTokenFilter(req),
+  }).sort({ updatedAt: -1 })
 }
 
 const FACEBOOK_GRAPH_ID_PATTERN = /^[A-Za-z0-9_.-]+$/
@@ -537,6 +560,8 @@ const sanitizeDraftWriteInput = (input: any) => {
   const data: any = {}
   const name = pickTrimmedString(input?.name, 160)
   if (name) data.name = name
+  const facebookTokenId = pickObjectIdString(input?.facebookTokenId)
+  if (facebookTokenId) data.facebookTokenId = facebookTokenId
 
   if (Array.isArray(input?.accounts)) {
     const accounts = input.accounts
@@ -845,7 +870,11 @@ const assertScopedFacebookAccountAccess = async (req: Request, rawAccountId: any
 
 const getScopedTokenForAccount = async (req: Request, rawAccountId: any) => {
   const accountId = await assertScopedFacebookAccountAccess(req, rawAccountId)
-  const allTokens = await FbToken.find({ status: 'active', ...scopedTokenFilter(req) })
+  const allTokens = await FbToken.find({
+    status: 'active',
+    ...scopedTokenFilter(req),
+    ...selectedFacebookTokenFilter(req),
+  })
 
   const cachedTokenIds = allTokens
     .filter(token => token._id && token.fbUserId)
@@ -2269,8 +2298,8 @@ export const handleAuthCallback = async (req: Request, res: Response) => {
  * 检查授权状态（用户隔离）
  * GET /api/bulk-ad/auth/status
  * 
- * 每个 AutoArk 用户看到自己绑定的 Facebook 账号
- * 超级管理员可以看到所有 token
+ * 每个 AutoArk 用户只使用自己在此入口绑定的 Facebook 个人号。
+ * 即使是超级管理员，也不能静默回退到其他人的 token。
  */
 export const getAuthStatus = async (req: Request, res: Response) => {
   try {
@@ -2278,56 +2307,12 @@ export const getAuthStatus = async (req: Request, res: Response) => {
       return res.status(401).json({ success: false, error: '未认证' })
     }
     
-    const orgObjectId =
-      req.user.organizationId && mongoose.Types.ObjectId.isValid(req.user.organizationId)
-        ? new mongoose.Types.ObjectId(req.user.organizationId)
-        : undefined
-    
-    // 构建查询条件
-    const tokenQuery: any = { status: 'active', ...scopedTokenFilter(req) }
-    
-    // 超级管理员看到所有，普通用户只看到自己绑定的或本组织的
-    if (req.user.role === UserRole.SUPER_ADMIN) {
-      // 超级管理员：获取所有活跃 token，优先显示自己绑定的
-      const userToken = await FbToken.findOne({ 
-        status: 'active', 
-        userId: req.user.userId 
-      }).sort({ updatedAt: -1 })
-      
-      if (userToken) {
-        return res.json({
-          success: true,
-          data: {
-            authorized: true,
-            tokenId: userToken._id,
-            fbUserId: userToken.fbUserId,
-            fbUserName: userToken.fbUserName,
-            expiresAt: userToken.expiresAt,
-            isOwnToken: true,
-          },
-        })
-      }
-      
-      // 如果超级管理员没有绑定自己的 token，显示第一个可用的
-      const anyToken: any = await FbToken.findOne({ status: 'active' }).sort({ updatedAt: -1 })
-      if (anyToken) {
-        return res.json({
-          success: true,
-          data: {
-            authorized: true,
-            tokenId: anyToken._id,
-            fbUserId: anyToken.fbUserId,
-            fbUserName: anyToken.fbUserName,
-            expiresAt: anyToken.expiresAt,
-            isOwnToken: false,
-            message: '当前使用的是其他用户的授权，建议绑定自己的 Facebook 账号',
-          },
-        })
-      }
-    } else {
-      Object.assign(tokenQuery, scopedTokenFilter(req))
+    const tokenQuery: any = {
+      status: 'active',
+      ...scopedTokenFilter(req),
+      ...currentFacebookTokenOwnerFilter(req),
     }
-    
+
     const fbToken: any = await FbToken.findOne(tokenQuery).sort({ updatedAt: -1 })
     
     if (!fbToken) {
@@ -2348,12 +2333,12 @@ export const getAuthStatus = async (req: Request, res: Response) => {
         fbUserId: fbToken.fbUserId,
         fbUserName: fbToken.fbUserName,
         expiresAt: fbToken.expiresAt,
-        isOwnToken: fbToken.userId === req.user.userId,
+        isOwnToken: true,
       },
     })
   } catch (error: any) {
     logger.error('[BulkAd] Get auth status failed:', error)
-    res.status(500).json({ success: false, error: error.message })
+    res.status(error.statusCode || 500).json({ success: false, error: error.message })
   }
 }
 
@@ -2367,24 +2352,29 @@ export const getAuthDiagnostics = async (req: Request, res: Response) => {
       return res.status(401).json({ success: false, error: '未认证' })
     }
 
-    const tokenQuery: any = { status: 'active', ...scopedTokenFilter(req) }
+    const tokenQuery: any = {
+      status: 'active',
+      ...scopedTokenFilter(req),
+      ...selectedFacebookTokenFilter(req),
+    }
     const tokens: any[] = await FbToken.find(tokenQuery)
-      .select('_id fbUserId fbUserName expiresAt lastCheckedAt updatedAt')
+      .select('_id fbUserId fbUserName organizationId expiresAt lastCheckedAt updatedAt')
       .sort({ updatedAt: -1 })
       .lean()
 
     let users: any[] = []
     if (tokens.length > 0) {
       const tokenIds = tokens.map(token => token._id).filter(Boolean)
-      const fbUserIds = tokens.map(token => token.fbUserId).filter(Boolean)
-      const userFilters: any[] = tokenIds.length > 0 ? [{ tokenId: { $in: tokenIds } }] : []
-      if (fbUserIds.length > 0) {
-        userFilters.push({
-          fbUserId: { $in: fbUserIds },
-          ...(req.user.organizationId && { organizationId: req.user.organizationId }),
-        })
-      }
-      users = await FacebookUser.find({ $or: userFilters }).lean()
+      const tokenSnapshotFilters = tokens.map(token => ({
+        tokenId: token._id,
+        organizationId: token.organizationId || null,
+        ...(token.fbUserId ? { fbUserId: token.fbUserId } : {}),
+      }))
+      users = await FacebookUser.find(
+        tokenSnapshotFilters.length === 1
+          ? tokenSnapshotFilters[0]
+          : { $or: tokenSnapshotFilters },
+      ).lean()
     }
 
     const accountLimit = parseLimitedNumber(req.query.accountLimit, 100, 500)
@@ -2395,7 +2385,7 @@ export const getAuthDiagnostics = async (req: Request, res: Response) => {
     })
   } catch (error: any) {
     logger.error('[BulkAd] Get auth diagnostics failed:', error)
-    res.status(500).json({ success: false, error: error.message })
+    res.status(error.statusCode || 500).json({ success: false, error: error.message })
   }
 }
 
@@ -2415,7 +2405,11 @@ export const getAuthAdAccounts = async (req: Request, res: Response) => {
     }
 
     // 构建 token 查询条件（根据组织隔离）
-    const tokenQuery: any = { status: 'active', ...scopedTokenFilter(req) }
+    const tokenQuery: any = {
+      status: 'active',
+      ...scopedTokenFilter(req),
+      ...selectedFacebookTokenFilter(req),
+    }
 
     // 查找所有符合条件的 token（超级管理员看到所有，普通用户只看到本组织）
     const fbTokens: any[] = await FbToken.find(tokenQuery).sort({ updatedAt: -1 })
@@ -2526,7 +2520,7 @@ export const getAuthAdAccounts = async (req: Request, res: Response) => {
     })
   } catch (error: any) {
     logger.error('[BulkAd] Get ad accounts failed:', error)
-    res.status(500).json({ success: false, error: error.message })
+    res.status(error.statusCode || 500).json({ success: false, error: error.message })
   }
 }
 
@@ -2712,7 +2706,11 @@ export const getCachedPixels = async (req: Request, res: Response) => {
         : undefined
     
     // 构建 token 查询条件（根据组织隔离）
-    const tokenQuery: any = { status: 'active', ...scopedTokenFilter(req) }
+    const tokenQuery: any = {
+      status: 'active',
+      ...scopedTokenFilter(req),
+      ...selectedFacebookTokenFilter(req),
+    }
     
     const fbTokens: any[] = await FbToken.find(tokenQuery).sort({ updatedAt: -1 })
     if (!fbTokens || fbTokens.length === 0) {
@@ -2764,7 +2762,7 @@ export const getCachedPixels = async (req: Request, res: Response) => {
     res.json({ success: true, data: formattedPixels })
   } catch (error: any) {
     logger.error('[BulkAd] Get cached pixels failed:', error)
-    res.status(500).json({ success: false, error: error.message })
+    res.status(error.statusCode || 500).json({ success: false, error: error.message })
   }
 }
 
@@ -2779,7 +2777,11 @@ export const getCachedCatalogs = async (req: Request, res: Response) => {
         ? new mongoose.Types.ObjectId(req.user.organizationId)
         : undefined
 
-    const tokenQuery: any = { status: 'active', ...scopedTokenFilter(req) }
+    const tokenQuery: any = {
+      status: 'active',
+      ...scopedTokenFilter(req),
+      ...selectedFacebookTokenFilter(req),
+    }
 
     const fbTokens: any[] = await FbToken.find(tokenQuery).sort({ updatedAt: -1 })
     if (!fbTokens || fbTokens.length === 0) {
@@ -2811,7 +2813,7 @@ export const getCachedCatalogs = async (req: Request, res: Response) => {
     res.json({ success: true, data: Array.from(catalogMap.values()) })
   } catch (error: any) {
     logger.error('[BulkAd] Get cached catalogs failed:', error)
-    res.status(500).json({ success: false, error: error.message })
+    res.status(error.statusCode || 500).json({ success: false, error: error.message })
   }
 }
 
@@ -2834,7 +2836,7 @@ export const getPixelSyncStatus = async (req: Request, res: Response) => {
     res.json({ success: true, data: status })
   } catch (error: any) {
     logger.error('[BulkAd] Get sync status failed:', error)
-    res.status(500).json({ success: false, error: error.message })
+    res.status(error.statusCode || 500).json({ success: false, error: error.message })
   }
 }
 
@@ -2888,7 +2890,7 @@ export const resyncFacebookAssets = async (req: Request, res: Response) => {
       summary: '手动触发 Facebook 资产重同步失败',
       reason: error.message,
     })
-    res.status(500).json({ success: false, error: error.message })
+    res.status(error.statusCode || 500).json({ success: false, error: error.message })
   }
 }
 

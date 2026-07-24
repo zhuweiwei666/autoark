@@ -73,9 +73,13 @@ import {
   deleteCreativeGroup,
   deleteTargetingPackage,
   getAuthAdAccounts,
+  getAuthDiagnostics,
+  getCachedPixels,
   getAuthPages,
   getAuthPixels,
+  getAuthStatus,
   getAuthLoginUrl,
+  getPixelSyncStatus,
   getCopywritingPackageList,
   getCreativeGroupList,
   getFacebookInstagramAccounts,
@@ -89,6 +93,7 @@ import {
   updateTargetingPackage,
   getTaskSupportPackage,
   removeMaterial,
+  resyncFacebookAssets,
   rerunTask,
   searchInterests,
   searchLocations,
@@ -280,6 +285,7 @@ describe('bulk ad controller', () => {
     const req = memberReq({
       body: {
         name: '  Launch draft  ',
+        facebookTokenId: '665000000000000000000901',
         status: 'published',
         taskId: '665000000000000000000999',
         validation: { isValid: true },
@@ -301,6 +307,7 @@ describe('bulk ad controller', () => {
     const payload = mockBulkAdService.createDraft.mock.calls[0][0]
     expect(payload).toMatchObject({
       name: 'Launch draft',
+      facebookTokenId: '665000000000000000000901',
       accounts: [{ accountId: 'act_123' }],
       campaign: { nameTemplate: 'camp', budget: 10 },
       adset: { nameTemplate: 'adset', multiplier: 2 },
@@ -316,6 +323,35 @@ describe('bulk ad controller', () => {
     expect(payload).not.toHaveProperty('estimates')
     expect(mockBulkAdService.createDraft.mock.calls[0][1]).toBe('665000000000000000000002')
     expect(res.json).toHaveBeenCalledWith({ success: true, data: { _id: 'draft_1', name: 'Launch draft' } })
+  })
+
+  it('does not silently use another user Facebook token as the current authorization', async () => {
+    const tokenFind = jest.spyOn(FbToken, 'findOne').mockReturnValue({
+      sort: jest.fn().mockResolvedValue(null),
+    } as any)
+    const req: any = {
+      user: {
+        role: UserRole.SUPER_ADMIN,
+        userId: '665000000000000000000002',
+      },
+      query: {},
+    }
+    const res = resMock()
+
+    await getAuthStatus(req, res as any)
+
+    expect(tokenFind).toHaveBeenCalledTimes(1)
+    expect(tokenFind).toHaveBeenCalledWith({
+      status: 'active',
+      userId: '665000000000000000000002',
+    })
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      data: {
+        authorized: false,
+        message: '请先绑定您的 Facebook 账号',
+      },
+    })
   })
 
   it('sanitizes nested draft configs before saving', async () => {
@@ -811,7 +847,7 @@ describe('bulk ad controller', () => {
   })
 
   it('serves cached authorized ad accounts without another Meta Graph read', async () => {
-    jest.spyOn(FbToken, 'find').mockReturnValue({
+    const tokenFind = jest.spyOn(FbToken, 'find').mockReturnValue({
       sort: jest.fn().mockResolvedValue([{
         _id: '665000000000000000000901',
         token: 'TOKEN_A',
@@ -837,12 +873,17 @@ describe('bulk ad controller', () => {
         role: UserRole.SUPER_ADMIN,
         userId: '665000000000000000000002',
       },
-      query: {},
+      query: { tokenId: '665000000000000000000901' },
     }
     const res = resMock()
 
     await getAuthAdAccounts(req, res as any)
 
+    expect(tokenFind).toHaveBeenCalledWith({
+      _id: '665000000000000000000901',
+      status: 'active',
+      userId: '665000000000000000000002',
+    })
     expect(mockFacebookUserService.getCachedAccountsWithMeta).toHaveBeenCalledWith('fb_1', {
       tokenId: '665000000000000000000901',
       organizationId: '665000000000000000000001',
@@ -864,6 +905,135 @@ describe('bulk ad controller', () => {
         paginationTruncated: true,
       }),
     })
+  })
+
+  it('loads cached pixels only from the selected Facebook personal token', async () => {
+    const tokenFind = jest.spyOn(FbToken, 'find').mockReturnValue({
+      sort: jest.fn().mockResolvedValue([{
+        _id: '665000000000000000000901',
+        fbUserId: 'fb_1',
+        fbUserName: 'Operator A',
+        organizationId: '665000000000000000000001',
+      }]),
+    } as any)
+    mockFacebookUserService.getCachedPixels.mockResolvedValue([{
+      pixelId: 'pixel_1',
+      name: 'Pixel 1',
+      accounts: [{ accountId: '100', accountName: 'Account 100' }],
+    }] as any)
+
+    const req: any = {
+      user: {
+        role: UserRole.SUPER_ADMIN,
+        userId: '665000000000000000000002',
+      },
+      query: { tokenId: '665000000000000000000901' },
+    }
+    const res = resMock()
+
+    await getCachedPixels(req, res as any)
+
+    expect(tokenFind).toHaveBeenCalledWith({
+      _id: '665000000000000000000901',
+      status: 'active',
+      userId: '665000000000000000000002',
+    })
+    expect(mockFacebookUserService.getCachedPixels).toHaveBeenCalledWith('fb_1', {
+      tokenId: '665000000000000000000901',
+      organizationId: '665000000000000000000001',
+    })
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      data: [{
+        id: 'pixel_1',
+        name: 'Pixel 1',
+        accounts: [{ accountId: '100', accountName: 'Account 100' }],
+      }],
+    })
+  })
+
+  it('keeps a member selected token inside both the current user and organization scope', async () => {
+    const selectedTokenId = '665000000000000000000901'
+    const token = {
+      _id: selectedTokenId,
+      fbUserId: 'fb_1',
+      fbUserName: 'Operator A',
+      organizationId: '665000000000000000000001',
+    }
+    const tokenLean = jest.fn().mockResolvedValue([token])
+    const tokenSort = jest.fn().mockReturnValue({ lean: tokenLean })
+    const tokenSelect = jest.fn().mockReturnValue({ sort: tokenSort })
+    const tokenFind = jest.spyOn(FbToken, 'find').mockReturnValue({
+      select: tokenSelect,
+    } as any)
+    const facebookUserFind = jest.spyOn(FacebookUser, 'find').mockReturnValue(
+      { lean: jest.fn().mockResolvedValue([]) } as any,
+    )
+    const tokenFindOne = jest.spyOn(FbToken, 'findOne').mockReturnValue({
+      sort: jest.fn().mockResolvedValue(token),
+    } as any)
+    mockFacebookUserService.getSyncStatus.mockResolvedValue({
+      status: 'completed',
+    } as any)
+    mockFacebookUserService.syncFacebookTokenAssets.mockResolvedValue({} as any)
+    mockWriteAuditLog.mockResolvedValue(undefined)
+
+    const req: any = memberReq({
+      query: { tokenId: selectedTokenId },
+    })
+    const diagnosticsRes = resMock()
+    const syncStatusRes = resMock()
+    const resyncRes = resMock()
+
+    await getAuthDiagnostics(req, diagnosticsRes as any)
+    await getPixelSyncStatus(req, syncStatusRes as any)
+    await resyncFacebookAssets(req, resyncRes as any)
+
+    const expectedTokenFilter = {
+      _id: selectedTokenId,
+      organizationId: '665000000000000000000001',
+      status: 'active',
+      userId: '665000000000000000000002',
+    }
+    expect(tokenFind).toHaveBeenCalledWith(expectedTokenFilter)
+    expect(tokenFindOne).toHaveBeenNthCalledWith(1, expectedTokenFilter)
+    expect(tokenFindOne).toHaveBeenNthCalledWith(2, expectedTokenFilter)
+    expect(facebookUserFind).toHaveBeenCalledWith({
+      tokenId: selectedTokenId,
+      organizationId: '665000000000000000000001',
+      fbUserId: 'fb_1',
+    })
+    expect(mockFacebookUserService.getSyncStatus).toHaveBeenCalledWith('fb_1', {
+      tokenId: selectedTokenId,
+      organizationId: '665000000000000000000001',
+    })
+    expect(mockFacebookUserService.syncFacebookTokenAssets).toHaveBeenCalledWith(
+      token,
+      { force: true },
+    )
+    expect(mockFacebookClient.get).not.toHaveBeenCalled()
+  })
+
+  it('does not resync a selected token that is outside the member current organization', async () => {
+    const selectedTokenId = '665000000000000000000901'
+    const tokenFindOne = jest.spyOn(FbToken, 'findOne').mockReturnValue({
+      sort: jest.fn().mockResolvedValue(null),
+    } as any)
+    const req: any = memberReq({
+      query: { tokenId: selectedTokenId },
+    })
+    const res = resMock()
+
+    await resyncFacebookAssets(req, res as any)
+
+    expect(tokenFindOne).toHaveBeenCalledWith({
+      _id: selectedTokenId,
+      organizationId: '665000000000000000000001',
+      status: 'active',
+      userId: '665000000000000000000002',
+    })
+    expect(mockFacebookUserService.syncFacebookTokenAssets).not.toHaveBeenCalled()
+    expect(res.status).toHaveBeenCalledWith(401)
   })
 
   it('marks authorized ad account pagination as truncated at the page cap', async () => {
@@ -963,7 +1133,7 @@ describe('bulk ad controller', () => {
   })
 
   it('paginates and deduplicates promote pages for an authorized ad account', async () => {
-    jest.spyOn(FbToken, 'find').mockResolvedValue([
+    const tokenFind = jest.spyOn(FbToken, 'find').mockResolvedValue([
       { token: 'TOKEN_A', fbUserName: 'Operator A', fbUserId: 'fb_user_1' },
     ] as any)
     mockFacebookClient.get
@@ -982,7 +1152,10 @@ describe('bulk ad controller', () => {
       } as any)
 
     const req: any = {
-      query: { accountId: 'act_123' },
+      query: {
+        accountId: 'act_123',
+        tokenId: '665000000000000000000901',
+      },
       user: {
         role: UserRole.SUPER_ADMIN,
         userId: '665000000000000000000002',
@@ -992,6 +1165,11 @@ describe('bulk ad controller', () => {
 
     await getAuthPages(req, res as any)
 
+    expect(tokenFind).toHaveBeenCalledWith({
+      _id: '665000000000000000000901',
+      status: 'active',
+      userId: '665000000000000000000002',
+    })
     expect(mockFacebookClient.get).toHaveBeenNthCalledWith(1, '/act_123', {
       access_token: 'TOKEN_A',
       fields: 'id,name',
@@ -1818,7 +1996,7 @@ describe('bulk ad controller', () => {
   })
 
   it('paginates auth pixel reads for large ad accounts', async () => {
-    jest.spyOn(FbToken, 'find').mockResolvedValue([
+    const tokenFind = jest.spyOn(FbToken, 'find').mockResolvedValue([
       { _id: '665000000000000000000202', token: 'TOKEN_WITH_ACCOUNT', fbUserName: 'token-b' },
     ] as any)
     mockFacebookClient.get
@@ -1832,7 +2010,10 @@ describe('bulk ad controller', () => {
       } as any)
 
     const req: any = {
-      query: { accountId: 'act_123' },
+      query: {
+        accountId: 'act_123',
+        tokenId: '665000000000000000000202',
+      },
       user: {
         role: UserRole.SUPER_ADMIN,
         userId: '665000000000000000000002',
@@ -1842,6 +2023,11 @@ describe('bulk ad controller', () => {
 
     await getAuthPixels(req, res as any)
 
+    expect(tokenFind).toHaveBeenCalledWith({
+      _id: '665000000000000000000202',
+      status: 'active',
+      userId: '665000000000000000000002',
+    })
     expect(mockFacebookClient.get).toHaveBeenNthCalledWith(2, '/act_123/adspixels', {
       access_token: 'TOKEN_WITH_ACCOUNT',
       fields: 'id,name,code,last_fired_time',
