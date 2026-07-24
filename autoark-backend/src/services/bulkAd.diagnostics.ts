@@ -239,6 +239,17 @@ const DIAGNOSIS_TEMPLATES: Record<string, DiagnosisTemplate> = {
       '修复配置后重新发布或重跑任务。',
     ],
   },
+  BULK_MATERIALS_INCOMPLETE: {
+    entityType: 'material',
+    customerMessage: '本账户只创建了部分素材广告，仍有素材未发布。',
+    retryable: false,
+    source: 'autoark',
+    nextActions: [
+      '查看素材上传、创意创建和广告创建的原始错误。',
+      '确认所有素材都已成功上传到 Meta 后，再重新发布新任务。',
+      '不要直接重试已经创建过 Campaign 或 AdSet 的旧任务。',
+    ],
+  },
   BULK_ASSET_NOT_FOUND: {
     entityType: 'asset',
     customerMessage: '所选定向包、创意组或文案包不在当前 AutoArk 账号可用范围内。',
@@ -277,6 +288,7 @@ const DIAGNOSIS_TEMPLATES: Record<string, DiagnosisTemplate> = {
 const KNOWN_EXPLICIT_CODES = new Set([
   'WORKER_TIMEOUT',
   'NO_ADS_CREATED',
+  'BULK_MATERIALS_INCOMPLETE',
   'BULK_ASSET_NOT_FOUND',
   'META_RATE_LIMIT',
   'FACEBOOK_AUTH_REQUIRED',

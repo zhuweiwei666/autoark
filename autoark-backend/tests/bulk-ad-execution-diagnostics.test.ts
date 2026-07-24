@@ -26,6 +26,7 @@ import {
   createAdCreative,
   createAdSet,
   createCampaign,
+  uploadVideoFromUrl,
 } from '../src/integration/facebook/bulkCreate.api'
 import { executeTaskForAccount, retryFailedItems } from '../src/services/bulkAd.service'
 
@@ -224,6 +225,79 @@ describe('bulk ad execution diagnostics', () => {
     const creativePayload = (createAdCreative as jest.Mock).mock.calls[0][0]
     expect(creativePayload.objectStorySpec.link_data).toBeUndefined()
     expect(creativePayload.objectStorySpec.video_data.caption).toBeUndefined()
+  })
+
+  it('marks an account failed and preserves diagnostics when any material is skipped', async () => {
+    const task = buildTask()
+    jest.spyOn(AdTask, 'findById')
+      .mockResolvedValueOnce(task as any)
+      .mockResolvedValueOnce(task as any)
+    jest.spyOn(AdTask, 'findOneAndUpdate').mockResolvedValue(task as any)
+    jest.spyOn(AdTask, 'findByIdAndUpdate').mockResolvedValue(task as any)
+    jest.spyOn(FbToken, 'findOne').mockResolvedValue({ token: 'fb_token' } as any)
+    jest.spyOn(CreativeGroup, 'find').mockResolvedValue([{
+      _id: '665000000000000000000711',
+      name: 'Mixed Group',
+      materials: [
+        {
+          _id: '665000000000000000000713',
+          type: 'image',
+          name: 'Image 1',
+          facebookImageHash: 'hash_1',
+          status: 'uploaded',
+        },
+        {
+          _id: '665000000000000000000714',
+          type: 'video',
+          name: 'Video 1',
+          url: 'https://example.com/video.mp4',
+          status: 'uploaded',
+        },
+      ],
+    }] as any)
+    jest.spyOn(CopywritingPackage, 'find').mockResolvedValue([{
+      _id: '665000000000000000000712',
+      name: 'Copy Package',
+      links: { websiteUrl: 'https://example.com' },
+      content: {
+        primaryTexts: ['Primary'],
+        headlines: ['Headline'],
+        descriptions: ['Description'],
+      },
+      callToAction: 'SHOP_NOW',
+    }] as any)
+    jest.spyOn(Ad, 'findOneAndUpdate').mockResolvedValue({} as any)
+    jest.spyOn(AdMaterialMapping as any, 'recordMapping').mockResolvedValue({} as any)
+    ;(uploadVideoFromUrl as jest.Mock).mockResolvedValue({
+      success: false,
+      error: {
+        code: 100,
+        message: 'Video upload failed',
+        userMsg: '视频上传失败',
+      },
+    })
+    ;(createCampaign as jest.Mock).mockResolvedValue({ success: true, id: 'camp_1' })
+    ;(createAdSet as jest.Mock).mockResolvedValue({ success: true, id: 'adset_1' })
+    ;(createAdCreative as jest.Mock).mockResolvedValue({ success: true, id: 'creative_1' })
+    ;(createAd as jest.Mock).mockResolvedValue({ success: true, id: 'ad_1' })
+
+    await executeTaskForAccount(taskId, '123')
+
+    const finalUpdate = (AdTask.findOneAndUpdate as jest.Mock).mock.calls.find((call: any[]) => (
+      call[1]?.$set?.['items.$.result.expectedCount']
+    ))
+    expect(finalUpdate?.[1]?.$set).toMatchObject({
+      'items.$.status': 'failed',
+      'items.$.result.expectedCount': 2,
+      'items.$.result.createdCount': 1,
+      'items.$.result.skippedCount': 1,
+    })
+    expect(finalUpdate?.[1]?.$set?.['items.$.errors']).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ errorCode: 'CREATIVE_OR_MATERIAL_FAILED' }),
+        expect.objectContaining({ errorCode: 'BULK_MATERIALS_INCOMPLETE' }),
+      ]),
+    )
   })
 
   it('stops before creating a campaign when the preflight token is no longer active', async () => {
