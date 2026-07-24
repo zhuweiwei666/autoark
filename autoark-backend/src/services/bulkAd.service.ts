@@ -1485,6 +1485,12 @@ export const executeTaskForAccount = async (
             materialRef.thumbnail_url = uploadResult.thumbnail_url || material.thumbnailUrl || material.url
           } else {
             logger.error(`[BulkAd] No upload result for video: ${material.name}, skipping`)
+            stepDiagnostics.push(diagnoseBulkAdError({
+              entityType: 'material',
+              errorCode: 'CREATIVE_OR_MATERIAL_FAILED',
+              errorMessage: `视频素材「${material.name || material._id || matIndex + 1}」上传失败，未获得 Meta video_id`,
+              timestamp: new Date(),
+            }, { fallbackCode: 'CREATIVE_OR_MATERIAL_FAILED', entityType: 'material' }))
             continue
           }
         }
@@ -1634,9 +1640,13 @@ export const executeTaskForAccount = async (
     }
     
     // ==================== 6. 完成任务 ====================
-    // 如果没有创建任何广告，标记为失败
-    const finalStatus = adIds.length > 0 ? 'success' : 'failed'
-    const errorInfo = adIds.length === 0
+    // 素材数量必须和最终广告数量一致；否则不能把“部分成功”伪装成成功。
+    const expectedAdCount = allMaterials.length * adsetsToUse.length
+    const skippedCount = Math.max(expectedAdCount - adIds.length, 0)
+    const noAdsCreated = adIds.length === 0
+    const materialsIncomplete = expectedAdCount === 0 || skippedCount > 0
+    const finalStatus = materialsIncomplete ? 'failed' : 'success'
+    const errorInfo = noAdsCreated
       ? [
         ...stepDiagnostics,
         diagnoseBulkAdError({
@@ -1648,13 +1658,26 @@ export const executeTaskForAccount = async (
           timestamp: new Date(),
         }),
       ]
-      : undefined
+      : materialsIncomplete
+        ? [
+          ...stepDiagnostics,
+          diagnoseBulkAdError({
+            entityType: 'material',
+            errorCode: 'BULK_MATERIALS_INCOMPLETE',
+            errorMessage: `素材广告创建不完整：应创建 ${expectedAdCount} 条，实际创建 ${adIds.length} 条，跳过 ${skippedCount} 条`,
+            timestamp: new Date(),
+          }),
+        ]
+        : undefined
     
     // 原子更新状态
     const updateData: any = {
       'items.$.status': finalStatus,
       'items.$.result.adIds': adIds,
+      'items.$.result.expectedCount': expectedAdCount,
       'items.$.result.createdCount': adIds.length,
+      'items.$.result.failedCount': skippedCount,
+      'items.$.result.skippedCount': skippedCount,
       'items.$.completedAt': new Date(),
       'items.$.ads': adsDetails,  // 保存广告详情用于审核追踪
     }
@@ -1725,10 +1748,12 @@ export const executeTaskForAccount = async (
     logger.info(`[BulkAd] Task ${finalStatus} for account ${accountId}: ${adIds.length} ads created`)
     
     return {
-      success: true,
+      success: finalStatus === 'success',
       campaignId,
       adsetIds: allAdsetIds,
       adIds,
+      expectedCount: expectedAdCount,
+      skippedCount,
     }
     
   } catch (error: any) {
