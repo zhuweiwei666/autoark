@@ -2,6 +2,7 @@ import FacebookUser from '../models/FacebookUser'
 import FbToken from '../models/FbToken'
 import logger from '../utils/logger'
 import { FB_VERSIONED_URL } from '../config/facebook.config'
+import { normalizeForStorage } from '../utils/accountId'
 import { sanitizeFacebookPages } from '../utils/facebookAssetSanitizer'
 import { syncCachedAccountsForToken } from './facebook.accounts.service'
 
@@ -280,7 +281,8 @@ const runFacebookUserAssetSync = async (
       mergePixel(pixelMap, pixel)
     }
 
-    // 3. 用户直接管理的 Page 属于 token 资产，但不能伪装成每个账户都可推广。
+    // 3. 用户直接管理的 Page 属于 token 资产。保留空 accounts 以区分显式
+    // promote_pages；下游只可在同一 Token 快照内使用带访问令牌的 Page。
     const pagesMap = new Map<string, any>()
     for (const page of userPages) {
       mergePage(pagesMap, page)
@@ -540,14 +542,24 @@ export const getCachedAccountsWithMeta = async (fbUserId: string, scope: Faceboo
  */
 export const getCachedPages = async (fbUserId: string, accountId?: string, scope: FacebookUserScope = {}) => {
   const user = await FacebookUser.findOne(buildFacebookUserFilter(fbUserId, scope))
-    .select('pages')
+    .select('pages adAccounts')
     .lean()
   if (!user?.pages) return []
   
   if (accountId) {
-    // 筛选该账户可用的粉丝页
+    const scopedAccountId = normalizeForStorage(accountId)
+    const belongsToSnapshot = (user.adAccounts || []).some(
+      (account: any) => normalizeForStorage(account.accountId) === scopedAccountId,
+    )
+    // 显式分配给账户的 Page，或当前 Token 直接管理且带访问令牌的 Page。
     return sanitizeFacebookPages(user.pages.filter((p: any) =>
-      p.accounts?.some((a: any) => a.accountId === accountId)
+      p.accounts?.some(
+        (account: any) => normalizeForStorage(account.accountId) === scopedAccountId,
+      ) || (
+        belongsToSnapshot &&
+        typeof p.accessToken === 'string' &&
+        p.accessToken.trim().length > 0
+      )
     ))
   }
   

@@ -52,6 +52,69 @@ describe('facebook asset diagnostics', () => {
     expect(diagnostics.accounts.find(account => account.accountId === '3')?.issueDetails.map(issue => issue.code)).toContain('ACCOUNT_NOT_ACTIVE')
   })
 
+  it('counts user-managed pages for accounts from the same token snapshot', () => {
+    const diagnostics = buildFacebookAssetDiagnostics({
+      tokens: [{ _id: 'token_1', fbUserId: 'fb_1' }],
+      users: [{
+        fbUserId: 'fb_1',
+        syncStatus: 'completed',
+        adAccounts: [
+          { accountId: 'act_1', name: 'Account 1', status: 1 },
+          { accountId: 'act_2', name: 'Account 2', status: 1 },
+        ],
+        pages: [{
+          pageId: 'user_page',
+          name: 'User-managed Page',
+          accessToken: 'PAGE_TOKEN',
+          accounts: [],
+        }],
+        pixels: [
+          { pixelId: 'pixel_1', name: 'Pixel 1', accounts: [{ accountId: '1' }] },
+          { pixelId: 'pixel_2', name: 'Pixel 2', accounts: [{ accountId: '2' }] },
+        ],
+      }],
+    })
+
+    expect(diagnostics.summary.pageLinkedAccountCount).toBe(2)
+    expect(diagnostics.summary.readyAccountCount).toBe(2)
+    expect(diagnostics.summary.accountsMissingPageCount).toBe(0)
+    expect(diagnostics.accounts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ accountId: '1', pageCount: 1, ready: true }),
+      expect.objectContaining({ accountId: '2', pageCount: 1, ready: true }),
+    ]))
+  })
+
+  it('does not share user-managed pages across token snapshots', () => {
+    const diagnostics = buildFacebookAssetDiagnostics({
+      tokens: [
+        { _id: 'token_1', fbUserId: 'fb_1' },
+        { _id: 'token_2', fbUserId: 'fb_2' },
+      ],
+      users: [{
+        fbUserId: 'fb_1',
+        adAccounts: [{ accountId: '1', name: 'Account 1', status: 1 }],
+        pages: [{
+          pageId: 'user_page',
+          name: 'User-managed Page',
+          accessToken: 'PAGE_TOKEN',
+          accounts: [],
+        }],
+        pixels: [{ pixelId: 'pixel_1', name: 'Pixel 1', accounts: [{ accountId: '1' }] }],
+      }, {
+        fbUserId: 'fb_2',
+        adAccounts: [{ accountId: '2', name: 'Account 2', status: 1 }],
+        pages: [],
+        pixels: [{ pixelId: 'pixel_2', name: 'Pixel 2', accounts: [{ accountId: '2' }] }],
+      }],
+    })
+
+    expect(diagnostics.summary.pageLinkedAccountCount).toBe(1)
+    expect(diagnostics.summary.readyAccountCount).toBe(1)
+    expect(diagnostics.accounts.find(account => account.accountId === '2')).toEqual(
+      expect.objectContaining({ pageCount: 0, ready: false }),
+    )
+  })
+
   it('limits account details while preserving full summary counts', () => {
     const adAccounts = Array.from({ length: 105 }, (_, index) => ({
       accountId: `act_${index + 1}`,

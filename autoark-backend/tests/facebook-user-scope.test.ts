@@ -2,6 +2,7 @@ import FacebookUser from '../src/models/FacebookUser'
 import FbToken from '../src/models/FbToken'
 import * as facebookAccountsService from '../src/services/facebook.accounts.service'
 import {
+  getCachedPages,
   getCachedPixels,
   getSyncStatus,
   syncFacebookTokenAssets,
@@ -41,6 +42,33 @@ describe('facebook user asset cache scoping', () => {
       tokenId: 'token_1',
     })
     expect(status.status).toBe('pending')
+  })
+
+  it('returns user-managed pages only for accounts in the same token snapshot', async () => {
+    const lean = jest.fn().mockResolvedValue({
+      adAccounts: [{ accountId: '100' }],
+      pages: [
+        {
+          pageId: 'user_page',
+          name: 'User-managed Page',
+          accessToken: 'PAGE_TOKEN',
+          accounts: [],
+        },
+      ],
+    })
+    const select = jest.fn().mockReturnValue({ lean })
+    jest.spyOn(FacebookUser, 'findOne').mockReturnValue({ select } as any)
+
+    const ownedAccountPages = await getCachedPages('fb_1', 'act_100', { tokenId: 'token_1' })
+    const foreignAccountPages = await getCachedPages('fb_1', 'act_999', { tokenId: 'token_1' })
+
+    expect(select).toHaveBeenCalledWith('pages adAccounts')
+    expect(ownedAccountPages).toEqual([expect.objectContaining({
+      pageId: 'user_page',
+      name: 'User-managed Page',
+    })])
+    expect(ownedAccountPages[0]).not.toHaveProperty('accessToken')
+    expect(foreignAccountPages).toEqual([])
   })
 
   it('makes an expired persisted sync lease retryable after a process interruption', async () => {
