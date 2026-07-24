@@ -122,6 +122,16 @@ const hasUsableMaterial = (material: any) => {
   return false
 }
 
+const isHttpUrl = (value: any) => {
+  if (typeof value !== 'string' || !value.trim()) return false
+  try {
+    const parsed = new URL(value.trim())
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
 const isAllowedAttributionWindow = (value: any, allowedValues: number[]) => {
   const next = Number(value)
   return Number.isInteger(next) && allowedValues.includes(next)
@@ -782,6 +792,9 @@ export const validateDraft = async (draftId: string, accessFilter: any = {}) => 
     for (const pkg of copywritingPackages) {
       if (!pkg.links?.websiteUrl) {
         addError('ad.copywritingPackageIds', `文案包「${pkg.name}」缺少落地页链接`)
+      }
+      if (pkg.links?.displayLink && !isHttpUrl(pkg.links.displayLink)) {
+        addWarning('ad.copywritingPackageIds', `文案包「${pkg.name}」的显示链接不是完整网址，发布时将忽略该字段`)
       }
       if (!pkg.content?.primaryTexts?.length) {
         addWarning('ad.copywritingPackageIds', `文案包「${pkg.name}」缺少正文文案`)
@@ -1497,8 +1510,9 @@ export const executeTaskForAccount = async (
           },
         }
         
-        // 添加显示链接（caption）
-        if (copywriting.links?.displayLink) {
+        // Meta 的 link_data.caption 必须是完整网址；历史文案包里可能把
+        // 产品名（例如 "Leyon"）放在这里，不能原样发送给 Meta。
+        if (isHttpUrl(copywriting.links?.displayLink)) {
           linkData.caption = copywriting.links.displayLink
         }
         
@@ -1517,8 +1531,6 @@ export const executeTaskForAccount = async (
           const message = objectStorySpec.link_data.message
           const title = objectStorySpec.link_data.name
           const description = objectStorySpec.link_data.description
-          const caption = objectStorySpec.link_data.caption
-          
           // 使用用户选择的 CTA，不做强制转换
           const ctaType = copywriting.callToAction || 'SHOP_NOW'
           
@@ -1532,11 +1544,6 @@ export const executeTaskForAccount = async (
               type: ctaType,
               value: { link: link },
             },
-          }
-          
-          // 添加显示链接
-          if (caption) {
-            videoData.caption = caption
           }
           
           objectStorySpec.video_data = videoData

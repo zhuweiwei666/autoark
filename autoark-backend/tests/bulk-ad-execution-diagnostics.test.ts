@@ -176,6 +176,56 @@ describe('bulk ad execution diagnostics', () => {
     expect(storedErrors[0].operatorMessage).toContain('Invalid image hash')
   })
 
+  it('does not send displayLink as video_data.caption', async () => {
+    const task = buildTask()
+    jest.spyOn(AdTask, 'findById')
+      .mockResolvedValueOnce(task as any)
+      .mockResolvedValueOnce(task as any)
+    jest.spyOn(AdTask, 'findOneAndUpdate').mockResolvedValue(task as any)
+    jest.spyOn(AdTask, 'findByIdAndUpdate').mockResolvedValue(task as any)
+    jest.spyOn(FbToken, 'findOne').mockResolvedValue({ token: 'fb_token' } as any)
+    jest.spyOn(CreativeGroup, 'find').mockResolvedValue([{
+      _id: '665000000000000000000711',
+      name: 'Video Group',
+      materials: [{
+        _id: '665000000000000000000713',
+        type: 'video',
+        name: 'Video 1',
+        facebookVideoId: 'video_1',
+        thumbnailUrl: 'https://example.com/thumb.jpg',
+        status: 'uploaded',
+      }],
+    }] as any)
+    jest.spyOn(CopywritingPackage, 'find').mockResolvedValue([{
+      _id: '665000000000000000000712',
+      name: 'Copy Package',
+      links: { websiteUrl: 'https://example.com', displayLink: 'Leyon' },
+      content: {
+        primaryTexts: ['Primary'],
+        headlines: ['Headline'],
+        descriptions: ['Description'],
+      },
+      callToAction: 'SHOP_NOW',
+    }] as any)
+    jest.spyOn(Ad, 'findOneAndUpdate').mockResolvedValue({} as any)
+    jest.spyOn(AdMaterialMapping as any, 'recordMapping').mockResolvedValue({} as any)
+    ;(createCampaign as jest.Mock).mockResolvedValue({ success: true, id: 'camp_1' })
+    ;(createAdSet as jest.Mock).mockResolvedValue({ success: true, id: 'adset_1' })
+    ;(createAdCreative as jest.Mock).mockResolvedValue({ success: true, id: 'creative_1' })
+    ;(createAd as jest.Mock).mockResolvedValue({ success: true, id: 'ad_1' })
+
+    await executeTaskForAccount(taskId, '123')
+
+    expect(createAdCreative).toHaveBeenCalledWith(expect.objectContaining({
+      objectStorySpec: expect.objectContaining({
+        video_data: expect.not.objectContaining({ caption: expect.anything() }),
+      }),
+    }))
+    const creativePayload = (createAdCreative as jest.Mock).mock.calls[0][0]
+    expect(creativePayload.objectStorySpec.link_data).toBeUndefined()
+    expect(creativePayload.objectStorySpec.video_data.caption).toBeUndefined()
+  })
+
   it('stops before creating a campaign when the preflight token is no longer active', async () => {
     const task = buildTask()
     jest.spyOn(AdTask, 'findById').mockResolvedValue(task as any)
