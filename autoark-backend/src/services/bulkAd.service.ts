@@ -9,7 +9,7 @@ import FacebookUser from '../models/FacebookUser'
 import AdMaterialMapping from '../models/AdMaterialMapping'
 import OpsLog from '../models/OpsLog'
 import logger from '../utils/logger'
-import User from '../models/User'
+import User, { UserRole } from '../models/User'
 import Account from '../models/Account'
 import Ad from '../models/Ad'
 import {
@@ -56,6 +56,59 @@ const normalizeObjectIdList = (values: any[] = []) => {
     valid: unique.filter(value => mongoose.Types.ObjectId.isValid(value)),
     invalid: unique.filter(value => !mongoose.Types.ObjectId.isValid(value)),
   }
+}
+
+/**
+ * Resolve the resource scope from the publisher's actual role.
+ *
+ * Tasks created by a super admin intentionally have no organization boundary.
+ * The old executor inferred scope from task.organizationId/createdBy instead,
+ * which made a super-admin task unable to read legacy assets owned by another
+ * historical user or organization.
+ */
+const resolveTaskAssetAccessFilter = async (task: any): Promise<Record<string, any>> => {
+  if (task.organizationId) {
+    return { organizationId: task.organizationId }
+  }
+
+  if (!task.createdBy) {
+    return {}
+  }
+
+  let creator: any = null
+  try {
+    creator = await User.findById(task.createdBy)
+      .select('role organizationId')
+      .lean()
+  } catch {
+    // Keep historical tasks runnable if the creator record was removed.
+  }
+
+  if (creator?.role === UserRole.SUPER_ADMIN) {
+    return {}
+  }
+
+  if (creator?.organizationId) {
+    return { organizationId: creator.organizationId }
+  }
+
+  return { createdBy: task.createdBy }
+}
+
+const createBulkAssetAccessError = (
+  assetType: string,
+  requestedIds: string[],
+  foundIds: string[] = [],
+) => {
+  const missingIds = requestedIds.filter(id => !foundIds.includes(id))
+  const error: any = new Error(
+    `${assetType} not found or inaccessible: ${missingIds.join(', ') || requestedIds.join(', ')}`,
+  )
+  error.errorCode = 'BULK_ASSET_NOT_FOUND'
+  error.entityType = 'asset'
+  error.source = 'validation'
+  error.retryable = false
+  return error
 }
 
 const hasUsableMaterial = (material: any) => {
@@ -1059,11 +1112,7 @@ export const executeTaskForAccount = async (
 
   // 获取 Token。新任务固定使用预检时选中的个人号授权，防止发布阶段
   // 自动换到另一枚只能访问广告账户、却不能使用所选 Page 的 token。
-  const taskAccessFilter = task.organizationId
-    ? { organizationId: task.organizationId }
-    : task.createdBy
-      ? { createdBy: task.createdBy }
-      : {}
+  const taskAccessFilter = await resolveTaskAssetAccessFilter(task)
   const tokenAccessFilter = task.organizationId
     ? {
         organizationId: task.organizationId,
@@ -1147,21 +1196,56 @@ export const executeTaskForAccount = async (
   })
   
   try {
-    // ==================== 0. 获取定向配置（先获取，用于名称生成） ====================
+    // ==================== 0. 资源预检（任何 Meta 写操作之前） ====================
+    // 先确认定向、创意组、文案包都能按发布者权限读取，避免已经创建
+    // Campaign/AdSet 后才发现资源不可用，留下无法复用的半成品。
     let targeting: any = {}
     let targetingName = ''  // 定向包名称，用于名称模板
     if (config.adset.targetingPackageId) {
+      const targetingPackageId = config.adset.targetingPackageId.toString()
+      if (!mongoose.Types.ObjectId.isValid(targetingPackageId)) {
+        throw createBulkAssetAccessError('Targeting package', [targetingPackageId])
+      }
       const targetingPackage: any = await TargetingPackage.findOne(
-        combineFilters({ _id: config.adset.targetingPackageId }, taskAccessFilter),
+        combineFilters({ _id: targetingPackageId }, taskAccessFilter),
       )
-      if (targetingPackage) {
-        targetingName = targetingPackage.name || ''
-        if (targetingPackage.toFacebookTargeting) {
-          targeting = targetingPackage.toFacebookTargeting()
-        }
+      if (!targetingPackage) {
+        throw createBulkAssetAccessError('Targeting package', [targetingPackageId])
+      }
+      targetingName = targetingPackage.name || ''
+      if (targetingPackage.toFacebookTargeting) {
+        targeting = targetingPackage.toFacebookTargeting()
       }
     } else if (config.adset.inlineTargeting) {
       targeting = config.adset.inlineTargeting
+    }
+
+    const creativeIdSet = normalizeObjectIdList(config.ad.creativeGroupIds || [])
+    const copywritingIdSet = normalizeObjectIdList(config.ad.copywritingPackageIds || [])
+    const creativeGroups: any[] = creativeIdSet.valid.length > 0
+      ? await CreativeGroup.find(
+          combineFilters({ _id: { $in: creativeIdSet.valid } }, taskAccessFilter),
+        )
+      : []
+    const copywritingPackages: any[] = copywritingIdSet.valid.length > 0
+      ? await CopywritingPackage.find(
+          combineFilters({ _id: { $in: copywritingIdSet.valid } }, taskAccessFilter),
+        )
+      : []
+
+    const foundCreativeIds = creativeGroups.map(group => group._id?.toString()).filter(Boolean)
+    const foundCopywritingIds = copywritingPackages.map(pkg => pkg._id?.toString()).filter(Boolean)
+    const missingCreativeIds = creativeIdSet.valid.length === 0 && creativeIdSet.invalid.length === 0
+      ? ['<none selected>']
+      : [...creativeIdSet.invalid, ...creativeIdSet.valid.filter(id => !foundCreativeIds.includes(id))]
+    const missingCopywritingIds = copywritingIdSet.valid.length === 0 && copywritingIdSet.invalid.length === 0
+      ? ['<none selected>']
+      : [...copywritingIdSet.invalid, ...copywritingIdSet.valid.filter(id => !foundCopywritingIds.includes(id))]
+    if (missingCreativeIds.length > 0) {
+      throw createBulkAssetAccessError('Creative groups', [...new Set(missingCreativeIds)], foundCreativeIds)
+    }
+    if (missingCopywritingIds.length > 0) {
+      throw createBulkAssetAccessError('Copywriting packages', [...new Set(missingCopywritingIds)], foundCopywritingIds)
     }
     
     // ==================== 1. 创建 Campaign ====================
@@ -1280,23 +1364,7 @@ export const executeTaskForAccount = async (
       'items.$.result.adsetIds': allAdsetIds,
     })
     
-    // ==================== 4. 获取创意组和文案包 ====================
-    const creativeGroups: any[] = await CreativeGroup.find(
-      combineFilters({ _id: { $in: config.ad.creativeGroupIds || [] } }, taskAccessFilter),
-    )
-    
-    const copywritingPackages: any[] = await CopywritingPackage.find(
-      combineFilters({ _id: { $in: config.ad.copywritingPackageIds || [] } }, taskAccessFilter),
-    )
-    
-    if (creativeGroups.length === 0) {
-      throw new Error('No creative groups found')
-    }
-    if (copywritingPackages.length === 0) {
-      throw new Error('No copywriting packages found')
-    }
-    
-    // ==================== 5. 创建广告 ====================
+    // ==================== 4. 创建广告 ====================
     // 支持“一个 Campaign 下 N 个广告组”：会在每个广告组下各创建一套广告
     const adIds: string[] = []
     const adsDetails: Array<{

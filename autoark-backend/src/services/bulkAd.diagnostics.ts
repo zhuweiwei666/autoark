@@ -239,6 +239,17 @@ const DIAGNOSIS_TEMPLATES: Record<string, DiagnosisTemplate> = {
       '修复配置后重新发布或重跑任务。',
     ],
   },
+  BULK_ASSET_NOT_FOUND: {
+    entityType: 'asset',
+    customerMessage: '所选定向包、创意组或文案包不在当前 AutoArk 账号可用范围内。',
+    retryable: false,
+    source: 'validation',
+    nextActions: [
+      '确认任务发布账号对所选素材、定向包和文案包有访问权限。',
+      '重新打开广告草稿并重新选择可用的资源。',
+      '修复后重新发布任务，不要直接重试当前失败项。',
+    ],
+  },
   META_VALIDATION_ERROR: {
     entityType: 'meta_validation',
     customerMessage: 'Meta 拒绝了当前广告配置，请按原始错误修改草稿后重试。',
@@ -266,6 +277,7 @@ const DIAGNOSIS_TEMPLATES: Record<string, DiagnosisTemplate> = {
 const KNOWN_EXPLICIT_CODES = new Set([
   'WORKER_TIMEOUT',
   'NO_ADS_CREATED',
+  'BULK_ASSET_NOT_FOUND',
   'META_RATE_LIMIT',
   'FACEBOOK_AUTH_REQUIRED',
   'FACEBOOK_PERMISSION_DENIED',
@@ -436,7 +448,15 @@ export const diagnoseBulkAdError = (
   const rawCode = extractRawCode(candidates)
   const rawSubcode = extractRawSubcode(candidates)
   const explicitCode = firstDefined(root?.errorCode, options.fallbackCode)
-  const errorCode = classifyErrorCode(message, rawCode, explicitCode)
+  const legacyBulkAssetError = explicitCode === 'EXECUTION_ERROR'
+    && includesAny(message.toLowerCase(), [
+      'no copywriting packages found',
+      'no creative groups found',
+      'targeting package not found',
+    ])
+  const errorCode = legacyBulkAssetError
+    ? 'BULK_ASSET_NOT_FOUND'
+    : classifyErrorCode(message, rawCode, explicitCode)
   const template = DIAGNOSIS_TEMPLATES[errorCode] || DIAGNOSIS_TEMPLATES.EXECUTION_ERROR
 
   const codeSuffix = [rawCode ? `Meta code ${rawCode}` : '', rawSubcode ? `subcode ${rawSubcode}` : '']
@@ -449,12 +469,14 @@ export const diagnoseBulkAdError = (
     entityType: options.entityType || root?.entityType || template.entityType,
     errorCode,
     errorMessage: root?.errorMessage || message,
-    customerMessage: root?.customerMessage || template.customerMessage,
+    customerMessage: legacyBulkAssetError ? template.customerMessage : root?.customerMessage || template.customerMessage,
     operatorMessage,
     severity: root?.severity || template.severity || 'error',
-    retryable: typeof root?.retryable === 'boolean' ? root.retryable : template.retryable,
-    nextActions: Array.isArray(root?.nextActions) && root.nextActions.length > 0 ? root.nextActions : template.nextActions,
-    source: root?.source || template.source,
+    retryable: legacyBulkAssetError ? false : typeof root?.retryable === 'boolean' ? root.retryable : template.retryable,
+    nextActions: legacyBulkAssetError
+      ? template.nextActions
+      : Array.isArray(root?.nextActions) && root.nextActions.length > 0 ? root.nextActions : template.nextActions,
+    source: legacyBulkAssetError ? template.source : root?.source || template.source,
     rawCode,
     rawSubcode,
     timestamp: normalizeTimestamp(root?.timestamp),
