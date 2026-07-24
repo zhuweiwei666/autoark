@@ -10,6 +10,30 @@ const FACEBOOK_LOGIN_POPUP_TIMEOUT_MS = 120000
 const FACEBOOK_SYNC_FAST_POLL_MS = 2000
 const FACEBOOK_SYNC_SLOW_POLL_MS = 10000
 const FACEBOOK_SYNC_FAST_POLL_WINDOW_MS = 30000
+const ACCOUNT_PAGE_FETCH_CONCURRENCY = 6
+
+const mapWithConcurrency = async <T, R,>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<R>,
+): Promise<R[]> => {
+  if (items.length === 0) return []
+
+  const results = new Array<R>(items.length)
+  let nextIndex = 0
+  const workers = Array.from(
+    { length: Math.min(Math.max(1, concurrency), items.length) },
+    async () => {
+      while (nextIndex < items.length) {
+        const index = nextIndex
+        nextIndex += 1
+        results[index] = await mapper(items[index], index)
+      }
+    },
+  )
+  await Promise.all(workers)
+  return results
+}
 
 const STEPS = [
   { id: 1, title: '选择产品', description: '选择文案包(产品)' },
@@ -390,6 +414,9 @@ export default function BulkAdCreatePage() {
   
   // 每个账户的主页列表
   const [accountPages, setAccountPages] = useState<{ [accountId: string]: any[] }>({})
+  const [selectingAccounts, setSelectingAccounts] = useState(false)
+  const accountSelectionPromiseRef = useRef<Promise<void> | null>(null)
+  const accountPageRequestsRef = useRef<Map<string, Promise<any[]>>>(new Map())
 
   // 表单数据
   const [selectedAccounts, setSelectedAccounts] = useState<AccountConfig[]>([])
@@ -909,10 +936,52 @@ export default function BulkAdCreatePage() {
     }
   }
   
-  // 根据选中的 Pixel 筛选可用账户
-  const filterAccountsByPixel = async (pixel: any) => {
+  const fetchPagesForAccount = (accountId: string, accountName: string): Promise<any[]> => {
+    if (accountPages[accountId] !== undefined) {
+      return Promise.resolve(accountPages[accountId])
+    }
+
+    const pendingRequest = accountPageRequestsRef.current.get(accountId)
+    if (pendingRequest) return pendingRequest
+
+    const request = (async () => {
+      try {
+        const res = await authFetch(`${API_BASE}/bulk-ad/auth/pages?accountId=${accountId}`)
+        const data = await res.json()
+        if (data.success && Array.isArray(data.data)) {
+          if (isMountedRef.current) {
+            setAssetWarning(`pages:${accountId}`, buildPageAssetWarning(data.meta, accountName))
+          }
+          return data.data
+        }
+      } catch (err) {
+        console.error(`Failed to load pages for account ${accountId}:`, err)
+      }
+
+      if (isMountedRef.current) {
+        setAssetWarning(
+          `pages:${accountId}`,
+          `账户 ${accountName} 的主页读取失败，请检查主页授权或重新同步。`,
+        )
+      }
+      return []
+    })()
+
+    let trackedRequest: Promise<any[]>
+    trackedRequest = request.finally(() => {
+      if (accountPageRequestsRef.current.get(accountId) === trackedRequest) {
+        accountPageRequestsRef.current.delete(accountId)
+      }
+    })
+    accountPageRequestsRef.current.set(accountId, trackedRequest)
+    return trackedRequest
+  }
+
+  // 根据选中的 Pixel 筛选可用账户；只筛选，不提前读取 Page
+  const filterAccountsByPixel = (pixel: any) => {
     if (!pixel?.accounts) {
       setFilteredAccounts([])
+      setSelectedAccounts([])
       return
     }
     
@@ -923,61 +992,67 @@ export default function BulkAdCreatePage() {
       return accountIds.includes(accId)
     })
     setFilteredAccounts(filtered)
-    
-    // 自动选择所有活跃状态的账户，传递 pixel 参数
-    const activeAccounts = filtered.filter(acc => acc.account_status === 1)
-    if (activeAccounts.length > 0) {
-      await selectMultipleAccounts(activeAccounts, pixel)
-    }
+    setSelectedAccounts([])
   }
   
   // 批量选择多个账户（pixel 参数用于避免 React 状态异步更新问题）
   const selectMultipleAccounts = async (accountsToSelect: any[], pixelOverride?: any) => {
-    const newSelectedAccounts: AccountConfig[] = []
-    const newAccountPages: { [key: string]: any[] } = { ...accountPages }
-    
-    // 使用传入的 pixel 或状态中的 selectedPixel
-    const pixel = pixelOverride || selectedPixel
-    
-    for (const account of accountsToSelect) {
-      const accountId = account.account_id || account.id?.replace('act_', '')
-      
-      // 加载该账户的主页
-      let pagesForAccount = newAccountPages[accountId]
-      if (!pagesForAccount) {
-        try {
-          const res = await authFetch(`${API_BASE}/bulk-ad/auth/pages?accountId=${accountId}`)
-          const data = await res.json()
-          if (data.success && data.data) {
-            pagesForAccount = data.data
-            newAccountPages[accountId] = pagesForAccount
-            setAssetWarning(`pages:${accountId}`, buildPageAssetWarning(data.meta, account.name || accountId))
-          }
-        } catch (err) {
-          console.error(`Failed to load pages for account ${accountId}:`, err)
-          pagesForAccount = []
-          setAssetWarning(`pages:${accountId}`, `账户 ${account.name || accountId} 的主页读取失败，请检查主页授权或重新同步。`)
-        }
-      }
-      
-      newSelectedAccounts.push({
-        accountId: accountId,
-        accountName: account.name || accountId,
-        pageId: '',
-        pageName: '',
-        pixelId: pixel?.pixelId || pixel?.id || '',
-        pixelName: pixel?.name || '',
-        conversionEvent: 'PURCHASE',
-      })
+    if (accountSelectionPromiseRef.current) {
+      return accountSelectionPromiseRef.current
     }
-    
-    setAccountPages(newAccountPages)
-    const accountsWithPages = autoAssignPages(newSelectedAccounts, newAccountPages)
-    setSelectedAccounts(accountsWithPages)
+
+    const selectionOperation = (async () => {
+      setSelectingAccounts(true)
+
+      const pixel = pixelOverride || selectedPixel
+      const newSelectedAccounts: AccountConfig[] = accountsToSelect.map(account => {
+        const accountId = account.account_id || account.id?.replace('act_', '')
+        return {
+          accountId,
+          accountName: account.name || accountId,
+          pageId: '',
+          pageName: '',
+          pixelId: pixel?.pixelId || pixel?.id || '',
+          pixelName: pixel?.name || '',
+          conversionEvent: 'PURCHASE',
+        }
+      })
+
+      // 先提交选择状态，让“已选”数量和勾选框即时响应。
+      setSelectedAccounts(newSelectedAccounts)
+
+      const loadedPageEntries = await mapWithConcurrency(
+        accountsToSelect,
+        ACCOUNT_PAGE_FETCH_CONCURRENCY,
+        async account => {
+          const accountId = account.account_id || account.id?.replace('act_', '')
+          const pages = await fetchPagesForAccount(accountId, account.name || accountId)
+          return [accountId, pages] as const
+        },
+      )
+      const loadedPages = Object.fromEntries(loadedPageEntries)
+      const allPages = { ...accountPages, ...loadedPages }
+
+      if (!isMountedRef.current) return
+      setAccountPages(prev => ({ ...prev, ...loadedPages }))
+      setSelectedAccounts(autoAssignPages(newSelectedAccounts, allPages))
+    })()
+
+    accountSelectionPromiseRef.current = selectionOperation
+    try {
+      await selectionOperation
+    } finally {
+      if (accountSelectionPromiseRef.current === selectionOperation) {
+        accountSelectionPromiseRef.current = null
+        if (isMountedRef.current) setSelectingAccounts(false)
+      }
+    }
   }
   
   // 全选/取消全选活跃账户
   const toggleSelectAllActive = async () => {
+    if (accountSelectionPromiseRef.current) return
+
     const activeAccounts = filteredAccounts.filter(acc => acc.account_status === 1)
     const allActiveSelected = activeAccounts.every(acc => {
       const accId = acc.account_id || acc.id?.replace('act_', '')
@@ -1032,6 +1107,8 @@ export default function BulkAdCreatePage() {
   
   // 选择/取消选择账户
   const toggleAccount = async (account: any) => {
+    if (selectingAccounts) return
+
     const accountId = account.account_id || account.id?.replace('act_', '')
     const exists = selectedAccounts.find(a => a.accountId === accountId)
     if (exists) {
@@ -1039,6 +1116,7 @@ export default function BulkAdCreatePage() {
     } else {
       // 先加载该账户的主页
       const pagesForAccount = await loadPagesForAccount(accountId)
+      if (!isMountedRef.current) return
       
       // 自动设置已选的 Pixel，并自动分配主页
       const newAccount = {
@@ -1061,23 +1139,15 @@ export default function BulkAdCreatePage() {
   // 加载单个账户的主页
   const loadPagesForAccount = async (accountId: string): Promise<any[]> => {
     // 如果已经加载过，直接返回
-    if (accountPages[accountId]) {
+    if (accountPages[accountId] !== undefined) {
       return accountPages[accountId]
     }
-    
-    try {
-      const res = await authFetch(`${API_BASE}/bulk-ad/auth/pages?accountId=${accountId}`)
-      const data = await res.json()
-      if (data.success && data.data) {
-        setAccountPages(prev => ({ ...prev, [accountId]: data.data }))
-        setAssetWarning(`pages:${accountId}`, buildPageAssetWarning(data.meta, getAccountDisplayName(accountId)))
-        return data.data
-      }
-    } catch (err) {
-      console.error(`Failed to load pages for account ${accountId}:`, err)
-      setAssetWarning(`pages:${accountId}`, `账户 ${getAccountDisplayName(accountId)} 的主页读取失败，请检查主页授权或重新同步。`)
+
+    const pages = await fetchPagesForAccount(accountId, getAccountDisplayName(accountId))
+    if (isMountedRef.current) {
+      setAccountPages(prev => ({ ...prev, [accountId]: pages }))
     }
-    return []
+    return pages
   }
   
   // 自动分配主页（均摊原则）
@@ -1223,7 +1293,7 @@ export default function BulkAdCreatePage() {
   const nextDisabled = (
     (currentStep === 1 && (!authStatus?.authorized || !selectedProduct || facebookAssetsBlocked)) ||
     (currentStep === 2 && !selectedPixel) ||
-    (currentStep === 3 && (selectedAccounts.length === 0 || selectedAccounts.some(acc => !acc.pageId)))
+    (currentStep === 3 && (selectingAccounts || selectedAccounts.length === 0 || selectedAccounts.some(acc => !acc.pageId)))
   )
   const nextDisabledTitle = currentStep === 1 && facebookAssetsBlocked
     ? '当前没有同时具备 Page 和 Pixel 的活跃广告账户，请先完成资产分配并重新同步。'
@@ -1804,9 +1874,10 @@ export default function BulkAdCreatePage() {
                   {filteredAccounts.length > 0 && (
                     <button
                       onClick={toggleSelectAllActive}
-                      className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium"
+                      disabled={selectingAccounts}
+                      className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium disabled:cursor-wait disabled:opacity-60"
                     >
-                      {filteredAccounts.filter(a => a.account_status === 1).every(acc => {
+                      {selectingAccounts ? '加载主页...' : filteredAccounts.filter(a => a.account_status === 1).every(acc => {
                         const accId = acc.account_id || acc.id?.replace('act_', '')
                         return selectedAccounts.find(a => a.accountId === accId)
                       }) ? '取消全选' : '全选活跃账户'}
@@ -1845,7 +1916,7 @@ export default function BulkAdCreatePage() {
                             type="checkbox" 
                             checked={isSelected} 
                             onChange={() => isActive && toggleAccount(account)} 
-                            disabled={!isActive}
+                            disabled={!isActive || selectingAccounts}
                             className="mr-3 w-5 h-5" 
                           />
                           <div className="flex-1">
@@ -1864,8 +1935,16 @@ export default function BulkAdCreatePage() {
                         <h4 className="font-semibold">配置粉丝页（自动均摊分配）</h4>
                       </div>
                       
-                      {/* 警告：有账户没有主页 - 阻止继续 */}
-                      {selectedAccounts.some(acc => !acc.pageId) && (
+                      {/* 主页加载中，完成后再展示真正缺失主页的账户 */}
+                      {selectingAccounts ? (
+                        <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl flex items-center gap-3 text-blue-700" role="status">
+                          <Loading.Spinner size="sm" />
+                          <div>
+                            <div className="font-semibold">正在加载已选账户的主页</div>
+                            <p className="text-sm mt-1">账户已选中，主页配置完成后即可进入下一步。</p>
+                          </div>
+                        </div>
+                      ) : selectedAccounts.some(acc => !acc.pageId) && (
                         <div className="p-4 bg-red-100 border-2 border-red-400 rounded-xl flex items-start gap-3">
                           <div className="w-10 h-10 rounded-full bg-red-500 flex items-center justify-center flex-shrink-0">
                             <svg className="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -1920,8 +1999,9 @@ export default function BulkAdCreatePage() {
                                     该账户没有可用主页
                                   </div>
                                 ) : (
-                                  <select 
+                                  <select
                                     value={acc.pageId} 
+                                    disabled={selectingAccounts}
                                     onChange={(e) => {
                                       const page = pagesForAccount.find((p: any) => p.id === e.target.value)
                                       updateAccountConfig(acc.accountId, 'pageId', e.target.value)
@@ -1936,11 +2016,11 @@ export default function BulkAdCreatePage() {
                                 </div>
                                 <div>
                                   <label className="block text-sm text-slate-600 mb-1">转化事件</label>
-                                  <select 
+                                  <select
                                     value={acc.conversionEvent} 
                                     onChange={(e) => updateAccountConfig(acc.accountId, 'conversionEvent', e.target.value)} 
                                     className="w-full px-3 py-2 border rounded-lg"
-                                  disabled={hasNoPages}
+                                    disabled={hasNoPages || selectingAccounts}
                                   >
                                     <option value="PURCHASE">Purchase</option>
                                     <option value="ADD_TO_CART">Add to Cart</option>
@@ -2285,7 +2365,7 @@ export default function BulkAdCreatePage() {
         <div className="flex justify-between mt-6">
           <button 
             onClick={() => setCurrentStep(prev => Math.max(1, prev - 1))} 
-            disabled={currentStep === 1} 
+            disabled={currentStep === 1 || selectingAccounts}
             className="px-6 py-2 border border-slate-300 rounded-lg text-slate-700 hover:bg-slate-50 disabled:opacity-50"
           >
             上一步

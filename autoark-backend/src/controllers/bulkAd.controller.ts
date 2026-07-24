@@ -847,6 +847,47 @@ const getScopedTokenForAccount = async (req: Request, rawAccountId: any) => {
   const accountId = await assertScopedFacebookAccountAccess(req, rawAccountId)
   const allTokens = await FbToken.find({ status: 'active', ...scopedTokenFilter(req) })
 
+  const cachedTokenIds = allTokens
+    .filter(token => token._id && token.fbUserId)
+    .map(token => token._id)
+    .filter(Boolean)
+  if (cachedTokenIds.length > 0) {
+    try {
+      const cachedOwner = await FacebookUser.findOne({
+        tokenId: { $in: cachedTokenIds },
+        syncStatus: 'completed',
+        'adAccounts.accountId': {
+          $in: getAccountIdsForQuery([accountId]),
+        },
+      })
+        .select('tokenId')
+        .lean()
+      const cachedToken = cachedOwner
+        ? allTokens.find(token => String(token._id) === String(cachedOwner.tokenId))
+        : undefined
+
+      if (cachedToken?.fbUserId) {
+        const facebookUserScope = {
+          tokenId: String(cachedToken._id),
+          organizationId: cachedToken.organizationId
+            ? String(cachedToken.organizationId)
+            : undefined,
+        }
+        logger.info(`[BulkAd] Found cached scoped token for account ${accountId}`)
+        return {
+          accountId,
+          fbToken: cachedToken,
+          facebookUserScope,
+          cachedAccount: true,
+        }
+      }
+    } catch (error: any) {
+      logger.warn(
+        `[BulkAd] Failed to read cached account ownership for ${accountId}: ${error.message}`,
+      )
+    }
+  }
+
   for (const token of allTokens) {
     try {
       const account = await facebookClient.get(`/act_${accountId}`, {
@@ -855,7 +896,12 @@ const getScopedTokenForAccount = async (req: Request, rawAccountId: any) => {
       })
       if (account?.id) {
         logger.info(`[BulkAd] Found scoped token for account ${accountId}`)
-        return { accountId, fbToken: token }
+        return {
+          accountId,
+          fbToken: token,
+          facebookUserScope: undefined,
+          cachedAccount: false,
+        }
       }
     } catch (error: any) {
       logger.debug(`[BulkAd] Scoped token candidate has no access to account ${accountId}`)
@@ -2495,11 +2541,49 @@ export const getAuthAdAccounts = async (req: Request, res: Response) => {
 export const getAuthPages = async (req: Request, res: Response) => {
   try {
     const { accountId } = req.query
-    const { accountId: scopedAccountId, fbToken } = await getScopedTokenForAccount(req, accountId)
+    const {
+      accountId: scopedAccountId,
+      fbToken,
+      facebookUserScope,
+      cachedAccount,
+    } = await getScopedTokenForAccount(req, accountId)
+
+    if (cachedAccount && fbToken.fbUserId && facebookUserScope) {
+      try {
+        const cachedPages = await facebookUserService.getCachedPages(
+          fbToken.fbUserId,
+          scopedAccountId,
+          facebookUserScope,
+        )
+        const sanitizedCachedPages = sanitizeFacebookPages(cachedPages).map((page: any) => ({
+          ...page,
+          id: page.id || page.pageId,
+        }))
+
+        return res.json({
+          success: true,
+          data: sanitizedCachedPages,
+          ...(sanitizedCachedPages.length === 0
+            ? { warning: '此账户没有可用的 Facebook 主页。请重新同步资产或检查主页分配。' }
+            : {}),
+          meta: {
+            source: 'cache',
+            pageCount: sanitizedCachedPages.length,
+            fetchedPageCount: 0,
+            paginationTruncated: false,
+            promotePagesFailed: false,
+          },
+        })
+      } catch (error: any) {
+        logger.warn(
+          `[BulkAd] Failed to read cached pages for ${scopedAccountId}; falling back to Meta: ${error.message}`,
+        )
+      }
+    }
     
     // 1. 从广告账户获取 promote_pages（BM 分配的主页）
     let pages: any[] = []
-    let source: 'promote_pages' | 'user_pages' | 'none' = 'none'
+    let source: 'promote_pages' | 'user_pages' | 'none' | 'cache' = 'none'
     let fetchedPageCount = 0
     let paginationTruncated = false
     let promotePagesFailed = false
