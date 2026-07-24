@@ -63,7 +63,7 @@ const rejectUnexpectedQueryKeys = (
 export const getPixels = async (req: Request, res: Response, next: NextFunction) => {
   try {
     if (!requireSuperAdmin(req, res)) return
-    if (rejectUnexpectedQueryKeys(req.query, ['tokenId', 'allTokens'], res)) return
+    if (rejectUnexpectedQueryKeys(req.query, ['tokenId', 'allTokens', 'refresh'], res)) return
 
     const tokenId = pickTokenId(req.query.tokenId)
 
@@ -77,24 +77,37 @@ export const getPixels = async (req: Request, res: Response, next: NextFunction)
     ) {
       return rejectInvalidBooleanParam(res, 'allTokens')
     }
+    if (
+      req.query.refresh !== undefined &&
+      req.query.refresh !== 'true' &&
+      req.query.refresh !== 'false'
+    ) {
+      return rejectInvalidBooleanParam(res, 'refresh')
+    }
+    const refresh = req.query.refresh === 'true'
+    if (refresh && (!tokenId || req.query.allTokens === 'true')) {
+      res.status(400).json({
+        success: false,
+        error: 'refresh=true requires one tokenId',
+      })
+      return
+    }
 
-    let pixels: any[]
+    let result: pixelsService.PixelInventoryResult
 
     if (req.query.allTokens === 'true') {
-      // 获取所有 Token 的 Pixels
-      pixels = await pixelsService.getAllPixelsFromAllTokens()
+      result = await pixelsService.getAllPixelsFromAllTokens()
     } else if (tokenId) {
-      // 获取指定 Token 的 Pixels
-      pixels = await pixelsService.getPixelsByToken(tokenId as string)
+      result = await pixelsService.getPixelsByToken(tokenId as string, { refresh })
     } else {
-      // 使用 Token Pool 自动选择
-      pixels = await pixelsService.getAllPixels()
+      result = await pixelsService.getAllPixels()
     }
 
     res.json({
       success: true,
-      data: pixels,
-      count: pixels.length,
+      data: result.pixels,
+      count: result.pixels.length,
+      meta: result.meta,
     })
   } catch (error: any) {
     next(error)

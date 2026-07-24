@@ -208,7 +208,14 @@ export async function executeAutomationJobInline(automationJobId: string) {
         const organizationId = tokenDoc?.organizationId || doc.organizationId
         if (!token) throw new Error('No accessible active Facebook token found')
 
-        result = await syncFacebookUserAssets(fbUserId, token, tokenId, organizationId)
+        result = await syncFacebookUserAssets(
+          fbUserId,
+          token,
+          tokenId,
+          organizationId,
+          undefined,
+          { force: true },
+        )
         break
       }
       default:

@@ -23,6 +23,7 @@ jest.mock('../src/services/facebook.oauth.service', () => ({
 
 jest.mock('../src/services/facebookUser.service', () => ({
   syncFacebookUserAssets: jest.fn(),
+  syncFacebookTokenAssets: jest.fn(),
   getCachedPixels: jest.fn(),
   getCachedAccounts: jest.fn(),
   getCachedAccountsWithMeta: jest.fn(),
@@ -675,6 +676,7 @@ describe('bulk ad controller', () => {
       '665000000000000000000901',
       '665000000000000000000001',
       expect.any(Function),
+      { force: true },
     )
     expect(mockWriteAuditLog).toHaveBeenCalledWith(req, expect.objectContaining({
       category: 'bulk_ad',

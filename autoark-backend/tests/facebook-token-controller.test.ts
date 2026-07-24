@@ -1,5 +1,6 @@
 const mockAxiosGet = jest.fn()
 const mockFbTokenFindOneAndUpdate = jest.fn()
+const mockSyncFacebookTokenAssets = jest.fn()
 
 jest.mock('axios', () => ({
   __esModule: true,
@@ -15,6 +16,10 @@ jest.mock('../src/models/FbToken', () => ({
   },
 }))
 
+jest.mock('../src/services/facebookUser.service', () => ({
+  syncFacebookTokenAssets: mockSyncFacebookTokenAssets,
+}))
+
 import { saveFacebookToken } from '../src/controllers/facebookToken.controller'
 import { UserRole } from '../src/models/User'
 
@@ -27,7 +32,13 @@ describe('legacy facebook token controller', () => {
     mockAxiosGet.mockResolvedValue({
       data: { id: 'fb_1', name: 'Alice FB' },
     })
-    mockFbTokenFindOneAndUpdate.mockResolvedValue({})
+    mockFbTokenFindOneAndUpdate.mockResolvedValue({
+      _id: { toString: () => '665000000000000000000201' },
+      organizationId: '665000000000000000000001',
+      fbUserId: 'fb_1',
+      token: 'E'.repeat(4096),
+    })
+    mockSyncFacebookTokenAssets.mockResolvedValue({})
     const req: any = {
       user: {
         role: UserRole.ORG_ADMIN,
@@ -59,6 +70,13 @@ describe('legacy facebook token controller', () => {
     expect(update.token).toHaveLength(4096)
     expect(update.organizationId).toBe(req.user.organizationId)
     expect(update.status).toBe('active')
+    expect(mockSyncFacebookTokenAssets).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fbUserId: 'fb_1',
+        organizationId: req.user.organizationId,
+      }),
+      { force: true },
+    )
     expect(res.json).toHaveBeenCalledWith({
       message: 'Facebook token saved successfully',
       fbUser: { id: 'fb_1', name: 'Alice FB' },

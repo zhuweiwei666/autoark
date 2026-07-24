@@ -1,11 +1,12 @@
 import { Request, Response, NextFunction } from 'express'
 import dayjs from 'dayjs'
-import FbToken, { IFbToken } from '../models/FbToken'
+import FbToken from '../models/FbToken'
 import {
   validateToken,
   checkAndUpdateTokenStatus,
 } from '../services/fbToken.validation.service'
 import logger from '../utils/logger'
+import { syncFacebookTokenAssets } from '../services/facebookUser.service'
 import { combineFilters, scopedIdFilter, scopedTokenFilter } from '../utils/accessControl'
 import { parsePagination, pickAllowedString, pickSafeQueryString } from '../utils/pagination'
 
@@ -121,6 +122,10 @@ export const bindToken = async (
     )
 
     logger.info(`[Token Bind] Token saved successfully for user: ${userId}`)
+
+    void syncFacebookTokenAssets(savedToken as any, { force: true }).catch((error: any) => {
+      logger.error(`[Token Bind] Immediate asset sync failed for token ${savedToken._id}:`, error)
+    })
 
     return res.json({
       success: true,

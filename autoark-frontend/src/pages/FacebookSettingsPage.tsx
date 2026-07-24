@@ -1,11 +1,12 @@
-import { useRef, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { getTokens, getPixels, getPixelDetails, getPixelEvents, checkTokenStatus, updateToken, deleteToken, authFetch, type FbToken, type FbPixel, type PixelDetails, type PixelEvent } from '../services/api'
 import { useAuth } from '../contexts/AuthContext'
 
 type TabType = 'tokens' | 'pixels'
 
 export default function FacebookSettingsPage() {
+  const queryClient = useQueryClient()
   const { isSuperAdmin } = useAuth()
   const [activeTab, setActiveTab] = useState<TabType>('tokens')
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
@@ -22,6 +23,8 @@ export default function FacebookSettingsPage() {
   
   // Pixel 状态
   const [allTokens, setAllTokens] = useState(false)
+  const [selectedTokenId, setSelectedTokenId] = useState('')
+  const [pixelsRefreshing, setPixelsRefreshing] = useState(false)
   const [selectedPixel, setSelectedPixel] = useState<FbPixel | null>(null)
   const [pixelDetails, setPixelDetails] = useState<PixelDetails | null>(null)
   const [pixelEvents, setPixelEvents] = useState<PixelEvent[]>([])
@@ -31,27 +34,62 @@ export default function FacebookSettingsPage() {
   // Token 查询 - 默认自动加载
   const { data: tokenData, isLoading: tokensLoading, refetch: refetchTokens, isFetching: tokensFetching } = useQuery({
     queryKey: ['tokens'],
-    queryFn: () => getTokens(),
+    queryFn: () => getTokens({ pageSize: 200 }),
     enabled: true, // 页面进入默认加载
     staleTime: Infinity, // 永不过期，只在手动刷新时更新
   })
   const tokens = tokenData?.data || []
+  const activeTokens = useMemo(
+    () => tokenData?.data.filter(token => token.status === 'active') || [],
+    [tokenData],
+  )
+
+  useEffect(() => {
+    if (activeTokens.some(token => token.id === selectedTokenId)) return
+    const nextTokenId = activeTokens[0]?.id || ''
+    if (nextTokenId !== selectedTokenId) setSelectedTokenId(nextTokenId)
+  }, [activeTokens, selectedTokenId])
 
   // Pixel 查询 - 在切换到像素 Tab 时加载
+  const pixelQueryKey = ['pixels', {
+    allTokens,
+    tokenId: allTokens ? undefined : selectedTokenId,
+  }]
   const { data: pixelData, isLoading: pixelsLoading, refetch: refetchPixels, isFetching: pixelsFetching } = useQuery({
-    queryKey: ['pixels', { allTokens }],
-    queryFn: () => getPixels({ allTokens }),
-    enabled: isSuperAdmin && activeTab === 'pixels', // Pixel API 是超管诊断能力
+    queryKey: pixelQueryKey,
+    queryFn: () => allTokens
+      ? getPixels({ allTokens: true })
+      : getPixels({ tokenId: selectedTokenId }),
+    enabled: isSuperAdmin && activeTab === 'pixels' && (allTokens || Boolean(selectedTokenId)),
     staleTime: Infinity,
   })
   const pixels = pixelData?.data || []
 
   // 手动加载数据
-  const handleRefresh = () => {
+  const handleRefresh = async () => {
     if (activeTab === 'tokens') {
-      refetchTokens()
+      await refetchTokens()
     } else if (isSuperAdmin) {
-      refetchPixels()
+      setPixelsRefreshing(true)
+      setMessage(null)
+      try {
+        if (allTokens) {
+          await refetchPixels()
+        } else if (selectedTokenId) {
+          const refreshed = await getPixels({ tokenId: selectedTokenId, refresh: true })
+          queryClient.setQueryData(pixelQueryKey, refreshed)
+        }
+        setMessage({
+          type: 'success',
+          text: allTokens
+            ? '已读取所有 Token 的最新缓存'
+            : '所选 Token 的账户、像素、Page 和 Catalog 已同步',
+        })
+      } catch (error: any) {
+        setMessage({ type: 'error', text: error.message || '同步失败' })
+      } finally {
+        setPixelsRefreshing(false)
+      }
     }
   }
 
@@ -193,6 +231,10 @@ export default function FacebookSettingsPage() {
 
   const loading = activeTab === 'tokens' ? tokensLoading : pixelsLoading
   const fetching = activeTab === 'tokens' ? tokensFetching : pixelsFetching
+  let refreshLabel = '刷新数据'
+  if (pixelsRefreshing) refreshLabel = '同步中...'
+  else if (fetching) refreshLabel = '加载中...'
+  else if (activeTab === 'pixels' && !allTokens) refreshLabel = '同步所选 Token'
 
   return (
     <div className="min-h-screen bg-white text-slate-900 p-6">
@@ -207,15 +249,31 @@ export default function FacebookSettingsPage() {
           </div>
           <div className="flex items-center gap-3">
             {isSuperAdmin && activeTab === 'pixels' && (
-              <label className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-300 rounded-2xl text-sm font-medium text-slate-700 cursor-pointer hover:bg-slate-50 transition-all">
-                <input
-                  type="checkbox"
-                  checked={allTokens}
-                  onChange={(e) => setAllTokens(e.target.checked)}
-                  className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500"
-                />
-                <span>所有 Token</span>
-              </label>
+              <>
+                <select
+                  value={selectedTokenId}
+                  onChange={(event) => setSelectedTokenId(event.target.value)}
+                  disabled={allTokens}
+                  aria-label="选择 Facebook Token"
+                  className="min-w-56 rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm font-medium text-slate-700 disabled:bg-slate-100 disabled:text-slate-400"
+                >
+                  {activeTokens.length === 0 && <option value="">暂无活跃 Token</option>}
+                  {activeTokens.map((token) => (
+                    <option key={token.id} value={token.id}>
+                      {token.optimizer || token.fbUserName || token.fbUserId || token.id}
+                    </option>
+                  ))}
+                </select>
+                <label className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-300 rounded-2xl text-sm font-medium text-slate-700 cursor-pointer hover:bg-slate-50 transition-all">
+                  <input
+                    type="checkbox"
+                    checked={allTokens}
+                    onChange={(e) => setAllTokens(e.target.checked)}
+                    className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500"
+                  />
+                  <span>所有 Token</span>
+                </label>
+              </>
             )}
             {activeTab === 'tokens' && (
               <button
@@ -230,15 +288,20 @@ export default function FacebookSettingsPage() {
             )}
             <button
               onClick={handleRefresh}
-              disabled={loading || fetching}
+              disabled={
+                loading ||
+                fetching ||
+                pixelsRefreshing ||
+                (activeTab === 'pixels' && !allTokens && !selectedTokenId)
+              }
               className={`px-6 py-3 bg-blue-600 hover:bg-blue-700 rounded-2xl text-sm font-semibold text-white shadow-md hover:shadow-lg transition-all flex items-center gap-2 ${
-                loading || fetching ? 'opacity-70 cursor-not-allowed' : ''
+                loading || fetching || pixelsRefreshing ? 'opacity-70 cursor-not-allowed' : ''
               }`}
             >
-              <svg className={`w-5 h-5 ${fetching ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className={`w-5 h-5 ${fetching || pixelsRefreshing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
               </svg>
-              {fetching ? '加载中...' : '刷新数据'}
+              {refreshLabel}
             </button>
           </div>
         </header>
@@ -282,6 +345,22 @@ export default function FacebookSettingsPage() {
             </button>
           )}
         </div>
+
+        {isSuperAdmin && activeTab === 'pixels' && pixelData?.meta && (
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            {[
+              ['广告账户', pixelData.meta.accountCount],
+              ['Pixels', pixelData.meta.pixelCount],
+              ['Pages', pixelData.meta.pageCount],
+              ['Catalogs', pixelData.meta.catalogCount],
+            ].map(([label, value]) => (
+              <div key={label} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                <div className="text-xs text-slate-500">{label}</div>
+                <div className="mt-1 text-lg font-bold text-slate-900">{value}</div>
+              </div>
+            ))}
+          </div>
+        )}
 
         {/* 空状态 */}
         {!loading && !fetching && ((activeTab === 'tokens' && tokens.length === 0) || (activeTab === 'pixels' && pixels.length === 0)) && (
@@ -414,7 +493,7 @@ export default function FacebookSettingsPage() {
                 </thead>
                 <tbody>
                   {pixels.map((pixel: FbPixel) => (
-                    <tr key={pixel.id} className="border-b border-slate-100 hover:bg-slate-50">
+                    <tr key={`${pixel.id}-${pixel.tokenId || 'default'}`} className="border-b border-slate-100 hover:bg-slate-50">
                       <td className="px-6 py-4 font-mono text-xs">{pixel.id}</td>
                       <td className="px-6 py-4 font-medium">{pixel.name}</td>
                       <td className="px-6 py-4">

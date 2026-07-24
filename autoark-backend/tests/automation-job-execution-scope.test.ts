@@ -175,6 +175,8 @@ describe('automation job execution scope', () => {
       'facebook-token',
       'token-1',
       'org-a',
+      undefined,
+      { force: true },
     )
     expect(doc.status).toBe('completed')
   })

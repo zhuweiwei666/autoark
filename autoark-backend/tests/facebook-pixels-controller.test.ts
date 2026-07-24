@@ -31,11 +31,22 @@ const superAdminReq = (input: { query?: any; params?: any } = {}) => ({
 })
 
 describe('Facebook pixels controller', () => {
+  const emptyInventory = {
+    pixels: [],
+    meta: {
+      source: 'cache' as const,
+      accountCount: 0,
+      pixelCount: 0,
+      pageCount: 0,
+      catalogCount: 0,
+    },
+  }
+
   beforeEach(() => {
     jest.clearAllMocks()
-    mockPixelsService.getAllPixels.mockResolvedValue([])
-    mockPixelsService.getPixelsByToken.mockResolvedValue([])
-    mockPixelsService.getAllPixelsFromAllTokens.mockResolvedValue([])
+    mockPixelsService.getAllPixels.mockResolvedValue(emptyInventory)
+    mockPixelsService.getPixelsByToken.mockResolvedValue(emptyInventory)
+    mockPixelsService.getAllPixelsFromAllTokens.mockResolvedValue(emptyInventory)
     mockPixelsService.getPixelDetails.mockResolvedValue({ id: 'pixel_1', name: 'Pixel 1' } as any)
     mockPixelsService.getPixelEvents.mockResolvedValue([])
   })
@@ -109,12 +120,38 @@ describe('Facebook pixels controller', () => {
       jest.fn(),
     )
 
-    expect(mockPixelsService.getPixelsByToken).toHaveBeenCalledWith('token_1')
+    expect(mockPixelsService.getPixelsByToken).toHaveBeenCalledWith('token_1', { refresh: false })
     expect(res.json).toHaveBeenCalledWith({
       success: true,
       data: [],
       count: 0,
+      meta: emptyInventory.meta,
     })
+  })
+
+  it('refreshes only one explicitly selected token', async () => {
+    const res = responseMock()
+
+    await getPixels(
+      superAdminReq({ query: { tokenId: 'token_1', refresh: 'true' } }) as any,
+      res as any,
+      jest.fn(),
+    )
+
+    expect(mockPixelsService.getPixelsByToken).toHaveBeenCalledWith('token_1', { refresh: true })
+  })
+
+  it('rejects a broad all-token refresh to protect Meta quota', async () => {
+    const res = responseMock()
+
+    await getPixels(
+      superAdminReq({ query: { allTokens: 'true', refresh: 'true' } }) as any,
+      res as any,
+      jest.fn(),
+    )
+
+    expect(res.status).toHaveBeenCalledWith(400)
+    expect(mockPixelsService.getAllPixelsFromAllTokens).not.toHaveBeenCalled()
   })
 
   it('rejects malformed pixel IDs before fetching details', async () => {

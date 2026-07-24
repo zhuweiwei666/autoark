@@ -1,6 +1,7 @@
 const mockFbTokenFind = jest.fn()
 const mockFbTokenFindOneAndUpdate = jest.fn()
 const mockValidateToken = jest.fn()
+const mockSyncFacebookTokenAssets = jest.fn()
 
 jest.mock('../src/models/FbToken', () => ({
   __esModule: true,
@@ -15,12 +16,17 @@ jest.mock('../src/services/fbToken.validation.service', () => ({
   checkAndUpdateTokenStatus: jest.fn(),
 }))
 
+jest.mock('../src/services/facebookUser.service', () => ({
+  syncFacebookTokenAssets: mockSyncFacebookTokenAssets,
+}))
+
 import { bindToken, getTokens, updateToken } from '../src/controllers/fbToken.controller'
 import { UserRole } from '../src/models/User'
 
 describe('fb token controller', () => {
   beforeEach(() => {
     jest.clearAllMocks()
+    mockSyncFacebookTokenAssets.mockResolvedValue({})
   })
 
   it('caps token list pagination and never returns raw token values', async () => {
@@ -254,6 +260,13 @@ describe('fb token controller', () => {
     expect(savedTokenData.status).toBe('active')
     expect(savedTokenData.organizationId).toBe(req.user.organizationId)
     expect(savedTokenData).not.toHaveProperty('createdBy')
+    expect(mockSyncFacebookTokenAssets).toHaveBeenCalledWith(
+      expect.objectContaining({
+        _id: '665000000000000000000201',
+        fbUserId: 'fb_1',
+      }),
+      { force: true },
+    )
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
       success: true,
       message: 'Facebook token saved successfully',
