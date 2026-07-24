@@ -20,13 +20,14 @@ import Account from '../src/models/Account'
 import CopywritingPackage from '../src/models/CopywritingPackage'
 import CreativeGroup from '../src/models/CreativeGroup'
 import FbToken from '../src/models/FbToken'
+import User, { UserRole } from '../src/models/User'
 import {
   createAd,
   createAdCreative,
   createAdSet,
   createCampaign,
 } from '../src/integration/facebook/bulkCreate.api'
-import { executeTaskForAccount } from '../src/services/bulkAd.service'
+import { executeTaskForAccount, retryFailedItems } from '../src/services/bulkAd.service'
 
 const taskId = '665000000000000000000701'
 const facebookTokenId = '665000000000000000000702'
@@ -287,6 +288,105 @@ describe('bulk ad execution diagnostics', () => {
       taskId,
       materialId: '665000000000000000000713',
     }))
+  })
+
+  it('uses the super-admin publisher scope for legacy assets without an organization', async () => {
+    const task = buildTask()
+    delete (task as any).organizationId
+    jest.spyOn(AdTask, 'findById')
+      .mockResolvedValueOnce(task as any)
+      .mockResolvedValueOnce(task as any)
+    jest.spyOn(AdTask, 'findOneAndUpdate').mockResolvedValue(task as any)
+    jest.spyOn(AdTask, 'findByIdAndUpdate').mockResolvedValue(task as any)
+    jest.spyOn(User, 'findById').mockReturnValue({
+      select: jest.fn().mockReturnValue({
+        lean: jest.fn().mockResolvedValue({ role: UserRole.SUPER_ADMIN }),
+      }),
+    } as any)
+    jest.spyOn(FbToken, 'findOne').mockResolvedValue({ token: 'fb_token' } as any)
+    jest.spyOn(CreativeGroup, 'find').mockResolvedValue([{
+      _id: '665000000000000000000711',
+      name: 'Legacy creative group',
+      materials: [{
+        _id: '665000000000000000000713',
+        type: 'image',
+        name: 'Image 1',
+        facebookImageHash: 'hash_1',
+        status: 'uploaded',
+      }],
+    }] as any)
+    jest.spyOn(CopywritingPackage, 'find').mockResolvedValue([{
+      _id: '665000000000000000000712',
+      name: 'Legacy copywriting package',
+      links: { websiteUrl: 'https://example.com' },
+      content: {
+        primaryTexts: ['Primary'],
+        headlines: ['Headline'],
+        descriptions: ['Description'],
+      },
+      callToAction: 'SHOP_NOW',
+    }] as any)
+    jest.spyOn(Ad, 'findOneAndUpdate').mockResolvedValue({} as any)
+    jest.spyOn(AdMaterialMapping as any, 'recordMapping').mockResolvedValue({} as any)
+    ;(createCampaign as jest.Mock).mockResolvedValue({ success: true, id: 'camp_1' })
+    ;(createAdSet as jest.Mock).mockResolvedValue({ success: true, id: 'adset_1' })
+    ;(createAdCreative as jest.Mock).mockResolvedValue({ success: true, id: 'creative_1' })
+    ;(createAd as jest.Mock).mockResolvedValue({ success: true, id: 'ad_1' })
+
+    await executeTaskForAccount(taskId, '123')
+
+    expect(CreativeGroup.find).toHaveBeenCalledWith({
+      _id: { $in: ['665000000000000000000711'] },
+    })
+    expect(CopywritingPackage.find).toHaveBeenCalledWith({
+      _id: { $in: ['665000000000000000000712'] },
+    })
+    expect(createCampaign).toHaveBeenCalled()
+    expect(createAdSet).toHaveBeenCalled()
+  })
+
+  it('fails resource preflight before creating Meta objects', async () => {
+    const task = buildTask()
+    jest.spyOn(AdTask, 'findById').mockResolvedValue(task as any)
+    jest.spyOn(AdTask, 'findOneAndUpdate').mockResolvedValue(task as any)
+    jest.spyOn(AdTask, 'findByIdAndUpdate').mockResolvedValue(task as any)
+    jest.spyOn(FbToken, 'findOne').mockResolvedValue({ token: 'fb_token' } as any)
+    jest.spyOn(CreativeGroup, 'find').mockResolvedValue([{
+      _id: '665000000000000000000711',
+      materials: [],
+    }] as any)
+    jest.spyOn(CopywritingPackage, 'find').mockResolvedValue([])
+
+    await expect(executeTaskForAccount(taskId, '123')).rejects.toThrow(
+      'Copywriting packages not found or inaccessible',
+    )
+
+    expect(createCampaign).not.toHaveBeenCalled()
+    expect(createAdSet).not.toHaveBeenCalled()
+    const failureUpdate = (AdTask.findOneAndUpdate as jest.Mock).mock.calls.find((call: any[]) => (
+      call[1]?.$set?.['items.$.errors']
+    ))
+    expect(failureUpdate?.[1]?.$set?.['items.$.errors']?.[0]?.errorCode).toBe('BULK_ASSET_NOT_FOUND')
+  })
+
+  it('blocks retry of the legacy resource error after partial Meta creation', async () => {
+    const task = buildTask()
+    task.status = 'failed'
+    task.items[0].status = 'failed'
+    task.items[0].result = {
+      campaignId: 'camp_existing',
+      adsetIds: ['adset_existing'],
+    }
+    task.items[0].errors = [{
+      errorCode: 'EXECUTION_ERROR',
+      errorMessage: 'No copywriting packages found',
+      retryable: true,
+    }]
+    jest.spyOn(AdTask, 'findOne').mockResolvedValue(task as any)
+
+    await expect(retryFailedItems(taskId, {
+      organizationId: task.organizationId,
+    })).rejects.toThrow('没有可重试的失败项')
   })
 
   it('falls back to one adset when a task snapshot has an invalid multiplier', async () => {
