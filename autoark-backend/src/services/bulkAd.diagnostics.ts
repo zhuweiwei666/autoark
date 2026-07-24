@@ -395,8 +395,11 @@ const classifyErrorCode = (
   if (includesAny(text, ['catalog', 'product set', 'product_set', 'product catalog', 'commerce', 'shop', '商品目录', '商品集', '商店'])) {
     return 'CATALOG_ACCESS_REQUIRED'
   }
-  if (includesAny(text, ['promote_pages', 'page id', 'page_id', 'object_story_spec', 'facebook page', '主页', '公共主页'])) {
+  if (includesAny(text, ['promote_pages', 'page id', 'page_id', 'facebook page', '主页', '公共主页'])) {
     return 'PAGE_ACCESS_REQUIRED'
+  }
+  if (Number.isFinite(code) && code === 100 && includesAny(text, ['object_story_spec', 'video_data', 'link_data', 'caption'])) {
+    return 'META_VALIDATION_ERROR'
   }
   if (includesAny(text, ['destination url', 'destination_url', 'link_url', 'website_url', 'invalid url', 'malformed url', 'landing page', 'domain', 'deeplink', '落地页', '链接', '网址', '域名'])) {
     return 'DESTINATION_URL_INVALID'

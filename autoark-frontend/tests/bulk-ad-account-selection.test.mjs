@@ -50,6 +50,12 @@ test('bulk account selection is optimistic, concurrent, and single-flight', () =
   )
 })
 
+test('manual Campaign name edits are not overwritten by the auto-template effect', () => {
+  assert.match(pageSource, /const campaignNameTemplateEditedRef = useRef\(false\)/)
+  assert.match(pageSource, /if \(campaignNameTemplateEditedRef\.current\) return/)
+  assert.match(pageSource, /campaignNameTemplateEditedRef\.current = true/)
+})
+
 test('account controls expose loading state and prevent duplicate selection requests', () => {
   assert.match(pageSource, /const \[selectingAccounts, setSelectingAccounts\] = useState\(false\)/)
   assert.match(pageSource, /disabled=\{selectingAccounts\}/)

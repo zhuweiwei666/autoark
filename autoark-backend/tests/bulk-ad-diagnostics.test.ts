@@ -79,6 +79,18 @@ describe('bulk ad diagnostics', () => {
     expect(diagnosis.nextActions.join(' ')).toContain('websiteUrl')
   })
 
+  it('does not misclassify generic object_story_spec validation as Page access', () => {
+    const diagnosis = diagnoseBulkAdError({
+      code: 100,
+      subcode: 1443050,
+      message: 'Invalid parameter',
+      userMsg: 'object_story_spec的 video_data 字段不支持 caption 字段。',
+    })
+
+    expect(diagnosis.errorCode).toBe('META_VALIDATION_ERROR')
+    expect(diagnosis.errorCode).not.toBe('PAGE_ACCESS_REQUIRED')
+  })
+
   it('classifies ad policy review failures as non-retryable content actions', () => {
     const diagnosis = diagnoseBulkAdError({
       code: 100,

@@ -430,6 +430,7 @@ export default function BulkAdCreatePage() {
     budget: 50,
     bidStrategy: 'LOWEST_COST_WITHOUT_CAP',
   })
+  const campaignNameTemplateEditedRef = useRef(false)
   const [adset, setAdset] = useState({
     nameTemplate: '{campaignName}_adset',
     status: 'ACTIVE', // 默认开启
@@ -491,6 +492,7 @@ export default function BulkAdCreatePage() {
   // 格式: autoark用户名_渠道_文案包产品名_定向包名_{accountName}_{date}
   // 定向包名称实时更新：如果已选择定向包，显示实际名称；否则显示变量占位符
   useEffect(() => {
+    if (campaignNameTemplateEditedRef.current) return
     const username = user?.username || 'user'
     const channel = 'fb'  // 渠道固定为 fb
     const productName = selectedProduct?.product?.name || selectedProduct?.name || '产品名'
@@ -2177,7 +2179,7 @@ export default function BulkAdCreatePage() {
               <h3 className="text-lg font-semibold">广告系列设置</h3>
               <div className="grid grid-cols-2 gap-6">
                 <div><label className="block text-sm text-slate-600 mb-1">系列名称模板</label>
-                  <input type="text" value={campaign.nameTemplate} onChange={(e) => setCampaign({...campaign, nameTemplate: e.target.value})} className="w-full px-3 py-2 border rounded-lg" />
+                  <input type="text" value={campaign.nameTemplate} onChange={(e) => { campaignNameTemplateEditedRef.current = true; setCampaign({...campaign, nameTemplate: e.target.value}) }} className="w-full px-3 py-2 border rounded-lg" />
                   <p className="text-xs text-slate-400 mt-1">自动填入: 用户名_渠道_产品名；变量: {'{targetingName}'}, {'{accountName}'}, {'{date}'}</p></div>
                 <div><label className="block text-sm text-slate-600 mb-1">推广目标</label>
                   <select value={campaign.objective} onChange={(e) => setCampaign({...campaign, objective: e.target.value})} className="w-full px-3 py-2 border rounded-lg">
