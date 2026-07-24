@@ -101,9 +101,11 @@ export function buildFacebookAssetDiagnostics({
   const pixelMap = new Map<string, any[]>()
 
   for (const user of users) {
+    const userAccountIds = new Set<string>()
     for (const account of user.adAccounts || []) {
       const accountId = normalizeForStorage(account.accountId)
       if (!accountId) continue
+      userAccountIds.add(accountId)
       const existing = accountMap.get(accountId) || {}
       accountMap.set(accountId, {
         accountId,
@@ -115,9 +117,22 @@ export function buildFacebookAssetDiagnostics({
     }
 
     for (const page of user.pages || []) {
+      const linkedAccountIds = new Set<string>()
       for (const account of page.accounts || []) {
         const accountId = normalizeForStorage(account.accountId)
-        if (!page.pageId || !accountId) continue
+        if (accountId) linkedAccountIds.add(accountId)
+      }
+      if (
+        page.pageId &&
+        typeof page.accessToken === 'string' &&
+        page.accessToken.trim().length > 0
+      ) {
+        for (const accountId of userAccountIds) {
+          linkedAccountIds.add(accountId)
+        }
+      }
+      for (const accountId of linkedAccountIds) {
+        if (!page.pageId) continue
         const pages = pageMap.get(accountId) || []
         if (!pages.some(existing => existing.pageId === page.pageId)) {
           pages.push({ pageId: page.pageId, name: page.name })

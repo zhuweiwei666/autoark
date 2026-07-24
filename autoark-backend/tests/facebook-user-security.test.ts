@@ -49,7 +49,7 @@ describe('facebook user asset security', () => {
 
     const pages = await getCachedPages('fb_123', 'act_1')
 
-    expect(select).toHaveBeenCalledWith('pages')
+    expect(select).toHaveBeenCalledWith('pages adAccounts')
     expect(pages).toHaveLength(1)
     expect(pages[0]).toMatchObject({
       pageId: 'page_1',
