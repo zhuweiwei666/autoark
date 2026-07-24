@@ -4,6 +4,8 @@ import axios from 'axios'
 import { FB_BASE_URL } from '../config/facebook.config'
 import { combineFilters, scopedTokenFilter } from '../utils/accessControl'
 import { pickSafeQueryString } from '../utils/pagination'
+import { syncFacebookTokenAssets } from '../services/facebookUser.service'
+import logger from '../utils/logger'
 
 const FB_TOKEN_MAX_LENGTH = 4096
 
@@ -37,7 +39,7 @@ export const saveFacebookToken = async (req: Request, res: Response) => {
         return res.status(400).json({ error: 'Invalid FB token' })
       }
 
-      await FbToken.findOneAndUpdate(
+      const savedToken = await FbToken.findOneAndUpdate(
         combineFilters({ fbUserId: check.data.id }, scopedTokenFilter(req)),
         {
           token,
@@ -51,11 +53,15 @@ export const saveFacebookToken = async (req: Request, res: Response) => {
         { new: true, upsert: true },
       )
 
+      void syncFacebookTokenAssets(savedToken as any, { force: true }).catch((error: any) => {
+        logger.error(`[Legacy Token] Immediate asset sync failed for token ${savedToken._id}:`, error)
+      })
+
       return res.json({
         message: 'Facebook token saved successfully',
         fbUser: check.data,
       })
-    } catch (apiErr) {
+    } catch {
       return res
         .status(400)
         .json({ error: 'Invalid Facebook Token (API verification failed)' })

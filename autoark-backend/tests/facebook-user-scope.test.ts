@@ -1,12 +1,19 @@
 import FacebookUser from '../src/models/FacebookUser'
+import FbToken from '../src/models/FbToken'
+import * as facebookAccountsService from '../src/services/facebook.accounts.service'
 import {
   getCachedPixels,
   getSyncStatus,
+  syncFacebookTokenAssets,
   syncFacebookUserAssets,
 } from '../src/services/facebookUser.service'
 
 describe('facebook user asset cache scoping', () => {
   const originalFetch = global.fetch
+
+  beforeEach(() => {
+    jest.spyOn(FacebookUser, 'findOne').mockResolvedValue(null)
+  })
 
   afterEach(() => {
     jest.restoreAllMocks()
@@ -152,13 +159,430 @@ describe('facebook user asset cache scoping', () => {
     const completedWrite = writes.find((write) => write.syncStatus === 'completed')
     expect(completedWrite.adAccounts.map((account: any) => account.accountId)).toEqual(['100', '101'])
     expect(completedWrite.pixels.map((pixel: any) => pixel.pixelId)).toEqual(['pixel_1', 'pixel_2'])
-    expect(completedWrite.pages.map((page: any) => page.pageId)).toEqual(['page_1', 'page_2', 'fallback_page'])
+    expect(completedWrite.pages.map((page: any) => page.pageId)).toEqual(
+      expect.arrayContaining(['page_1', 'page_2', 'fallback_page']),
+    )
     expect(completedWrite.productCatalogs.map((catalog: any) => catalog.catalogId)).toEqual(['catalog_1', 'catalog_2'])
     const requestWithTimeout = expect.objectContaining({ signal: expect.any(AbortSignal) })
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('accounts_page_2=1'), requestWithTimeout)
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('pixels_page_2=1'), requestWithTimeout)
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('pages_page_2=1'), requestWithTimeout)
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('catalogs_page_2=1'), requestWithTimeout)
+  })
+
+  it('collects token-level assets and avoids per-account requests when field expansion succeeds', async () => {
+    const writes: any[] = []
+    jest.spyOn(FacebookUser, 'findOne').mockResolvedValue(null)
+    jest.spyOn(FacebookUser, 'findOneAndUpdate').mockImplementation(async (_filter: any, update: any) => {
+      writes.push(update)
+      return update as any
+    })
+
+    const response = (data: any) => Promise.resolve({
+      json: async () => data,
+    } as any)
+    const fetchMock = jest.fn(async (input: any) => {
+      const url = String(input)
+      if (url.includes('/me/adaccounts')) {
+        return response({
+          data: [{
+            id: 'act_100',
+            account_id: '100',
+            name: 'Account 100',
+            account_status: 1,
+            adspixels: {
+              data: [{
+                id: 'assigned_pixel',
+                name: 'Assigned Pixel',
+                owner_business: { id: 'biz_1', name: 'Business 1' },
+              }],
+            },
+            promote_pages: {
+              data: [{ id: 'account_page', name: 'Account Page' }],
+            },
+          }],
+        })
+      }
+      if (url.includes('/me/adspixels')) {
+        return response({
+          data: [{
+            id: 'token_pixel',
+            name: 'Token Pixel',
+            owner_business: { id: 'biz_1', name: 'Business 1' },
+            is_created_by_business: true,
+            last_fired_time: '2026-07-24T00:00:00+0000',
+          }],
+        })
+      }
+      if (url.includes('/me/accounts')) {
+        return response({
+          data: [{ id: 'user_page', name: 'User Page', access_token: 'PAGE_TOKEN' }],
+        })
+      }
+      if (url.includes('/me/businesses')) {
+        return response({
+          data: [{
+            id: 'biz_1',
+            name: 'Business 1',
+            owned_product_catalogs: {
+              data: [{ id: 'catalog_1', name: 'Catalog 1' }],
+            },
+            owned_pixels: {
+              data: [{ id: 'business_pixel', name: 'Business Pixel' }],
+            },
+          }],
+        })
+      }
+      return response({ data: [] })
+    })
+    global.fetch = fetchMock as any
+
+    await syncFacebookUserAssets(
+      'fb_1',
+      'TOKEN_A',
+      '665000000000000000000901',
+      '665000000000000000000001',
+    )
+
+    const completedWrite = writes.find((write) => write.syncStatus === 'completed')
+    expect(completedWrite.pixels).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        pixelId: 'token_pixel',
+        name: 'Token Pixel',
+        accounts: [],
+        ownerBusiness: { id: 'biz_1', name: 'Business 1' },
+      }),
+      expect.objectContaining({
+        pixelId: 'assigned_pixel',
+        accounts: [{ accountId: '100', accountName: 'Account 100' }],
+      }),
+      expect.objectContaining({
+        pixelId: 'business_pixel',
+        accounts: [],
+      }),
+    ]))
+    expect(completedWrite.pages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        pageId: 'user_page',
+        accounts: [],
+      }),
+      expect.objectContaining({
+        pageId: 'account_page',
+        accounts: [{ accountId: '100' }],
+      }),
+    ]))
+    expect(completedWrite.productCatalogs).toEqual([
+      expect.objectContaining({ catalogId: 'catalog_1' }),
+    ])
+    expect(fetchMock).toHaveBeenCalledTimes(4)
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/act_100/'))).toBe(false)
+  })
+
+  it('imports the synchronized account directory for a newly authorized token', async () => {
+    jest.spyOn(FacebookUser, 'findOne').mockResolvedValue(null)
+    jest.spyOn(FacebookUser, 'findOneAndUpdate').mockImplementation(
+      async (_filter: any, update: any) => update as any,
+    )
+    const importAccounts = jest
+      .spyOn(facebookAccountsService, 'syncCachedAccountsForToken')
+      .mockResolvedValue({ syncedCount: 1, skippedCount: 0, errors: [] })
+    const updateToken = jest.spyOn(FbToken, 'findByIdAndUpdate').mockResolvedValue({} as any)
+    const response = (data: any) => Promise.resolve({ json: async () => data } as any)
+    global.fetch = jest.fn(async (input: any) => {
+      if (String(input).includes('/me/adaccounts')) {
+        return response({
+          data: [{
+            id: 'act_100',
+            account_id: '100',
+            name: 'Account 100',
+            account_status: 1,
+            adspixels: { data: [] },
+            promote_pages: { data: [] },
+          }],
+        })
+      }
+      return response({ data: [] })
+    }) as any
+
+    const tokenDoc = {
+      _id: 'token_1',
+      token: 'TOKEN_A',
+      fbUserId: 'fb_1',
+      organizationId: 'org_1',
+      optimizer: 'Alice',
+    }
+    await syncFacebookTokenAssets(tokenDoc, { force: true })
+
+    expect(importAccounts).toHaveBeenCalledWith(
+      tokenDoc,
+      [expect.objectContaining({ accountId: '100' })],
+    )
+    expect(updateToken).toHaveBeenCalledWith('token_1', {
+      lastAccountSyncedAt: expect.any(Date),
+    })
+  })
+
+  it('reuses a recent completed asset snapshot without spending Meta requests', async () => {
+    const cachedSnapshot = {
+      syncStatus: 'completed',
+      lastSyncedAt: new Date(),
+      adAccounts: [{ accountId: '100', name: 'Account 100' }],
+      pixels: [{ pixelId: 'pixel_1', name: 'Pixel 1', accounts: [] }],
+      pages: [],
+      productCatalogs: [],
+    }
+    jest.spyOn(FacebookUser, 'findOne').mockResolvedValue(cachedSnapshot as any)
+    jest.spyOn(FacebookUser, 'findOneAndUpdate').mockResolvedValue(cachedSnapshot as any)
+    const fetchMock = jest.fn(async () => {
+      throw new Error('unexpected Meta request')
+    })
+    global.fetch = fetchMock as any
+    const onAdAccountsSynced = jest.fn().mockResolvedValue(undefined)
+
+    await expect(syncFacebookUserAssets(
+      'fb_1',
+      'TOKEN_A',
+      '665000000000000000000901',
+      '665000000000000000000001',
+      onAdAccountsSynced,
+    )).resolves.toBe(cachedSnapshot)
+
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(onAdAccountsSynced).toHaveBeenCalledWith(cachedSnapshot.adAccounts)
+  })
+
+  it('does not bypass another process active sync lease even when refresh is forced', async () => {
+    const cachedSnapshot = {
+      syncStatus: 'syncing',
+      syncLeaseExpiresAt: new Date(Date.now() + 60_000),
+      adAccounts: [{ accountId: '100', name: 'Account 100' }],
+      pixels: [],
+      pages: [],
+      productCatalogs: [],
+    }
+    jest.spyOn(FacebookUser, 'findOne').mockResolvedValue(cachedSnapshot as any)
+    const fetchMock = jest.fn(async () => {
+      throw new Error('unexpected Meta request')
+    })
+    global.fetch = fetchMock as any
+
+    await expect(syncFacebookUserAssets(
+      'fb_1',
+      'TOKEN_A',
+      '665000000000000000000901',
+      '665000000000000000000001',
+      undefined,
+      { force: true },
+    )).resolves.toBe(cachedSnapshot)
+
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('does not spend Meta requests when another process wins the atomic sync claim', async () => {
+    const pendingSnapshot = {
+      syncStatus: 'pending',
+      adAccounts: [],
+    }
+    const activeSnapshot = {
+      syncStatus: 'syncing',
+      syncLeaseExpiresAt: new Date(Date.now() + 60_000),
+      adAccounts: [{ accountId: '100', name: 'Account 100' }],
+    }
+    jest.spyOn(FacebookUser, 'findOne')
+      .mockResolvedValueOnce(pendingSnapshot as any)
+      .mockResolvedValueOnce(activeSnapshot as any)
+    const claim = jest.spyOn(FacebookUser, 'findOneAndUpdate').mockResolvedValue(null)
+    const fetchMock = jest.fn(async () => {
+      throw new Error('unexpected Meta request')
+    })
+    global.fetch = fetchMock as any
+
+    await expect(syncFacebookUserAssets(
+      'fb_1',
+      'TOKEN_A',
+      '665000000000000000000901',
+      '665000000000000000000001',
+      undefined,
+      { force: true },
+    )).resolves.toBe(activeSnapshot)
+
+    expect(claim).toHaveBeenCalledTimes(1)
+    expect(claim.mock.calls[0][0]).toEqual(expect.objectContaining({
+      $and: expect.any(Array),
+    }))
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('keeps the previous pixel snapshot when the token-level request fails transiently', async () => {
+    const cachedSnapshot = {
+      syncStatus: 'completed',
+      lastSyncedAt: new Date(),
+      adAccounts: [{ accountId: '200', status: 2 }],
+      pixels: [{ pixelId: 'known_pixel', name: 'Known Pixel', accounts: [] }],
+      pages: [],
+      productCatalogs: [],
+    }
+    jest.spyOn(FacebookUser, 'findOne').mockResolvedValue(cachedSnapshot as any)
+    const writes: any[] = []
+    jest.spyOn(FacebookUser, 'findOneAndUpdate').mockImplementation(
+      async (_filter: any, update: any) => {
+        writes.push(update)
+        return update as any
+      },
+    )
+    const response = (data: any) => Promise.resolve({ json: async () => data } as any)
+    global.fetch = jest.fn(async (input: any) => {
+      const url = String(input)
+      if (url.includes('/me/adspixels')) {
+        throw new Error('temporary network failure')
+      }
+      if (url.includes('/me/adaccounts')) {
+        return response({
+          data: [{
+            id: 'act_200',
+            account_id: '200',
+            name: 'Disabled Account',
+            account_status: 2,
+            adspixels: { data: [] },
+            promote_pages: { data: [] },
+          }],
+        })
+      }
+      return response({ data: [] })
+    }) as any
+
+    await expect(syncFacebookUserAssets(
+      'fb_1',
+      'TOKEN_A',
+      '665000000000000000000901',
+      '665000000000000000000001',
+      undefined,
+      { force: true },
+    )).rejects.toThrow('temporary network failure')
+
+    expect(writes.some(write => write.syncStatus === 'completed')).toBe(false)
+    expect(writes).toContainEqual(expect.objectContaining({
+      syncStatus: 'failed',
+      syncError: 'temporary network failure',
+    }))
+  })
+
+  it('does not scan disabled accounts when expanded account assets are unavailable', async () => {
+    jest.spyOn(FacebookUser, 'findOne').mockResolvedValue(null)
+    jest.spyOn(FacebookUser, 'findOneAndUpdate').mockResolvedValue({} as any)
+
+    const response = (data: any) => Promise.resolve({
+      json: async () => data,
+    } as any)
+    const fetchMock = jest.fn(async (input: any) => {
+      const url = String(input)
+      if (url.includes('/me/adaccounts')) {
+        return response({
+          data: [{
+            id: 'act_200',
+            account_id: '200',
+            name: 'Disabled Account',
+            account_status: 2,
+          }],
+        })
+      }
+      return response({ data: [] })
+    })
+    global.fetch = fetchMock as any
+
+    await syncFacebookUserAssets('fb_2', 'TOKEN_B', 'token_2', 'org_1')
+
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/act_200/'))).toBe(false)
+  })
+
+  it('retries only the account directory when Meta rejects field expansion', async () => {
+    jest.spyOn(FacebookUser, 'findOne').mockResolvedValue(null)
+    jest.spyOn(FacebookUser, 'findOneAndUpdate').mockResolvedValue({} as any)
+
+    const response = (data: any) => Promise.resolve({
+      json: async () => data,
+    } as any)
+    let accountRequests = 0
+    const fetchMock = jest.fn(async (input: any) => {
+      if (String(input).includes('/me/adaccounts')) {
+        accountRequests += 1
+        if (accountRequests === 1) {
+          return response({
+            error: {
+              code: 100,
+              message: 'Tried accessing nonexisting field adspixels',
+            },
+          })
+        }
+        return response({
+          data: [{
+            id: 'act_200',
+            account_id: '200',
+            name: 'Disabled Account',
+            account_status: 2,
+          }],
+        })
+      }
+      return response({ data: [] })
+    })
+    global.fetch = fetchMock as any
+
+    await syncFacebookUserAssets('fb_2', 'TOKEN_B', 'token_2', 'org_1')
+
+    expect(accountRequests).toBe(2)
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/act_200/'))).toBe(false)
+  })
+
+  it('falls back to business-owned pixels only when business field expansion is unavailable', async () => {
+    jest.spyOn(FacebookUser, 'findOne').mockResolvedValue(null)
+    const writes: any[] = []
+    jest.spyOn(FacebookUser, 'findOneAndUpdate').mockImplementation(
+      async (_filter: any, update: any) => {
+        writes.push(update)
+        return update as any
+      },
+    )
+
+    const response = (data: any) => Promise.resolve({ json: async () => data } as any)
+    let businessRequests = 0
+    const fetchMock = jest.fn(async (input: any) => {
+      const url = String(input)
+      if (url.includes('/me/adspixels')) {
+        return response({
+          error: {
+            code: 100,
+            message: 'Unsupported get request for adspixels',
+          },
+        })
+      }
+      if (url.includes('/me/businesses')) {
+        businessRequests += 1
+        if (businessRequests === 1) {
+          return response({
+            error: {
+              code: 100,
+              message: 'Tried accessing nonexisting field owned_pixels',
+            },
+          })
+        }
+        return response({ data: [{ id: 'biz_1', name: 'Business 1' }] })
+      }
+      if (url.includes('/biz_1/owned_pixels')) {
+        return response({ data: [{ id: 'business_pixel', name: 'Business Pixel' }] })
+      }
+      return response({ data: [] })
+    })
+    global.fetch = fetchMock as any
+
+    await syncFacebookUserAssets('fb_1', 'TOKEN_A', 'token_1', 'org_1')
+
+    const completedWrite = writes.find(write => write.syncStatus === 'completed')
+    expect(completedWrite.pixels).toEqual([
+      expect.objectContaining({ pixelId: 'business_pixel' }),
+    ])
+    expect(fetchMock.mock.calls.filter(([input]) =>
+      String(input).includes('/biz_1/owned_pixels'),
+    )).toHaveLength(1)
   })
 
   it('coalesces concurrent syncs for the same Facebook token', async () => {

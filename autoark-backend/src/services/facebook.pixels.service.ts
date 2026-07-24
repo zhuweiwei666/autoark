@@ -1,11 +1,16 @@
 import logger from '../utils/logger'
 import FbToken from '../models/FbToken'
+import FacebookUser from '../models/FacebookUser'
 import { tokenPool } from './facebook.token.pool'
-import { getPixels as getPixelsApi, getPixelDetails as getPixelDetailsApi, getPixelEvents as getPixelEventsApi } from '../integration/facebook/pixels.api'
+import { syncFacebookTokenAssets } from './facebookUser.service'
+import {
+  getPixelDetails as getPixelDetailsApi,
+  getPixelEvents as getPixelEventsApi,
+} from '../integration/facebook/pixels.api'
 
 /**
  * Facebook Pixel 服务
- * 通过登录的 Facebook 个人号抓取像素权限信息
+ * Pixel 列表读取授权后的资产快照；详情和事件按需实时查询。
  */
 
 export interface PixelInfo {
@@ -23,6 +28,9 @@ export interface PixelInfo {
   pixel_id?: string
   code?: string
   raw?: any
+  tokenId?: string
+  fbUserId?: string
+  fbUserName?: string
 }
 
 export interface PixelEvent {
@@ -34,68 +42,128 @@ export interface PixelEvent {
   raw?: any
 }
 
+export interface PixelInventoryMeta {
+  source: 'cache'
+  tokenId?: string
+  tokenCount?: number
+  syncStatus?: string
+  lastSyncedAt?: Date | string
+  accountCount: number
+  pixelCount: number
+  pageCount: number
+  catalogCount: number
+  syncStats?: {
+    graphRequestCount?: number
+    graphFailureCount?: number
+    skippedInactiveAccountCount?: number
+    accountAssetMode?: string
+    businessAssetMode?: string
+  }
+}
+
+export interface PixelInventoryResult {
+  pixels: PixelInfo[]
+  meta: PixelInventoryMeta
+}
+
+const toIdString = (value: any) => String(value || '')
+const toPlainSnapshot = (value: any) => value?.toObject?.() || value
+
+const toCachedPixel = (pixel: any, token: any): PixelInfo => ({
+  id: pixel.pixelId || pixel.id,
+  pixel_id: pixel.pixelId || pixel.id,
+  name: pixel.name || 'Unnamed Pixel',
+  owner_business: pixel.ownerBusiness || pixel.owner_business,
+  is_created_by_business:
+    pixel.isCreatedByBusiness ?? pixel.is_created_by_business,
+  creation_time: pixel.creationTime || pixel.creation_time,
+  last_fired_time: pixel.lastFiredTime || pixel.last_fired_time,
+  data_use_setting: pixel.dataUseSetting || pixel.data_use_setting,
+  enable_automatic_matching:
+    pixel.enableAutomaticMatching ?? pixel.enable_automatic_matching,
+  tokenId: toIdString(token._id),
+  fbUserId: token.fbUserId,
+  fbUserName: token.fbUserName,
+})
+
+const inventoryMeta = (
+  snapshot: any,
+  overrides: Partial<PixelInventoryMeta> = {},
+): PixelInventoryMeta => ({
+  source: 'cache',
+  syncStatus: snapshot?.syncStatus || 'pending',
+  lastSyncedAt: snapshot?.lastSyncedAt,
+  accountCount: snapshot?.adAccounts?.length || 0,
+  pixelCount: snapshot?.pixels?.length || 0,
+  pageCount: snapshot?.pages?.length || 0,
+  catalogCount: snapshot?.productCatalogs?.length || 0,
+  syncStats: snapshot?.syncStats,
+  ...overrides,
+})
+
 /**
- * 获取所有 Pixels（通过 Token Pool 自动选择 token）
+ * 默认展示最近授权的活跃 token，避免随机 token 和实时 Meta 请求造成结果漂移。
  */
-export const getAllPixels = async (): Promise<PixelInfo[]> => {
+export const getAllPixels = async (): Promise<PixelInventoryResult> => {
   try {
-    // 使用 Token Pool 获取 token
-    let token = tokenPool.getNextToken()
-    
-    // 如果 Token Pool 没有可用 token，尝试从数据库获取第一个活跃的 token
-    if (!token) {
-      logger.warn('[Pixels] No token from token pool, trying to get from database')
-      const tokenDoc = await FbToken.findOne({ status: 'active' }).sort({ createdAt: 1 }).lean()
-      if (tokenDoc) {
-        token = tokenDoc.token
-        logger.info('[Pixels] Using token from database as fallback')
-      } else {
-        throw new Error('No available token in token pool or database')
-      }
+    const tokenDoc = await FbToken.findOne({ status: 'active' })
+      .sort({ createdAt: -1 })
+      .lean()
+    if (!tokenDoc) {
+      throw new Error('No active Facebook token available')
     }
-
-    logger.info('[Pixels] Fetching pixels using token pool')
-
-    // 使用集成层的 API
-    const pixels = await getPixelsApi(token)
-
-    logger.info(`[Pixels] Fetched ${pixels.length} pixels`)
-    return pixels
+    return getPixelsByToken(toIdString(tokenDoc._id))
   } catch (error: any) {
-    logger.error('[Pixels] Failed to fetch pixels:', error)
+    logger.error('[Pixels] Failed to read pixels:', error)
     throw error
   }
 }
 
 /**
- * 获取指定 Token 的 Pixels
+ * 获取指定 Token 的缓存 Pixels。仅显式 refresh 时强制调用 Meta。
  */
-export const getPixelsByToken = async (tokenId: string): Promise<PixelInfo[]> => {
+export const getPixelsByToken = async (
+  tokenId: string,
+  options: { refresh?: boolean } = {},
+): Promise<PixelInventoryResult> => {
   try {
     const tokenDoc = await FbToken.findById(tokenId)
     if (!tokenDoc) {
       throw new Error(`Token ${tokenId} not found`)
     }
+    if (tokenDoc.status && tokenDoc.status !== 'active') {
+      throw new Error(`Token ${tokenId} is not active`)
+    }
 
-    logger.info(`[Pixels] Fetching pixels for token ${tokenId}`)
+    let snapshot: any
+    if (options.refresh) {
+      snapshot = toPlainSnapshot(
+        await syncFacebookTokenAssets(tokenDoc as any, { force: true }),
+      )
+    } else {
+      snapshot = await FacebookUser.findOne({ tokenId: tokenDoc._id }).lean()
+    }
 
-    // 使用集成层的 API
-    const pixels = await getPixelsApi(tokenDoc.token)
-
-    logger.info(`[Pixels] Fetched ${pixels.length} pixels for token ${tokenId}`)
-    return pixels
+    const pixels = (snapshot?.pixels || []).map((pixel: any) =>
+      toCachedPixel(pixel, tokenDoc),
+    )
+    logger.info(`[Pixels] Read ${pixels.length} cached pixels for token ${tokenId}`)
+    return {
+      pixels,
+      meta: inventoryMeta(snapshot, { tokenId }),
+    }
   } catch (error: any) {
-    logger.error(`[Pixels] Failed to fetch pixels for token ${tokenId}:`, error)
+    logger.error(`[Pixels] Failed to read pixels for token ${tokenId}:`, error)
     throw error
   }
 }
 
 /**
- * 获取 Pixel 详情（包括代码）
+ * 获取 Pixel 详情（包括代码）。这是用户明确点开的单资产实时请求。
  */
 export const getPixelDetails = async (
   pixelId: string,
-  tokenId?: string
+  tokenId?: string,
 ): Promise<PixelInfo & { code?: string }> => {
   try {
     let token: string | undefined
@@ -114,11 +182,7 @@ export const getPixelDetails = async (
     }
 
     logger.info(`[Pixels] Fetching details for pixel ${pixelId}`)
-
-    // 使用集成层的 API
-    const pixel = await getPixelDetailsApi(pixelId, token)
-
-    return pixel
+    return getPixelDetailsApi(pixelId, token)
   } catch (error: any) {
     logger.error(`[Pixels] Failed to fetch pixel details for ${pixelId}:`, error)
     throw error
@@ -126,12 +190,12 @@ export const getPixelDetails = async (
 }
 
 /**
- * 获取 Pixel 事件（最近的事件）
+ * 获取 Pixel 事件（最近的事件）。这是用户明确点开的单资产实时请求。
  */
 export const getPixelEvents = async (
   pixelId: string,
   tokenId?: string,
-  limit: number = 100
+  limit: number = 100,
 ): Promise<PixelEvent[]> => {
   try {
     let token: string | undefined
@@ -150,50 +214,58 @@ export const getPixelEvents = async (
     }
 
     logger.info(`[Pixels] Fetching events for pixel ${pixelId}`)
-
-    // 使用集成层的 API
     const events = await getPixelEventsApi(pixelId, token, limit)
-
     logger.info(`[Pixels] Fetched ${events.length} events for pixel ${pixelId}`)
     return events
   } catch (error: any) {
-    logger.error(`[Pixels] Failed to fetch events for pixel ${pixelId}:`, error)
+    logger.error(`[Pixels] Failed to fetch events for ${pixelId}:`, error)
     throw error
   }
 }
 
 /**
- * 获取所有 Token 的 Pixels（汇总）
+ * 一次数据库查询聚合所有活跃 token 的快照，不做逐 token Meta 请求。
  */
-export const getAllPixelsFromAllTokens = async (): Promise<
-  Array<PixelInfo & { tokenId: string; fbUserId?: string; fbUserName?: string }>
-> => {
+export const getAllPixelsFromAllTokens = async (): Promise<PixelInventoryResult> => {
   try {
-    const tokens = await FbToken.find({ status: 'active' }).lean()
-    const allPixels: Array<PixelInfo & { tokenId: string; fbUserId?: string; fbUserName?: string }> = []
+    const tokens = await FbToken.find({ status: 'active' })
+      .select('_id fbUserId fbUserName')
+      .lean()
+    const tokenIds = tokens.map(token => token._id)
+    const snapshots = tokenIds.length
+      ? await FacebookUser.find({ tokenId: { $in: tokenIds } }).lean()
+      : []
+    const tokenById = new Map(tokens.map(token => [toIdString(token._id), token]))
+    const pixels: PixelInfo[] = []
+    let accountCount = 0
+    let pageCount = 0
+    let catalogCount = 0
 
-    for (const token of tokens) {
-      try {
-        const pixels = await getPixelsByToken(token._id.toString())
-        for (const pixel of pixels) {
-          allPixels.push({
-            ...pixel,
-            tokenId: token._id.toString(),
-            fbUserId: token.fbUserId,
-            fbUserName: token.fbUserName,
-          })
-        }
-      } catch (error: any) {
-        logger.warn(`[Pixels] Failed to fetch pixels for token ${token._id}:`, error)
-        // 继续处理其他 token
+    for (const snapshot of snapshots) {
+      const token = tokenById.get(toIdString(snapshot.tokenId))
+      if (!token) continue
+      accountCount += snapshot.adAccounts?.length || 0
+      pageCount += snapshot.pages?.length || 0
+      catalogCount += snapshot.productCatalogs?.length || 0
+      for (const pixel of snapshot.pixels || []) {
+        pixels.push(toCachedPixel(pixel, token))
       }
     }
 
-    logger.info(`[Pixels] Fetched ${allPixels.length} pixels from ${tokens.length} tokens`)
-    return allPixels
+    logger.info(`[Pixels] Read ${pixels.length} cached pixels from ${tokens.length} tokens`)
+    return {
+      pixels,
+      meta: {
+        source: 'cache',
+        tokenCount: tokens.length,
+        accountCount,
+        pixelCount: pixels.length,
+        pageCount,
+        catalogCount,
+      },
+    }
   } catch (error: any) {
-    logger.error('[Pixels] Failed to fetch pixels from all tokens:', error)
+    logger.error('[Pixels] Failed to read pixels from all tokens:', error)
     throw error
   }
 }
-

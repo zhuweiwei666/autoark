@@ -1,22 +1,44 @@
-import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { getPixels, getPixelDetails, getPixelEvents } from '../services/api'
+import { useEffect, useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { getPixels, getPixelDetails, getPixelEvents, getTokens } from '../services/api'
 import type { FbPixel, PixelDetails, PixelEvent } from '../services/api'
 
 export default function FacebookPixelsPage() {
+  const queryClient = useQueryClient()
   const [selectedPixel, setSelectedPixel] = useState<FbPixel | null>(null)
   const [pixelDetails, setPixelDetails] = useState<PixelDetails | null>(null)
   const [pixelEvents, setPixelEvents] = useState<PixelEvent[]>([])
   const [showDetails, setShowDetails] = useState(false)
   const [showEvents, setShowEvents] = useState(false)
   const [allTokens, setAllTokens] = useState(false)
+  const [selectedTokenId, setSelectedTokenId] = useState('')
+  const [refreshing, setRefreshing] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
-  // 使用 React Query 获取 Pixels（使用全局缓存策略）
+  const { data: tokenData, isLoading: tokensLoading } = useQuery({
+    queryKey: ['tokens', { status: 'active', pageSize: 200 }],
+    queryFn: () => getTokens({ status: 'active', pageSize: 200 }),
+    staleTime: 60_000,
+  })
+  const tokens = tokenData?.data || []
+
+  useEffect(() => {
+    if (tokens.some(token => token.id === selectedTokenId)) return
+    const nextTokenId = tokens[0]?.id || ''
+    if (nextTokenId !== selectedTokenId) setSelectedTokenId(nextTokenId)
+  }, [selectedTokenId, tokens])
+
+  // 列表只读数据库快照；只有用户点击“同步所选 Token”才会请求 Meta。
+  const pixelQueryKey = ['pixels', {
+    allTokens,
+    tokenId: allTokens ? undefined : selectedTokenId,
+  }]
   const { data, isLoading: loading, isFetching, refetch } = useQuery({
-    queryKey: ['pixels', { allTokens }],
-    queryFn: () => getPixels({ allTokens }),
-    placeholderData: (previousData) => previousData,
+    queryKey: pixelQueryKey,
+    queryFn: () => allTokens
+      ? getPixels({ allTokens: true })
+      : getPixels({ tokenId: selectedTokenId }),
+    enabled: allTokens || Boolean(selectedTokenId),
   })
 
   const pixels = data?.data || []
@@ -43,7 +65,24 @@ export default function FacebookPixelsPage() {
     }
   }
 
-  const loadPixels = () => refetch()
+  const loadPixels = async () => {
+    setRefreshing(true)
+    setMessage(null)
+    try {
+      if (allTokens) {
+        await refetch()
+        setMessage({ type: 'success', text: '已读取所有 Token 的最新缓存' })
+      } else if (selectedTokenId) {
+        const refreshed = await getPixels({ tokenId: selectedTokenId, refresh: true })
+        queryClient.setQueryData(pixelQueryKey, refreshed)
+        setMessage({ type: 'success', text: '所选 Token 的账户、像素、Page 和 Catalog 已同步' })
+      }
+    } catch (error: any) {
+      setMessage({ type: 'error', text: `同步失败: ${error.message}` })
+    } finally {
+      setRefreshing(false)
+    }
+  }
 
   const formatDate = (dateString?: string) => {
     if (!dateString) return '-'
@@ -53,12 +92,17 @@ export default function FacebookPixelsPage() {
       return dateString
     }
   }
+  const refreshLabel = refreshing
+    ? '同步中...'
+    : allTokens
+      ? '刷新缓存'
+      : '同步所选 Token'
 
   return (
     <div className="min-h-screen bg-white text-slate-900 p-6 relative overflow-hidden">
       <div className="relative z-10 max-w-7xl mx-auto space-y-6">
         {/* 头部 */}
-        <header className="flex items-center justify-between bg-white rounded-3xl p-6 shadow-lg shadow-black/5 border border-slate-200">
+        <header className="flex flex-col gap-5 xl:flex-row xl:items-center xl:justify-between bg-white rounded-3xl p-6 shadow-lg shadow-black/5 border border-slate-200">
           <div className="flex items-center gap-4">
             <h1 className="text-3xl font-bold text-slate-900 tracking-tight">像素管理</h1>
             <span className="bg-slate-100 border border-slate-200 px-4 py-1.5 rounded-full text-xs font-semibold text-slate-700">
@@ -74,7 +118,21 @@ export default function FacebookPixelsPage() {
               </span>
             )}
           </div>
-          <div className="flex gap-3">
+          <div className="flex w-full flex-col gap-3 sm:flex-row xl:w-auto">
+            <select
+              value={selectedTokenId}
+              onChange={(event) => setSelectedTokenId(event.target.value)}
+              disabled={allTokens || tokensLoading}
+              aria-label="选择 Facebook Token"
+              className="min-w-64 rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700 disabled:bg-slate-100 disabled:text-slate-400"
+            >
+              {tokens.length === 0 && <option value="">暂无活跃 Token</option>}
+              {tokens.map((token) => (
+                <option key={token.id} value={token.id}>
+                  {token.optimizer || token.fbUserName || token.fbUserId || token.id}
+                </option>
+              ))}
+            </select>
             <label className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-300 rounded-2xl text-sm font-semibold text-slate-700 cursor-pointer hover:bg-slate-50 transition-all">
               <input
                 type="checkbox"
@@ -86,13 +144,13 @@ export default function FacebookPixelsPage() {
             </label>
             <button
               onClick={loadPixels}
-              disabled={loading}
+              disabled={loading || refreshing || (!allTokens && !selectedTokenId)}
               className={`px-6 py-3 bg-blue-600 hover:bg-blue-700 rounded-2xl text-sm font-semibold text-white shadow-md hover:shadow-lg transition-all duration-200 flex items-center gap-2 active:scale-95 ${
-                loading ? 'opacity-70 cursor-not-allowed' : ''
+                loading || refreshing ? 'opacity-70 cursor-not-allowed' : ''
               }`}
             >
               <svg
-                className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`}
+                className={`w-5 h-5 ${loading || refreshing ? 'animate-spin' : ''}`}
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
@@ -104,7 +162,7 @@ export default function FacebookPixelsPage() {
                   d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
                 />
               </svg>
-              {loading ? '加载中...' : '刷新'}
+              {refreshLabel}
             </button>
           </div>
         </header>
@@ -128,6 +186,23 @@ export default function FacebookPixelsPage() {
               </svg>
             </button>
           </div>
+        )}
+
+        {data?.meta && (
+          <section className="grid grid-cols-2 gap-3 md:grid-cols-5">
+            {[
+              ['广告账户', data.meta.accountCount],
+              ['Pixels', data.meta.pixelCount],
+              ['Pages', data.meta.pageCount],
+              ['Catalogs', data.meta.catalogCount],
+              ['本次 Graph 请求', data.meta.syncStats?.graphRequestCount ?? '-'],
+            ].map(([label, value]) => (
+              <div key={label} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                <div className="text-xs font-medium text-slate-500">{label}</div>
+                <div className="mt-1 text-xl font-bold text-slate-900">{value}</div>
+              </div>
+            ))}
+          </section>
         )}
 
         {/* Pixel 列表 */}
@@ -357,4 +432,3 @@ export default function FacebookPixelsPage() {
     </div>
   )
 }
-

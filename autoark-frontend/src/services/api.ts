@@ -549,12 +549,18 @@ export async function getTokens(params?: {
   startDate?: string
   endDate?: string
   status?: string
+  page?: number
+  pageSize?: number
+  limit?: number
 }): Promise<TokenListResponse> {
   const queryParams = new URLSearchParams()
   if (params?.optimizer) queryParams.append('optimizer', params.optimizer)
   if (params?.startDate) queryParams.append('startDate', params.startDate)
   if (params?.endDate) queryParams.append('endDate', params.endDate)
   if (params?.status) queryParams.append('status', params.status)
+  if (params?.page) queryParams.append('page', params.page.toString())
+  if (params?.pageSize) queryParams.append('pageSize', params.pageSize.toString())
+  if (params?.limit) queryParams.append('limit', params.limit.toString())
 
   const url = `${API_BASE_URL}/api/fb-token${
     queryParams.toString() ? `?${queryParams.toString()}` : ''
@@ -1546,14 +1552,40 @@ export interface PixelEvent {
   custom_data?: any
 }
 
+export interface PixelInventoryMeta {
+  source: 'cache'
+  tokenId?: string
+  tokenCount?: number
+  syncStatus?: string
+  lastSyncedAt?: string
+  accountCount: number
+  pixelCount: number
+  pageCount: number
+  catalogCount: number
+  syncStats?: {
+    graphRequestCount?: number
+    graphFailureCount?: number
+    skippedInactiveAccountCount?: number
+    accountAssetMode?: string
+    businessAssetMode?: string
+  }
+}
+
 // 获取 Pixels 列表
 export async function getPixels(params?: {
   tokenId?: string
   allTokens?: boolean
-}): Promise<{ success: boolean; data: FbPixel[]; count: number }> {
+  refresh?: boolean
+}): Promise<{
+  success: boolean
+  data: FbPixel[]
+  count: number
+  meta: PixelInventoryMeta
+}> {
   const queryParams = new URLSearchParams()
   if (params?.tokenId) queryParams.append('tokenId', params.tokenId)
   if (params?.allTokens) queryParams.append('allTokens', 'true')
+  if (params?.refresh) queryParams.append('refresh', 'true')
 
   const url = `${API_BASE_URL}/api/facebook/pixels${
     queryParams.toString() ? `?${queryParams.toString()}` : ''

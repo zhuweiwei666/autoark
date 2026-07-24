@@ -2170,6 +2170,7 @@ export const handleAuthCallback = async (req: Request, res: Response) => {
           })
         }
       },
+      { force: true },
     ).catch(async (err: any) => {
       logger.error('[BulkAd OAuth] Failed to sync Facebook user assets:', err)
       await writeBulkAdAudit(req, {
@@ -2765,11 +2766,9 @@ export const resyncFacebookAssets = async (req: Request, res: Response) => {
     }
     
     // 异步执行同步
-    facebookUserService.syncFacebookUserAssets(
-      fbToken.fbUserId, 
-      fbToken.token,
-      fbToken._id.toString(),
-      fbToken.organizationId,
+    facebookUserService.syncFacebookTokenAssets(
+      fbToken,
+      { force: true },
     ).catch(async (err: any) => {
       logger.error('[BulkAd] Resync failed:', err)
       await writeBulkAdAudit(req, {

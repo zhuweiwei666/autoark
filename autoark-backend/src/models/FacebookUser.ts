@@ -8,6 +8,15 @@ import { sanitizeFacebookPages } from '../utils/facebookAssetSanitizer'
 const pixelSchema = new mongoose.Schema({
   pixelId: { type: String, required: true },
   name: { type: String, required: true },
+  ownerBusiness: {
+    id: { type: String },
+    name: { type: String },
+  },
+  isCreatedByBusiness: { type: Boolean },
+  creationTime: { type: String },
+  lastFiredTime: { type: String },
+  dataUseSetting: { type: String },
+  enableAutomaticMatching: { type: Boolean },
   // 该 Pixel 可用于哪些账户
   accounts: [{
     accountId: { type: String, required: true },
@@ -76,6 +85,19 @@ const facebookUserSchema = new mongoose.Schema(
     syncStartedAt: { type: Date },
     syncLeaseExpiresAt: { type: Date },
     syncError: { type: String },
+    syncStats: {
+      graphRequestCount: { type: Number, default: 0 },
+      graphFailureCount: { type: Number, default: 0 },
+      skippedInactiveAccountCount: { type: Number, default: 0 },
+      accountAssetMode: {
+        type: String,
+        enum: ['field_expansion', 'hybrid_fallback'],
+      },
+      businessAssetMode: {
+        type: String,
+        enum: ['field_expansion', 'hybrid_fallback'],
+      },
+    },
   },
   {
     timestamps: true,
