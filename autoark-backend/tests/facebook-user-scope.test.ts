@@ -245,6 +245,7 @@ describe('facebook user asset cache scoping', () => {
     )
 
     const completedWrite = writes.find((write) => write.syncStatus === 'completed')
+    expect(completedWrite.tokenId).toBe('665000000000000000000901')
     expect(completedWrite.pixels).toEqual(expect.arrayContaining([
       expect.objectContaining({
         pixelId: 'token_pixel',
@@ -264,6 +265,7 @@ describe('facebook user asset cache scoping', () => {
     expect(completedWrite.pages).toEqual(expect.arrayContaining([
       expect.objectContaining({
         pageId: 'user_page',
+        accessToken: 'PAGE_TOKEN',
         accounts: [],
       }),
       expect.objectContaining({

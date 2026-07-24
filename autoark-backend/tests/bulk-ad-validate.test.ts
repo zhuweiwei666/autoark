@@ -1,10 +1,25 @@
+jest.mock('../src/config/redis', () => ({
+  getRedisClient: jest.fn(() => ({})),
+}))
+
+jest.mock('../src/queue/bulkAd.queue', () => ({
+  addBulkAdJobsBatch: jest.fn().mockResolvedValue(undefined),
+}))
+
+jest.mock('../src/services/commercial.service', () => ({
+  assertBulkAdPublishAllowed: jest.fn().mockResolvedValue(undefined),
+}))
+
 import AdDraft from '../src/models/AdDraft'
+import AdTask from '../src/models/AdTask'
 import CopywritingPackage from '../src/models/CopywritingPackage'
 import CreativeGroup from '../src/models/CreativeGroup'
 import FacebookUser from '../src/models/FacebookUser'
 import FbToken from '../src/models/FbToken'
 import TargetingPackage from '../src/models/TargetingPackage'
 import Account from '../src/models/Account'
+import User from '../src/models/User'
+import { addBulkAdJobsBatch } from '../src/queue/bulkAd.queue'
 import { publishDraft, validateDraft } from '../src/services/bulkAd.service'
 
 const draftId = '665000000000000000000010'
@@ -12,6 +27,7 @@ const creativeGroupId = '665000000000000000000011'
 const copywritingPackageId = '665000000000000000000012'
 const targetingPackageId = '665000000000000000000013'
 const tokenId = '665000000000000000000014'
+const secondTokenId = '665000000000000000000015'
 
 const queryWithLean = (value: any) => ({
   lean: jest.fn().mockResolvedValue(value),
@@ -38,6 +54,7 @@ const baseDraft = (overrides: any = {}) => ({
   _id: draftId,
   organizationId: '665000000000000000000001',
   createdBy: '665000000000000000000002',
+  facebookTokenId: tokenId,
   accounts: [{
     accountId: '123',
     accountName: 'Account 123',
@@ -68,6 +85,13 @@ const baseDraft = (overrides: any = {}) => ({
 })
 
 const mockValidPackages = () => {
+  if (!jest.isMockFunction(Account.findOne)) {
+    jest.spyOn(Account, 'findOne').mockReturnValue(accountQuery({
+      _id: '665000000000000000000016',
+      accountId: '123',
+      accountStatus: 1,
+    }) as any)
+  }
   jest.spyOn(TargetingPackage, 'findOne').mockResolvedValue({
     _id: targetingPackageId,
     name: 'US Broad',
@@ -125,6 +149,7 @@ describe('bulk ad draft validation preflight', () => {
     }]) as any)
     jest.spyOn(FacebookUser, 'find').mockReturnValue(queryWithLean([{
       fbUserId: 'fb_1',
+      tokenId,
       syncStatus: 'completed',
       adAccounts: [{ accountId: 'act_123', status: 1 }],
       pages: [{ pageId: 'page_1', accounts: [{ accountId: 'act_123' }] }],
@@ -136,6 +161,401 @@ describe('bulk ad draft validation preflight', () => {
 
     expect(validation.isValid).toBe(true)
     expect(validation.errors).toHaveLength(0)
+    expect(FbToken.find).toHaveBeenCalledWith({
+      _id: tokenId,
+      organizationId: draft.organizationId,
+      status: 'active',
+      userId: draft.createdBy,
+    })
+  })
+
+  it('pins a legacy draft to the one token that owns all selected assets', async () => {
+    const draft = baseDraft({ facebookTokenId: undefined })
+    jest.spyOn(AdDraft, 'findOne').mockResolvedValue(draft as any)
+    jest.spyOn(FbToken, 'find').mockReturnValue(tokenQuery([{
+      _id: tokenId,
+      fbUserId: 'fb_1',
+    }]) as any)
+    jest.spyOn(FacebookUser, 'find').mockReturnValue(queryWithLean([{
+      fbUserId: 'fb_1',
+      tokenId,
+      syncStatus: 'completed',
+      adAccounts: [{ accountId: 'act_123', status: 1 }],
+      pages: [{ pageId: 'page_1', accounts: [{ accountId: 'act_123' }] }],
+      pixels: [{ pixelId: 'pixel_1', accounts: [{ accountId: 'act_123' }] }],
+    }]) as any)
+    mockValidPackages()
+
+    const validation = await validateDraft(draftId, {})
+
+    expect(validation.isValid).toBe(true)
+    expect(draft.facebookTokenId).toBe(tokenId)
+    expect(draft.save).toHaveBeenCalled()
+  })
+
+  it('pins a legacy draft to the only fully compatible token among multiple active tokens', async () => {
+    const draft = baseDraft({ facebookTokenId: undefined })
+    jest.spyOn(AdDraft, 'findOne').mockResolvedValue(draft as any)
+    jest.spyOn(FbToken, 'find').mockReturnValue(tokenQuery([
+      { _id: tokenId, fbUserId: 'fb_1' },
+      { _id: secondTokenId, fbUserId: 'fb_2' },
+    ]) as any)
+    jest.spyOn(FacebookUser, 'find').mockReturnValue(queryWithLean([
+      {
+        fbUserId: 'fb_1',
+        tokenId,
+        syncStatus: 'completed',
+        adAccounts: [{ accountId: 'act_123', status: 1 }],
+        pages: [],
+        pixels: [{ pixelId: 'pixel_1', accounts: [{ accountId: 'act_123' }] }],
+      },
+      {
+        fbUserId: 'fb_2',
+        tokenId: secondTokenId,
+        syncStatus: 'completed',
+        adAccounts: [{ accountId: 'act_123', status: 1 }],
+        pages: [{ pageId: 'page_1', accounts: [{ accountId: 'act_123' }] }],
+        pixels: [{ pixelId: 'pixel_1', accounts: [{ accountId: 'act_123' }] }],
+      },
+    ]) as any)
+    mockValidPackages()
+
+    const validation = await validateDraft(draftId, {})
+
+    expect(validation.isValid).toBe(true)
+    expect(draft.facebookTokenId).toBe(secondTokenId)
+    expect(draft.save).toHaveBeenCalled()
+  })
+
+  it('rejects a legacy draft whose account, Page, and Pixel are split across tokens', async () => {
+    const draft = baseDraft({ facebookTokenId: undefined })
+    jest.spyOn(AdDraft, 'findOne').mockResolvedValue(draft as any)
+    jest.spyOn(FbToken, 'find').mockReturnValue(tokenQuery([
+      { _id: tokenId, fbUserId: 'fb_1' },
+      { _id: secondTokenId, fbUserId: 'fb_2' },
+    ]) as any)
+    jest.spyOn(FacebookUser, 'find').mockReturnValue(queryWithLean([
+      {
+        fbUserId: 'fb_1',
+        tokenId,
+        syncStatus: 'completed',
+        adAccounts: [{ accountId: 'act_123', status: 1 }],
+        pages: [{ pageId: 'page_1', accounts: [{ accountId: 'act_123' }] }],
+        pixels: [],
+      },
+      {
+        fbUserId: 'fb_2',
+        tokenId: secondTokenId,
+        syncStatus: 'completed',
+        adAccounts: [{ accountId: 'act_123', status: 1 }],
+        pages: [],
+        pixels: [{ pixelId: 'pixel_1', accounts: [{ accountId: 'act_123' }] }],
+      },
+    ]) as any)
+    mockValidPackages()
+
+    const validation = await validateDraft(draftId, {})
+
+    expect(validation.isValid).toBe(false)
+    expect(validation.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        field: 'facebookAuthorization',
+        message: expect.stringContaining('不属于同一个 Facebook 个人号授权'),
+      }),
+    ]))
+    expect(draft.facebookTokenId).toBeUndefined()
+    expect(draft.save).toHaveBeenCalled()
+  })
+
+  it('does not pin an inferred token when the legacy draft still fails validation', async () => {
+    const draft = baseDraft({
+      facebookTokenId: undefined,
+      accounts: [{
+        accountId: '123',
+        accountName: 'Account 123',
+        pixelId: 'pixel_1',
+        conversionEvent: 'PURCHASE',
+      }],
+    })
+    jest.spyOn(AdDraft, 'findOne').mockResolvedValue(draft as any)
+    jest.spyOn(FbToken, 'find').mockReturnValue(tokenQuery([
+      { _id: tokenId, fbUserId: 'fb_1' },
+      { _id: secondTokenId, fbUserId: 'fb_2' },
+    ]) as any)
+    jest.spyOn(FacebookUser, 'find').mockReturnValue(queryWithLean([
+      {
+        fbUserId: 'fb_1',
+        tokenId,
+        syncStatus: 'completed',
+        adAccounts: [{ accountId: 'act_123', status: 1 }],
+        pages: [],
+        pixels: [{ pixelId: 'pixel_1', accounts: [{ accountId: 'act_123' }] }],
+      },
+      {
+        fbUserId: 'fb_2',
+        tokenId: secondTokenId,
+        syncStatus: 'completed',
+        adAccounts: [{ accountId: 'act_123', status: 1 }],
+        pages: [],
+        pixels: [{ pixelId: 'pixel_1', accounts: [{ accountId: 'act_123' }] }],
+      },
+    ]) as any)
+    mockValidPackages()
+
+    const validation = await validateDraft(draftId, {})
+
+    expect(validation.isValid).toBe(false)
+    expect(validation.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({ field: 'accounts.123.pageId' }),
+    ]))
+    expect(draft.facebookTokenId).toBeUndefined()
+    expect(draft.save).toHaveBeenCalled()
+  })
+
+  it('passes when one completed Facebook token can access both the account and a user-managed page', async () => {
+    const draft = baseDraft()
+    jest.spyOn(AdDraft, 'findOne').mockResolvedValue(draft as any)
+    jest.spyOn(FbToken, 'find').mockReturnValue(
+      tokenQuery([
+        {
+          _id: tokenId,
+          fbUserId: 'fb_1',
+        },
+      ]) as any,
+    )
+    jest.spyOn(FacebookUser, 'find').mockReturnValue(
+      queryWithLean([
+        {
+          fbUserId: 'fb_1',
+          tokenId,
+          syncStatus: 'completed',
+          adAccounts: [{ accountId: 'act_123', status: 1 }],
+          pages: [
+            { pageId: 'page_1', accessToken: 'PAGE_TOKEN', accounts: [] },
+          ],
+          pixels: [
+            { pixelId: 'pixel_1', accounts: [{ accountId: 'act_123' }] },
+          ],
+        },
+      ]) as any,
+    )
+    mockValidPackages()
+
+    const validation = await validateDraft(draftId, {})
+
+    expect(validation.isValid).toBe(true)
+    expect(validation.errors).toHaveLength(0)
+  })
+
+  it('does not combine a user-managed page from one token with an account from another token', async () => {
+    const draft = baseDraft()
+    jest.spyOn(AdDraft, 'findOne').mockResolvedValue(draft as any)
+    jest.spyOn(FbToken, 'find').mockReturnValue(
+      tokenQuery([
+        { _id: tokenId, fbUserId: 'fb_1' },
+        { _id: secondTokenId, fbUserId: 'fb_2' },
+      ]) as any,
+    )
+    jest.spyOn(FacebookUser, 'find').mockReturnValue(
+      queryWithLean([
+        {
+          fbUserId: 'fb_1',
+          tokenId,
+          syncStatus: 'completed',
+          adAccounts: [{ accountId: 'act_123', status: 1 }],
+          pages: [],
+          pixels: [
+            { pixelId: 'pixel_1', accounts: [{ accountId: 'act_123' }] },
+          ],
+        },
+        {
+          fbUserId: 'fb_2',
+          tokenId: secondTokenId,
+          syncStatus: 'completed',
+          adAccounts: [{ accountId: 'act_999', status: 1 }],
+          pages: [
+            { pageId: 'page_1', accessToken: 'PAGE_TOKEN', accounts: [] },
+          ],
+          pixels: [],
+        },
+      ]) as any,
+    )
+    mockValidPackages()
+
+    const validation = await validateDraft(draftId, {})
+
+    expect(validation.isValid).toBe(false)
+    expect(validation.errors.map((error: any) => error.field)).toContain(
+      'accounts.123.pageId',
+    )
+  })
+
+  it('does not use a completed snapshot outside the draft active token scope', async () => {
+    const draft = baseDraft({ organizationId: undefined })
+    jest.spyOn(AdDraft, 'findOne').mockResolvedValue(draft as any)
+    jest.spyOn(FbToken, 'find').mockReturnValue(
+      tokenQuery([
+        {
+          _id: tokenId,
+          fbUserId: 'fb_1',
+        },
+      ]) as any,
+    )
+    jest.spyOn(FacebookUser, 'find').mockReturnValue(
+      queryWithLean([
+        {
+          fbUserId: 'fb_1',
+          tokenId,
+          syncStatus: 'completed',
+          adAccounts: [{ accountId: 'act_123', status: 1 }],
+          pages: [],
+          pixels: [
+            { pixelId: 'pixel_1', accounts: [{ accountId: 'act_123' }] },
+          ],
+        },
+        {
+          fbUserId: 'fb_1',
+          tokenId: secondTokenId,
+          syncStatus: 'completed',
+          adAccounts: [{ accountId: 'act_123', status: 1 }],
+          pages: [
+            { pageId: 'page_1', accessToken: 'PAGE_TOKEN', accounts: [] },
+          ],
+          pixels: [],
+        },
+      ]) as any,
+    )
+    mockValidPackages()
+
+    const validation = await validateDraft(draftId, {})
+
+    expect(validation.isValid).toBe(false)
+    expect(validation.errors.map((error: any) => error.field)).toContain(
+      'accounts.123.pageId',
+    )
+  })
+
+  it('rejects ambiguous duplicate cache rows instead of unioning their permissions', async () => {
+    const draft = baseDraft()
+    jest.spyOn(AdDraft, 'findOne').mockResolvedValue(draft as any)
+    jest.spyOn(FbToken, 'find').mockReturnValue(tokenQuery([{
+      _id: tokenId,
+      fbUserId: 'fb_1',
+      organizationId: draft.organizationId,
+    }]) as any)
+    const facebookUserFind = jest.spyOn(FacebookUser, 'find').mockReturnValue(queryWithLean([
+      {
+        fbUserId: 'fb_1',
+        tokenId,
+        organizationId: draft.organizationId,
+        syncStatus: 'completed',
+        adAccounts: [{ accountId: 'act_123', status: 1 }],
+        pages: [{ pageId: 'page_1', accounts: [{ accountId: 'act_123' }] }],
+        pixels: [],
+      },
+      {
+        fbUserId: 'fb_1',
+        tokenId,
+        organizationId: draft.organizationId,
+        syncStatus: 'completed',
+        adAccounts: [{ accountId: 'act_123', status: 1 }],
+        pages: [],
+        pixels: [{ pixelId: 'pixel_1', accounts: [{ accountId: 'act_123' }] }],
+      },
+    ]) as any)
+    jest.spyOn(Account, 'findOne').mockReturnValue(accountQuery(null) as any)
+    mockValidPackages()
+
+    const validation = await validateDraft(draftId, {})
+
+    expect(facebookUserFind).toHaveBeenCalledWith({
+      tokenId,
+      organizationId: draft.organizationId,
+      fbUserId: 'fb_1',
+    })
+    expect(validation.isValid).toBe(false)
+    expect(validation.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({ field: 'facebookAssets' }),
+      expect.objectContaining({ field: 'accounts.123.access' }),
+    ]))
+  })
+
+  it('does not use a user-managed page from a snapshot whose sync is incomplete', async () => {
+    const draft = baseDraft()
+    jest.spyOn(AdDraft, 'findOne').mockResolvedValue(draft as any)
+    jest.spyOn(FbToken, 'find').mockReturnValue(
+      tokenQuery([
+        { _id: tokenId, fbUserId: 'fb_1' },
+        { _id: secondTokenId, fbUserId: 'fb_2' },
+      ]) as any,
+    )
+    jest.spyOn(FacebookUser, 'find').mockReturnValue(
+      queryWithLean([
+        {
+          fbUserId: 'fb_1',
+          tokenId,
+          syncStatus: 'completed',
+          adAccounts: [{ accountId: 'act_999', status: 1 }],
+          pages: [],
+          pixels: [],
+        },
+        {
+          fbUserId: 'fb_2',
+          tokenId: secondTokenId,
+          syncStatus: 'syncing',
+          adAccounts: [{ accountId: 'act_123', status: 1 }],
+          pages: [
+            { pageId: 'page_1', accessToken: 'PAGE_TOKEN', accounts: [] },
+          ],
+          pixels: [
+            { pixelId: 'pixel_1', accounts: [{ accountId: 'act_123' }] },
+          ],
+        },
+      ]) as any,
+    )
+    mockValidPackages()
+
+    const validation = await validateDraft(draftId, {})
+
+    expect(validation.isValid).toBe(false)
+    expect(validation.errors.map((error: any) => error.field)).toContain(
+      'accounts.123.pageId',
+    )
+  })
+
+  it('does not treat a blank page access token as user-managed Page permission', async () => {
+    const draft = baseDraft()
+    jest.spyOn(AdDraft, 'findOne').mockResolvedValue(draft as any)
+    jest.spyOn(FbToken, 'find').mockReturnValue(
+      tokenQuery([
+        {
+          _id: tokenId,
+          fbUserId: 'fb_1',
+        },
+      ]) as any,
+    )
+    jest.spyOn(FacebookUser, 'find').mockReturnValue(
+      queryWithLean([
+        {
+          fbUserId: 'fb_1',
+          tokenId,
+          syncStatus: 'completed',
+          adAccounts: [{ accountId: 'act_123', status: 1 }],
+          pages: [{ pageId: 'page_1', accessToken: '   ', accounts: [] }],
+          pixels: [
+            { pixelId: 'pixel_1', accounts: [{ accountId: 'act_123' }] },
+          ],
+        },
+      ]) as any,
+    )
+    mockValidPackages()
+
+    const validation = await validateDraft(draftId, {})
+
+    expect(validation.isValid).toBe(false)
+    expect(validation.errors.map((error: any) => error.field)).toContain(
+      'accounts.123.pageId',
+    )
   })
 
   it('blocks publish when attribution windows are outside supported values', async () => {
@@ -158,6 +578,7 @@ describe('bulk ad draft validation preflight', () => {
     }]) as any)
     jest.spyOn(FacebookUser, 'find').mockReturnValue(queryWithLean([{
       fbUserId: 'fb_1',
+      tokenId,
       syncStatus: 'completed',
       adAccounts: [{ accountId: 'act_123', status: 1 }],
       pages: [{ pageId: 'page_1', accounts: [{ accountId: 'act_123' }] }],
@@ -191,6 +612,7 @@ describe('bulk ad draft validation preflight', () => {
     }]) as any)
     jest.spyOn(FacebookUser, 'find').mockReturnValue(queryWithLean([{
       fbUserId: 'fb_1',
+      tokenId,
       syncStatus: 'completed',
       adAccounts: [{ accountId: 'act_123', status: 1 }],
       pages: [{ pageId: 'page_1', accounts: [{ accountId: 'act_123' }] }],
@@ -219,6 +641,7 @@ describe('bulk ad draft validation preflight', () => {
     }]) as any)
     jest.spyOn(FacebookUser, 'find').mockReturnValue(queryWithLean([{
       fbUserId: 'fb_1',
+      tokenId,
       syncStatus: 'completed',
       adAccounts: [{ accountId: '999', status: 1 }],
       pages: [{ pageId: 'page_1', accounts: [{ accountId: '123' }] }],
@@ -242,6 +665,7 @@ describe('bulk ad draft validation preflight', () => {
     }]) as any)
     jest.spyOn(FacebookUser, 'find').mockReturnValue(queryWithLean([{
       fbUserId: 'fb_1',
+      tokenId,
       syncStatus: 'syncing',
       adAccounts: [],
       pages: [],
@@ -259,6 +683,43 @@ describe('bulk ad draft validation preflight', () => {
       $and: [
         { channel: 'facebook', accountId: { $in: ['123', 'act_123'] } },
         { organizationId: '665000000000000000000001' },
+      ],
+    })
+  })
+
+  it('blocks a Meta-accessible account that belongs to another AutoArk organization', async () => {
+    const draft = baseDraft()
+    jest.spyOn(AdDraft, 'findOne').mockResolvedValue(draft as any)
+    jest.spyOn(FbToken, 'find').mockReturnValue(tokenQuery([{
+      _id: tokenId,
+      fbUserId: 'fb_1',
+      organizationId: draft.organizationId,
+    }]) as any)
+    jest.spyOn(FacebookUser, 'find').mockReturnValue(queryWithLean([{
+      fbUserId: 'fb_1',
+      tokenId,
+      organizationId: draft.organizationId,
+      syncStatus: 'completed',
+      adAccounts: [{ accountId: 'act_123', status: 1 }],
+      pages: [{ pageId: 'page_1', accounts: [{ accountId: 'act_123' }] }],
+      pixels: [{ pixelId: 'pixel_1', accounts: [{ accountId: 'act_123' }] }],
+    }]) as any)
+    jest.spyOn(Account, 'findOne').mockReturnValue(accountQuery(null) as any)
+    mockValidPackages()
+
+    const validation = await validateDraft(draftId, {})
+
+    expect(validation.isValid).toBe(false)
+    expect(validation.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        field: 'accounts.123.access',
+        message: expect.stringContaining('未分配到当前组织'),
+      }),
+    ]))
+    expect(Account.findOne).toHaveBeenCalledWith({
+      $and: [
+        { channel: 'facebook', accountId: { $in: ['123', 'act_123'] } },
+        { organizationId: draft.organizationId },
       ],
     })
   })
@@ -293,5 +754,47 @@ describe('bulk ad draft validation preflight', () => {
           ]),
         }),
       })
+  })
+
+  it('copies the token pinned during legacy draft validation into the published task snapshot', async () => {
+    const draft = baseDraft({ facebookTokenId: undefined })
+    jest.spyOn(AdDraft, 'findOne')
+      .mockResolvedValueOnce(draft as any)
+      .mockReturnValueOnce(populatedDraftQuery(draft) as any)
+    jest.spyOn(FbToken, 'find').mockReturnValue(tokenQuery([{
+      _id: secondTokenId,
+      fbUserId: 'fb_2',
+    }]) as any)
+    jest.spyOn(FacebookUser, 'find').mockReturnValue(queryWithLean([{
+      fbUserId: 'fb_2',
+      tokenId: secondTokenId,
+      syncStatus: 'completed',
+      adAccounts: [{ accountId: 'act_123', status: 1 }],
+      pages: [{ pageId: 'page_1', accounts: [{ accountId: 'act_123' }] }],
+      pixels: [{ pixelId: 'pixel_1', accounts: [{ accountId: 'act_123' }] }],
+    }]) as any)
+    jest.spyOn(CopywritingPackage, 'findOne').mockResolvedValue({
+      name: 'Copy Package',
+    } as any)
+    jest.spyOn(User, 'findById').mockReturnValue(queryWithLean({
+      username: 'admin',
+    }) as any)
+    const taskSave = jest.spyOn(AdTask.prototype, 'save').mockImplementation(async function(this: any) {
+      return this
+    })
+    mockValidPackages()
+
+    const publisherUserId = '665000000000000000000099'
+    const task: any = await publishDraft(draftId, publisherUserId, {})
+
+    expect(draft.facebookTokenId).toBe(secondTokenId)
+    expect(task.configSnapshot.facebookTokenId.toString()).toBe(secondTokenId)
+    expect(task.configSnapshot.facebookTokenOwnerUserId.toString()).toBe(draft.createdBy)
+    expect(task.createdBy.toString()).toBe(publisherUserId)
+    expect(taskSave).toHaveBeenCalled()
+    expect(addBulkAdJobsBatch).toHaveBeenCalledWith(
+      task._id.toString(),
+      ['123'],
+    )
   })
 })

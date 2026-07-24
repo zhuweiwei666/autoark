@@ -211,57 +211,110 @@ const diagnoseFacebookStepError = (step: string, errorPayload: any, fallbackMess
   { entityType: FACEBOOK_STEP_ENTITY_TYPES[step] || 'general' },
 )
 
+const emptyFacebookAssetSnapshot = (tokenCount = 0, selectedTokenId?: string) => ({
+  tokenCount,
+  selectedTokenId,
+  hasCachedAssets: false,
+  pageAccountPairs: new Set<string>(),
+  pixelAccountPairs: new Set<string>(),
+  adAccountStatuses: new Map<string, number>(),
+})
+
 const buildFacebookAssetSnapshot = async (draft: any) => {
   const tokenAccessFilter = draft.organizationId
-    ? { organizationId: draft.organizationId }
+    ? {
+        organizationId: draft.organizationId,
+        ...(draft.createdBy ? { userId: draft.createdBy } : {}),
+      }
     : draft.createdBy
       ? { userId: draft.createdBy }
       : null
 
   if (!tokenAccessFilter) {
-    return {
-      tokenCount: 0,
-      hasCachedAssets: false,
-      pageAccountPairs: new Set<string>(),
-      pixelAccountPairs: new Set<string>(),
-      adAccountStatuses: new Map<string, number>(),
-    }
+    return emptyFacebookAssetSnapshot()
   }
 
-  const tokens: any[] = await FbToken.find({ status: 'active', ...tokenAccessFilter })
-    .select('_id fbUserId')
+  const draftTokenId = draft.facebookTokenId?.toString()
+  const tokens: any[] = await FbToken.find({
+    status: 'active',
+    ...tokenAccessFilter,
+    ...(draftTokenId ? { _id: draftTokenId } : {}),
+  })
+    .select('_id fbUserId organizationId')
     .lean()
 
   if (tokens.length === 0) {
-    return {
-      tokenCount: 0,
-      hasCachedAssets: false,
-      pageAccountPairs: new Set<string>(),
-      pixelAccountPairs: new Set<string>(),
-      adAccountStatuses: new Map<string, number>(),
-    }
+    return emptyFacebookAssetSnapshot(0, draftTokenId)
   }
 
-  const tokenIds = tokens.map(token => token._id).filter(Boolean)
-  const fbUserIds = tokens.map(token => token.fbUserId).filter(Boolean)
-  const userFilters: any[] = [{ tokenId: { $in: tokenIds } }]
-  if (fbUserIds.length > 0) {
-    userFilters.push({
-      fbUserId: { $in: fbUserIds },
-      ...(draft.organizationId && { organizationId: draft.organizationId }),
-    })
+  const tokenIds = tokens.map((token) => token._id).filter(Boolean)
+  const activeTokenIds = new Set(tokenIds.map((tokenId) => String(tokenId)))
+  const tokenIdentityById = new Map(
+    tokens.map(token => [String(token._id), token.fbUserId ? String(token.fbUserId) : undefined]),
+  )
+  const tokenSnapshotFilters = tokens.map(token => ({
+    tokenId: token._id,
+    organizationId: token.organizationId || null,
+    ...(token.fbUserId ? { fbUserId: token.fbUserId } : {}),
+  }))
+  const users: any[] = await FacebookUser.find(
+    tokenSnapshotFilters.length === 1
+      ? tokenSnapshotFilters[0]
+      : { $or: tokenSnapshotFilters },
+  ).lean()
+
+  const requestedPageAccounts = new Map<string, Set<string>>()
+
+  for (const account of draft.accounts || []) {
+    const accountId = normalizeForStorage(account.accountId)
+    if (!account.pageId || !accountId) continue
+
+    const pageId = String(account.pageId)
+    const accountIds = requestedPageAccounts.get(pageId) || new Set<string>()
+    accountIds.add(accountId)
+    requestedPageAccounts.set(pageId, accountIds)
   }
-  const users: any[] = await FacebookUser.find({ $or: userFilters }).lean()
 
-  const pageAccountPairs = new Set<string>()
-  const pixelAccountPairs = new Set<string>()
-  const adAccountStatuses = new Map<string, number>()
+  const snapshots = new Map<string, ReturnType<typeof emptyFacebookAssetSnapshot>>()
+  for (const tokenId of activeTokenIds) {
+    snapshots.set(tokenId, emptyFacebookAssetSnapshot(1, tokenId))
+  }
 
+  const completedUsersByToken = new Map<string, any[]>()
   for (const user of users) {
+    const userTokenId = user.tokenId?.toString()
+    if (
+      !userTokenId ||
+      !activeTokenIds.has(userTokenId) ||
+      (tokenIdentityById.get(userTokenId) &&
+        String(user.fbUserId) !== tokenIdentityById.get(userTokenId)) ||
+      user.syncStatus !== 'completed'
+    ) {
+      continue
+    }
+
+    const tokenUsers = completedUsersByToken.get(userTokenId) || []
+    tokenUsers.push(user)
+    completedUsersByToken.set(userTokenId, tokenUsers)
+  }
+
+  for (const [userTokenId, tokenUsers] of completedUsersByToken) {
+    // One token represents one personal authorization snapshot. Refuse
+    // ambiguous duplicate rows instead of unioning their asset permissions.
+    if (tokenUsers.length !== 1) continue
+    const user = tokenUsers[0]
+    const snapshot = snapshots.get(userTokenId)
+    if (!snapshot) continue
+    snapshot.hasCachedAssets = true
+
+    const userAccountIds = new Set<string>()
     for (const account of user.adAccounts || []) {
       const accountId = normalizeForStorage(account.accountId)
+      if (accountId) {
+        userAccountIds.add(accountId)
+      }
       if (accountId && account.status !== undefined) {
-        adAccountStatuses.set(accountId, account.status)
+        snapshot.adAccountStatuses.set(accountId, account.status)
       }
     }
 
@@ -269,7 +322,24 @@ const buildFacebookAssetSnapshot = async (draft: any) => {
       for (const account of page.accounts || []) {
         const accountId = normalizeForStorage(account.accountId)
         if (page.pageId && accountId) {
-          pageAccountPairs.add(`${page.pageId}:${accountId}`)
+          snapshot.pageAccountPairs.add(`${page.pageId}:${accountId}`)
+        }
+      }
+
+      // /me/accounts returns user-managed Pages with a Page access token but no
+      // ad-account relation. Treat them as usable only with accounts from the
+      // same completed Facebook authorization snapshot.
+      if (
+        page.pageId &&
+        typeof page.accessToken === 'string' &&
+        page.accessToken.trim().length > 0
+      ) {
+        for (const accountId of requestedPageAccounts.get(
+          String(page.pageId),
+        ) || []) {
+          if (userAccountIds.has(accountId)) {
+            snapshot.pageAccountPairs.add(`${page.pageId}:${accountId}`)
+          }
         }
       }
     }
@@ -278,18 +348,55 @@ const buildFacebookAssetSnapshot = async (draft: any) => {
       for (const account of pixel.accounts || []) {
         const accountId = normalizeForStorage(account.accountId)
         if (pixel.pixelId && accountId) {
-          pixelAccountPairs.add(`${pixel.pixelId}:${accountId}`)
+          snapshot.pixelAccountPairs.add(`${pixel.pixelId}:${accountId}`)
         }
       }
     }
   }
 
+  const snapshotMatchesDraft = (
+    snapshot: ReturnType<typeof emptyFacebookAssetSnapshot>,
+  ) => {
+    if (!snapshot.hasCachedAssets) return false
+
+    return (draft.accounts || []).every((account: any) => {
+      const accountId = normalizeForStorage(account.accountId)
+      if (!accountId || !snapshot.adAccountStatuses.has(accountId)) return false
+      if (
+        account.pageId &&
+        !snapshot.pageAccountPairs.has(`${account.pageId}:${accountId}`)
+      ) {
+        return false
+      }
+      if (
+        account.pixelId &&
+        !snapshot.pixelAccountPairs.has(`${account.pixelId}:${accountId}`)
+      ) {
+        return false
+      }
+      return true
+    })
+  }
+
+  const matchingSnapshot = draftTokenId
+    ? snapshots.get(draftTokenId)
+    : Array.from(snapshots.values()).find(snapshotMatchesDraft)
+  const fallbackSnapshot = Array.from(snapshots.values()).find(
+    (snapshot) => snapshot.hasCachedAssets,
+  ) || Array.from(snapshots.values())[0]
+  const selectedSnapshot = matchingSnapshot || fallbackSnapshot
+
+  if (!selectedSnapshot) {
+    return emptyFacebookAssetSnapshot(tokens.length, draftTokenId)
+  }
+
   return {
     tokenCount: tokens.length,
-    hasCachedAssets: users.some(user => user.syncStatus === 'completed'),
-    pageAccountPairs,
-    pixelAccountPairs,
-    adAccountStatuses,
+    selectedTokenId: draftTokenId || matchingSnapshot?.selectedTokenId,
+    hasCachedAssets: selectedSnapshot.hasCachedAssets,
+    pageAccountPairs: selectedSnapshot.pageAccountPairs,
+    pixelAccountPairs: selectedSnapshot.pixelAccountPairs,
+    adAccountStatuses: selectedSnapshot.adAccountStatuses,
   }
 }
 
@@ -438,6 +545,7 @@ export const validateDraft = async (draftId: string, accessFilter: any = {}) => 
   // 简化验证逻辑
   const errors: any[] = []
   const warnings: any[] = []
+  let inferredFacebookTokenId: string | undefined
   const addError = (field: string, message: string) => errors.push({ field, message, severity: 'error' })
   const addWarning = (field: string, message: string) => warnings.push({ field, message, severity: 'warning' })
   
@@ -448,7 +556,17 @@ export const validateDraft = async (draftId: string, accessFilter: any = {}) => 
     const assetSnapshot = await buildFacebookAssetSnapshot(draft)
 
     if (assetSnapshot.tokenCount === 0) {
-      addError('facebookAuthorization', '当前组织没有活跃 Facebook 授权，请先完成 Facebook Login for Business 授权')
+      addError('facebookAuthorization', draft.facebookTokenId
+        ? '当前选择的 Facebook 个人号授权已失效或不属于当前组织，请重新授权'
+        : '当前组织没有活跃 Facebook 授权，请先完成 Facebook Login for Business 授权')
+    } else if (!assetSnapshot.hasCachedAssets) {
+      addError('facebookAssets', '当前选择的 Facebook 个人号资产尚未同步完成，请重新同步后再发布')
+    } else if (!draft.facebookTokenId && !assetSnapshot.selectedTokenId) {
+      addError('facebookAuthorization', '所选广告账户、Page 和 Pixel 不属于同一个 Facebook 个人号授权，请切换个人号后重新选择资产')
+    }
+
+    if (!draft.facebookTokenId && assetSnapshot.selectedTokenId) {
+      inferredFacebookTokenId = assetSnapshot.selectedTokenId
     }
 
     for (const account of draft.accounts) {
@@ -465,13 +583,17 @@ export const validateDraft = async (draftId: string, accessFilter: any = {}) => 
       seenAccounts.add(accountId)
 
       const hasCachedAccountAccess = assetSnapshot.adAccountStatuses.has(accountId)
-      if (assetSnapshot.hasCachedAssets && !hasCachedAccountAccess) {
+      const accountAsset = await findScopedDraftAccountAsset(accountId, draft)
+      if (draft.organizationId && !accountAsset) {
+        addError(`accounts.${account.accountId}.access`, `广告账户 ${accountLabel} 未分配到当前组织或账户资产尚未同步完成，请先同步账户资产后重新选择`)
+      } else if (assetSnapshot.hasCachedAssets && !hasCachedAccountAccess) {
         addError(`accounts.${account.accountId}.access`, `当前 Facebook 授权未同步到账户 ${accountLabel} 的访问权限，请重新授权或更换可访问账户`)
-      } else if (!hasCachedAccountAccess && assetSnapshot.tokenCount > 0) {
-        const accountAsset = await findScopedDraftAccountAsset(accountId, draft)
-        if (!accountAsset) {
-          addError(`accounts.${account.accountId}.access`, `广告账户 ${accountLabel} 未分配到当前组织或账户资产尚未同步完成，请先同步账户资产后重新选择`)
-        }
+      } else if (
+        !draft.organizationId &&
+        !hasCachedAccountAccess &&
+        assetSnapshot.tokenCount > 0
+      ) {
+        addError(`accounts.${account.accountId}.access`, `广告账户 ${accountLabel} 未分配到当前组织或账户资产尚未同步完成，请先同步账户资产后重新选择`)
       }
 
       const cachedStatus = assetSnapshot.adAccountStatuses.get(accountId)
@@ -623,6 +745,13 @@ export const validateDraft = async (draftId: string, accessFilter: any = {}) => 
     warnings,
     validatedAt: new Date(),
   }
+
+  // Only persist an inferred authorization after the entire draft passes.
+  // Invalid legacy drafts must stay unpinned so correcting their assets can
+  // select the genuinely compatible personal token on the next preflight.
+  if (validation.isValid && !draft.facebookTokenId && inferredFacebookTokenId) {
+    draft.facebookTokenId = inferredFacebookTokenId
+  }
   
   draft.validation = validation
   await draft.save()
@@ -636,13 +765,15 @@ export const validateDraft = async (draftId: string, accessFilter: any = {}) => 
  * 发布草稿（创建任务）
  */
 export const publishDraft = async (draftId: string, userId?: string, accessFilter: any = {}) => {
-  const draft: any = await getDraft(draftId, accessFilter)
-  
   // 验证草稿
   const validation = await validateDraft(draftId, accessFilter)
   if (!validation.isValid) {
     throw createDraftValidationFailure(validation)
   }
+
+  // validateDraft may pin a legacy draft to the only compatible Facebook token.
+  // Reload so the task snapshot always carries that exact authorization.
+  const draft: any = await getDraft(draftId, accessFilter)
   
   // 计算预估
   const accountCount = draft.accounts?.length || 0
@@ -712,6 +843,8 @@ export const publishDraft = async (draftId: string, userId?: string, accessFilte
     
     // 保存配置快照
     configSnapshot: {
+      facebookTokenId: draft.facebookTokenId,
+      facebookTokenOwnerUserId: draft.createdBy,
       accounts: draft.accounts,
       campaign: draft.campaign,
       adset: draft.adset,
@@ -897,29 +1030,78 @@ export const executeTaskForAccount = async (
   if (!item) {
     throw new Error('Task item not found')
   }
-  
-  // 获取 Token - 根据账户 ID 找到正确的 token
+
+  const config = task.configSnapshot
+  const accountConfig = config.accounts.find((a: any) => a.accountId === accountId)
+  if (!accountConfig) {
+    throw new Error('Account config not found')
+  }
+
+  if (task.organizationId) {
+    const scopedAccount = await Account.findOne(combineFilters(
+      {
+        channel: 'facebook',
+        accountId: { $in: getAccountIdsForQuery([accountId]) },
+      },
+      { organizationId: task.organizationId },
+    ))
+      .select('_id')
+      .lean()
+    if (!scopedAccount) {
+      throw new Error(`广告账户 ${accountConfig.accountName || accountId} 不属于当前组织，任务已停止`)
+    }
+  }
+
+  // 验证必要配置
+  if (!accountConfig.pageId) {
+    throw new Error(`账户 ${accountConfig.accountName || accountId} 没有配置 Facebook 主页，无法创建广告`)
+  }
+
+  // 获取 Token。新任务固定使用预检时选中的个人号授权，防止发布阶段
+  // 自动换到另一枚只能访问广告账户、却不能使用所选 Page 的 token。
   const taskAccessFilter = task.organizationId
     ? { organizationId: task.organizationId }
     : task.createdBy
       ? { createdBy: task.createdBy }
       : {}
   const tokenAccessFilter = task.organizationId
-    ? { organizationId: task.organizationId }
+    ? {
+        organizationId: task.organizationId,
+        ...(task.createdBy ? { userId: task.createdBy } : {}),
+      }
     : task.createdBy
       ? { userId: task.createdBy }
       : {}
 
-  // 1. 优先查找明确绑定了该账户的 token
-  let fbToken: any = await FbToken.findOne({ 
-    status: 'active',
-    ...tokenAccessFilter,
-    'accounts.accountId': accountId 
-  })
+  const pinnedTokenId = config.facebookTokenId?.toString()
+  const pinnedTokenOwnerUserId = config.facebookTokenOwnerUserId?.toString()
+  let fbToken: any
+  if (pinnedTokenId) {
+    fbToken = await FbToken.findOne({
+      _id: pinnedTokenId,
+      status: 'active',
+      ...(task.organizationId ? { organizationId: task.organizationId } : {}),
+      ...(pinnedTokenOwnerUserId
+        ? { userId: pinnedTokenOwnerUserId }
+        : task.createdBy
+          ? { userId: task.createdBy }
+          : {}),
+    })
+    if (!fbToken) {
+      throw new Error('预检使用的 Facebook 个人号授权已失效，请重新验证草稿后再发布')
+    }
+  } else {
+    // 兼容修复上线前已创建的历史任务。
+    fbToken = await FbToken.findOne({
+      status: 'active',
+      ...tokenAccessFilter,
+      'accounts.accountId': accountId,
+    })
+  }
   
   // 2. 如果没有绑定关系，尝试从 Account 模型获取 fbUserId
   // 注意：Account 模型可能不包含 fbUserId 字段，这是历史兼容代码
-  if (!fbToken) {
+  if (!pinnedTokenId && !fbToken) {
     const account: any = await Account.findOne(combineFilters({ accountId }, task.organizationId ? { organizationId: task.organizationId } : {})).lean()
     if (account?.fbUserId) {
       fbToken = await FbToken.findOne({ 
@@ -931,7 +1113,7 @@ export const executeTaskForAccount = async (
   }
   
   // 3. 如果还没找到，查找所有 active token 并验证权限
-  if (!fbToken) {
+  if (!pinnedTokenId && !fbToken) {
     const allTokens = await FbToken.find({ status: 'active', ...tokenAccessFilter })
     for (const t of allTokens) {
       try {
@@ -957,17 +1139,6 @@ export const executeTaskForAccount = async (
     throw new Error(`没有找到可访问账户 ${accountId} 的 Facebook Token，请检查授权`)
   }
   const token = fbToken.token
-  
-  const config = task.configSnapshot
-  const accountConfig = config.accounts.find((a: any) => a.accountId === accountId)
-  if (!accountConfig) {
-    throw new Error('Account config not found')
-  }
-  
-  // 验证必要配置
-  if (!accountConfig.pageId) {
-    throw new Error(`账户 ${accountConfig.accountName || accountId} 没有配置 Facebook 主页，无法创建广告`)
-  }
   
   // 原子更新状态为处理中
   await updateTaskItemAtomic(taskId, accountId, {
