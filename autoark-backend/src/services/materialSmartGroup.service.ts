@@ -1,3 +1,4 @@
+import { createHash } from 'crypto'
 import Account from '../models/Account'
 import ExternalMaterialSyncState from '../models/ExternalMaterialSyncState'
 import { resolveExternalMaterialRuntime } from './externalMaterialRuntime.service'
@@ -8,7 +9,13 @@ import { combineFilters } from '../utils/accessControl'
 
 export interface MaterialSmartGroupNode {
   key: string
-  type: 'facebook-root' | 'facebook-account' | 'external-root' | 'external-provider' | 'external-package'
+  type:
+    | 'facebook-root'
+    | 'facebook-optimizer'
+    | 'facebook-account'
+    | 'external-root'
+    | 'external-provider'
+    | 'external-package'
   label: string
   count: number
   status?: 'active' | 'disabled' | 'unavailable' | 'paused'
@@ -21,8 +28,18 @@ export interface FacebookMaterialMembership {
   accountIds: string[]
 }
 
+interface FacebookAccountSummary {
+  accountId?: unknown
+  name?: unknown
+  operator?: unknown
+  status?: unknown
+  accountStatus?: unknown
+  disableReason?: unknown
+}
+
 export const FACEBOOK_ALL_SMART_GROUP_KEY = '__all__'
 export const FACEBOOK_UNASSIGNED_SMART_GROUP_KEY = '__unassigned__'
+export const FACEBOOK_UNASSIGNED_OPTIMIZER_KEY = '__optimizer_unassigned__'
 
 const ACTIVE_MATERIAL_STATUSES = ['uploaded', 'ready']
 const SMART_GROUP_KEY_MAX_LENGTH = 128
@@ -259,6 +276,7 @@ export const buildFacebookSmartGroupPipeline = (materialFilter: any): any[] => [
         { $match: { facebookRelated: true } },
         {
           $project: {
+            materialId: '$_id',
             memberships: {
               $cond: [
                 { $gt: [{ $size: '$accountIds' }, 0] },
@@ -269,7 +287,13 @@ export const buildFacebookSmartGroupPipeline = (materialFilter: any): any[] => [
           },
         },
         { $unwind: '$memberships' },
-        { $group: { _id: '$memberships', count: { $sum: 1 } } },
+        {
+          $group: {
+            _id: '$memberships',
+            count: { $sum: 1 },
+            materialIds: { $addToSet: '$materialId' },
+          },
+        },
         { $sort: { _id: 1 } },
       ],
     },
@@ -364,7 +388,14 @@ const safeLastFour = (accountId: string): string => {
   return suffix || '未知'
 }
 
-const accountNodeStatus = (account: any): MaterialSmartGroupNode['status'] => {
+const optimizerGroupKey = (canonicalLabel: string): string =>
+  canonicalLabel
+    ? `optimizer_${createHash('sha256').update(canonicalLabel).digest('hex').slice(0, 24)}`
+    : FACEBOOK_UNASSIGNED_OPTIMIZER_KEY
+
+const accountNodeStatus = (
+  account: FacebookAccountSummary | undefined,
+): MaterialSmartGroupNode['status'] => {
   if (!account) return 'unavailable'
   const status = String(account.status || '').trim().toLowerCase()
   if (
@@ -387,6 +418,7 @@ export const getFacebookMaterialSmartGroups = async ({
   const [aggregation] = await Material.aggregate(buildFacebookSmartGroupPipeline(materialFilter))
   const globalCount = Number(aggregation?.global?.[0]?.count || 0)
   const countByAccount = new Map<string, number>()
+  const materialIdsByAccount = new Map<string, Set<string>>()
 
   for (const row of aggregation?.accounts || []) {
     const key = row?._id === FACEBOOK_UNASSIGNED_SMART_GROUP_KEY
@@ -394,26 +426,37 @@ export const getFacebookMaterialSmartGroups = async ({
       : normalizeForStorage(String(row?._id || '').slice(0, SMART_GROUP_KEY_MAX_LENGTH))
     if (!key) continue
     countByAccount.set(key, (countByAccount.get(key) || 0) + Number(row?.count || 0))
+    const materialIds = materialIdsByAccount.get(key) || new Set<string>()
+    for (const materialId of Array.isArray(row?.materialIds)
+      ? row.materialIds
+      : []) {
+      const normalizedMaterialId = String(materialId || '').trim()
+      if (normalizedMaterialId) materialIds.add(normalizedMaterialId)
+    }
+    materialIdsByAccount.set(key, materialIds)
   }
 
   const accountIds = [...countByAccount.keys()].filter(key => (
     key !== FACEBOOK_UNASSIGNED_SMART_GROUP_KEY && key !== FACEBOOK_ALL_SMART_GROUP_KEY
   ))
-  const accountDocs: any[] = accountIds.length > 0
-    ? await Account.find(combineFilters(
-      {
-        channel: 'facebook',
-        accountId: { $in: getAccountIdsForQuery(accountIds) },
-      },
-      accountFilter,
-    ))
-      .select('accountId name status accountStatus disableReason')
-      .lean()
-    : []
+  const accountDocs: FacebookAccountSummary[] =
+    accountIds.length > 0
+      ? await Account.find(
+          combineFilters(
+            {
+              channel: 'facebook',
+              accountId: { $in: getAccountIdsForQuery(accountIds) },
+            },
+            accountFilter,
+          ),
+        )
+          .select('accountId name operator status accountStatus disableReason')
+          .lean()
+      : []
 
-  const accountById = new Map<string, any>()
+  const accountById = new Map<string, FacebookAccountSummary>()
   for (const account of accountDocs) {
-    const accountId = normalizeForStorage(account?.accountId)
+    const accountId = normalizeForStorage(String(account.accountId || ''))
     if (accountId && !accountById.has(accountId)) accountById.set(accountId, account)
   }
 
@@ -427,24 +470,78 @@ export const getFacebookMaterialSmartGroups = async ({
     nameFrequency.set(collisionKey, (nameFrequency.get(collisionKey) || 0) + 1)
   }
 
-  const accountNodes = accountIds.map<MaterialSmartGroupNode>((accountId) => {
-    const account = accountById.get(accountId)
-    const baseName = baseNameById.get(accountId)
-    const hasDuplicateName = baseName
-      ? (nameFrequency.get(baseName.toLocaleLowerCase()) || 0) > 1
-      : false
-    const label = baseName
-      ? `${baseName}${hasDuplicateName ? ` · ${safeLastFour(accountId)}` : ''}`
-      : `Facebook 账户 · ${safeLastFour(accountId)}`
+  const accountEntries = accountIds
+    .map((accountId) => {
+      const account = accountById.get(accountId)
+      const baseName = baseNameById.get(accountId)
+      const hasDuplicateName = baseName
+        ? (nameFrequency.get(baseName.toLocaleLowerCase()) || 0) > 1
+        : false
+      const label = baseName
+        ? `${baseName}${hasDuplicateName ? ` · ${safeLastFour(accountId)}` : ''}`
+        : `Facebook 账户 · ${safeLastFour(accountId)}`
 
-    return {
-      key: accountId,
-      type: 'facebook-account',
-      label,
-      count: countByAccount.get(accountId) || 0,
-      status: accountNodeStatus(account),
+      return {
+        accountId,
+        optimizerLabel: safeLabelText(account?.operator),
+        node: {
+          key: accountId,
+          type: 'facebook-account' as const,
+          label,
+          count: countByAccount.get(accountId) || 0,
+          status: accountNodeStatus(account),
+        },
+      }
+    })
+    .sort(
+      (a, b) =>
+        a.node.label.localeCompare(b.node.label) ||
+        a.node.key.localeCompare(b.node.key),
+    )
+
+  const optimizerBuckets = new Map<
+    string,
+    {
+      key: string
+      label: string
+      materialIds: Set<string>
+      fallbackCount: number
+      children: MaterialSmartGroupNode[]
     }
-  }).sort((a, b) => a.label.localeCompare(b.label) || a.key.localeCompare(b.key))
+  >()
+  for (const entry of accountEntries) {
+    const canonicalLabel = entry.optimizerLabel.toLocaleLowerCase()
+    const key = optimizerGroupKey(canonicalLabel)
+    const bucket = optimizerBuckets.get(key) || {
+      key,
+      label: entry.optimizerLabel || '未分配优化师',
+      materialIds: new Set<string>(),
+      fallbackCount: 0,
+      children: [],
+    }
+    const materialIds = materialIdsByAccount.get(entry.accountId)
+    if (materialIds && materialIds.size > 0) {
+      for (const materialId of materialIds) bucket.materialIds.add(materialId)
+    } else {
+      bucket.fallbackCount += entry.node.count
+    }
+    bucket.children.push(entry.node)
+    optimizerBuckets.set(key, bucket)
+  }
+
+  const optimizerNodes = [...optimizerBuckets.values()]
+    .sort((a, b) => {
+      if (a.key === FACEBOOK_UNASSIGNED_OPTIMIZER_KEY) return 1
+      if (b.key === FACEBOOK_UNASSIGNED_OPTIMIZER_KEY) return -1
+      return a.label.localeCompare(b.label) || a.key.localeCompare(b.key)
+    })
+    .map<MaterialSmartGroupNode>((bucket) => ({
+      key: bucket.key,
+      type: 'facebook-optimizer',
+      label: bucket.label,
+      count: safeCount(bucket.materialIds.size + bucket.fallbackCount),
+      children: bucket.children,
+    }))
 
   const root: MaterialSmartGroupNode = {
     key: 'facebook',
@@ -458,13 +555,13 @@ export const getFacebookMaterialSmartGroups = async ({
         label: '全部 Facebook 素材',
         count: globalCount,
       },
+      ...optimizerNodes,
       {
         key: FACEBOOK_UNASSIGNED_SMART_GROUP_KEY,
         type: 'facebook-account',
         label: '未归属账户',
         count: countByAccount.get(FACEBOOK_UNASSIGNED_SMART_GROUP_KEY) || 0,
       },
-      ...accountNodes,
     ],
   }
 

@@ -38,6 +38,7 @@ describe('material smart groups', () => {
 
   it('renders read-only Facebook and external hierarchies with explicit states', () => {
     const page = readSource('src/pages/MaterialLibraryPage.tsx')
+    const service = readSource('src/services/materialSmartGroups.ts')
 
     assert.match(page, /loadMaterialSmartGroups/)
     assert.match(page, /Facebook/)
@@ -52,6 +53,11 @@ describe('material smart groups', () => {
     assert.match(page, /该智能分组暂无素材/)
     assert.match(page, /智能分组暂不可用/)
     assert.match(page, /selection\.kind === ['"]folder['"]/)
+    assert.match(service, /['"]facebook-optimizer['"]/)
+    assert.match(page, /expandedSmartGroups/)
+    assert.match(page, /toggleSmartGroupExpansion/)
+    assert.match(page, /aria-expanded=\{isExpandable \? isExpanded : undefined\}/)
+    assert.match(page, /isExpanded && group\.children\?\.map/)
   })
 
   it('shows source and reuse cues and only loads restricted origins on demand', () => {

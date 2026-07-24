@@ -41,6 +41,26 @@ const jsonResponse = (data, status = 200) => new Response(
 )
 
 describe('material smart groups runtime behavior', () => {
+  it('toggles optimizer folders without mutating the existing expansion set', () => {
+    const initial = new Set(['facebook-root:facebook'])
+    const expanded = service.toggleSmartGroupExpansion(
+      initial,
+      'facebook-optimizer:alice',
+    )
+
+    assert.deepEqual([...initial], ['facebook-root:facebook'])
+    assert.deepEqual(
+      [...expanded].sort(),
+      ['facebook-optimizer:alice', 'facebook-root:facebook'],
+    )
+
+    const collapsed = service.toggleSmartGroupExpansion(
+      expanded,
+      'facebook-optimizer:alice',
+    )
+    assert.deepEqual([...collapsed], ['facebook-root:facebook'])
+  })
+
   it('only lets the newest overlapping material request commit and settle loading', async () => {
     const runner = service.createLatestRequestRunner()
     const first = deferred()

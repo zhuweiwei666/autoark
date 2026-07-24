@@ -389,14 +389,28 @@ describe('Facebook material smart groups', () => {
       label: 'Facebook',
       count: 4,
     })
-    expect(roots[0].children).toEqual(expect.arrayContaining([
-      expect.objectContaining({ key: '__all__', count: 4 }),
-      expect.objectContaining({ key: '__unassigned__', count: 1 }),
-      expect.objectContaining({ key: '1111', count: 1 }),
-      expect.objectContaining({ key: '2222', count: 1 }),
-      expect.objectContaining({ key: '3333', count: 1 }),
-      expect.objectContaining({ key: '4444', count: 1 }),
-    ]))
+    expect(roots[0].children).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: '__all__', count: 4 }),
+        expect.objectContaining({ key: '__unassigned__', count: 1 }),
+        expect.objectContaining({
+          key: '__optimizer_unassigned__',
+          type: 'facebook-optimizer',
+          count: 4,
+        }),
+      ]),
+    )
+    const unassignedOptimizer = roots[0].children.find(
+      (node: { key: string }) => node.key === '__optimizer_unassigned__',
+    )
+    expect(unassignedOptimizer.children).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: '1111', count: 1 }),
+        expect.objectContaining({ key: '2222', count: 1 }),
+        expect.objectContaining({ key: '3333', count: 1 }),
+        expect.objectContaining({ key: '4444', count: 1 }),
+      ]),
+    )
 
     const pipeline = mockMaterialAggregate.mock.calls[0][0]
     expect(pipeline).toEqual(expectedPipeline)
@@ -405,6 +419,13 @@ describe('Facebook material smart groups', () => {
     expect(pipeline[1].$project.accountIds).toEqual(service.buildFacebookAccountIdsExpression())
     expect(pipeline[1].$project.facebookRelated).toEqual(service.buildFacebookRelatedExpression())
     expect(pipeline[2].$facet.global).toContainEqual({ $count: 'count' })
+    expect(pipeline[2].$facet.accounts).toContainEqual({
+      $group: {
+        _id: '$memberships',
+        count: { $sum: 1 },
+        materialIds: { $addToSet: '$materialId' },
+      },
+    })
   })
 
   it('uses mapping, then source, then usage precedence in both aggregation and list filters', () => {
@@ -444,6 +465,129 @@ describe('Facebook material smart groups', () => {
     })
   })
 
+  it('groups accounts by optimizer and deduplicates reused materials in optimizer counts', async () => {
+    const service = loadSmartGroupService()
+    expect(service).toBeDefined()
+
+    mockMaterialAggregate.mockResolvedValue([
+      {
+        global: [{ count: 5 }],
+        accounts: [
+          {
+            _id: '11111111',
+            count: 2,
+            materialIds: ['material-a', 'material-shared'],
+          },
+          {
+            _id: '22222222',
+            count: 2,
+            materialIds: ['material-shared', 'material-b'],
+          },
+          { _id: '33333333', count: 1, materialIds: ['material-c'] },
+          { _id: '44444444', count: 1, materialIds: ['material-d'] },
+          {
+            _id: '__unassigned__',
+            count: 1,
+            materialIds: ['material-unassigned'],
+          },
+        ],
+      },
+    ])
+    const accountQuery = mockAccountQuery([
+      {
+        accountId: '11111111',
+        name: 'Alpha',
+        operator: ' Alice\u0000 ',
+        status: 'active',
+        accountStatus: 1,
+      },
+      {
+        accountId: '22222222',
+        name: 'Beta',
+        operator: 'alice',
+        status: 'active',
+        accountStatus: 1,
+      },
+      {
+        accountId: '33333333',
+        name: 'Gamma',
+        operator: 'Bob',
+        status: 'active',
+        accountStatus: 1,
+      },
+      {
+        accountId: '44444444',
+        name: 'Delta',
+        operator: ' ',
+        status: 'active',
+        accountStatus: 1,
+      },
+    ])
+
+    const [root] = await service.getFacebookMaterialSmartGroups({
+      materialFilter: { organizationId: ORG_ID },
+      accountFilter: { organizationId: ORG_ID },
+    })
+
+    expect(root.children).toEqual([
+      expect.objectContaining({
+        key: '__all__',
+        type: 'facebook-account',
+        count: 5,
+      }),
+      expect.objectContaining({
+        type: 'facebook-optimizer',
+        label: 'Alice',
+        count: 3,
+        children: [
+          expect.objectContaining({
+            key: '11111111',
+            label: 'Alpha',
+            count: 2,
+          }),
+          expect.objectContaining({ key: '22222222', label: 'Beta', count: 2 }),
+        ],
+      }),
+      expect.objectContaining({
+        type: 'facebook-optimizer',
+        label: 'Bob',
+        count: 1,
+        children: [
+          expect.objectContaining({
+            key: '33333333',
+            label: 'Gamma',
+            count: 1,
+          }),
+        ],
+      }),
+      expect.objectContaining({
+        key: '__optimizer_unassigned__',
+        type: 'facebook-optimizer',
+        label: '未分配优化师',
+        count: 1,
+        children: [
+          expect.objectContaining({
+            key: '44444444',
+            label: 'Delta',
+            count: 1,
+          }),
+        ],
+      }),
+      expect.objectContaining({
+        key: '__unassigned__',
+        type: 'facebook-account',
+        label: '未归属账户',
+        count: 1,
+      }),
+    ])
+    expect(accountQuery.select).toHaveBeenCalledWith(
+      'accountId name operator status accountStatus disableReason',
+    )
+    expect(accountQuery.select).not.toHaveBeenCalledWith(
+      expect.stringContaining('token'),
+    )
+  })
+
   it('keeps duplicate, disabled, unavailable, and unassigned groups visible with safe labels', async () => {
     const service = loadSmartGroupService()
     expect(service).toBeDefined()
@@ -468,20 +612,55 @@ describe('Facebook material smart groups', () => {
       accountFilter: { organizationId: ORG_ID },
     })
 
-    expect(root.children).toEqual(expect.arrayContaining([
-      expect.objectContaining({ key: '__unassigned__', label: '未归属账户', count: 1 }),
-      expect.objectContaining({ key: '11111111', label: 'Shared Shop · 1111', status: 'active' }),
-      expect.objectContaining({ key: '22222222', label: 'Shared Shop · 2222', status: 'disabled' }),
-      expect.objectContaining({ key: '33333333', label: 'Facebook 账户 · 3333', status: 'unavailable' }),
-    ]))
+    expect(root.children).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: '__unassigned__',
+          label: '未归属账户',
+          count: 1,
+        }),
+        expect.objectContaining({
+          key: '__optimizer_unassigned__',
+          type: 'facebook-optimizer',
+          label: '未分配优化师',
+          count: 4,
+        }),
+      ]),
+    )
+    const unassignedOptimizer = root.children.find(
+      (node: { key: string }) => node.key === '__optimizer_unassigned__',
+    )
+    expect(unassignedOptimizer.children).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: '11111111',
+          label: 'Shared Shop · 1111',
+          status: 'active',
+        }),
+        expect.objectContaining({
+          key: '22222222',
+          label: 'Shared Shop · 2222',
+          status: 'disabled',
+        }),
+        expect.objectContaining({
+          key: '33333333',
+          label: 'Facebook 账户 · 3333',
+          status: 'unavailable',
+        }),
+      ]),
+    )
     expect(mockAccountFind).toHaveBeenCalledWith({
       $and: [
         { channel: 'facebook', accountId: { $in: expect.arrayContaining(['11111111', 'act_11111111']) } },
         { organizationId: ORG_ID },
       ],
     })
-    expect(accountQuery.select).toHaveBeenCalledWith('accountId name status accountStatus disableReason')
-    expect(accountQuery.select).not.toHaveBeenCalledWith(expect.stringContaining('token'))
+    expect(accountQuery.select).toHaveBeenCalledWith(
+      'accountId name operator status accountStatus disableReason',
+    )
+    expect(accountQuery.select).not.toHaveBeenCalledWith(
+      expect.stringContaining('token'),
+    )
   })
 
   it('marks only Facebook-related materials without recoverable accounts as unassigned', () => {
