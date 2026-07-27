@@ -562,10 +562,9 @@ export const inspectApplicationOwnership = async (
     `/${requiredGraphId(app.appId, 'appId')}`,
     {
       access_token: `${app.appId}|${app.appSecret}`,
-      fields: 'id,name,business,owner_business',
+      fields: 'id,name,owner_business',
     },
   )
-  const business = safeBusinessReference(graphApp?.business)
   const ownerBusiness = safeBusinessReference(graphApp?.owner_business)
 
   return {
@@ -578,9 +577,8 @@ export const inspectApplicationOwnership = async (
     graph: {
       id: graphApp?.id ? String(graphApp.id) : String(app.appId),
       name: graphApp?.name || app.appName,
-      business,
       ownerBusiness,
-      isBusinessOwned: Boolean(business || ownerBusiness),
+      isBusinessOwned: Boolean(ownerBusiness),
     },
   }
 }
