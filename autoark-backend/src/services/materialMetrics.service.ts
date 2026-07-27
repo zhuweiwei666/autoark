@@ -6,7 +6,6 @@ import MaterialMetrics from '../models/MaterialMetrics'
 import Material from '../models/Material'
 import Creative from '../models/Creative'
 import AdMaterialMapping from '../models/AdMaterialMapping'
-import RawInsights from '../models/RawInsights'
 import { generateFingerprint } from './materialSync.service'
 
 /**
@@ -73,35 +72,6 @@ const extractOptimizer = (campaignName: string): string => {
   if (!campaignName) return 'unknown'
   const parts = campaignName.split('_')
   return parts[0] || 'unknown'
-}
-
-const metricIdentity = (metric: any) => (
-  `${metric.adId || ''}:${metric.country || 'ALL'}`
-)
-
-export const mergeDailyMaterialMetricSources = (
-  metricsDaily: any[],
-  rawInsights: any[],
-) => {
-  const merged = new Map<string, any>()
-
-  for (const metric of rawInsights) {
-    merged.set(metricIdentity(metric), {
-      ...metric,
-      spendUsd: metric.spendUsd ?? metric.spend ?? 0,
-      raw: {
-        ...(metric.raw || {}),
-        actions: metric.actions || metric.raw?.actions || [],
-        action_values: metric.action_values || metric.raw?.action_values || [],
-      },
-    })
-  }
-
-  for (const metric of metricsDaily) {
-    merged.set(metricIdentity(metric), metric)
-  }
-
-  return [...merged.values()]
 }
 
 /**
@@ -254,20 +224,11 @@ export const aggregateMaterialMetrics = async (date: string): Promise<{
     logger.info(`[MaterialMetrics] Ad-Material mapping: ${directCount} direct, ${fallbackCount} fallback, ${adCreativeMap.size - directCount - fallbackCount} none`)
     
     // 3. 获取当天的 ad 级别指标（包含 country 维度）
-    const [metricsDaily, rawInsights] = await Promise.all([
-      MetricsDaily.find({
-        date,
-        adId: { $exists: true, $ne: null },
-        spendUsd: { $gt: 0 },
-      }).lean(),
-      RawInsights.find({
-        date,
-        datePreset: { $in: ['today', 'yesterday'] },
-        adId: { $exists: true, $ne: null },
-        spend: { $gt: 0 },
-      }).lean(),
-    ])
-    const adMetrics = mergeDailyMaterialMetricSources(metricsDaily, rawInsights)
+    const adMetrics = await MetricsDaily.find({
+      date,
+      adId: { $exists: true, $ne: null },
+      spendUsd: { $gt: 0 }
+    }).lean()
     logger.info(`[MaterialMetrics] Found ${adMetrics.length} ad metrics for ${date}`)
     
     // 4. 按素材 + 国家 聚合指标
