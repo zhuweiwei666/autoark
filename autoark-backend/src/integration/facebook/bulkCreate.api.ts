@@ -35,6 +35,55 @@ const hashForLog = (value: unknown): string | undefined => {
   return createHash('sha256').update(String(value)).digest('hex').slice(0, 12)
 }
 
+const VIDEO_STATUS_POLL_INTERVAL_MS = 3000
+const VIDEO_PROCESSING_TIMEOUT_MS = 5 * 60 * 1000
+const VIDEO_READY_STATUSES = new Set(['ready', 'published'])
+const VIDEO_FAILED_STATUSES = new Set(['error', 'failed'])
+
+const createVideoProcessingError = (
+  code: 'VIDEO_PROCESSING_FAILED' | 'VIDEO_PROCESSING_TIMEOUT',
+  message: string,
+  details?: any,
+) => {
+  const error: any = new Error(message)
+  error.code = code
+  error.userMessage = message
+  error.response = details
+  return error
+}
+
+const waitForVideoProcessing = async (videoId: string, token: string) => {
+  const deadline = Date.now() + VIDEO_PROCESSING_TIMEOUT_MS
+
+  while (Date.now() < deadline) {
+    const videoDetails = await facebookClient.get(`/${videoId}`, {
+      access_token: token,
+      fields: 'status,thumbnails,picture',
+    })
+    const videoStatus = String(videoDetails?.status?.video_status || videoDetails?.status || '').toLowerCase()
+
+    if (VIDEO_READY_STATUSES.has(videoStatus)) {
+      return videoDetails
+    }
+
+    if (VIDEO_FAILED_STATUSES.has(videoStatus)) {
+      const processingMessage = videoDetails?.status?.processing_phase?.errors?.[0]?.message
+      throw createVideoProcessingError(
+        'VIDEO_PROCESSING_FAILED',
+        processingMessage || 'Meta video processing failed',
+        videoDetails,
+      )
+    }
+
+    await new Promise(resolve => setTimeout(resolve, VIDEO_STATUS_POLL_INTERVAL_MS))
+  }
+
+  throw createVideoProcessingError(
+    'VIDEO_PROCESSING_TIMEOUT',
+    'Meta video processing did not finish within 5 minutes',
+  )
+}
+
 export const buildFacebookBulkCreateErrorPayload = (error: any) => {
   const responseData = error?.response?.data || error?.response || {}
   const fbError = responseData?.error || {}
@@ -439,32 +488,14 @@ export const uploadVideoFromUrl = async (params: UploadVideoParams) => {
     logger.info(`[BulkCreate] Uploading video for account ${accountId}`)
     const res = await facebookClient.post(`/act_${accountId}/advideos`, requestParams)
     logger.info(`[BulkCreate] Video uploaded, id: ${res.id}`)
-    
-    // 获取视频缩略图
-    let thumbnailUrl: string | undefined
-    try {
-      // 等待一小段时间让 Facebook 处理视频
-      await new Promise(resolve => setTimeout(resolve, 2000))
-      
-      const videoDetails = await facebookClient.get(`/${res.id}`, {
-        access_token: token,
-        fields: 'thumbnails,picture',
-      })
-      
-      // 优先使用 picture，其次使用 thumbnails 中的第一个
-      if (videoDetails.picture) {
-        thumbnailUrl = videoDetails.picture
-      } else if (videoDetails.thumbnails?.data?.[0]?.uri) {
-        thumbnailUrl = videoDetails.thumbnails.data[0].uri
-      }
-      logger.info('[BulkCreate] Video thumbnail resolved', {
-        videoId: res.id,
-        hasThumbnailUrl: Boolean(thumbnailUrl),
-        thumbnailRef: hashForLog(thumbnailUrl),
-      })
-    } catch (thumbError: any) {
-      logger.warn(`[BulkCreate] Failed to get video thumbnail: ${thumbError.message}`)
-    }
+
+    const videoDetails = await waitForVideoProcessing(res.id, token)
+    const thumbnailUrl = videoDetails.picture || videoDetails.thumbnails?.data?.[0]?.uri
+    logger.info('[BulkCreate] Video processing complete', {
+      videoId: res.id,
+      hasThumbnailUrl: Boolean(thumbnailUrl),
+      thumbnailRef: hashForLog(thumbnailUrl),
+    })
     
     return { success: true, id: res.id, thumbnailUrl, data: res }
   } catch (error: any) {
