@@ -1,7 +1,7 @@
 import mongoose from 'mongoose'
 import connectDB from '../config/db'
-import Account from '../models/Account'
 import AdTask from '../models/AdTask'
+import FbToken from '../models/FbToken'
 import TargetingPackage from '../models/TargetingPackage'
 import { facebookClient } from '../integration/facebook/facebookClient'
 import { updateAdSet } from '../integration/facebook/bulkCreate.api'
@@ -14,8 +14,12 @@ const EXPECTED_MISSING_ADSET_COUNT = 2
 
 type Targeting = Record<string, any>
 
-type RecordedAdSet = {
+export type RecordedAdSet = {
   taskId: string
+  organizationId?: string
+  createdBy?: string
+  facebookTokenId: string
+  facebookTokenOwnerUserId?: string
   accountId: string
   adsetId: string
 }
@@ -52,6 +56,40 @@ export const addIosTargeting = (targeting: Targeting): Targeting => ({
   user_os: ['iOS'],
 })
 
+export const pinnedTokenMatchesTaskSnapshot = (
+  record: Pick<
+    RecordedAdSet,
+    | 'organizationId'
+    | 'createdBy'
+    | 'facebookTokenId'
+    | 'facebookTokenOwnerUserId'
+  >,
+  token: {
+    _id?: unknown
+    organizationId?: unknown
+    userId?: unknown
+    status?: unknown
+  } | undefined,
+) => {
+  if (
+    !token
+    || String(token._id || '') !== record.facebookTokenId
+    || token.status !== 'active'
+  ) {
+    return false
+  }
+
+  if (
+    record.organizationId
+    && String(token.organizationId || '') !== record.organizationId
+  ) {
+    return false
+  }
+
+  const expectedOwnerUserId = record.facebookTokenOwnerUserId || record.createdBy
+  return !expectedOwnerUserId || String(token.userId || '') === expectedOwnerUserId
+}
+
 const canonicalize = (value: any): any => {
   if (Array.isArray(value)) {
     return value
@@ -68,8 +106,28 @@ const canonicalize = (value: any): any => {
   return value
 }
 
-const withoutUserOs = (targeting: Targeting | undefined): Targeting => {
-  const { user_os: _userOs, ...rest } = targeting || {}
+const isDefaultTargetingRelaxationTypes = (value: any) => (
+  value
+  && typeof value === 'object'
+  && !Array.isArray(value)
+  && Object.keys(value).sort().join(',') === 'custom_audience,lookalike'
+  && value.lookalike === 0
+  && value.custom_audience === 0
+)
+
+const withoutExpectedMetaNormalization = (
+  targeting: Targeting | undefined,
+): Targeting => {
+  const {
+    user_os: _userOs,
+    targeting_relaxation_types: targetingRelaxationTypes,
+    ...rest
+  } = targeting || {}
+  if (!isDefaultTargetingRelaxationTypes(targetingRelaxationTypes)) {
+    return targetingRelaxationTypes === undefined
+      ? rest
+      : { ...rest, targeting_relaxation_types: targetingRelaxationTypes }
+  }
   return rest
 }
 
@@ -77,8 +135,8 @@ export const targetingMatchesExceptUserOs = (
   before: Targeting | undefined,
   after: Targeting | undefined,
 ) => (
-  JSON.stringify(canonicalize(withoutUserOs(before)))
-  === JSON.stringify(canonicalize(withoutUserOs(after)))
+  JSON.stringify(canonicalize(withoutExpectedMetaNormalization(before)))
+  === JSON.stringify(canonicalize(withoutExpectedMetaNormalization(after)))
 )
 
 export const classifyRepairScope = (
@@ -163,15 +221,30 @@ const loadRecordedAdSets = async (): Promise<{ taskCount: number; records: Recor
       { 'configSnapshot.adset.targetingPackageId': packageObjectId },
     ],
   })
-    .select('_id items.accountId items.result.adsetIds')
+    .select(
+      '_id organizationId createdBy '
+      + 'configSnapshot.facebookTokenId configSnapshot.facebookTokenOwnerUserId '
+      + 'items.accountId items.result.adsetIds',
+    )
     .lean()
 
   const records: RecordedAdSet[] = []
   for (const task of tasks) {
+    const facebookTokenId = String(task.configSnapshot?.facebookTokenId || '')
+    if (!mongoose.Types.ObjectId.isValid(facebookTokenId)) {
+      throw new Error(`Leyon task ${task._id} has no valid pinned Facebook token; refusing mutation`)
+    }
+
     for (const item of task.items || []) {
       for (const adsetId of item.result?.adsetIds || []) {
         records.push({
           taskId: String(task._id),
+          organizationId: task.organizationId ? String(task.organizationId) : undefined,
+          createdBy: task.createdBy ? String(task.createdBy) : undefined,
+          facebookTokenId,
+          facebookTokenOwnerUserId: task.configSnapshot?.facebookTokenOwnerUserId
+            ? String(task.configSnapshot.facebookTokenOwnerUserId)
+            : undefined,
           accountId: normalizeAccountId(String(item.accountId)),
           adsetId: String(adsetId),
         })
@@ -187,26 +260,32 @@ const loadRecordedAdSets = async (): Promise<{ taskCount: number; records: Recor
   return { taskCount: tasks.length, records }
 }
 
-const loadAccountTokens = async (records: RecordedAdSet[]) => {
-  const accountIds = [...new Set(records.map(record => record.accountId))]
-  const accounts: any[] = await Account.find({
-    channel: 'facebook',
-    accountId: {
-      $in: accountIds.flatMap(accountId => [accountId, `act_${accountId}`]),
-    },
+const loadPinnedTokens = async (records: RecordedAdSet[]) => {
+  const tokenIds = [...new Set(records.map(record => record.facebookTokenId))]
+  const pinnedTokens: any[] = await FbToken.find({
+    _id: { $in: tokenIds },
+    status: 'active',
   })
-    .select('accountId token')
+    .select('_id organizationId userId status token')
     .lean()
 
   const tokens = new Map<string, string>()
-  for (const account of accounts) {
-    const accountId = normalizeAccountId(String(account.accountId))
-    if (account.token) tokens.set(accountId, account.token)
+  const tokensById = new Map(
+    pinnedTokens.map(token => [String(token._id), token]),
+  )
+  for (const record of records) {
+    const token = tokensById.get(record.facebookTokenId)
+    if (!pinnedTokenMatchesTaskSnapshot(record, token) || !token?.token) {
+      throw new Error(
+        `Pinned Facebook token no longer matches Leyon task ${record.taskId}; refusing mutation`,
+      )
+    }
+    tokens.set(record.facebookTokenId, token.token)
   }
 
-  const missingTokenIds = accountIds.filter(accountId => !tokens.has(accountId))
+  const missingTokenIds = tokenIds.filter(tokenId => !tokens.has(tokenId))
   if (missingTokenIds.length > 0) {
-    throw new Error(`Missing Facebook token for account(s): ${missingTokenIds.join(', ')}`)
+    throw new Error(`Missing pinned Facebook token(s): ${missingTokenIds.join(', ')}`)
   }
   return tokens
 }
@@ -215,17 +294,25 @@ const loadCurrentAdSets = async (
   records: RecordedAdSet[],
   tokens: Map<string, string>,
 ): Promise<CurrentAdSet[]> => {
-  const byAccount = new Map<string, RecordedAdSet[]>()
+  const byAccountAndToken = new Map<
+    string,
+    { accountId: string; tokenId: string; records: RecordedAdSet[] }
+  >()
   for (const record of records) {
-    const accountRecords = byAccount.get(record.accountId) || []
-    accountRecords.push(record)
-    byAccount.set(record.accountId, accountRecords)
+    const key = `${record.accountId}:${record.facebookTokenId}`
+    const group = byAccountAndToken.get(key) || {
+      accountId: record.accountId,
+      tokenId: record.facebookTokenId,
+      records: [],
+    }
+    group.records.push(record)
+    byAccountAndToken.set(key, group)
   }
 
   const current: CurrentAdSet[] = []
-  for (const [accountId, accountRecords] of byAccount) {
+  for (const { accountId, tokenId, records: accountRecords } of byAccountAndToken.values()) {
     const response = await facebookClient.get(`/act_${accountId}/adsets`, {
-      access_token: tokens.get(accountId),
+      access_token: tokens.get(tokenId),
       fields: 'id,account_id,status,targeting',
       limit: 1000,
     })
@@ -293,7 +380,7 @@ const main = async () => {
     }
 
     const { taskCount, records } = await loadRecordedAdSets()
-    const tokens = await loadAccountTokens(records)
+    const tokens = await loadPinnedTokens(records)
     const initialRecords = await loadCurrentAdSets(records, tokens)
     const initialScope = classifyRepairScope(taskCount, initialRecords)
     assertExpectedRepairScope(initialScope, expectedFinalIosCount)
@@ -305,7 +392,7 @@ const main = async () => {
     const updated: string[] = []
     for (const record of initialScope.activeMissingIos) {
       try {
-        const token = tokens.get(record.accountId) as string
+        const token = tokens.get(record.facebookTokenId) as string
         const fresh = await loadSingleAdSet(record, token)
         if (
           fresh.status !== 'ACTIVE'
