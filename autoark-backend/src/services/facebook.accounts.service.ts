@@ -30,10 +30,39 @@ type FacebookAccountToken = {
   organizationId?: any
 }
 
+const INSIGHTS_FINALIZATION_WINDOW_MS = 3 * 24 * 60 * 60 * 1000
+
+const buildAccountLifecycleUpdate = (
+  existingStatus: string | undefined,
+  nextStatus: string | undefined,
+  syncedAt: Date,
+) => {
+  const set: Record<string, Date> = {}
+  const unset: Record<string, 1> = {}
+
+  if (nextStatus === 'active') {
+    set.lastActiveAt = syncedAt
+    if (existingStatus && existingStatus !== nextStatus) {
+      set.statusChangedAt = syncedAt
+      unset.insightsFinalizationUntil = 1
+    }
+  } else if (existingStatus === 'active' && nextStatus) {
+    set.statusChangedAt = syncedAt
+    set.insightsFinalizationUntil = new Date(
+      syncedAt.getTime() + INSIGHTS_FINALIZATION_WINDOW_MS,
+    )
+  } else if (existingStatus && nextStatus && existingStatus !== nextStatus) {
+    set.statusChangedAt = syncedAt
+  }
+
+  return { set, unset }
+}
+
 export const syncCachedAccountsForToken = async (
   tokenDoc: FacebookAccountToken,
   accounts: FacebookAccountSource[],
 ) => {
+  const syncedAt = new Date()
   const accountDataById = new Map<string, any>()
 
   for (const account of accounts) {
@@ -49,7 +78,7 @@ export const syncCachedAccountsForToken = async (
       accountId,
       token: tokenDoc.token,
       tokenId: tokenDoc._id,
-      sourceSyncedAt: new Date(),
+      sourceSyncedAt: syncedAt,
       ...(tokenDoc.organizationId && { organizationId: tokenDoc.organizationId }),
     }
     if (account.name !== undefined) accountData.name = account.name
@@ -76,7 +105,7 @@ export const syncCachedAccountsForToken = async (
   const existingAccounts = await Account.find({
     channel: 'facebook',
     accountId: { $in: accountData.map(account => account.accountId) },
-  }).select('accountId organizationId').lean()
+  }).select('accountId organizationId status').lean()
   const existingById = new Map(existingAccounts.map((account: any) => [account.accountId, account]))
   const tokenOrgId = tokenDoc.organizationId?.toString?.()
   const errors: Array<{ tokenId: string; optimizer?: string; error: string }> = []
@@ -112,6 +141,24 @@ export const syncCachedAccountsForToken = async (
           ],
         }
 
+    const lifecycleUpdate = buildAccountLifecycleUpdate(
+      existingAccount?.status,
+      data.status,
+      syncedAt,
+    )
+    const update: {
+      $set: Record<string, unknown>
+      $unset?: Record<string, 1>
+    } = {
+      $set: {
+        ...data,
+        ...lifecycleUpdate.set,
+      },
+    }
+    if (Object.keys(lifecycleUpdate.unset).length > 0) {
+      update.$unset = lifecycleUpdate.unset
+    }
+
     operations.push({
       updateOne: {
         filter: {
@@ -119,7 +166,7 @@ export const syncCachedAccountsForToken = async (
           accountId: data.accountId,
           ...ownershipFilter,
         },
-        update: { $set: data },
+        update,
         // 若归属在预检查后被并发修改，唯一索引会把这次 upsert 变成可识别的冲突，
         // 而不是静默覆盖另一个组织的数据。
         upsert: true,

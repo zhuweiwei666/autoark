@@ -44,6 +44,7 @@ const queryResult = (value: any) => ({
 describe('facebook account cache import', () => {
   beforeEach(() => {
     jest.clearAllMocks()
+    jest.useFakeTimers().setSystemTime(new Date('2026-07-27T08:00:00.000Z'))
     ;(FbToken.find as jest.Mock).mockResolvedValue([{
       _id: 'token_a',
       token: 'TOKEN_A',
@@ -62,6 +63,10 @@ describe('facebook account cache import', () => {
     ;(Account.find as jest.Mock).mockReturnValue(queryResult([]))
     ;(Account.bulkWrite as jest.Mock).mockResolvedValue({ modifiedCount: 0, upsertedCount: 1 })
     ;(FbToken.findByIdAndUpdate as jest.Mock).mockResolvedValue({})
+  })
+
+  afterEach(() => {
+    jest.useRealTimers()
   })
 
   it('imports cached accounts in bulk without reading Meta again', async () => {
@@ -105,5 +110,78 @@ describe('facebook account cache import', () => {
     expect(update).not.toHaveProperty('status')
     expect(update).not.toHaveProperty('accountStatus')
     expect(update).not.toHaveProperty('operator')
+  })
+
+  it('opens a bounded insights finalization window when an active account becomes disabled', async () => {
+    ;(FacebookUser.findOne as jest.Mock).mockReturnValue(queryResult({
+      adAccounts: [{
+        accountId: '123',
+        name: 'Cached Account 123',
+        status: 2,
+      }],
+    }))
+    const existingAccountQuery = queryResult([{
+      accountId: '123',
+      organizationId: { toString: () => '665000000000000000000001' },
+      status: 'active',
+    }])
+    ;(Account.find as jest.Mock).mockReturnValue(existingAccountQuery)
+
+    await syncAccountsFromTokens()
+
+    expect(existingAccountQuery.select).toHaveBeenCalledWith('accountId organizationId status')
+    const update = (Account.bulkWrite as jest.Mock).mock.calls[0][0][0].updateOne.update
+    expect(update.$set).toMatchObject({
+      status: 'disabled',
+      statusChangedAt: new Date('2026-07-27T08:00:00.000Z'),
+      insightsFinalizationUntil: new Date('2026-07-30T08:00:00.000Z'),
+    })
+  })
+
+  it('does not renew the finalization window for an account that remains disabled', async () => {
+    ;(FacebookUser.findOne as jest.Mock).mockReturnValue(queryResult({
+      adAccounts: [{ accountId: '123', status: 2 }],
+    }))
+    ;(Account.find as jest.Mock).mockReturnValue(queryResult([{
+      accountId: '123',
+      organizationId: { toString: () => '665000000000000000000001' },
+      status: 'disabled',
+    }]))
+
+    await syncAccountsFromTokens()
+
+    const update = (Account.bulkWrite as jest.Mock).mock.calls[0][0][0].updateOne.update
+    expect(update.$set).not.toHaveProperty('statusChangedAt')
+    expect(update.$set).not.toHaveProperty('insightsFinalizationUntil')
+  })
+
+  it('does not open a finalization window for an account first discovered as disabled', async () => {
+    ;(FacebookUser.findOne as jest.Mock).mockReturnValue(queryResult({
+      adAccounts: [{ accountId: '123', status: 2 }],
+    }))
+
+    await syncAccountsFromTokens()
+
+    const update = (Account.bulkWrite as jest.Mock).mock.calls[0][0][0].updateOne.update
+    expect(update.$set).not.toHaveProperty('statusChangedAt')
+    expect(update.$set).not.toHaveProperty('insightsFinalizationUntil')
+  })
+
+  it('clears the finalization window when a disabled account becomes active again', async () => {
+    ;(Account.find as jest.Mock).mockReturnValue(queryResult([{
+      accountId: '123',
+      organizationId: { toString: () => '665000000000000000000001' },
+      status: 'disabled',
+    }]))
+
+    await syncAccountsFromTokens()
+
+    const update = (Account.bulkWrite as jest.Mock).mock.calls[0][0][0].updateOne.update
+    expect(update.$set).toMatchObject({
+      status: 'active',
+      lastActiveAt: new Date('2026-07-27T08:00:00.000Z'),
+      statusChangedAt: new Date('2026-07-27T08:00:00.000Z'),
+    })
+    expect(update.$unset).toEqual({ insightsFinalizationUntil: 1 })
   })
 })
