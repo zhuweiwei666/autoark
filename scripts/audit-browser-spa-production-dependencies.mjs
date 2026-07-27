@@ -3,10 +3,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const APP_ROOT = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "..",
-);
+const APP_ROOT = process.cwd();
 const SOURCE_ROOT = path.join(APP_ROOT, "src");
 const LOCKFILE_PATH = path.join(APP_ROOT, "package-lock.json");
 
@@ -171,14 +168,14 @@ export const runProductionAudit = () => {
   }
 
   if (result.status === 0) {
-    console.log("Frontend production dependency audit passed.");
+    console.log("Browser SPA production dependency audit passed.");
     return;
   }
 
   const { allowed, blocked } = classifyVulnerabilities(report);
   if (blocked.length > 0 || allowed.length === 0) {
     throw new Error(
-      `Frontend production dependency audit blocked:\n${summarizeBlocked(
+      `Browser SPA production dependency audit blocked:\n${summarizeBlocked(
         blocked.length ? blocked : [{ name: "unknown-audit-failure" }],
       )}`,
     );

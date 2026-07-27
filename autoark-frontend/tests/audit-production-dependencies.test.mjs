@@ -4,7 +4,7 @@ import {
   RSC_EXCEPTION,
   classifyVulnerabilities,
   validateExceptionEnvironment,
-} from "../scripts/audit-production-dependencies.mjs";
+} from "../../scripts/audit-browser-spa-production-dependencies.mjs";
 
 const allowedReport = {
   vulnerabilities: {

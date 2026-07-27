@@ -6,7 +6,7 @@ import mongoose from 'mongoose'
 const snapshotSchema = new mongoose.Schema({
   // 运行时间
   runAt: { type: Date, required: true, index: true },
-  triggeredBy: { type: String, enum: ['cron', 'manual'], default: 'cron' },
+  triggeredBy: { type: String, enum: ['cron', 'manual', 'event'], default: 'cron' },
 
   // 数据概要
   totalCampaigns: Number,
