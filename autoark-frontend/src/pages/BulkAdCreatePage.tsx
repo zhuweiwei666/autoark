@@ -3,6 +3,10 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import Loading from '../components/Loading'
 import { useAuth } from '../contexts/AuthContext'
 import { authFetch } from '../services/api'
+import {
+  getMetaCreativeOptimizationLabel,
+  getMetaCreativeOptimizationMode,
+} from '../utils/metaCreativeOptimization'
 
 const API_BASE = '/api'
 const FACEBOOK_LOGIN_URL_TIMEOUT_MS = 15000
@@ -1408,12 +1412,24 @@ export default function BulkAdCreatePage() {
     }
   }
   
+  const selectedCreativeGroups = creativeGroups.filter(group => ad.creativeGroupIds.includes(group._id))
+  const selectedMetaCloudOptimization = selectedCreativeGroups.some(
+    group => getMetaCreativeOptimizationMode(group.config) === 'advantage_plus',
+  )
+  const selectedCreativeMaterialCount = selectedCreativeGroups.reduce(
+    (total, group) => total + (group.materials?.length || 0),
+    0,
+  )
+  const estimatedCreativeUnits = selectedMetaCloudOptimization
+    ? Math.max(1, selectedCreativeMaterialCount)
+    : Math.max(1, ad.creativeGroupIds.length)
+
   // 预估数据
   const estimates = {
     totalAccounts: selectedAccounts.length,
     totalCampaigns: selectedAccounts.length,
     totalAdsets: selectedAccounts.length * adset.multiplier,
-    totalAds: selectedAccounts.length * adset.multiplier * Math.max(1, ad.creativeGroupIds.length) * 
+    totalAds: selectedAccounts.length * adset.multiplier * estimatedCreativeUnits *
       (publishStrategy.copywritingMode === 'SEQUENTIAL' ? Math.max(1, ad.copywritingPackageIds.length) : 1),
     dailyBudget: campaign.budget * selectedAccounts.length,
   }
@@ -2440,9 +2456,24 @@ export default function BulkAdCreatePage() {
                     {creativeGroups.map(group => (
                       <label key={group._id} className={`flex items-center p-3 border rounded-lg cursor-pointer ${ad.creativeGroupIds.includes(group._id) ? 'border-blue-500 bg-blue-50' : 'border-slate-200'}`}>
                         <input type="checkbox" checked={ad.creativeGroupIds.includes(group._id)} onChange={(e) => setAd({...ad, creativeGroupIds: e.target.checked ? [...ad.creativeGroupIds, group._id] : ad.creativeGroupIds.filter(id => id !== group._id)})} className="mr-2" />
-                        <div><div className="font-medium text-sm">{group.name}</div><div className="text-xs text-slate-500">{group.materials?.length || 0} 个素材</div></div>
+                        <div>
+                          <div className="font-medium text-sm">{group.name}</div>
+                          <div className="text-xs text-slate-500">
+                            {group.materials?.length || 0} 个素材
+                            {getMetaCreativeOptimizationMode(group.config) !== 'off' && (
+                              <span className="ml-2 text-blue-600">
+                                {getMetaCreativeOptimizationLabel(getMetaCreativeOptimizationMode(group.config))}
+                              </span>
+                            )}
+                          </div>
+                        </div>
                       </label>
                     ))}
+                  </div>
+                )}
+                {selectedMetaCloudOptimization && (
+                  <div className="mt-3 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs leading-5 text-blue-800">
+                    Meta 云端智能优化会优先：发布时将关闭定向包的动态创意，并按每个素材创建独立广告。
                   </div>
                 )}
                 <button onClick={() => navigate('/bulk-ad/assets?tab=creative')} className="text-sm text-blue-500 mt-2 hover:underline">+ 新建创意组</button></div>

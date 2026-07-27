@@ -1,9 +1,35 @@
 import { useState, useEffect, useRef } from 'react'
 import { useSearchParams, useNavigate } from 'react-router-dom'
-import { Crop } from '@phosphor-icons/react'
+import { Crop, Sparkle } from '@phosphor-icons/react'
 import { authFetch } from '../services/api'
+import {
+  getMetaCreativeOptimizationMode,
+  type MetaCreativeOptimizationMode,
+} from '../utils/metaCreativeOptimization'
 
 const API_BASE = '/api'
+
+const META_CREATIVE_OPTIMIZATION_OPTIONS: Array<{
+  value: MetaCreativeOptimizationMode
+  title: string
+  description: string
+}> = [
+  {
+    value: 'off',
+    title: '关闭',
+    description: '保持原素材，不向 Meta 申请视频比例优化。',
+  },
+  {
+    value: 'auto_crop',
+    title: 'Meta 自动裁剪视频',
+    description: '允许 Meta 根据版位调整视频比例。是否裁剪及裁剪范围由 Meta 决定，不会修改素材库中的原视频。',
+  },
+  {
+    value: 'advantage_plus',
+    title: 'Meta 云端智能优化',
+    description: '申请 Advantage+ 创意、标准增强、自动裁剪和版位适配，由 Meta 按展示机会决定最终效果。',
+  },
+]
 
 // 全球国家列表（按洲分组）- Facebook 支持的所有国家和地区
 const COUNTRIES = {
@@ -866,49 +892,61 @@ export default function AssetManagementPage() {
                 <option value="single">单图/视频</option><option value="carousel">轮播</option>
               </select></div>
 
-            <div className={`rounded-xl border p-4 transition-colors ${
-              formData.config?.metaAutoCrop === true
-                ? 'border-blue-300 bg-blue-50'
-                : 'border-slate-200 bg-slate-50'
-            }`}>
-              <div className="flex items-start justify-between gap-4">
-                <div className="flex min-w-0 gap-3">
-                  <span className={`mt-0.5 flex h-9 w-9 flex-none items-center justify-center rounded-lg ${
-                    formData.config?.metaAutoCrop === true
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-white text-slate-500 ring-1 ring-slate-200'
-                  }`}>
-                    <Crop size={20} weight="bold" />
-                  </span>
-                  <div>
-                    <div className="text-sm font-semibold text-slate-800">Meta 自动裁剪视频</div>
-                    <p className="mt-1 text-xs leading-5 text-slate-500">
-                      允许 Meta 根据版位和预估表现自动调整视频比例。是否裁剪及裁剪范围由 Meta 决定，不会修改素材库中的原视频。
-                    </p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={formData.config?.metaAutoCrop === true}
-                  aria-label="Meta 自动裁剪视频"
-                  onClick={() => setFormData({
-                    ...formData,
-                    config: {
-                      ...formData.config,
-                      metaAutoCrop: formData.config?.metaAutoCrop !== true,
-                    },
-                  })}
-                  className={`relative mt-1 h-6 w-11 flex-none rounded-full transition-colors active:scale-[0.98] ${
-                    formData.config?.metaAutoCrop === true ? 'bg-blue-600' : 'bg-slate-300'
-                  }`}
-                >
-                  <span className={`absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${
-                    formData.config?.metaAutoCrop === true ? 'translate-x-5' : 'translate-x-0'
-                  }`} />
-                </button>
+            <fieldset
+              role="radiogroup"
+              aria-label="Meta 视频创意优化"
+              className="rounded-xl border border-slate-200 bg-slate-50 p-4"
+            >
+              <legend className="px-1 text-sm font-semibold text-slate-800">Meta 视频创意优化</legend>
+              <p className="mb-3 mt-1 text-xs leading-5 text-slate-500">
+                三种模式互斥。Meta 优化属于展示机会级增强，并不保证每次展示都产生裁剪效果。
+              </p>
+              <div className="grid gap-3 md:grid-cols-3">
+                {META_CREATIVE_OPTIMIZATION_OPTIONS.map((option) => {
+                  const selected = getMetaCreativeOptimizationMode(formData.config) === option.value
+                  return (
+                    <label
+                      key={option.value}
+                      className={`relative flex cursor-pointer gap-3 rounded-lg border p-3 transition-colors ${
+                        selected
+                          ? 'border-blue-500 bg-white ring-1 ring-blue-500'
+                          : 'border-slate-200 bg-white hover:border-slate-300'
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="metaCreativeOptimizationMode"
+                        value={option.value}
+                        checked={selected}
+                        onChange={() => setFormData({
+                          ...formData,
+                          config: {
+                            ...formData.config,
+                            metaCreativeOptimizationMode: option.value,
+                            metaAutoCrop: option.value !== 'off',
+                          },
+                        })}
+                        className="mt-1 h-4 w-4 flex-none border-slate-300 text-blue-600 focus:ring-blue-500"
+                      />
+                      <span className="min-w-0">
+                        <span className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+                          {option.value === 'advantage_plus'
+                            ? <Sparkle size={17} weight="fill" className="text-blue-600" />
+                            : <Crop size={17} weight="bold" className={selected ? 'text-blue-600' : 'text-slate-400'} />}
+                          {option.title}
+                        </span>
+                        <span className="mt-1 block text-xs leading-5 text-slate-500">{option.description}</span>
+                      </span>
+                    </label>
+                  )
+                })}
               </div>
-            </div>
+              {getMetaCreativeOptimizationMode(formData.config) === 'advantage_plus' && (
+                <div className="mt-3 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs leading-5 text-blue-800">
+                  发布时自动关闭动态创意，并按每个素材创建独立广告；广告数量和 Meta 审核对象可能增加。
+                </div>
+              )}
+            </fieldset>
             
             {/* 素材选择 */}
             <div>
@@ -1084,9 +1122,11 @@ export default function AssetManagementPage() {
               <span className="mr-3">📷 {item.materials?.filter((m: any) => m.type === 'image').length || 0} 图片</span>
               <span className="mr-3">🎬 {item.materials?.filter((m: any) => m.type === 'video').length || 0} 视频</span>
               <span className="inline-block px-2 py-0.5 bg-slate-100 rounded text-xs">{item.config?.format || 'single'}</span>
-              {item.config?.metaAutoCrop === true && (
+              {getMetaCreativeOptimizationMode(item.config) !== 'off' && (
                 <span className="ml-2 inline-block rounded bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700">
-                  Meta 自动裁剪
+                  {getMetaCreativeOptimizationMode(item.config) === 'advantage_plus'
+                    ? 'Meta 云端优化'
+                    : 'Meta 自动裁剪'}
                 </span>
               )}
             </div>

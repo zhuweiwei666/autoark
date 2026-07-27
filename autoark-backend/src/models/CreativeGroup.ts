@@ -95,6 +95,11 @@ const creativeGroupSchema = new mongoose.Schema(
       dynamicCreative: { type: Boolean, default: false },
       // 是否允许 Meta 在投放时按版位自动裁剪视频
       metaAutoCrop: { type: Boolean },
+      // Meta 视频优化模式；保留 metaAutoCrop 兼容历史素材包
+      metaCreativeOptimizationMode: {
+        type: String,
+        enum: ['off', 'auto_crop', 'advantage_plus'],
+      },
       // 轮播图设置
       carousel: {
         autoOptimize: { type: Boolean, default: true },  // 自动优化排序
