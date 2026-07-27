@@ -20,6 +20,7 @@ import Account from '../src/models/Account'
 import CopywritingPackage from '../src/models/CopywritingPackage'
 import CreativeGroup from '../src/models/CreativeGroup'
 import FbToken from '../src/models/FbToken'
+import TargetingPackage from '../src/models/TargetingPackage'
 import User, { UserRole } from '../src/models/User'
 import {
   createAd,
@@ -225,6 +226,59 @@ describe('bulk ad execution diagnostics', () => {
     const creativePayload = (createAdCreative as jest.Mock).mock.calls[0][0]
     expect(creativePayload.objectStorySpec.link_data).toBeUndefined()
     expect(creativePayload.objectStorySpec.video_data.caption).toBeUndefined()
+  })
+
+  it('uses one dynamic creative ad when the selected targeting package enables it', async () => {
+    const task: any = buildTask()
+    task.configSnapshot.adset.targetingPackageId = '665000000000000000000710'
+    delete task.configSnapshot.adset.inlineTargeting
+    jest.spyOn(AdTask, 'findById')
+      .mockResolvedValueOnce(task)
+      .mockResolvedValueOnce(task)
+    jest.spyOn(AdTask, 'findOneAndUpdate').mockResolvedValue(task)
+    jest.spyOn(AdTask, 'findByIdAndUpdate').mockResolvedValue(task)
+    jest.spyOn(FbToken, 'findOne').mockResolvedValue({ token: 'fb_token' } as any)
+    jest.spyOn(TargetingPackage, 'findOne').mockResolvedValue({
+      _id: '665000000000000000000710',
+      name: 'Dynamic broad',
+      dynamicCreativeEnabled: true,
+      toFacebookTargeting: () => ({ geo_locations: { countries: ['US'] } }),
+    } as any)
+    jest.spyOn(CreativeGroup, 'find').mockResolvedValue([{
+      _id: '665000000000000000000711',
+      name: 'Image Group',
+      materials: [
+        { _id: '665000000000000000000713', type: 'image', name: 'Image 1', facebookImageHash: 'hash_1', status: 'uploaded' },
+        { _id: '665000000000000000000714', type: 'image', name: 'Image 2', facebookImageHash: 'hash_2', status: 'uploaded' },
+      ],
+    }] as any)
+    jest.spyOn(CopywritingPackage, 'find').mockResolvedValue([{
+      _id: '665000000000000000000712',
+      links: { websiteUrl: 'https://example.com' },
+      content: {
+        primaryTexts: ['Primary'],
+        headlines: ['Headline'],
+        descriptions: ['Description'],
+      },
+      callToAction: 'SHOP_NOW',
+    }] as any)
+    jest.spyOn(Ad, 'findOneAndUpdate').mockResolvedValue({} as any)
+    jest.spyOn(AdMaterialMapping as any, 'recordMapping').mockResolvedValue({} as any)
+    ;(createCampaign as jest.Mock).mockResolvedValue({ success: true, id: 'camp_1' })
+    ;(createAdSet as jest.Mock).mockResolvedValue({ success: true, id: 'adset_1' })
+    ;(createAdCreative as jest.Mock).mockResolvedValue({ success: true, id: 'creative_1' })
+    ;(createAd as jest.Mock).mockResolvedValue({ success: true, id: 'ad_1' })
+
+    await executeTaskForAccount(taskId, '123')
+
+    expect(createAdSet).toHaveBeenCalledWith(expect.objectContaining({ isDynamicCreative: true }))
+    expect(createAdCreative).toHaveBeenCalledTimes(1)
+    expect(createAdCreative).toHaveBeenCalledWith(expect.objectContaining({
+      assetFeedSpec: expect.objectContaining({
+        images: [{ hash: 'hash_1' }, { hash: 'hash_2' }],
+      }),
+    }))
+    expect(createAd).toHaveBeenCalledTimes(1)
   })
 
   it('marks an account failed and preserves diagnostics when any material is skipped', async () => {

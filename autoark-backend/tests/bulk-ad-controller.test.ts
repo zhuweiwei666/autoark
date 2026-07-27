@@ -1610,6 +1610,7 @@ describe('bulk ad controller', () => {
         savedToFacebook: true,
         facebookSavedAudienceId: 'audience_1',
         platform: 'facebook',
+        dynamicCreativeEnabled: true,
         geoLocations: {
           countries: ['US', 'US', { $ne: 'CN' }],
           cities: [{ key: 'city_1', name: 'Bangkok', radius: 120 }],
@@ -1655,6 +1656,7 @@ describe('bulk ad controller', () => {
     expect(savedPackage.deviceSettings.mobileDevices).toEqual(['android_smartphone'])
     expect(savedPackage.deviceSettings.wifiOnly).toBe(true)
     expect(savedPackage.optimizationGoal).toBe('LINK_CLICKS')
+    expect(savedPackage.dynamicCreativeEnabled).toBe(true)
     expect(savedPackage.tags).toEqual(['growth'])
     expect(res.json).toHaveBeenCalledWith({ success: true, data: savedPackage })
   })

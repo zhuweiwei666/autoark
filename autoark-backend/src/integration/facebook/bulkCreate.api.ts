@@ -153,6 +153,7 @@ export interface CreateAdSetParams {
   pacing_type?: string[]
   dsa_beneficiary?: string  // DSA 受益方（欧盟合规）
   dsa_payor?: string        // DSA 付款方（欧盟合规）
+  isDynamicCreative?: boolean
 }
 
 export const createAdSet = async (params: CreateAdSetParams) => {
@@ -176,6 +177,7 @@ export const createAdSet = async (params: CreateAdSetParams) => {
     pacing_type,
     dsa_beneficiary,
     dsa_payor,
+    isDynamicCreative,
   } = params
 
   // 处理 targeting：确保国家代码大写，并添加必要的 targeting_automation 字段
@@ -236,6 +238,9 @@ export const createAdSet = async (params: CreateAdSetParams) => {
   }
   if (dsa_payor) {
     requestParams.dsa_payor = dsa_payor
+  }
+  if (isDynamicCreative !== undefined) {
+    requestParams.is_dynamic_creative = isDynamicCreative
   }
 
   try {
