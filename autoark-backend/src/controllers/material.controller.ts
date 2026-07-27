@@ -1,6 +1,7 @@
 import { Request, Response } from 'express'
 import { createHash } from 'crypto'
 import Material from '../models/Material'
+import MaterialFavorite from '../models/MaterialFavorite'
 import Folder from '../models/Folder'
 import Account from '../models/Account'
 import Ad from '../models/Ad'
@@ -961,6 +962,8 @@ export const getMaterialList = async (req: Request, res: Response) => {
       smartGroupKey,
       sortBy = 'createdAt',
       sortOrder = 'desc',
+      favoritesOnly,
+      includeFavorite,
     } = req.query
     const rawSmartGroupType = typeof smartGroupType === 'string'
       ? smartGroupType
@@ -1005,6 +1008,17 @@ export const getMaterialList = async (req: Request, res: Response) => {
     const safeTags = pickSafeTagList(tags)
     const safeSearch = pickSafeRegexLiteral(search, MATERIAL_TEXT_FILTER_MAX_LENGTH)
     const safeSmartGroupKey = pickSafeQueryString(smartGroupKey, MATERIAL_SMART_GROUP_KEY_MAX_LENGTH)
+    const wantsFavoritesOnly = favoritesOnly === 'true'
+    const wantsFavoriteState = wantsFavoritesOnly || includeFavorite === 'true'
+    if (favoritesOnly !== undefined && favoritesOnly !== 'true' && favoritesOnly !== 'false') {
+      return res.status(400).json({ success: false, error: '收藏筛选参数无效' })
+    }
+    if (includeFavorite !== undefined && includeFavorite !== 'true' && includeFavorite !== 'false') {
+      return res.status(400).json({ success: false, error: '收藏状态参数无效' })
+    }
+    const favoriteIds = wantsFavoriteState && req.user?.userId
+      ? await MaterialFavorite.distinct('materialId', { userId: req.user.userId })
+      : []
     let filter: any = wantsExternalPackage
       ? {
         organizationId: { $in: [null] },
@@ -1044,6 +1058,9 @@ export const getMaterialList = async (req: Request, res: Response) => {
     if (rawSmartGroupType === 'facebook-account' && safeSmartGroupKey) {
       filter = combineFilters(filter, buildFacebookSmartGroupFilter(safeSmartGroupKey))
     }
+    if (wantsFavoritesOnly) {
+      filter = combineFilters(filter, { _id: { $in: favoriteIds } })
+    }
     
     const sort: Record<string, 1 | -1> = {}
     const safeSortBy = MATERIAL_SORT_FIELDS.has(String(sortBy)) ? String(sortBy) : 'createdAt'
@@ -1051,7 +1068,7 @@ export const getMaterialList = async (req: Request, res: Response) => {
     sort[safeSortBy] = safeSortOrder
     if (safeSortBy !== '_id') sort._id = safeSortOrder
 
-    const { list, total } = await queryMaterialPage({
+    const { list: rawList, total } = await queryMaterialPage({
       filter,
       sort,
       skip,
@@ -1064,6 +1081,13 @@ export const getMaterialList = async (req: Request, res: Response) => {
         && materialFilterMayMatchGlobal(filter)
       ),
     })
+    const favoriteIdSet = new Set(favoriteIds.map((id: any) => String(id)))
+    const list = wantsFavoriteState
+      ? rawList.map((material: any) => ({
+        ...material,
+        isFavorite: favoriteIdSet.has(String(material._id)),
+      }))
+      : rawList
     
     res.json({
       success: true,
@@ -1081,6 +1105,43 @@ export const getMaterialList = async (req: Request, res: Response) => {
       success: false,
       error: '获取素材列表失败，请稍后重试',
     })
+  }
+}
+
+export const setMaterialFavorite = async (req: Request, res: Response) => {
+  try {
+    const userId = req.user?.userId
+    if (!userId) {
+      return res.status(401).json({ success: false, error: '请先登录' })
+    }
+    if (typeof req.body?.favorite !== 'boolean') {
+      return res.status(400).json({ success: false, error: '收藏状态无效' })
+    }
+    const material = await Material.findOne(
+      combineFilters({ _id: req.params.id }, getMaterialFilter(req)),
+    ).select('_id').lean()
+    if (!material) {
+      return res.status(404).json({ success: false, error: '素材不存在或无权访问' })
+    }
+    const favoriteFilter = { userId, materialId: material._id }
+    if (req.body.favorite) {
+      await MaterialFavorite.updateOne(
+        favoriteFilter,
+        {
+          $setOnInsert: {
+            ...favoriteFilter,
+            organizationId: req.user?.organizationId,
+          },
+        },
+        { upsert: true },
+      )
+    } else {
+      await MaterialFavorite.deleteOne(favoriteFilter)
+    }
+    return res.json({ success: true, data: { materialId: material._id, isFavorite: req.body.favorite } })
+  } catch {
+    logger.error('[Material] Favorite update failed')
+    return res.status(500).json({ success: false, error: '更新收藏失败，请稍后重试' })
   }
 }
 

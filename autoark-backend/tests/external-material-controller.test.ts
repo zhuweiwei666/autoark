@@ -91,6 +91,7 @@ jest.mock('../src/controllers/material.controller', () => ({
   getMaterialSmartGroups: ordinaryMaterialHandler,
   getFolders: ordinaryMaterialHandler,
   getFolderTree: ordinaryMaterialHandler,
+  setMaterialFavorite: ordinaryMaterialHandler,
   createFolder: ordinaryMaterialHandler,
   renameFolder: ordinaryMaterialHandler,
   deleteFolder: ordinaryMaterialHandler,

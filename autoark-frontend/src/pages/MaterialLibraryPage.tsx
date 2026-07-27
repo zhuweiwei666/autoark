@@ -109,6 +109,7 @@ interface Material {
   folder: string
   usageCount: number
   createdAt: string
+  isFavorite?: boolean
   source?: {
     platform?: string
     externalAccountId?: string
@@ -155,7 +156,7 @@ export default function MaterialLibraryPage() {
   const [smartGroupsError, setSmartGroupsError] = useState(false)
   
   // 筛选
-  const [filter, setFilter] = useState({ type: '', search: '' })
+  const [filter, setFilter] = useState({ type: '', search: '', favoritesOnly: false })
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
   const [totalCount, setTotalCount] = useState(0)
@@ -371,6 +372,8 @@ export default function MaterialLibraryPage() {
           type: filter.type,
           search: filter.search,
         })
+        params.set('includeFavorite', 'true')
+        if (filter.favoritesOnly) params.set('favoritesOnly', 'true')
         const res = await authFetch(`${API_BASE}/materials?${params}`, { signal })
         const data = await res.json()
         if (!res.ok || !data.success) {
@@ -394,6 +397,31 @@ export default function MaterialLibraryPage() {
       },
     )
   )
+
+  const toggleFavorite = async (material: Material) => {
+    const favorite = !material.isFavorite
+    setMaterials(current => current.map(item => (
+      item._id === material._id ? { ...item, isFavorite: favorite } : item
+    )))
+    try {
+      const res = await authFetch(`${API_BASE}/materials/${material._id}/favorite`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ favorite }),
+      })
+      const data = await res.json()
+      if (!res.ok || !data.success) throw new Error(data.error || '更新收藏失败')
+      if (filter.favoritesOnly && !favorite) {
+        setMaterials(current => current.filter(item => item._id !== material._id))
+        setTotal(current => Math.max(0, current - 1))
+      }
+    } catch (error: any) {
+      setMaterials(current => current.map(item => (
+        item._id === material._id ? { ...item, isFavorite: material.isFavorite } : item
+      )))
+      alert(error?.message || '更新收藏失败，请重试')
+    }
+  }
   
   // 直传 R2 上传（更快，跳过服务器）
   const handleUpload = async (files: FileList | null) => {
@@ -1089,6 +1117,25 @@ export default function MaterialLibraryPage() {
         )}
         
         <div className="flex-1" />
+
+        <button
+          type="button"
+          aria-pressed={filter.favoritesOnly}
+          onClick={() => {
+            setFilter(current => ({ ...current, favoritesOnly: !current.favoritesOnly }))
+            setPage(1)
+          }}
+          className={`flex items-center gap-1.5 rounded border px-3 py-1.5 text-sm transition active:scale-[0.98] ${
+            filter.favoritesOnly
+              ? 'border-amber-300 bg-amber-50 text-amber-800'
+              : 'border-slate-200 text-slate-600 hover:border-amber-200 hover:text-amber-700'
+          }`}
+        >
+          <svg viewBox="0 0 24 24" className="h-4 w-4" fill={filter.favoritesOnly ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="1.8">
+            <path strokeLinecap="round" strokeLinejoin="round" d="m12 3 2.7 5.47 6.04.88-4.37 4.26 1.03 6.02L12 16.79l-5.4 2.84 1.03-6.02-4.37-4.26 6.04-.88L12 3Z" />
+          </svg>
+          我的收藏
+        </button>
         
         {/* Type Filter */}
         <select
@@ -1408,6 +1455,25 @@ export default function MaterialLibraryPage() {
                         </div>
                       </div>
                     )}
+
+                    <button
+                      type="button"
+                      aria-label={m.isFavorite ? `取消收藏 ${m.name}` : `收藏 ${m.name}`}
+                      title={m.isFavorite ? '取消收藏' : '收藏素材'}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        void toggleFavorite(m)
+                      }}
+                      className={`absolute right-1.5 top-1.5 z-10 flex h-8 w-8 items-center justify-center rounded-full border bg-white/95 shadow-sm backdrop-blur transition active:scale-[0.92] ${
+                        m.isFavorite
+                          ? 'border-amber-300 text-amber-500'
+                          : 'border-white/70 text-slate-400 opacity-0 group-hover:opacity-100 focus:opacity-100'
+                      }`}
+                    >
+                      <svg viewBox="0 0 24 24" className="h-4 w-4" fill={m.isFavorite ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="1.8">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="m12 3 2.7 5.47 6.04.88-4.37 4.26 1.03 6.02L12 16.79l-5.4 2.84 1.03-6.02-4.37-4.26 6.04-.88L12 3Z" />
+                      </svg>
+                    </button>
                     
                     {/* Preview */}
                     <div className="aspect-square bg-slate-100 rounded-lg overflow-hidden">

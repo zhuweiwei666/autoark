@@ -304,6 +304,7 @@ interface Material {
   type: 'image' | 'video'
   storage: { url: string }
   folder: string
+  isFavorite?: boolean
 }
 
 interface Folder {
@@ -365,23 +366,36 @@ export default function AssetManagementPage() {
     setLoadingMaterials(true)
     try {
       const params = new URLSearchParams({ pageSize: '100' })
+      params.set('includeFavorite', 'true')
       params.set('page', String(page))
       if (overrideFilter.folder) params.append('folder', overrideFilter.folder)
       if (overrideFilter.type) params.append('type', overrideFilter.type)
       
-      const [matRes, folderRes] = await Promise.all([
+      const favoriteParams = new URLSearchParams(params)
+      favoriteParams.set('favoritesOnly', 'true')
+      favoriteParams.set('page', '1')
+      const [matRes, favoriteRes, folderRes] = await Promise.all([
         authFetch(`${API_BASE}/materials?${params}`),
+        page === 1
+          ? authFetch(`${API_BASE}/materials?${favoriteParams}`)
+          : Promise.resolve(null),
         authFetch(`${API_BASE}/materials/folder-tree`)
       ])
       
       const matData = await matRes.json()
+      const favoriteData = favoriteRes ? await favoriteRes.json() : null
       const folderData = await folderRes.json()
 
       if (requestId !== materialRequestId.current) return
       
       if (matData.success) {
         const nextMaterials = matData.data.list || []
-        setMaterials(current => append ? [...current, ...nextMaterials] : nextMaterials)
+        const favoriteMaterials = favoriteData?.success ? favoriteData.data.list || [] : []
+        const favoriteIds = new Set(favoriteMaterials.map((material: Material) => material._id))
+        const orderedMaterials = page === 1
+          ? [...favoriteMaterials, ...nextMaterials.filter((material: Material) => !favoriteIds.has(material._id))]
+          : nextMaterials
+        setMaterials(current => append ? [...current, ...orderedMaterials] : orderedMaterials)
         setMaterialPage(page)
         setMaterialTotal(Number(matData.data.total) || 0)
       }
@@ -1146,6 +1160,14 @@ export default function AssetManagementPage() {
                           }`}
                         >
                           <div className="aspect-square bg-slate-100 relative">
+                            {m.isFavorite && (
+                              <div className="absolute left-1.5 top-1.5 z-10 flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50/95 px-2 py-1 text-[10px] font-medium text-amber-800 shadow-sm backdrop-blur">
+                                <svg viewBox="0 0 24 24" className="h-3 w-3" fill="currentColor" stroke="currentColor" strokeWidth="1.5">
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="m12 3 2.7 5.47 6.04.88-4.37 4.26 1.03 6.02L12 16.79l-5.4 2.84 1.03-6.02-4.37-4.26 6.04-.88L12 3Z" />
+                                </svg>
+                                已收藏
+                              </div>
+                            )}
                             {m.type === 'image' ? (
                               <img src={m.storage.url} alt={m.name} className="w-full h-full object-cover" />
                             ) : (
@@ -1165,7 +1187,7 @@ export default function AssetManagementPage() {
                     })}
                   </div>
                 )}
-                {materials.length < materialTotal && (
+                {materialPage * 100 < materialTotal && (
                   <div className="flex justify-center pt-5">
                     <button
                       type="button"
