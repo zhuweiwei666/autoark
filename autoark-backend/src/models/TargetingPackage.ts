@@ -1,6 +1,31 @@
 import mongoose from 'mongoose'
 import { sanitizeOptimizerTargeting } from '../utils/optimizerTargeting'
 
+const normalizeMetaOsVersion = (value: unknown): string | undefined => {
+  const candidate = String(value || '').trim()
+  if (!/^\d+(?:\.\d+)?$/.test(candidate)) return undefined
+  return candidate.includes('.') ? candidate : `${candidate}.0`
+}
+
+export const buildMetaUserOsTargeting = (
+  mobileOS: unknown,
+  iosVersionMin?: unknown,
+): string[] | undefined => {
+  if (!Array.isArray(mobileOS) || mobileOS.includes('all')) return undefined
+
+  const normalizedIosMinimum = normalizeMetaOsVersion(iosVersionMin)
+  const supportedMobileOS = Array.from(new Set(
+    mobileOS.filter((os: string) => os === 'iOS' || os === 'Android'),
+  ))
+
+  if (supportedMobileOS.length === 0) return undefined
+  return supportedMobileOS.map(os => (
+    os === 'iOS' && normalizedIosMinimum
+      ? `iOS_ver_${normalizedIosMinimum}_and_above`
+      : os
+  ))
+}
+
 /**
  * 定向包数据模型
  * 用于保存和复用 Facebook 广告受众定向配置
@@ -317,15 +342,12 @@ targetingPackageSchema.methods.toFacebookTargeting = function() {
   }
   
   // ==================== 设备和操作系统设置 ====================
-  // Meta 的 AdSet targeting 仍支持 user_os。版本、机型和 Wi-Fi 字段需单独验证后再映射。
-  const mobileOS = this.deviceSettings?.mobileOS
-  if (mobileOS?.length && !mobileOS.includes('all')) {
-    const supportedMobileOS = Array.from(new Set(
-      mobileOS.filter((os: string) => os === 'iOS' || os === 'Android'),
-    ))
-    if (supportedMobileOS.length) {
-      targeting.user_os = supportedMobileOS
-    }
+  const userOs = buildMetaUserOsTargeting(
+    this.deviceSettings?.mobileOS,
+    this.deviceSettings?.iosVersionMin,
+  )
+  if (userOs) {
+    targeting.user_os = userOs
   }
   
   return targeting
