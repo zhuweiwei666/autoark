@@ -146,6 +146,9 @@ router.get('/folders', materialController.getFolders)
 // 文件夹树（新接口，支持层级）
 router.get('/folder-tree', materialController.getFolderTree)
 
+// 当前用户的个人素材收藏
+router.put('/:id/favorite', materialController.setMaterialFavorite)
+
 // 创建文件夹
 router.post('/create-folder', materialController.createFolder)
 
