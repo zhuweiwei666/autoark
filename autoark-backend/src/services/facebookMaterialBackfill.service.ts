@@ -6,6 +6,7 @@ import {
   FACEBOOK_SYNC_DISABLED_MESSAGE,
   isFacebookSyncEnabled,
 } from '../config/facebookSync'
+import { resolveAccountOperationalAuthorization } from './metaBusinessCredential.service'
 
 const ORIGINAL_IMAGE_BACKFILL_CONFIRMATION = 'BACKFILL_FACEBOOK_ORIGINAL_IMAGES'
 
@@ -44,16 +45,30 @@ export const backfillFacebookOriginalImages = async (options?: {
     channel: 'facebook',
     status: 'active',
     accountId: { $in: accountIdCandidates },
-    token: { $exists: true, $nin: [null, ''] },
   }).lean()
   const accountById = new Map(
     accounts.map((account) => [normalizeForStorage(account.accountId), account]),
   )
 
+  const authorizations = new Map<
+    string,
+    Awaited<ReturnType<typeof resolveAccountOperationalAuthorization>>
+  >()
+  await Promise.all(accounts.map(async (account) => {
+    const accountId = normalizeForStorage(account.accountId)
+    authorizations.set(accountId, await resolveAccountOperationalAuthorization({
+      accountId,
+      organizationId: account.organizationId,
+      legacyToken: account.token,
+      legacyTokenId: account.tokenId,
+    }))
+  }))
+
   const prepared = creatives.flatMap((creative: any) => {
     const accountId = normalizeForStorage(creative.accountId)
     const account = accountById.get(accountId)
-    if (!account?.token) return []
+    const authorization = authorizations.get(accountId)
+    if (!account || !authorization) return []
 
     return [{
       jobId: `material-original-image-v2-${creative.creativeId}`,
@@ -66,7 +81,9 @@ export const backfillFacebookOriginalImages = async (options?: {
         },
         accountId,
         organizationId: creative.organizationId?.toString() || account.organizationId?.toString(),
-        token: account.token,
+        token: authorization.token,
+        authorizationType: authorization.authorizationType,
+        metaCredentialId: authorization.metaCredentialId,
       },
     }]
   })

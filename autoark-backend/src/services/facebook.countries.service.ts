@@ -7,6 +7,7 @@ import dayjs from 'dayjs'
 import { fetchInsights } from '../integration/facebook/insights.api'
 import { getAccountIdsForQuery, normalizeForApi } from '../utils/accountId'
 import { buildInsightsDateRequest } from '../utils/insightsDateRange'
+import { resolveAccountOperationalAuthorization } from './metaBusinessCredential.service'
 
 // 国家代码到名称的映射
 const COUNTRY_NAMES: Record<string, string> = {
@@ -226,12 +227,6 @@ async function getCountriesFromFacebookAPI(
 
     // 获取所有活跃的 token
     const tokens = await FbToken.find({ status: 'active', ...(accessScope.tokenFilter || {}) }).lean()
-    if (tokens.length === 0) {
-        return {
-            data: [],
-            pagination: { page: pagination.page, limit: pagination.limit, total: 0, pages: 0 },
-        }
-    }
 
     const { startDate, endDate, timeRange } = resolveCountryDateRange(filters)
 
@@ -250,17 +245,24 @@ async function getCountriesFromFacebookAPI(
 
     // 从每个账户获取按国家细分的数据
     for (const account of accounts) {
-        const accountToken = account.token && tokenValues.has(account.token)
+        const legacyToken = account.token && tokenValues.has(account.token)
             ? account.token
             : tokens[0]?.token
-        if (!accountToken) continue
+        const legacyTokenRecord = tokens.find((token: any) => token.token === legacyToken)
+        const authorization = await resolveAccountOperationalAuthorization({
+            accountId: account.accountId,
+            organizationId: account.organizationId,
+            legacyToken,
+            legacyTokenId: legacyTokenRecord?._id,
+        })
+        if (!authorization) continue
 
         try {
             const insights = await fetchInsights(
                 normalizeForApi(account.accountId),
                 'campaign',
                 undefined,
-                accountToken,
+                authorization.token,
                 ['country'],
                 timeRange
             )

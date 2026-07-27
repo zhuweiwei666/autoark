@@ -43,6 +43,13 @@ if [ "${EXTERNAL_MATERIAL_SYNC_ENABLED+x}" = 'x' ]; then
   EXTERNAL_MATERIAL_SYNC_ENABLED_OVERRIDE="$EXTERNAL_MATERIAL_SYNC_ENABLED"
 fi
 
+META_CREDENTIAL_ENCRYPTION_KEY_OVERRIDE_SET='false'
+META_CREDENTIAL_ENCRYPTION_KEY_OVERRIDE=''
+if [ "${META_CREDENTIAL_ENCRYPTION_KEY+x}" = 'x' ]; then
+  META_CREDENTIAL_ENCRYPTION_KEY_OVERRIDE_SET='true'
+  META_CREDENTIAL_ENCRYPTION_KEY_OVERRIDE="$META_CREDENTIAL_ENCRYPTION_KEY"
+fi
+
 case "$EXTERNAL_MATERIAL_SYNC_ENABLED_OVERRIDE_SET:$EXTERNAL_MATERIAL_SYNC_ENABLED_OVERRIDE" in
   false: | true:true | true:false) ;;
   *)
@@ -57,6 +64,18 @@ case "$GUANGDADA_API_KEY_OVERRIDE" in
     exit 1
     ;;
 esac
+
+case "$META_CREDENTIAL_ENCRYPTION_KEY_OVERRIDE" in
+  *$'\n'* | *$'\r'*)
+    echo "META_CREDENTIAL_ENCRYPTION_KEY must be a single line."
+    exit 1
+    ;;
+esac
+if [ "$META_CREDENTIAL_ENCRYPTION_KEY_OVERRIDE_SET" = 'true' ] &&
+  [[ ! "$META_CREDENTIAL_ENCRYPTION_KEY_OVERRIDE" =~ [^[:space:]] ]]; then
+  echo "META_CREDENTIAL_ENCRYPTION_KEY must be non-empty when supplied."
+  exit 1
+fi
 
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   echo "Run this script from the AutoArk git checkout."
@@ -159,10 +178,14 @@ key_override_set=''
 key_override=''
 flag_override_set=''
 flag_override=''
+meta_key_override_set=''
+meta_key_override=''
 IFS= read -r -d '' key_override_set
 IFS= read -r -d '' key_override
 IFS= read -r -d '' flag_override_set
 IFS= read -r -d '' flag_override
+IFS= read -r -d '' meta_key_override_set
+IFS= read -r -d '' meta_key_override
 
 case "$key_override_set" in
   true | false) ;;
@@ -178,12 +201,30 @@ case "$flag_override_set:$flag_override" in
     exit 1
     ;;
 esac
+case "$meta_key_override_set" in
+  true | false) ;;
+  *)
+    echo 'Invalid META_CREDENTIAL_ENCRYPTION_KEY override state.'
+    exit 1
+    ;;
+esac
 case "$key_override" in
   *$'\n'* | *$'\r'*)
     echo 'GUANGDADA_API_KEY must be a single line.'
     exit 1
     ;;
 esac
+case "$meta_key_override" in
+  *$'\n'* | *$'\r'*)
+    echo 'META_CREDENTIAL_ENCRYPTION_KEY must be a single line.'
+    exit 1
+    ;;
+esac
+if [ "$meta_key_override_set" = 'true' ] &&
+  [[ ! "$meta_key_override" =~ [^[:space:]] ]]; then
+  echo 'META_CREDENTIAL_ENCRYPTION_KEY must be non-empty when supplied.'
+  exit 1
+fi
 
 if ! command -v flock >/dev/null 2>&1; then
   echo 'flock is required for production deployment.'
@@ -346,6 +387,7 @@ payload_temp="$(mktemp "${transaction_prefix}.payload.XXXXXX")"
 chmod 600 "$base_payload_temp" "$payload_temp"
 source_key=''
 source_flag='false'
+source_meta_key=''
 while IFS= read -r line || [ -n "$line" ]; do
   case "$line" in
     GUANGDADA_API_KEY=*)
@@ -353,6 +395,9 @@ while IFS= read -r line || [ -n "$line" ]; do
       ;;
     EXTERNAL_MATERIAL_SYNC_ENABLED=*)
       source_flag="${line#EXTERNAL_MATERIAL_SYNC_ENABLED=}"
+      ;;
+    META_CREDENTIAL_ENCRYPTION_KEY=*)
+      source_meta_key="${line#META_CREDENTIAL_ENCRYPTION_KEY=}"
       ;;
     AUTOARK_DEPLOY_UPLOAD_GENERATION=*) ;;
     *)
@@ -363,11 +408,15 @@ done < "$source_env_path" > "$base_payload_temp"
 
 resolved_key="$source_key"
 resolved_flag="$source_flag"
+resolved_meta_key="$source_meta_key"
 if [ "$key_override_set" = 'true' ]; then
   resolved_key="$key_override"
 fi
 if [ "$flag_override_set" = 'true' ]; then
   resolved_flag="$flag_override"
+fi
+if [ "$meta_key_override_set" = 'true' ]; then
+  resolved_meta_key="$meta_key_override"
 fi
 
 case "$resolved_flag" in
@@ -387,10 +436,17 @@ case "$resolved_key" in
     exit 1
     ;;
 esac
+case "$resolved_meta_key" in
+  *$'\n'* | *$'\r'*)
+    echo 'META_CREDENTIAL_ENCRYPTION_KEY must resolve to one line.'
+    exit 1
+    ;;
+esac
 
 cat "$base_payload_temp" > "$payload_temp"
 printf 'GUANGDADA_API_KEY=%s\n' "$resolved_key" >> "$payload_temp"
 printf 'EXTERNAL_MATERIAL_SYNC_ENABLED=%s\n' "$resolved_flag" >> "$payload_temp"
+printf 'META_CREDENTIAL_ENCRYPTION_KEY=%s\n' "$resolved_meta_key" >> "$payload_temp"
 chmod 600 "$payload_temp"
 mv -f -- "$payload_temp" "$payload_path"
 payload_temp=''
@@ -461,12 +517,14 @@ printf -v QUOTED_REMOTE_DEPLOY_LOCK_FILE '%q' "$REMOTE_DEPLOY_LOCK_FILE"
 REMOTE_DEPLOY_TRANSACTION_COMMAND="bash -c $QUOTED_REMOTE_DEPLOY_TRANSACTION_SCRIPT -- $QUOTED_APP_DIR $QUOTED_REPO_URL $QUOTED_AUTOARK_REF $QUOTED_REMOTE_ENV_BACKUP $QUOTED_REMOTE_ENV_UPLOAD_STAGE $QUOTED_REMOTE_ENV_UPLOAD_CANDIDATE $QUOTED_REMOTE_ENV_UPLOAD_EXPECTED_GENERATION $QUOTED_REMOTE_DEPLOY_LOCK_FILE"
 
 log "Deploying verified commit=$AUTOARK_REF"
-log "Synchronizing GUANGDADA_API_KEY and EXTERNAL_MATERIAL_SYNC_ENABLED"
-printf '%s\0%s\0%s\0%s\0' \
+log "Synchronizing GUANGDADA_API_KEY, EXTERNAL_MATERIAL_SYNC_ENABLED, and META_CREDENTIAL_ENCRYPTION_KEY"
+printf '%s\0%s\0%s\0%s\0%s\0%s\0' \
   "$GUANGDADA_API_KEY_OVERRIDE_SET" \
   "$GUANGDADA_API_KEY_OVERRIDE" \
   "$EXTERNAL_MATERIAL_SYNC_ENABLED_OVERRIDE_SET" \
-  "$EXTERNAL_MATERIAL_SYNC_ENABLED_OVERRIDE" |
+  "$EXTERNAL_MATERIAL_SYNC_ENABLED_OVERRIDE" \
+  "$META_CREDENTIAL_ENCRYPTION_KEY_OVERRIDE_SET" \
+  "$META_CREDENTIAL_ENCRYPTION_KEY_OVERRIDE" |
   ssh "$PROD_HOST" "$REMOTE_DEPLOY_TRANSACTION_COMMAND"
 
 if [ "${AUTOARK_SKIP_VERIFY:-false}" != "true" ]; then

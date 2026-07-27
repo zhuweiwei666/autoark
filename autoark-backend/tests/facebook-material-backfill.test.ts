@@ -110,7 +110,7 @@ describe('Facebook original image backfill', () => {
 
     expect(mockAdd).toHaveBeenCalledWith(
       'sync-material-original-image',
-      {
+      expect.objectContaining({
         creative: {
           creativeId: 'creative-1',
           name: 'Image one',
@@ -120,7 +120,8 @@ describe('Facebook original image backfill', () => {
         accountId: '123',
         organizationId: 'org-1',
         token: 'TOKEN_123',
-      },
+        authorizationType: 'personal',
+      }),
       expect.objectContaining({
         jobId: 'material-original-image-v2-creative-1',
         priority: 1,

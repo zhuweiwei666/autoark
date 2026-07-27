@@ -6,6 +6,7 @@ import { fetchUserAdAccounts, fetchInsights } from './facebook.api'
 import logger from '../utils/logger'
 import { normalizeForStorage, getAccountIdsForQuery, normalizeFromQuery, normalizeForApi } from '../utils/accountId'
 import { buildInsightsDateRequest } from '../utils/insightsDateRange'
+import { resolveAccountOperationalAuthorization } from './metaBusinessCredential.service'
 
 type FacebookAccountSource = {
   id?: string
@@ -349,11 +350,18 @@ export const getAccounts = async (filters: any = {}, pagination: { page: number,
     
     // 为每个账户使用其关联的 token（更准确，避免用“任意一个 active token”导致无权限/数据不更新）
     const accountTokenMap: Record<string, string> = {}
-    for (const acc of allAccounts as any[]) {
-        if (acc?.accountId && acc?.token) {
-            accountTokenMap[acc.accountId] = acc.token
+    await Promise.all((allAccounts as any[]).map(async (acc) => {
+        if (!acc?.accountId) return
+        const authorization = await resolveAccountOperationalAuthorization({
+            accountId: acc.accountId,
+            organizationId: acc.organizationId,
+            legacyToken: acc.token,
+            legacyTokenId: acc.tokenId,
+        })
+        if (authorization) {
+            accountTokenMap[acc.accountId] = authorization.token
         }
-    }
+    }))
     
     if (accountIds.length > 0) {
         // 并发获取所有账户的 insights（限制并发数）

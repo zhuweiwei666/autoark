@@ -151,6 +151,13 @@ const adDraftSchema = new mongoose.Schema(
     // 执行必须来自同一枚 token，避免跨个人号拼接资产。
     facebookTokenId: { type: mongoose.Schema.Types.ObjectId, ref: 'FbToken' },
     facebookTokenOwnerUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    // 组织级 System User 发布凭证。新草稿优先使用该字段；个人 token 字段仅保留
+    // 兼容尚未迁移的历史任务。
+    metaCredentialId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'MetaBusinessCredential',
+      index: true,
+    },
     status: { 
       type: String, 
       default: 'draft',

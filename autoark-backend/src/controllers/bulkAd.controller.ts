@@ -28,6 +28,10 @@ import { writeAuditLog } from '../services/auditLog.service'
 import { buildPublicOAuthReadiness } from '../utils/facebookAppReadiness'
 import { sanitizeFacebookPages } from '../utils/facebookAssetSanitizer'
 import {
+  getOrganizationAuthorization,
+  refreshCredential as refreshSystemCredential,
+} from '../services/metaBusinessCredential.service'
+import {
   combineFilters,
   sanitizeScopedUpdate,
   scopedOwnerFilter,
@@ -85,6 +89,140 @@ const selectedFacebookTokenFilter = (req: Request) => {
     throw createHttpError('tokenId is invalid', 400)
   }
   return { ...ownerFilter, _id: tokenId }
+}
+
+const selectedAuthorizationId = (req: Request) => {
+  const rawTokenId = Array.isArray(req.query.tokenId)
+    ? req.query.tokenId[0]
+    : req.query.tokenId
+  if (rawTokenId === undefined) return undefined
+  const tokenId = typeof rawTokenId === 'string' ? rawTokenId.trim() : ''
+  if (!tokenId || !mongoose.Types.ObjectId.isValid(tokenId)) {
+    throw createHttpError('tokenId is invalid', 400)
+  }
+  return tokenId
+}
+
+const getSelectedSystemAuthorization = async (req: Request) => {
+  if (!req.user?.organizationId) return null
+  const preferredAuthorization = await getOrganizationAuthorization(
+    req.user.organizationId,
+    selectedAuthorizationId(req),
+  )
+  if (preferredAuthorization) return preferredAuthorization
+  return getOrganizationAuthorization(req.user.organizationId)
+}
+
+const buildSystemAuthorizationDiagnostics = (
+  authorization: any,
+  accountLimit: number,
+) => {
+  const pages = authorization.assets?.pages || []
+  const pixels = authorization.assets?.pixels || []
+  const accounts = (authorization.assets?.adAccounts || []).map((account: any) => {
+    const accountId = normalizeForStorage(account.account_id || account.id)
+    const accountPixels = pixels.filter((pixel: any) => {
+      const linked = (pixel.accounts || []).map((item: any) => (
+        normalizeForStorage(item.accountId)
+      ))
+      return linked.length === 0 || linked.includes(accountId)
+    })
+    const ready = pages.length > 0 && accountPixels.length > 0
+    const issueDetails = [
+      ...(pages.length === 0
+        ? [{
+            code: 'MISSING_PAGE',
+            message: 'System User 未被分配可用于广告创意的 Page',
+            nextAction: '请让超级管理员重新协调 BM Page 授权。',
+          }]
+        : []),
+      ...(accountPixels.length === 0
+        ? [{
+            code: 'MISSING_PIXEL',
+            message: 'System User 未被分配此账户可用的 Pixel',
+            nextAction: '请让超级管理员重新协调 BM Pixel 授权。',
+          }]
+        : []),
+    ]
+    return {
+      accountId,
+      name: account.name || accountId,
+      status: 1,
+      statusLabel: '活跃',
+      pageCount: pages.length,
+      pixelCount: accountPixels.length,
+      ready,
+      issues: issueDetails.map((item) => item.message),
+      issueDetails,
+    }
+  })
+  const readyAccountCount = accounts.filter((account: any) => account.ready).length
+  const visibleAccounts = accounts.slice(0, accountLimit)
+  return {
+    authorizationType: 'system_user',
+    authorized: true,
+    summary: {
+      tokenCount: 0,
+      systemCredentialCount: 1,
+      syncedUserCount: 1,
+      accountCount: accounts.length,
+      activeAccountCount: accounts.length,
+      inactiveAccountCount: 0,
+      pageLinkedAccountCount: pages.length > 0 ? accounts.length : 0,
+      pixelLinkedAccountCount: accounts.length
+        - accounts.filter((account: any) => account.pixelCount === 0).length,
+      readyAccountCount,
+      accountsMissingPageCount: pages.length > 0 ? 0 : accounts.length,
+      accountsMissingPixelCount: accounts.filter((account: any) => (
+        account.pixelCount === 0
+      )).length,
+      expiredTokenCount: 0,
+      expiringSoonTokenCount: 0,
+      staleTokenCheckCount: 0,
+      tokenWithoutExpiryCount: authorization.expiresAt ? 0 : 1,
+      earliestTokenExpiresAt: authorization.expiresAt,
+      oldestTokenCheckedAt: authorization.lastValidatedAt,
+      lastSyncedAt: authorization.lastReconciledAt,
+    },
+    checklist: [
+      {
+        key: 'authorization',
+        label: '组织级 System User',
+        status: 'done',
+        value: authorization.systemUserName,
+        description: '发布不依赖当前操作员的 Facebook 个人号会话。',
+      },
+      {
+        key: 'asset_sync',
+        label: 'BM 资产授权读回',
+        status: accounts.length > 0 ? 'done' : 'blocked',
+        value: `${accounts.length} 个广告账户`,
+        description: 'AutoArk 仅使用已写入并从 Meta 读回确认的资产授权。',
+      },
+      {
+        key: 'ready_accounts',
+        label: '可投放账户',
+        status: readyAccountCount > 0 ? 'done' : 'blocked',
+        value: `${readyAccountCount} 个就绪`,
+        description: '账户必须同时具备 Page 和 Pixel 授权。',
+      },
+    ],
+    accounts: visibleAccounts,
+    limits: {
+      accounts: {
+        total: accounts.length,
+        returned: visibleAccounts.length,
+        maxReturned: accountLimit,
+        truncated: accounts.length > visibleAccounts.length,
+      },
+    },
+    risks: readyAccountCount > 0
+      ? []
+      : [{
+          level: 'critical',
+          message: 'System User 当前没有同时具备 Page 和 Pixel 的可投放账户。',
+        }],
+  }
 }
 
 const getScopedActiveToken = (req: Request) => {
@@ -562,6 +700,8 @@ const sanitizeDraftWriteInput = (input: any) => {
   if (name) data.name = name
   const facebookTokenId = pickObjectIdString(input?.facebookTokenId)
   if (facebookTokenId) data.facebookTokenId = facebookTokenId
+  const metaCredentialId = pickObjectIdString(input?.metaCredentialId)
+  if (metaCredentialId) data.metaCredentialId = metaCredentialId
 
   if (Array.isArray(input?.accounts)) {
     const accounts = input.accounts
@@ -2306,6 +2446,20 @@ export const getAuthStatus = async (req: Request, res: Response) => {
     if (!req.user) {
       return res.status(401).json({ success: false, error: '未认证' })
     }
+
+    const systemAuthorization = await getSelectedSystemAuthorization(req)
+    if (systemAuthorization) {
+      return res.json({
+        success: true,
+        data: {
+          authorized: true,
+          ...systemAuthorization,
+          isOwnToken: false,
+          personalTokenRequired: false,
+          message: '当前组织已使用 Meta System User 发布凭证',
+        },
+      })
+    }
     
     const tokenQuery: any = {
       status: 'active',
@@ -2329,6 +2483,7 @@ export const getAuthStatus = async (req: Request, res: Response) => {
       success: true,
       data: {
         authorized: true,
+        authorizationType: 'personal_user',
         tokenId: fbToken._id,
         fbUserId: fbToken.fbUserId,
         fbUserName: fbToken.fbUserName,
@@ -2350,6 +2505,18 @@ export const getAuthDiagnostics = async (req: Request, res: Response) => {
   try {
     if (!req.user) {
       return res.status(401).json({ success: false, error: '未认证' })
+    }
+
+    const accountLimit = parseLimitedNumber(req.query.accountLimit, 100, 500)
+    const systemAuthorization = await getSelectedSystemAuthorization(req)
+    if (systemAuthorization) {
+      return res.json({
+        success: true,
+        data: buildSystemAuthorizationDiagnostics(
+          systemAuthorization,
+          accountLimit,
+        ),
+      })
     }
 
     const tokenQuery: any = {
@@ -2377,8 +2544,6 @@ export const getAuthDiagnostics = async (req: Request, res: Response) => {
       ).lean()
     }
 
-    const accountLimit = parseLimitedNumber(req.query.accountLimit, 100, 500)
-
     res.json({
       success: true,
       data: buildFacebookAssetDiagnostics({ tokens, users, accountLimit }),
@@ -2402,6 +2567,27 @@ export const getAuthAdAccounts = async (req: Request, res: Response) => {
     // 检查用户认证
     if (!req.user) {
       return res.status(401).json({ success: false, error: '未认证' })
+    }
+
+    const systemAuthorization = await getSelectedSystemAuthorization(req)
+    if (systemAuthorization) {
+      const accounts = systemAuthorization.assets?.adAccounts || []
+      return res.json({
+        success: true,
+        data: accounts,
+        meta: {
+          authorizationType: 'system_user',
+          credentialId: systemAuthorization.credentialId,
+          tokenCount: 0,
+          failedTokenCount: 0,
+          accountCount: accounts.length,
+          sourceAccountCount: accounts.length,
+          fetchedPageCount: 0,
+          cacheTokenCount: 0,
+          liveTokenCount: 0,
+          paginationTruncated: false,
+        },
+      })
     }
 
     // 构建 token 查询条件（根据组织隔离）
@@ -2535,6 +2721,45 @@ export const getAuthAdAccounts = async (req: Request, res: Response) => {
 export const getAuthPages = async (req: Request, res: Response) => {
   try {
     const { accountId } = req.query
+    const systemAuthorization = await getSelectedSystemAuthorization(req)
+    if (systemAuthorization) {
+      const scopedAccountId = parseAccountIdParam(accountId)
+      if (!scopedAccountId) {
+        return res.status(400).json({
+          success: false,
+          error: 'accountId is required',
+        })
+      }
+      const allowedAccountIds = new Set(
+        (systemAuthorization.assets?.adAccounts || []).map((account: any) => (
+          normalizeForStorage(account.account_id || account.id)
+        )),
+      )
+      if (!allowedAccountIds.has(scopedAccountId)) {
+        return res.status(403).json({
+          success: false,
+          error: '广告账户不在当前组织的 System User 授权范围内',
+        })
+      }
+      const pages = systemAuthorization.assets?.pages || []
+      return res.json({
+        success: true,
+        data: sanitizeFacebookPages(pages),
+        ...(pages.length === 0
+          ? { warning: 'System User 当前没有被分配可用的 Facebook Page。' }
+          : {}),
+        meta: {
+          authorizationType: 'system_user',
+          credentialId: systemAuthorization.credentialId,
+          source: 'system_user_grants',
+          pageCount: pages.length,
+          fetchedPageCount: 0,
+          paginationTruncated: false,
+          promotePagesFailed: false,
+        },
+      })
+    }
+
     const {
       accountId: scopedAccountId,
       fbToken,
@@ -2666,6 +2891,46 @@ export const getAuthPages = async (req: Request, res: Response) => {
 export const getAuthPixels = async (req: Request, res: Response) => {
   try {
     const { accountId } = req.query
+    const systemAuthorization = await getSelectedSystemAuthorization(req)
+    if (systemAuthorization) {
+      const scopedAccountId = parseAccountIdParam(accountId)
+      if (!scopedAccountId) {
+        return res.status(400).json({
+          success: false,
+          error: 'accountId is required',
+        })
+      }
+      const allowedAccountIds = new Set(
+        (systemAuthorization.assets?.adAccounts || []).map((account: any) => (
+          normalizeForStorage(account.account_id || account.id)
+        )),
+      )
+      if (!allowedAccountIds.has(scopedAccountId)) {
+        return res.status(403).json({
+          success: false,
+          error: '广告账户不在当前组织的 System User 授权范围内',
+        })
+      }
+      const pixels = (systemAuthorization.assets?.pixels || []).filter((pixel: any) => {
+        const linkedAccountIds = (pixel.accounts || []).map((account: any) => (
+          normalizeForStorage(account.accountId)
+        ))
+        return linkedAccountIds.length === 0
+          || linkedAccountIds.includes(scopedAccountId)
+      })
+      return res.json({
+        success: true,
+        data: pixels,
+        meta: {
+          authorizationType: 'system_user',
+          credentialId: systemAuthorization.credentialId,
+          pixelCount: pixels.length,
+          fetchedPageCount: 0,
+          paginationTruncated: false,
+        },
+      })
+    }
+
     const { accountId: scopedAccountId, fbToken } = await getScopedTokenForAccount(req, accountId)
     
     const result = await fetchFacebookAssetPages(
@@ -2700,6 +2965,18 @@ export const getAuthPixels = async (req: Request, res: Response) => {
  */
 export const getCachedPixels = async (req: Request, res: Response) => {
   try {
+    const systemAuthorization = await getSelectedSystemAuthorization(req)
+    if (systemAuthorization) {
+      return res.json({
+        success: true,
+        data: systemAuthorization.assets?.pixels || [],
+        meta: {
+          authorizationType: 'system_user',
+          credentialId: systemAuthorization.credentialId,
+        },
+      })
+    }
+
     const orgObjectId =
       req.user?.organizationId && mongoose.Types.ObjectId.isValid(req.user.organizationId)
         ? new mongoose.Types.ObjectId(req.user.organizationId)
@@ -2772,6 +3049,18 @@ export const getCachedPixels = async (req: Request, res: Response) => {
  */
 export const getCachedCatalogs = async (req: Request, res: Response) => {
   try {
+    const systemAuthorization = await getSelectedSystemAuthorization(req)
+    if (systemAuthorization) {
+      return res.json({
+        success: true,
+        data: [],
+        meta: {
+          authorizationType: 'system_user',
+          credentialId: systemAuthorization.credentialId,
+        },
+      })
+    }
+
     const orgObjectId =
       req.user?.organizationId && mongoose.Types.ObjectId.isValid(req.user.organizationId)
         ? new mongoose.Types.ObjectId(req.user.organizationId)
@@ -2823,6 +3112,29 @@ export const getCachedCatalogs = async (req: Request, res: Response) => {
  */
 export const getPixelSyncStatus = async (req: Request, res: Response) => {
   try {
+    const systemAuthorization = await getSelectedSystemAuthorization(req)
+    if (systemAuthorization) {
+      const lastValidatedAt = systemAuthorization.lastValidatedAt
+        ? new Date(systemAuthorization.lastValidatedAt)
+        : undefined
+      const stale = !lastValidatedAt
+        || Date.now() - lastValidatedAt.getTime() > 24 * 60 * 60 * 1000
+      return res.json({
+        success: true,
+        data: {
+          status: 'completed',
+          authorizationType: 'system_user',
+          credentialId: systemAuthorization.credentialId,
+          lastSyncedAt: systemAuthorization.lastReconciledAt,
+          lastValidatedAt: systemAuthorization.lastValidatedAt,
+          stale,
+          error: stale
+            ? 'System User 凭证超过 24 小时未完成实时资产校验'
+            : undefined,
+        },
+      })
+    }
+
     const fbToken: any = await getScopedActiveToken(req)
     if (!fbToken) {
       return res.status(401).json({ success: false, error: '未授权 Facebook 账号' })
@@ -2846,6 +3158,34 @@ export const getPixelSyncStatus = async (req: Request, res: Response) => {
  */
 export const resyncFacebookAssets = async (req: Request, res: Response) => {
   try {
+    const systemAuthorization = await getSelectedSystemAuthorization(req)
+    if (systemAuthorization) {
+      const result = await refreshSystemCredential(
+        systemAuthorization.credentialId,
+        req.user?.userId,
+      )
+      await writeBulkAdAudit(req, {
+        action: 'bulk_ad.system_user_validate',
+        targetType: 'meta_business_credential',
+        targetId: systemAuthorization.credentialId,
+        summary: `重新校验 Meta System User 资产授权：${systemAuthorization.systemUserName}`,
+        metadata: {
+          authorizationType: 'system_user',
+          credentialId: systemAuthorization.credentialId,
+          checkedAssetCount: result.checks?.length,
+          tokenFingerprint: systemAuthorization.tokenFingerprint,
+        },
+      })
+      return res.json({
+        success: true,
+        message: 'System User 凭证及资产授权校验完成',
+        data: {
+          status: 'completed',
+          checkedAssetCount: result.checks?.length,
+        },
+      })
+    }
+
     const fbToken: any = await getScopedActiveToken(req)
     if (!fbToken) {
       return res.status(401).json({ success: false, error: '未授权 Facebook 账号' })

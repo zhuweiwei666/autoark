@@ -22,8 +22,8 @@ import {
 } from '../models/Aggregation'
 import Account from '../models/Account'
 import Campaign from '../models/Campaign'
-import FbToken from '../models/FbToken'
 import { fetchInsights } from '../integration/facebook/insights.api'
+import { resolveAccountOperationalAuthorization } from './metaBusinessCredential.service'
 
 // 国家代码到名称的映射
 const COUNTRY_NAMES: Record<string, string> = {
@@ -52,23 +52,6 @@ export async function refreshAggregation(date: string, forceRefresh = false): Pr
   const startTime = Date.now()
 
   try {
-    // 获取所有活跃 Token（用于后备）
-    const activeTokens = await FbToken.find({ status: 'active' }).lean()
-    if (activeTokens.length === 0) {
-      logger.warn('[Aggregation] No active token found')
-      return
-    }
-    const defaultToken = activeTokens[0].token
-    
-    // 构建 Token 映射（fbUserId -> token）
-    const tokenMap = new Map<string, string>()
-    for (const t of activeTokens) {
-      if (t.fbUserId && t.token) {
-        tokenMap.set(t.fbUserId, t.token)
-      }
-    }
-    logger.info(`[Aggregation] Loaded ${activeTokens.length} active tokens`)
-
     // 已经写入当天聚合的账户也必须继续参与当天重算，否则账户封禁后
     // 下一轮全量覆盖会把它此前已计入的花费从日汇总中抹掉。
     const previouslyAggregatedAccountIds = await AggAccount.distinct(
@@ -124,10 +107,14 @@ export async function refreshAggregation(date: string, forceRefresh = false): Pr
     for (const chunk of chunks) {
       await Promise.all(chunk.map(async (account) => {
         try {
-          // 使用账户关联的 token，如果没有则使用默认 token
-          const accountToken = (account as any).token || defaultToken
-          if (!accountToken) {
-            logger.warn(`[Aggregation] No token for account ${account.accountId}, skipping`)
+          const authorization = await resolveAccountOperationalAuthorization({
+            accountId: account.accountId,
+            organizationId: (account as any).organizationId,
+            legacyToken: (account as any).token,
+            legacyTokenId: (account as any).tokenId,
+          })
+          if (!authorization) {
+            logger.warn(`[Aggregation] No operational authorization for account ${account.accountId}, skipping`)
             return
           }
           
@@ -136,7 +123,7 @@ export async function refreshAggregation(date: string, forceRefresh = false): Pr
             `act_${account.accountId}`,
             'campaign',
             undefined,
-            accountToken,
+            authorization.token,
             ['country'],
             { since: date, until: date }
           )

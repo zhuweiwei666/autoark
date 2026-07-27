@@ -13,6 +13,7 @@ import { combineFilters, objectIdValue } from '../utils/accessControl'
 import { normalizeForStorage } from '../utils/accountId'
 import { sanitizeOptimizerTargeting } from '../utils/optimizerTargeting'
 import { collectOptimizerInsights } from './facebookOptimizerInsights.service'
+import { resolveAccountOperationalAuthorization } from './metaBusinessCredential.service'
 
 type BuildThresholds = {
   minSpend: number
@@ -766,19 +767,27 @@ const resolveSourceAccounts = async (
     tokens.map((token) => [String(token.token), token]),
   )
   const tokenById = new Map(tokens.map((token) => [String(token._id), token]))
-  const usable = accounts
-    .map((account) => {
-      const token =
+  const usable = (await Promise.all(accounts
+    .map(async (account) => {
+      const legacyToken =
         tokenById.get(String(account.tokenId || '')) ||
         tokenByValue.get(String(account.token || ''))
-      if (!token?.token) return null
+      const authorization = await resolveAccountOperationalAuthorization({
+        accountId: account.accountId,
+        organizationId: account.organizationId,
+        legacyToken: legacyToken?.token,
+        legacyTokenId: legacyToken?._id,
+      })
+      if (!authorization) return null
       return {
         ...account,
-        token: token.token,
-        tokenId: token._id,
+        token: authorization.token,
+        tokenId: authorization.legacyTokenId,
+        metaCredentialId: authorization.metaCredentialId,
+        authorizationType: authorization.authorizationType,
         operator: optimizerId,
       }
-    })
+    })))
     .filter(Boolean)
   if (usable.length === 0) {
     throw errorWithStatus('该投手的来源账户没有可用的活跃 Facebook 授权', 409)

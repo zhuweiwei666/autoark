@@ -24,40 +24,28 @@ import {
 } from '../../integration/facebook/bulkCreate.api'
 import { fetchCampaigns } from '../../integration/facebook/campaigns.api'
 import { fetchInsights } from '../../integration/facebook/insights.api'
-import FbToken from '../../models/FbToken'
 import Account from '../../models/Account'
 import Campaign from '../../models/Campaign'
 import AdSet from '../../models/AdSet'
 import Ad from '../../models/Ad'
 import { getAccountIdsForQuery, normalizeForStorage } from '../../utils/accountId'
 import logger from '../../utils/logger'
+import { resolveAgentOperationalAuthorization } from '../../services/metaBusinessCredential.service'
 
 /**
  * Resolve a Facebook access token for the given context.
- * Priority: context.fbToken > scope.fbTokenIds > any active org token
+ * Priority: pre-resolved context credential > organization System User >
+ * explicitly scoped legacy personal token.
  */
 async function resolveToken(context: AgentContext): Promise<string | null> {
   if (context.fbToken) return context.fbToken
 
-  // Try tokens from scope
-  if (context.scope.fbTokenIds.length > 0) {
-    const tokenDoc = await FbToken.findOne({
-      _id: { $in: context.scope.fbTokenIds },
-      status: 'active',
-    }).lean() as any
-    if (tokenDoc) return tokenDoc.token
-  }
-
-  // Fallback: any active token in the org
-  if (context.organizationId) {
-    const tokenDoc = await FbToken.findOne({
-      organizationId: context.organizationId,
-      status: 'active',
-    }).lean() as any
-    if (tokenDoc) return tokenDoc.token
-  }
-
-  return null
+  const authorization = await resolveAgentOperationalAuthorization({
+    organizationId: context.organizationId,
+    adAccountIds: context.scope.adAccountIds,
+    legacyTokenIds: context.scope.fbTokenIds,
+  })
+  return authorization?.token || null
 }
 
 async function resolveScopedAccountIds(context: AgentContext): Promise<string[] | null> {
@@ -138,6 +126,9 @@ const getCampaignsTool: ToolDefinition = {
     required: ['accountId'],
   },
   handler: async (args: any, context: AgentContext): Promise<ToolResult> => {
+    const scopeError = await assertAccountInScope(context, args.accountId)
+    if (scopeError) return scopeError
+
     const token = await resolveToken(context)
     if (!token) return { success: false, error: 'No Facebook access token available' }
 
@@ -233,6 +224,9 @@ const getPagesTool: ToolDefinition = {
     required: ['accountId'],
   },
   handler: async (args: any, context: AgentContext): Promise<ToolResult> => {
+    const scopeError = await assertAccountInScope(context, args.accountId)
+    if (scopeError) return scopeError
+
     const token = await resolveToken(context)
     if (!token) return { success: false, error: 'No Facebook access token available' }
     const result = await getPages(args.accountId, token)
@@ -280,9 +274,6 @@ const searchInterestsTool: ToolDefinition = {
     required: ['query'],
   },
   handler: async (args: any, context: AgentContext): Promise<ToolResult> => {
-    const scopeError = await assertAccountInScope(context, args.accountId)
-    if (scopeError) return scopeError
-
     const token = await resolveToken(context)
     if (!token) return { success: false, error: 'No Facebook access token available' }
     const result = await searchTargetingInterests({ token, query: args.query })
@@ -305,9 +296,6 @@ const searchLocationsTool: ToolDefinition = {
     required: ['query'],
   },
   handler: async (args: any, context: AgentContext): Promise<ToolResult> => {
-    const scopeError = await assertAccountInScope(context, args.accountId)
-    if (scopeError) return scopeError
-
     const token = await resolveToken(context)
     if (!token) return { success: false, error: 'No Facebook access token available' }
     const result = await searchTargetingLocations({ token, query: args.query })
@@ -699,6 +687,9 @@ const uploadImageTool: ToolDefinition = {
     maxCallsPerRun: 20,
   },
   handler: async (args: any, context: AgentContext): Promise<ToolResult> => {
+    const scopeError = await assertAccountInScope(context, args.accountId)
+    if (scopeError) return scopeError
+
     const token = await resolveToken(context)
     if (!token) return { success: false, error: 'No Facebook access token available' }
 
@@ -734,6 +725,9 @@ const uploadVideoTool: ToolDefinition = {
     maxCallsPerRun: 10,
   },
   handler: async (args: any, context: AgentContext): Promise<ToolResult> => {
+    const scopeError = await assertAccountInScope(context, args.accountId)
+    if (scopeError) return scopeError
+
     const token = await resolveToken(context)
     if (!token) return { success: false, error: 'No Facebook access token available' }
 

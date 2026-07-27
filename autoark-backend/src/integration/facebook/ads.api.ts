@@ -2,12 +2,16 @@ import { facebookClient } from './facebookClient'
 import { fetchFacebookEdgePages } from './pagination'
 import { normalizeForApi } from '../../utils/accountId'
 
-export const fetchAdSets = async (accountId: string) => {
-  return fetchFacebookEdgePages(`/${normalizeForApi(accountId)}/adsets`, {
+export const fetchAdSets = async (accountId: string, token?: string) => {
+  const params: any = {
     fields:
       'id,name,status,campaign_id,optimization_goal,billing_event,bid_amount,daily_budget,created_time,updated_time',
     limit: 1000,
-  })
+  }
+  if (token) {
+    params.access_token = token
+  }
+  return fetchFacebookEdgePages(`/${normalizeForApi(accountId)}/adsets`, params)
 }
 
 export const fetchAds = async (accountId: string, token?: string) => {

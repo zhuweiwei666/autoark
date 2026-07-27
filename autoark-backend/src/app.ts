@@ -14,6 +14,7 @@ import agentRoutes from './domain/agent/agent.controller' // New: AI Agent route
 import summaryRoutes from './controllers/summary.controller' // New: 预聚合数据快速读取
 import productMappingRoutes from './routes/productMapping.routes' // New: 产品关系映射
 import facebookAppRoutes from './routes/facebookApp.routes' // New: Facebook App 管理
+import metaBusinessCredentialRoutes from './routes/metaBusinessCredential.routes'
 import authRoutes from './routes/auth.routes' // New: 认证路由
 import userRoutes from './routes/user.routes' // New: 用户管理路由
 import organizationRoutes from './routes/organization.routes' // New: 组织管理路由
@@ -173,6 +174,7 @@ app.use('/api/agent', agentRoutes) // New: AI Agent
 app.use('/api/summary', summaryRoutes) // New: 预聚合数据快速读取（加速前端页面）
 app.use('/api/product-mapping', productMappingRoutes) // New: 产品关系映射（自动投放核心）
 app.use('/api/facebook-apps', facebookAppRoutes) // New: Facebook App 管理（多App负载均衡）
+app.use('/api/meta-business-credentials', metaBusinessCredentialRoutes)
 app.use('/api/agg', aggregationRoutes) // New: 统一预聚合数据 API（前端+AI 共用）
 app.use('/api/automation-jobs', automationJobRoutes) // New: AI Planner/Executor jobs
 app.use('/api/commercial', commercialRoutes) // SaaS readiness, plan and quota status

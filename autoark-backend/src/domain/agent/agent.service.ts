@@ -36,6 +36,11 @@ import {
 import { healthService } from './health/health.service'
 import { alertService } from './alert/alert.service'
 import { approvalService } from './approval/approval.service'
+import {
+  resolveAccountOperationalAuthorization,
+  resolvePublishingCredential,
+} from '../../services/metaBusinessCredential.service'
+import { normalizeForStorage } from '../../utils/accountId'
 
 const LLM_API_KEY = process.env.LLM_API_KEY
 const LLM_MODEL = process.env.LLM_MODEL || 'gemini-2.0-flash'
@@ -500,8 +505,6 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
 
     // 获取所有账户
     const accounts = await Account.find().lean()
-    const tokens = await FbToken.find({ status: 'active' }).lean()
-    const token = tokens[0]?.token
 
     // 🔥 使用和 Dashboard 相同的数据源，确保数据准确
     logger.info('[AgentService] Fetching core metrics from Dashboard API...')
@@ -698,42 +701,47 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
     // 4. 分国家数据 - 从 Facebook API 获取
     const countryDataMap: Record<string, { country: string, spend: number, revenue: number, impressions: number, clicks: number }> = {}
     
-    if (token) {
-      for (const account of accounts.slice(0, 5)) { // 限制账户数量
-        try {
-          const insights = await fetchInsights(
-            `act_${account.accountId}`,
-            'campaign',
-            undefined,
-            token,
-            ['country'],
-            { since: today, until: today }
-          )
+    for (const account of accounts.slice(0, 5)) { // 限制账户数量
+      try {
+        const authorization = await resolveAccountOperationalAuthorization({
+          accountId: account.accountId,
+          organizationId: account.organizationId,
+          legacyToken: account.token,
+          legacyTokenId: account.tokenId,
+        })
+        if (!authorization) continue
+        const insights = await fetchInsights(
+          `act_${account.accountId}`,
+          'campaign',
+          undefined,
+          authorization.token,
+          ['country'],
+          { since: today, until: today }
+        )
+
+        for (const insight of insights) {
+          const country = insight.country
+          if (!country) continue
+
+          if (!countryDataMap[country]) {
+            countryDataMap[country] = { country, spend: 0, revenue: 0, impressions: 0, clicks: 0 }
+          }
+
+          countryDataMap[country].spend += parseFloat(insight.spend || '0')
+          countryDataMap[country].impressions += parseInt(insight.impressions || '0', 10)
+          countryDataMap[country].clicks += parseInt(insight.clicks || '0', 10)
           
-          for (const insight of insights) {
-            const country = insight.country
-            if (!country) continue
-            
-            if (!countryDataMap[country]) {
-              countryDataMap[country] = { country, spend: 0, revenue: 0, impressions: 0, clicks: 0 }
-            }
-            
-            countryDataMap[country].spend += parseFloat(insight.spend || '0')
-            countryDataMap[country].impressions += parseInt(insight.impressions || '0', 10)
-            countryDataMap[country].clicks += parseInt(insight.clicks || '0', 10)
-            
-            // 提取 purchase value
-            if (insight.action_values) {
-              for (const av of insight.action_values) {
-                if (av.action_type === 'purchase' || av.action_type === 'omni_purchase') {
-                  countryDataMap[country].revenue += parseFloat(av.value || '0')
-                }
+          // 提取 purchase value
+          if (insight.action_values) {
+            for (const av of insight.action_values) {
+              if (av.action_type === 'purchase' || av.action_type === 'omni_purchase') {
+                countryDataMap[country].revenue += parseFloat(av.value || '0')
               }
             }
           }
-        } catch (e) {
-          // 继续
         }
+      } catch (e) {
+        // 继续
       }
     }
     
@@ -2124,6 +2132,37 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
     }
 
     if (platform === 'facebook') {
+      const scopedAccountIds = (
+        agent?.scope?.adAccountIds
+        || agent?.accountIds
+        || []
+      ).map((id: any) => normalizeForStorage(String(id)))
+      const normalizedAccountId = normalizeForStorage(accountId)
+      if (
+        scopedAccountIds.length > 0
+        && !scopedAccountIds.includes(normalizedAccountId)
+      ) {
+        return null
+      }
+      const account: any = await Account.findOne({
+        channel: 'facebook',
+        accountId: { $in: [accountId, normalizedAccountId, `act_${normalizedAccountId}`] },
+      }).select('organizationId').lean()
+      const organizationId = agent?.organizationId || account?.organizationId
+      const systemCredential = agent?.scope?.fbTokenIds?.length && scopedAccountIds.length === 0
+        ? null
+        : await resolvePublishingCredential({
+            organizationId,
+            adAccountIds: [normalizedAccountId],
+          })
+      if (systemCredential) {
+        return {
+          _id: systemCredential.credential._id,
+          token: systemCredential.token,
+          credentialType: 'system_user',
+        }
+      }
+
       if (agent?.scope?.fbTokenIds?.length) {
         tokenQuery._id = { $in: agent.scope.fbTokenIds }
       }

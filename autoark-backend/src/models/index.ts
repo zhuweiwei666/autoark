@@ -28,6 +28,7 @@ export { default as FacebookUser } from './FacebookUser'
 
 // Facebook App 管理（支持多App负载均衡）
 export { default as FacebookApp } from './FacebookApp'
+export { default as MetaBusinessCredential } from './MetaBusinessCredential'
 
 // TikTok 相关模型
 export { default as TiktokToken } from './TiktokToken'

@@ -1,11 +1,11 @@
 import { PipelineStage } from 'mongoose'
 import { MetricsDaily, Account, Campaign, Ad, SyncLog, OpsLog } from '../models'
-import FbToken from '../models/FbToken'
 import mongoose from 'mongoose'
 import { fetchInsights } from './facebook.api'
 import { normalizeForApi } from '../utils/accountId'
 import logger from '../utils/logger'
 import { pickAllowedString, pickSafeQueryString } from '../utils/pagination'
+import { resolveAccountOperationalAuthorization } from './metaBusinessCredential.service'
 
 // --- Existing Dashboard Service Logic ---
 
@@ -232,29 +232,34 @@ export async function getCoreMetrics(startDate?: string, endDate?: string) {
   const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().split('T')[0]
   const sevenDaysAgo = startDate || new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
 
-  // 获取有效 token
-  const tokenDoc = await FbToken.findOne({ status: 'active' })
-  const token = tokenDoc?.token
-
   let todayMetrics = { spend: 0, impressions: 0, clicks: 0, installs: 0, purchase_value: 0 }
   let yesterdayMetrics = { spend: 0, impressions: 0, clicks: 0, installs: 0, purchase_value: 0 }
   let sevenDaysMetrics = { spend: 0, impressions: 0, clicks: 0, installs: 0, purchase_value: 0 }
 
-  if (token) {
-    // 获取所有活跃账户
-    const accounts = await Account.find({ status: 'active' }).lean()
-    logger.info(`[Dashboard] Fetching campaign-level insights for ${accounts.length} accounts`)
+  const accounts = await Account.find({ status: 'active' }).lean()
+  const authorizedAccounts = (await Promise.all(accounts.map(async (account: any) => ({
+    account,
+    authorization: await resolveAccountOperationalAuthorization({
+      accountId: account.accountId,
+      organizationId: account.organizationId,
+      legacyToken: account.token,
+      legacyTokenId: account.tokenId,
+    }),
+  })))).filter((entry) => entry.authorization)
+
+  if (authorizedAccounts.length > 0) {
+    logger.info(`[Dashboard] Fetching campaign-level insights for ${authorizedAccounts.length} authorized accounts`)
 
     // 并发获取所有账户的 campaign 级别 insights（与广告系列页面一致）
     const fetchCampaignInsights = async (datePreset?: string, timeRange?: { since: string; until: string }) => {
-      const promises = accounts.map(async (account) => {
+      const promises = authorizedAccounts.map(async ({ account, authorization }) => {
         try {
           const accountIdForApi = normalizeForApi(account.accountId)
           const insights = await fetchInsights(
             accountIdForApi,
             'campaign',  // 使用 campaign 级别，与广告系列页面一致
             datePreset || undefined,
-            token,
+            authorization!.token,
             undefined,
             timeRange
           )
@@ -404,15 +409,6 @@ export async function getCampaignSpendRanking(limit = 10, startDate?: string, en
   const today = endDate || new Date().toISOString().split('T')[0]
   const sevenDaysAgo = startDate || new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
 
-  // 获取有效 token
-  const tokenDoc = await FbToken.findOne({ status: 'active' })
-  const token = tokenDoc?.token
-
-  if (!token) {
-    logger.warn('[Dashboard] No active token found for campaign ranking')
-    return []
-  }
-
   // 获取所有活跃账户
   const accounts = await Account.find({ status: 'active' }).lean()
   
@@ -420,14 +416,21 @@ export async function getCampaignSpendRanking(limit = 10, startDate?: string, en
   const timeRange = { since: sevenDaysAgo, until: today }
 
   // 并发获取所有账户的 campaign 级别 insights
-  const accountPromises = accounts.map(async (account) => {
+  const accountPromises = accounts.map(async (account: any) => {
     try {
+      const authorization = await resolveAccountOperationalAuthorization({
+        accountId: account.accountId,
+        organizationId: account.organizationId,
+        legacyToken: account.token,
+        legacyTokenId: account.tokenId,
+      })
+      if (!authorization) return []
       const accountIdForApi = normalizeForApi(account.accountId)
       const insights = await fetchInsights(
         accountIdForApi,
         'campaign',
         undefined,
-        token,
+        authorization.token,
         undefined,
         timeRange
       )

@@ -796,7 +796,7 @@ export default function AiOptimizerPage() {
                       创建 PAUSED 试投草稿
                     </h2>
                     <p className="mt-1 text-xs text-zinc-500">
-                      选择同一枚个人授权下的账户、Page 和
+                      优先选择组织 System User 已验证的账户、Page 和
                       Pixel；不会在此步骤调用 Meta 写接口。
                     </p>
                   </div>
@@ -814,6 +814,9 @@ export default function AiOptimizerPage() {
                       >
                         {tokens.map((token) => (
                           <option key={token.tokenId} value={token.tokenId}>
+                            {token.authorizationType === "system_user"
+                              ? "[System User] "
+                              : "[个人授权] "}
                             {token.fbUserName ||
                               token.optimizer ||
                               token.tokenId.slice(-8)}{" "}

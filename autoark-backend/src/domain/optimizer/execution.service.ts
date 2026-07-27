@@ -2,6 +2,9 @@ import { OptimizationAction } from './policies/basePolicy'
 import logger from '../../utils/logger'
 import { facebookClient } from '../../integration/facebook/facebookClient'
 import OptimizationState from '../../models/OptimizationState'
+import Account from '../../models/Account'
+import { normalizeForApi, normalizeForStorage } from '../../utils/accountId'
+import { resolvePublishingCredential } from '../../services/metaBusinessCredential.service'
 
 /**
  * 执行服务
@@ -25,19 +28,17 @@ class ExecutionService {
     logger.info(`[ExecutionService] Executing ${action.type} for ${entityType} ${entityId}: ${action.reason}`)
 
     try {
-      // 1. 获取 Token (如果未提供，尝试从 OptimizationState 或 TokenPool 获取)
-      // 这里简化，假设上层已经处理好 Token，或者 facebookClient 会自动处理
+      const accessToken = await this.resolveAccessToken(accountId, token)
       
-      // 2. 执行 API 调用
       switch (action.type) {
         case 'ADJUST_BUDGET':
-          await this.adjustBudget(entityId, entityType, action.newBudget)
+          await this.adjustBudget(entityId, entityType, action.newBudget, accessToken)
           break
         case 'PAUSE_ENTITY':
-          await this.updateStatus(entityId, entityType, 'PAUSED')
+          await this.updateStatus(entityId, entityType, 'PAUSED', accessToken)
           break
         case 'START_ENTITY':
-          await this.updateStatus(entityId, entityType, 'ACTIVE')
+          await this.updateStatus(entityId, entityType, 'ACTIVE', accessToken)
           break
       }
 
@@ -70,7 +71,30 @@ class ExecutionService {
   /**
    * 调整预算
    */
-  private async adjustBudget(entityId: string, entityType: string, newBudget: number) {
+  private async resolveAccessToken(accountId: string, legacyToken?: string): Promise<string> {
+    const normalizedAccountId = normalizeForStorage(accountId)
+    const account: any = await Account.findOne({
+      channel: 'facebook',
+      accountId: { $in: Array.from(new Set([normalizedAccountId, normalizeForApi(accountId)])) },
+    }).select('organizationId token').lean()
+
+    const systemCredential = await resolvePublishingCredential({
+      organizationId: account?.organizationId,
+      adAccountIds: [normalizedAccountId],
+    })
+    const resolvedToken = systemCredential?.token || legacyToken || account?.token
+    if (!resolvedToken) {
+      throw new Error(`No Facebook authorization covers account ${normalizedAccountId}`)
+    }
+    return resolvedToken
+  }
+
+  private async adjustBudget(
+    entityId: string,
+    entityType: string,
+    newBudget: number,
+    accessToken: string,
+  ) {
     if (entityType !== 'campaign' && entityType !== 'adset') {
       throw new Error(`Cannot set budget for ${entityType}`)
     }
@@ -79,19 +103,25 @@ class ExecutionService {
     const budgetInCents = Math.round(newBudget * 100)
 
     await facebookClient.post(`/${entityId}`, {
-      daily_budget: budgetInCents
+      daily_budget: budgetInCents,
+      access_token: accessToken,
     })
   }
 
   /**
    * 更新状态
    */
-  private async updateStatus(entityId: string, entityType: string, status: 'ACTIVE' | 'PAUSED') {
+  private async updateStatus(
+    entityId: string,
+    entityType: string,
+    status: 'ACTIVE' | 'PAUSED',
+    accessToken: string,
+  ) {
     await facebookClient.post(`/${entityId}`, {
-      status
+      status,
+      access_token: accessToken,
     })
   }
 }
 
 export const executionService = new ExecutionService()
-

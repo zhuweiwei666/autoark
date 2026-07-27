@@ -28,6 +28,7 @@ import logger from '../utils/logger'
 import { writeAuditLog } from '../services/auditLog.service'
 import { backfillFacebookOriginalImages } from '../services/facebookMaterialBackfill.service'
 import { deduplicateFacebookMaterials } from '../services/facebookMaterialDeduplication.service'
+import { resolvePublishingCredential } from '../services/metaBusinessCredential.service'
 
 const FACEBOOK_LIST_MAX_LIMIT = 100
 const FACEBOOK_DIAGNOSE_DEFAULT_LIMIT = 20
@@ -162,9 +163,38 @@ const parseRequiredFacebookDate = (value: any, fieldName: string): string | unde
 }
 
 const resolveAccountAccessToken = async (req: Request, accountId: string): Promise<string> => {
-  const query: any = {
+  const accountQuery: any = {
     channel: 'facebook',
     accountId: { $in: accountIdVariants(accountId) },
+  }
+
+  if (!(await ensureAccountAccess(req, accountId))) {
+    throw accountAuthorizationError(`没有权限访问账户 ${normalizeForStorage(accountId)}`)
+  }
+
+  const account: any = await Account.findOne(accountQuery)
+    .select('token organizationId')
+    .lean()
+  if (!account) {
+    throw accountAuthorizationError(`没有找到可访问账户 ${normalizeForStorage(accountId)} 的 Facebook 授权`)
+  }
+
+  const organizationId = req.user?.organizationId || account.organizationId
+  if (
+    req.user?.role !== UserRole.SUPER_ADMIN
+    && req.user?.organizationId
+    && account.organizationId
+    && String(req.user.organizationId) !== String(account.organizationId)
+  ) {
+    throw accountAuthorizationError(`没有权限访问账户 ${normalizeForStorage(accountId)}`)
+  }
+
+  const systemCredential = await resolvePublishingCredential({
+    organizationId,
+    adAccountIds: [normalizeForStorage(accountId)],
+  })
+  if (systemCredential) {
+    return systemCredential.token
   }
 
   if (req.user?.role !== UserRole.SUPER_ADMIN) {
@@ -181,10 +211,16 @@ const resolveAccountAccessToken = async (req: Request, accountId: string): Promi
       throw accountAuthorizationError('未找到当前用户可用的 Facebook 授权')
     }
 
-    query.token = { $in: tokenValues }
+    const scopedAccount: any = await Account.findOne({
+      ...accountQuery,
+      token: { $in: tokenValues },
+    }).select('token').lean()
+    if (!scopedAccount?.token) {
+      throw accountAuthorizationError(`没有找到可访问账户 ${normalizeForStorage(accountId)} 的 Facebook 授权`)
+    }
+    return scopedAccount.token
   }
 
-  const account = await Account.findOne(query).select('token').lean()
   if (!account?.token) {
     throw accountAuthorizationError(`没有找到可访问账户 ${normalizeForStorage(accountId)} 的 Facebook 授权`)
   }

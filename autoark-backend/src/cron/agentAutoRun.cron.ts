@@ -5,6 +5,7 @@ import { AgentConfig } from '../domain/agent/agent.model'
 import { createAutomationJob } from '../services/automationJob.service'
 // Agent V2: LLM-powered optimization pipeline
 import { runOptimizationPipeline } from '../agent'
+import { resolveAgentOperationalAuthorization } from '../services/metaBusinessCredential.service'
 
 // Feature flag: set to 'v2' to use the new LLM-powered agent, 'v1' for legacy
 const AGENT_VERSION = process.env.AGENT_VERSION || 'v1'
@@ -50,6 +51,11 @@ export const initAgentAutoRunCron = () => {
         if (AGENT_VERSION === 'v2') {
           // V2: Run LLM-powered optimization pipeline directly
           logger.info(`[AgentAutoRunCron] Running V2 pipeline for agent: ${agent.name}`)
+          const authorization = await resolveAgentOperationalAuthorization({
+            organizationId: agent.organizationId,
+            adAccountIds: agent.scope?.adAccountIds || agent.accountIds || [],
+            legacyTokenIds: agent.scope?.fbTokenIds || [],
+          })
           runOptimizationPipeline({
             agentConfig: {
               id: agent._id.toString(),
@@ -86,6 +92,7 @@ export const initAgentAutoRunCron = () => {
               temperature: 0.2,
             },
             organizationId: agent.organizationId?.toString(),
+            fbToken: authorization?.token,
           }).then((result) => {
             logger.info(`[AgentAutoRunCron] V2 pipeline completed for ${agent.name}: ${result.overallStatus}`)
             // Update lastRunAt
@@ -116,4 +123,3 @@ export const initAgentAutoRunCron = () => {
 
   logger.info(`[AgentAutoRunCron] Initialized (every 5 minutes, version: ${AGENT_VERSION})`)
 }
-

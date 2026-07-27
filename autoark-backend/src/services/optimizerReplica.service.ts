@@ -7,6 +7,7 @@ import CreativeGroup from '../models/CreativeGroup'
 import FacebookUser from '../models/FacebookUser'
 import FbToken from '../models/FbToken'
 import MetricsDaily from '../models/MetricsDaily'
+import MetaBusinessCredential from '../models/MetaBusinessCredential'
 import PlaybookVersion from '../models/PlaybookVersion'
 import ReplicaRun from '../models/ReplicaRun'
 import { combineFilters, objectIdValue } from '../utils/accessControl'
@@ -164,6 +165,77 @@ const sanitizedAssetSnapshot = (token: any, snapshot: any) => ({
   }),
 })
 
+const buildSystemCredentialSnapshot = async (credential: any) => {
+  const adAccountGrants = credential.assetGrants?.adAccounts || []
+  const accountIds = adAccountGrants
+    .map((grant: any) => normalizeForStorage(grant.assetId))
+    .filter(Boolean)
+  const accounts: any[] = accountIds.length > 0
+    ? await Account.find({
+        channel: 'facebook',
+        accountId: { $in: getAccountIdsForQuery(accountIds) },
+        ...orgConstraint(credential.organizationId),
+      })
+      .select('accountId name status currency timezone organizationId')
+      .lean()
+    : []
+  const accountById = new Map(accounts.map((account) => [
+    normalizeForStorage(account.accountId),
+    account,
+  ]))
+  const linkedAccounts = accountIds.map((accountId: string) => ({ accountId }))
+
+  return {
+    fbUserName: credential.systemUserName,
+    lastSyncedAt: credential.lastReconciledAt,
+    syncStatus: 'completed',
+    adAccounts: adAccountGrants.map((grant: any) => {
+      const accountId = normalizeForStorage(grant.assetId)
+      const account = accountById.get(accountId)
+      return {
+        accountId,
+        name: grant.name || account?.name,
+        status: grant.accountStatus !== undefined
+          && grant.accountStatus !== null
+          && Number.isFinite(Number(grant.accountStatus))
+          ? Number(grant.accountStatus)
+          : 1,
+        currency: grant.currency || account?.currency,
+        timezone: grant.timezoneName || account?.timezone,
+      }
+    }),
+    pages: (credential.assetGrants?.pages || []).map((grant: any) => ({
+      pageId: grant.assetId,
+      name: grant.name,
+      accounts: linkedAccounts,
+    })),
+    pixels: (credential.assetGrants?.pixels || []).map((grant: any) => ({
+      pixelId: grant.assetId,
+      name: grant.name,
+      accounts: (grant.accountIds || []).length > 0
+        ? grant.accountIds.map((accountId: string) => ({
+            accountId: normalizeForStorage(accountId),
+          }))
+        : linkedAccounts,
+    })),
+  }
+}
+
+const sanitizedSystemCredentialSnapshot = async (credential: any) => {
+  const snapshot = await buildSystemCredentialSnapshot(credential)
+  return {
+    ...sanitizedAssetSnapshot({
+      _id: credential._id,
+      optimizer: 'System User',
+      fbUserId: credential.systemUserId,
+      fbUserName: credential.systemUserName,
+      status: credential.status,
+    }, snapshot),
+    authorizationType: 'system_user',
+    metaCredentialId: String(credential._id),
+  }
+}
+
 export const listReplicaAssets = async ({
   playbookId,
   accessFilter = {},
@@ -176,7 +248,14 @@ export const listReplicaAssets = async ({
   const playbook = await findPlaybook(playbookId, accessFilter)
   const tokens: any[] = await FbToken.find(
     combineFilters(
-      { status: 'active' },
+      {
+        status: 'active',
+        $or: [
+          { expiresAt: { $exists: false } },
+          { expiresAt: null },
+          { expiresAt: { $gt: new Date() } },
+        ],
+      },
       tokenAccessFilter,
       orgConstraint(playbook.organizationId),
     ),
@@ -194,16 +273,40 @@ export const listReplicaAssets = async ({
   const snapshotByToken = new Map(
     snapshots.map((snapshot) => [String(snapshot.tokenId), snapshot]),
   )
+  const credentials: any[] = playbook.organizationId
+    ? await MetaBusinessCredential.find({
+        organizationId: playbook.organizationId,
+        status: 'active',
+        $or: [
+          { expiresAt: { $exists: false } },
+          { expiresAt: null },
+          { expiresAt: { $gt: new Date() } },
+        ],
+      })
+      .sort({ isDefault: -1, updatedAt: -1 })
+      .lean()
+    : []
+  const systemAssets = await Promise.all(
+    credentials.map(sanitizedSystemCredentialSnapshot),
+  )
 
   return {
     playbookId: String(playbook._id),
     organizationId: playbook.organizationId,
-    tokens: tokens
-      .map((token) => {
-        const snapshot = snapshotByToken.get(String(token._id))
-        return snapshot ? sanitizedAssetSnapshot(token, snapshot) : null
-      })
-      .filter(Boolean),
+    tokens: [
+      ...systemAssets,
+      ...tokens
+        .map((token) => {
+          const snapshot = snapshotByToken.get(String(token._id))
+          return snapshot
+            ? {
+                ...sanitizedAssetSnapshot(token, snapshot),
+                authorizationType: 'personal_user',
+              }
+            : null
+        })
+        .filter(Boolean),
+    ],
   }
 }
 
@@ -552,22 +655,47 @@ export const createReplica = async ({
     )
   }
   if (!mongoose.Types.ObjectId.isValid(facebookTokenId)) {
-    throw errorWithStatus('facebookTokenId 无效')
+    throw errorWithStatus('Facebook 授权 ID 无效')
   }
-  const token: any = await FbToken.findOne(
+  const systemCredential: any = await MetaBusinessCredential.findOne(
     combineFilters(
       { _id: facebookTokenId, status: 'active' },
-      tokenAccessFilter,
       orgConstraint(playbook.organizationId),
+      {
+        $or: [
+          { expiresAt: { $exists: false } },
+          { expiresAt: null },
+          { expiresAt: { $gt: new Date() } },
+        ],
+      },
     ),
   ).lean()
-  if (!token)
+  const token: any = systemCredential
+    ? null
+    : await FbToken.findOne(
+        combineFilters(
+          {
+            _id: facebookTokenId,
+            status: 'active',
+            $or: [
+              { expiresAt: { $exists: false } },
+              { expiresAt: null },
+              { expiresAt: { $gt: new Date() } },
+            ],
+          },
+          tokenAccessFilter,
+          orgConstraint(playbook.organizationId),
+        ),
+      ).lean()
+  if (!systemCredential && !token)
     throw errorWithStatus('目标 Facebook 授权不存在、已失效或无权访问', 404)
-  const snapshot: any = await FacebookUser.findOne({
-    tokenId: token._id,
-    syncStatus: 'completed',
-    ...orgConstraint(playbook.organizationId),
-  }).lean()
+  const snapshot: any = systemCredential
+    ? await buildSystemCredentialSnapshot(systemCredential)
+    : await FacebookUser.findOne({
+        tokenId: token._id,
+        syncStatus: 'completed',
+        ...orgConstraint(playbook.organizationId),
+      }).lean()
   if (!snapshot)
     throw errorWithStatus(
       '目标 Facebook 授权的账户、Page、Pixel 尚未同步完成',
@@ -642,7 +770,15 @@ export const createReplica = async ({
       adsetId: playbook.structure?.sourceAdsetId,
     },
     targets: {
-      facebookTokenId: token._id,
+      ...(systemCredential
+        ? {
+            authorizationType: 'system_user',
+            metaCredentialId: systemCredential._id,
+          }
+        : {
+            authorizationType: 'personal_user',
+            facebookTokenId: token._id,
+          }),
       accountIds: targets.map((target) => target.accountId),
       accounts: targets,
       dailyBudget: selectedBudget,
@@ -683,8 +819,12 @@ export const createReplica = async ({
       {
         organizationId: playbook.organizationId,
         name: `AI复制_${optimizerLabel}_v${playbook.version}_${String(run._id).slice(-8)}`,
-        facebookTokenId: token._id,
-        facebookTokenOwnerUserId: token.userId,
+        ...(systemCredential
+          ? { metaCredentialId: systemCredential._id }
+          : {
+              facebookTokenId: token._id,
+              facebookTokenOwnerUserId: token.userId,
+            }),
         status: 'draft',
         accounts: targets,
         campaign: {

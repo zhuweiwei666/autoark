@@ -146,6 +146,8 @@ export interface ReplicaAssetAccount {
 
 export interface ReplicaAssetToken {
   tokenId: string;
+  authorizationType?: "system_user" | "personal_user";
+  metaCredentialId?: string;
   optimizer?: string;
   fbUserName?: string;
   syncStatus?: string;
@@ -162,7 +164,9 @@ export interface ReplicaRun {
   status: string;
   effectiveStatus?: string;
   targets: {
-    facebookTokenId: string;
+    authorizationType?: "system_user" | "personal_user";
+    facebookTokenId?: string;
+    metaCredentialId?: string;
     accountIds: string[];
     dailyBudget: number;
     currency?: string;

@@ -13,6 +13,8 @@ import Campaign from '../models/Campaign'
 import FbToken from '../models/FbToken'
 import { facebookClient } from '../integration/facebook/facebookClient'
 import logger from '../utils/logger'
+import { resolvePublishingCredential } from './metaBusinessCredential.service'
+import { normalizeForStorage } from '../utils/accountId'
 
 // 审核状态映射（中文展示）
 export const REVIEW_STATUS_MAP: Record<string, { label: string; color: string; icon: string }> = {
@@ -169,7 +171,25 @@ const getTaskOrganizationId = (task: any) => {
   return task?.organizationId || task?.toObject?.()?.organizationId
 }
 
-const getActiveTokenForOrganization = async (organizationId?: any) => {
+const getActiveTokenForOrganization = async (
+  organizationId?: any,
+  accountIds: string[] = [],
+) => {
+  const normalizedAccountIds = Array.from(new Set(
+    accountIds.map(normalizeForStorage).filter(Boolean),
+  ))
+  const systemCredential = await resolvePublishingCredential({
+    organizationId,
+    adAccountIds: normalizedAccountIds,
+  })
+  if (systemCredential) {
+    return {
+      token: systemCredential.token,
+      authorizationType: 'system_user',
+      metaCredentialId: String(systemCredential.credential._id),
+    }
+  }
+
   const query: any = { status: 'active' }
   if (organizationId) {
     query.organizationId = organizationId
@@ -178,9 +198,13 @@ const getActiveTokenForOrganization = async (organizationId?: any) => {
   return FbToken.findOne(query).sort({ updatedAt: -1 }).lean()
 }
 
-const getActiveTokenForTask = async (task: any) => (
-  getActiveTokenForOrganization(getTaskOrganizationId(task))
-)
+const getActiveTokenForTask = async (task: any) => {
+  const taskObject = task?.toObject?.() || task
+  const accountIds = (taskObject?.items || [])
+    .map((item: any) => item.accountId)
+    .filter(Boolean)
+  return getActiveTokenForOrganization(getTaskOrganizationId(task), accountIds)
+}
 
 const groupAdsByOrganization = (ads: any[]) => {
   const groups = new Map<string, { organizationId?: any; ads: any[] }>()
@@ -572,7 +596,10 @@ export async function refreshAllReviewStatus(): Promise<{
     }
     
     for (const group of groupAdsByOrganization(ads as any[])) {
-      const activeToken = await getActiveTokenForOrganization(group.organizationId)
+      const activeToken = await getActiveTokenForOrganization(
+        group.organizationId,
+        group.ads.map((ad: any) => ad.accountId).filter(Boolean),
+      )
       if (!activeToken) {
         result.errors.push(`组织 ${group.organizationId || 'platform'} 没有可用的 Facebook Token`)
         continue
@@ -694,7 +721,10 @@ export async function checkPendingAdsReview(): Promise<{
     result.checked = pendingAds.length
     
     for (const group of groupAdsByOrganization(pendingAds as any[])) {
-      const activeToken = await getActiveTokenForOrganization(group.organizationId)
+      const activeToken = await getActiveTokenForOrganization(
+        group.organizationId,
+        group.ads.map((ad: any) => ad.accountId).filter(Boolean),
+      )
       if (!activeToken) {
         result.errors.push(`组织 ${group.organizationId || 'platform'} 没有可用的 Facebook Token`)
         continue
