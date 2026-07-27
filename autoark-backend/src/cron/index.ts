@@ -4,11 +4,15 @@ import { initFacebookUserAssetsCron } from './facebookUserAssets.cron'
 import { initAgentAutoRunCron } from './agentAutoRun.cron'
 import { initTiktokSyncCron } from './tiktokSync.cron'
 import { initExternalMaterialCron } from './externalMaterial.cron'
+import initMaterialMetricsCron from './materialMetrics.cron'
 import logger from '../utils/logger'
 
 const initCronJobs = () => {
   // 📊 统一预聚合 (Every 10 minutes) - 前端页面和 AI 共用的数据源
   initAggregationCron()
+
+  // 🎨 素材级指标（启动时 + 每小时，自动聚合同素材的跨账户广告）
+  initMaterialMetricsCron()
 
   // 📊 账户同步 (Hourly + Startup)
   initAccountSyncCron()
