@@ -155,6 +155,7 @@ export default function AiOptimizerPage() {
   const [accountChoices, setAccountChoices] = useState<
     Record<string, AccountChoice>
   >({});
+  const [selectedCurrency, setSelectedCurrency] = useState("");
   const [windowDays, setWindowDays] = useState(14);
   const [dailyBudget, setDailyBudget] = useState(20);
   const [materialLimit, setMaterialLimit] = useState(3);
@@ -224,7 +225,9 @@ export default function AiOptimizerPage() {
 
   const selectOptimizer = async (optimizer: OptimizerSummary) => {
     const key = `${optimizer.scopeKey}:${optimizer.optimizerId}`;
+    const defaultCurrency = optimizer.currencies?.[0]?.currency || "";
     setSelectedKey(key);
+    setSelectedCurrency(defaultCurrency);
     setPlaybook(null);
     setTokens([]);
     initializeToken(undefined);
@@ -232,6 +235,9 @@ export default function AiOptimizerPage() {
     try {
       const latest = await getPlaybookById(optimizer.latestPlaybookId);
       setPlaybook(latest);
+      if (latest.source.currencies?.length === 1) {
+        setSelectedCurrency(latest.source.currencies[0]);
+      }
       setDailyBudget(latest.guardrails.suggestedPilotDailyBudget);
       if (latest.eligibility.eligible) await loadAssets(latest);
     } catch (error: any) {
@@ -281,6 +287,7 @@ export default function AiOptimizerPage() {
     try {
       const requested = await generatePlaybook(selectedOptimizer.optimizerId, {
         organizationId: selectedOptimizer.organizationId,
+        currency: selectedCurrency || undefined,
         windowDays,
         refreshInsights: true,
       });
@@ -340,6 +347,18 @@ export default function AiOptimizerPage() {
 
   const switchToken = (tokenId: string) => {
     initializeToken(tokens.find((token) => token.tokenId === tokenId));
+  };
+
+  const switchCurrency = (currency: string) => {
+    if (currency === selectedCurrency) return;
+    setSelectedCurrency(currency);
+    setPlaybook(null);
+    setTokens([]);
+    initializeToken(undefined);
+    setNotice({
+      type: "info",
+      text: `已切换到 ${currency || "未知"} 币种，请生成该币种的独立打法版本`,
+    });
   };
 
   const updateChoice = (accountId: string, patch: Partial<AccountChoice>) => {
@@ -539,6 +558,14 @@ export default function AiOptimizerPage() {
                       个活跃账户 · v{optimizer.versionCount || 0}
                     </p>
                     <p
+                      className={`mt-1 truncate text-[11px] ${active ? "text-zinc-500" : "text-zinc-400"}`}
+                    >
+                      币种：
+                      {optimizer.currencies
+                        ?.map((item) => item.currency)
+                        .join("、") || "未知"}
+                    </p>
+                    <p
                       className={`mt-2 truncate text-[11px] ${active ? "text-zinc-500" : "text-zinc-400"}`}
                     >
                       最近结构同步：{formatDate(optimizer.latestSourceSyncedAt)}
@@ -572,6 +599,26 @@ export default function AiOptimizerPage() {
                   </p>
                 </div>
                 <div className="flex items-end gap-2">
+                  <label className="text-xs font-bold text-zinc-600">
+                    学习币种
+                    <select
+                      value={selectedCurrency}
+                      onChange={(event) =>
+                        switchCurrency(event.target.value)
+                      }
+                      className="mt-1 block rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm font-bold text-zinc-800"
+                    >
+                      {(selectedOptimizer?.currencies || []).map((item) => (
+                        <option key={item.currency} value={item.currency}>
+                          {item.currency} · {item.activeAccounts}/
+                          {item.accountCount} 活跃
+                        </option>
+                      ))}
+                      {!selectedOptimizer?.currencies?.length && (
+                        <option value="">币种未知</option>
+                      )}
+                    </select>
+                  </label>
                   <label className="text-xs font-bold text-zinc-600">
                     分析窗口
                     <select
@@ -845,7 +892,9 @@ export default function AiOptimizerPage() {
                         const ready =
                           account.status === 1 &&
                           account.pages.length > 0 &&
-                          account.pixels.length > 0;
+                          account.pixels.length > 0 &&
+                          (!playbook.structure.currency ||
+                            account.currency === playbook.structure.currency);
                         return (
                           <div
                             key={account.accountId}
@@ -869,7 +918,13 @@ export default function AiOptimizerPage() {
                                 <p className="text-[11px] text-zinc-500">
                                   {account.accountId} ·{" "}
                                   {account.currency || "币种未知"} ·{" "}
-                                  {ready ? "资产就绪" : "Page/Pixel 未就绪"}
+                                  {ready
+                                    ? "资产就绪"
+                                    : playbook.structure.currency &&
+                                        account.currency !==
+                                          playbook.structure.currency
+                                      ? `需 ${playbook.structure.currency} 账户`
+                                      : "Page/Pixel 未就绪"}
                                 </p>
                               </div>
                             </div>

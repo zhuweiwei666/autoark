@@ -9,6 +9,15 @@ const normalizeOptimizerId = (value: any): string =>
     .trim()
     .slice(0, 120)
 
+const normalizeCurrency = (value: any): string | undefined => {
+  if (value === undefined || value === null || value === '') return undefined
+  const currency = String(value).trim().toUpperCase()
+  if (!/^[A-Z]{3}$/.test(currency)) {
+    throw errorWithStatus('currency 必须是 3 位 ISO 币种代码')
+  }
+  return currency
+}
+
 const boundedWindowDays = (value: any): number => {
   const parsed = Number(value)
   return Math.min(
@@ -37,18 +46,21 @@ const errorWithStatus = (message: string, statusCode = 400) => {
 export const requestPlaybookGeneration = async ({
   optimizerId: optimizerIdInput,
   organizationId,
+  currency: currencyInput,
   windowDays,
   refreshInsights = true,
   generatedBy,
 }: {
   optimizerId: string
   organizationId?: any
+  currency?: string
   windowDays?: number
   refreshInsights?: boolean
   generatedBy?: string
 }) => {
   const optimizerId = normalizeOptimizerId(optimizerIdInput)
   if (!optimizerId) throw errorWithStatus('optimizerId 不能为空')
+  const currency = normalizeCurrency(currencyInput)
   if (
     organizationId &&
     !mongoose.Types.ObjectId.isValid(String(organizationId))
@@ -57,7 +69,7 @@ export const requestPlaybookGeneration = async ({
   }
 
   const scopeKey = scopeKeyFor(organizationId)
-  const activeKey = JSON.stringify([scopeKey, optimizerId])
+  const activeKey = JSON.stringify([scopeKey, optimizerId, currency || 'ALL'])
   const active: any = await PlaybookGeneration.findOne({
     activeKey,
     status: { $in: ['queued', 'running'] },
@@ -88,6 +100,7 @@ export const requestPlaybookGeneration = async ({
         organizationId: objectIdValue(String(organizationId)),
       }),
       optimizerId,
+      ...(currency && { currency }),
       activeKey,
       status: 'queued',
       windowDays: boundedWindowDays(windowDays),
@@ -175,6 +188,7 @@ export const processPlaybookGeneration = async (
     const playbook: any = await generator({
       optimizerId: generation.optimizerId,
       organizationId: generation.organizationId,
+      currency: generation.currency,
       windowDays: generation.windowDays,
       refreshInsights: generation.refreshInsights,
       generatedBy: generation.generatedBy,

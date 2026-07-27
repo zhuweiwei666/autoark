@@ -7,6 +7,11 @@ export interface OptimizerSummary {
   displayName: string;
   accountCount: number;
   activeAccounts: number;
+  currencies: Array<{
+    currency: string;
+    accountCount: number;
+    activeAccounts: number;
+  }>;
   latestSourceSyncedAt?: string;
   latestPlaybookId?: string;
   lastGeneratedAt?: string;
@@ -118,6 +123,7 @@ export interface PlaybookGeneration {
   _id: string;
   organizationId?: string;
   optimizerId: string;
+  currency?: string;
   status: "queued" | "running" | "completed" | "failed";
   windowDays: number;
   refreshInsights: boolean;
@@ -207,6 +213,7 @@ export const generatePlaybook = (
   optimizerId: string,
   input: {
     organizationId?: string;
+    currency?: string;
     windowDays?: number;
     refreshInsights?: boolean;
   },

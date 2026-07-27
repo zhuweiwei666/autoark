@@ -76,6 +76,15 @@ const normalizeOptimizerId = (value: any): string =>
     .trim()
     .slice(0, 120)
 
+const normalizeCurrency = (value: any): string | undefined => {
+  if (value === undefined || value === null || value === '') return undefined
+  const currency = String(value).trim().toUpperCase()
+  if (!/^[A-Z]{3}$/.test(currency)) {
+    throw errorWithStatus('currency 必须是 3 位 ISO 币种代码')
+  }
+  return currency
+}
+
 const errorWithStatus = (message: string, statusCode = 400) => {
   const error: any = new Error(message)
   error.statusCode = statusCode
@@ -728,16 +737,24 @@ const scopeKeyFor = (organizationId?: any) =>
 const resolveSourceAccounts = async (
   optimizerId: string,
   organizationId?: any,
+  currency?: string,
 ) => {
   const accounts: any[] = await Account.find({
     channel: 'facebook',
     operator: optimizerId,
+    ...(currency && { currency }),
     ...accountScopeFilter(organizationId),
   })
     .sort({ sourceSyncedAt: -1, updatedAt: -1 })
     .lean()
-  if (accounts.length === 0)
-    throw errorWithStatus('未找到该投手在当前数据范围内绑定的广告账户', 404)
+  if (accounts.length === 0) {
+    throw errorWithStatus(
+      currency
+        ? `未找到该投手在 ${currency} 币种下绑定的广告账户`
+        : '未找到该投手在当前数据范围内绑定的广告账户',
+      404,
+    )
+  }
 
   const tokens: any[] = await FbToken.find({
     status: 'active',
@@ -798,6 +815,10 @@ export const listBoundOptimizers = async ({
       displayName: optimizerId,
       accounts: [],
       tokenIds: new Set<string>(),
+      currencyStats: new Map<
+        string,
+        { currency: string; accountCount: number; activeAccounts: number }
+      >(),
       activeAccounts: 0,
       latestSourceSyncedAt: null,
     }
@@ -809,6 +830,22 @@ export const listBoundOptimizers = async ({
       sourceSyncedAt: account.sourceSyncedAt,
     })
     if (account.status === 'active') existing.activeAccounts += 1
+    const storedCurrency = String(account.currency || '')
+      .trim()
+      .toUpperCase()
+    const currency = /^[A-Z]{3}$/.test(storedCurrency)
+      ? storedCurrency
+      : undefined
+    if (currency) {
+      const stats = existing.currencyStats.get(currency) || {
+        currency,
+        accountCount: 0,
+        activeAccounts: 0,
+      }
+      stats.accountCount += 1
+      if (account.status === 'active') stats.activeAccounts += 1
+      existing.currencyStats.set(currency, stats)
+    }
     if (account.tokenId) existing.tokenIds.add(String(account.tokenId))
     const syncedAt = account.sourceSyncedAt || account.updatedAt
     if (
@@ -846,8 +883,15 @@ export const listBoundOptimizers = async ({
 
   return Array.from(grouped.entries()).map(([key, entry]) => {
     const profile = profileByKey.get(key)
+    const { currencyStats, ...summary } = entry
     return {
-      ...entry,
+      ...summary,
+      currencies: Array.from(currencyStats.values()).sort(
+        (left: any, right: any) =>
+          right.activeAccounts - left.activeAccounts ||
+          right.accountCount - left.accountCount ||
+          left.currency.localeCompare(right.currency),
+      ),
       tokenIds: Array.from(entry.tokenIds),
       accountCount: entry.accounts.length,
       profileId: profile?._id,
@@ -862,21 +906,28 @@ export const listBoundOptimizers = async ({
 export const generateOptimizerPlaybook = async ({
   optimizerId: optimizerIdInput,
   organizationId,
+  currency: currencyInput,
   windowDays: windowDaysInput = 14,
   refreshInsights = true,
   generatedBy,
 }: {
   optimizerId: string
   organizationId?: any
+  currency?: string
   windowDays?: number
   refreshInsights?: boolean
   generatedBy?: string
 }) => {
   const optimizerId = normalizeOptimizerId(optimizerIdInput)
   if (!optimizerId) throw errorWithStatus('optimizerId 不能为空')
+  const currency = normalizeCurrency(currencyInput)
   const windowDays = Math.round(boundedNumber(windowDaysInput, 14, 3, 30))
   const window = buildDateWindow(windowDays)
-  const accounts = await resolveSourceAccounts(optimizerId, organizationId)
+  const accounts = await resolveSourceAccounts(
+    optimizerId,
+    organizationId,
+    currency,
+  )
   const accountIds = uniqueStrings(
     accounts.map((account) => normalizeForStorage(account.accountId)),
   )

@@ -12,6 +12,7 @@
     "debug:purchase": "node scripts/debug_facebook_purchase.js",
     "init:super-admin": "ts-node scripts/initSuperAdmin.ts",
     "backfill:mapping": "ts-node scripts/backfillAdMaterialMapping.ts",
+    "backfill:optimizer-lineage": "node dist/scripts/backfillOptimizerLineage.js",
     "migrate:commercial-isolation": "ts-node src/scripts/migrateCommercialTenantIsolation.ts"
   },
   "keywords": [],

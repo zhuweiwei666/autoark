@@ -82,6 +82,7 @@ export const createPlaybook = async (req: Request, res: Response) => {
     const data = await requestPlaybookGeneration({
       optimizerId: req.params.optimizerId,
       organizationId,
+      currency: req.body?.currency,
       windowDays: req.body?.windowDays,
       refreshInsights: boolValue(req.body?.refreshInsights, true),
       generatedBy: req.user?.userId,
@@ -95,6 +96,7 @@ export const createPlaybook = async (req: Request, res: Response) => {
       summary: `提交投手 ${data.generation.optimizerId} 的异步打法学习任务`,
       metadata: {
         status: data.generation.status,
+        currency: data.generation.currency,
         windowDays: data.generation.windowDays,
         refreshInsights: data.generation.refreshInsights,
         reused: data.reused,

@@ -46,3 +46,17 @@ test("the API uses an async generation poll and explicit PAUSED confirmations", 
   assert.match(apiSource, /PUBLISH_PAUSED_REPLICA/);
   assert.doesNotMatch(apiSource, /timeoutMs:\s*5 \* 60 \* 1000/);
 });
+
+test("learning is currency-scoped and target accounts must match the playbook currency", () => {
+  assert.match(apiSource, /currency\?: string/);
+  assert.match(pageSource, /学习币种/);
+  assert.match(pageSource, /currency:\s*selectedCurrency \|\| undefined/);
+  assert.match(
+    pageSource,
+    /const switchCurrency[\s\S]*?setPlaybook\(null\)[\s\S]*?setTokens\(\[\]\)/,
+  );
+  assert.match(
+    pageSource,
+    /account\.currency === playbook\.structure\.currency/,
+  );
+});

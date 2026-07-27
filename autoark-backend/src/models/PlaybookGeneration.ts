@@ -16,6 +16,7 @@ const playbookGenerationSchema = new mongoose.Schema(
       index: true,
     },
     optimizerId: { type: String, required: true, index: true },
+    currency: { type: String, uppercase: true, trim: true, index: true },
     status: {
       type: String,
       enum: PLAYBOOK_GENERATION_STATUSES,
