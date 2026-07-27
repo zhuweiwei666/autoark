@@ -12,6 +12,11 @@ on:
         required: true
         type: boolean
         default: false
+      repair_leyon_ios16_targeting:
+        description: Repair the five AdSets from the exact Leyon 20260727_130341 task to iOS 16+
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -105,3 +110,21 @@ jobs:
           docker compose --env-file deploy/.env --env-file deploy/.deploy-metadata.env
           -f deploy/docker-compose.prod.yml exec -T backend
           node dist/scripts/repairLeyonIosTargeting.js --apply --expected-total-ios=17'
+
+      - name: Dry-run exact Leyon iOS 16+ targeting repair
+        if: ${{ inputs.repair_leyon_ios16_targeting }}
+        run: >-
+          ssh autoark-prod
+          'cd /opt/autoark &&
+          docker compose --env-file deploy/.env --env-file deploy/.deploy-metadata.env
+          -f deploy/docker-compose.prod.yml exec -T backend
+          node dist/scripts/repairLeyonIos16Targeting.js'
+
+      - name: Apply and verify exact Leyon iOS 16+ targeting repair
+        if: ${{ inputs.repair_leyon_ios16_targeting }}
+        run: >-
+          ssh autoark-prod
+          'cd /opt/autoark &&
+          docker compose --env-file deploy/.env --env-file deploy/.deploy-metadata.env
+          -f deploy/docker-compose.prod.yml exec -T backend
+          node dist/scripts/repairLeyonIos16Targeting.js --apply'

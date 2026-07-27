@@ -19,6 +19,19 @@ describe('TargetingPackage Facebook targeting', () => {
     expect(targetingPackage.toFacebookTargeting()).toMatchObject({
       publisher_platforms: ['facebook', 'instagram', 'messenger', 'audience_network'],
       device_platforms: ['mobile'],
+      user_os: ['iOS_ver_16.0_and_above'],
+    })
+  })
+
+  it('keeps generic iOS targeting when no minimum version is configured', () => {
+    const targetingPackage: any = new TargetingPackage({
+      name: 'iOS all versions',
+      deviceSettings: {
+        mobileOS: ['iOS'],
+      },
+    })
+
+    expect(targetingPackage.toFacebookTargeting()).toMatchObject({
       user_os: ['iOS'],
     })
   })
