@@ -1842,6 +1842,7 @@ describe('bulk ad controller', () => {
         config: {
           format: 'carousel',
           dynamicCreative: true,
+          metaAutoCrop: true,
           carousel: {
             autoOptimize: false,
             linkPerCard: true,
@@ -1873,6 +1874,7 @@ describe('bulk ad controller', () => {
     expect(savedGroup.materialStats.totalCount).toBe(0)
     expect(savedGroup.tags).toEqual(['hero', 'video'])
     expect(savedGroup.config.format).toBe('carousel')
+    expect(savedGroup.config.metaAutoCrop).toBe(true)
     expect(savedGroup.config.carousel.autoOptimize).toBe(false)
     expect(savedGroup.config.carousel.linkPerCard).toBe(true)
 
@@ -1909,6 +1911,7 @@ describe('bulk ad controller', () => {
         config: {
           format: 'carousel',
           dynamicCreative: true,
+          metaAutoCrop: false,
           carousel: {
             autoOptimize: false,
             linkPerCard: true,
@@ -1943,6 +1946,7 @@ describe('bulk ad controller', () => {
       config: {
         format: 'carousel',
         dynamicCreative: true,
+        metaAutoCrop: false,
         carousel: {
           autoOptimize: false,
           linkPerCard: true,

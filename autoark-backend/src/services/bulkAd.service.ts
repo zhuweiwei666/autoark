@@ -153,6 +153,28 @@ const isHttpUrl = (value: any) => {
   }
 }
 
+type MetaVideoAutoCropEnrollment = 'OPT_IN' | 'OPT_OUT'
+
+const getMetaVideoAutoCropEnrollment = (
+  creativeGroup: any,
+): MetaVideoAutoCropEnrollment | undefined => {
+  const configured = creativeGroup?.config?.metaAutoCrop
+  if (typeof configured !== 'boolean') return undefined
+  return configured ? 'OPT_IN' : 'OPT_OUT'
+}
+
+const buildMetaVideoAutoCropSpec = (
+  enrollment: MetaVideoAutoCropEnrollment | undefined,
+) => enrollment
+  ? {
+    creative_features_spec: {
+      video_auto_crop: {
+        enroll_status: enrollment,
+      },
+    },
+  }
+  : undefined
+
 const isAllowedAttributionWindow = (value: any, allowedValues: number[]) => {
   const next = Number(value)
   return Number.isInteger(next) && allowedValues.includes(next)
@@ -1895,6 +1917,7 @@ export const executeTaskForAccount = async (
     
     let creativeIndex = 0
     let failedDynamicMaterialCount = 0
+    let expectedDynamicCreativeCount = 0
 
     if (dynamicCreativeEnabled) {
       const imageUploadResults = new Map<string, string>()
@@ -1938,64 +1961,93 @@ export const executeTaskForAccount = async (
 
       failedDynamicMaterialCount = allMaterials.length - dynamicMaterials.length
 
+      // degrees_of_freedom_spec applies to the whole Creative. Keep assets with
+      // different package-level policies separate so one package cannot
+      // silently override another package's auto-crop choice.
+      const videoGroupIndexes = new Set(
+        dynamicMaterials
+          .filter(({ asset }) => asset.type === 'video')
+          .map(({ cgIndex }) => cgIndex),
+      )
+      const dynamicMaterialBuckets = new Map<string, Array<any>>()
+      for (const entry of dynamicMaterials) {
+        const enrollment = videoGroupIndexes.has(entry.cgIndex)
+          ? getMetaVideoAutoCropEnrollment(creativeGroups[entry.cgIndex])
+          : undefined
+        const bucketKey = enrollment || 'DEFAULT'
+        const bucket = dynamicMaterialBuckets.get(bucketKey) || []
+        bucket.push(entry)
+        dynamicMaterialBuckets.set(bucketKey, bucket)
+      }
+
       // Meta 动态素材单条广告最多聚合 10 个媒体资产；超出时自动拆成下一条 Ad。
       const DYNAMIC_MEDIA_LIMIT = 10
-      for (let offset = 0; offset < dynamicMaterials.length; offset += DYNAMIC_MEDIA_LIMIT) {
-        const chunk = dynamicMaterials.slice(offset, offset + DYNAMIC_MEDIA_LIMIT)
-        const first = chunk[0]
-        const copywriting = first.copywriting
-        const websiteUrl = copywriting.links?.websiteUrl || ''
-        const images = chunk.filter(({ asset }) => asset.type === 'image').map(({ asset }) => ({ hash: asset.hash }))
-        const videos = chunk.filter(({ asset }) => asset.type === 'video').map(({ asset }) => ({ video_id: asset.videoId }))
-        const primaryTexts = copywriting.content?.primaryTexts?.length ? copywriting.content.primaryTexts : ['']
-        const headlines = copywriting.content?.headlines?.length ? copywriting.content.headlines : ['']
-        const descriptions = copywriting.content?.descriptions?.length ? copywriting.content.descriptions : ['']
-        const assetFeedSpec: any = {
-          images,
-          videos,
-          bodies: primaryTexts.slice(0, 5).map((text: string) => ({ text })),
-          titles: headlines.slice(0, 5).map((text: string) => ({ text })),
-          descriptions: descriptions.slice(0, 5).map((text: string) => ({ text })),
-          link_urls: [{ website_url: websiteUrl }],
-          call_to_action_types: [copywriting.callToAction || 'SHOP_NOW'],
-          ad_formats: [
-            ...(images.length > 0 ? ['SINGLE_IMAGE'] : []),
-            ...(videos.length > 0 ? ['SINGLE_VIDEO'] : []),
-          ],
-        }
-        if (assetFeedSpec.images.length === 0) delete assetFeedSpec.images
-        if (assetFeedSpec.videos.length === 0) delete assetFeedSpec.videos
+      for (const [bucketKey, bucketMaterials] of dynamicMaterialBuckets) {
+        for (let offset = 0; offset < bucketMaterials.length; offset += DYNAMIC_MEDIA_LIMIT) {
+          expectedDynamicCreativeCount++
+          const chunk = bucketMaterials.slice(offset, offset + DYNAMIC_MEDIA_LIMIT)
+          const first = chunk[0]
+          const copywriting = first.copywriting
+          const websiteUrl = copywriting.links?.websiteUrl || ''
+          const images = chunk.filter(({ asset }) => asset.type === 'image').map(({ asset }) => ({ hash: asset.hash }))
+          const videos = chunk.filter(({ asset }) => asset.type === 'video').map(({ asset }) => ({ video_id: asset.videoId }))
+          const primaryTexts = copywriting.content?.primaryTexts?.length ? copywriting.content.primaryTexts : ['']
+          const headlines = copywriting.content?.headlines?.length ? copywriting.content.headlines : ['']
+          const descriptions = copywriting.content?.descriptions?.length ? copywriting.content.descriptions : ['']
+          const assetFeedSpec: any = {
+            images,
+            videos,
+            bodies: primaryTexts.slice(0, 5).map((text: string) => ({ text })),
+            titles: headlines.slice(0, 5).map((text: string) => ({ text })),
+            descriptions: descriptions.slice(0, 5).map((text: string) => ({ text })),
+            link_urls: [{ website_url: websiteUrl }],
+            call_to_action_types: [copywriting.callToAction || 'SHOP_NOW'],
+            ad_formats: [
+              ...(images.length > 0 ? ['SINGLE_IMAGE'] : []),
+              ...(videos.length > 0 ? ['SINGLE_VIDEO'] : []),
+            ],
+          }
+          if (assetFeedSpec.images.length === 0) delete assetFeedSpec.images
+          if (assetFeedSpec.videos.length === 0) delete assetFeedSpec.videos
 
-        const objectStorySpec: any = { page_id: accountConfig.pageId }
-        if (accountConfig.instagramAccountId) {
-          objectStorySpec.instagram_actor_id = accountConfig.instagramAccountId
-        }
+          const objectStorySpec: any = { page_id: accountConfig.pageId }
+          if (accountConfig.instagramAccountId) {
+            objectStorySpec.instagram_actor_id = accountConfig.instagramAccountId
+          }
+          const enrollment = bucketKey === 'DEFAULT'
+            ? undefined
+            : bucketKey as MetaVideoAutoCropEnrollment
+          const degreesOfFreedomSpec = videos.length > 0
+            ? buildMetaVideoAutoCropSpec(enrollment)
+            : undefined
 
-        creativeIndex++
-        const creativeResult = await createAdCreative({
-          accountId,
-          token,
-          name: `${campaignName}_dynamic_creative_${creativeIndex}`,
-          objectStorySpec,
-          assetFeedSpec,
-        })
-        if (!creativeResult.success) {
-          stepDiagnostics.push(diagnoseFacebookStepError(
-            'creative',
-            creativeResult.error,
-            `Dynamic creative ${creativeIndex} creation failed`,
-          ))
-          continue
+          creativeIndex++
+          const creativeResult = await createAdCreative({
+            accountId,
+            token,
+            name: `${campaignName}_dynamic_creative_${creativeIndex}`,
+            objectStorySpec,
+            degreesOfFreedomSpec,
+            assetFeedSpec,
+          })
+          if (!creativeResult.success) {
+            stepDiagnostics.push(diagnoseFacebookStepError(
+              'creative',
+              creativeResult.error,
+              `Dynamic creative ${creativeIndex} creation failed`,
+            ))
+            continue
+          }
+          creativeEntries.push({
+            cgIndex: first.cgIndex,
+            matIndex: first.matIndex,
+            creativeGroup: creativeGroups[first.cgIndex],
+            material: first.material,
+            materials: chunk.map(({ material }) => material),
+            copywriting,
+            creativeId: creativeResult.id,
+          })
         }
-        creativeEntries.push({
-          cgIndex: first.cgIndex,
-          matIndex: first.matIndex,
-          creativeGroup: creativeGroups[first.cgIndex],
-          material: first.material,
-          materials: chunk.map(({ material }) => material),
-          copywriting,
-          creativeId: creativeResult.id,
-        })
       }
     } else for (const { cgIndex, matIndex, material, copywriting } of allMaterials) {
       const creativeGroup = creativeGroups[cgIndex]
@@ -2100,6 +2152,9 @@ export const executeTaskForAccount = async (
           token,
           name: creativeName,
           objectStorySpec,
+          degreesOfFreedomSpec: material.type === 'video'
+            ? buildMetaVideoAutoCropSpec(getMetaVideoAutoCropEnrollment(creativeGroup))
+            : undefined,
         })
         
         if (!creativeResult.success) {
@@ -2177,7 +2232,7 @@ export const executeTaskForAccount = async (
     // ==================== 6. 完成任务 ====================
     // 素材数量必须和最终广告数量一致；否则不能把“部分成功”伪装成成功。
     const expectedCreativeCount = dynamicCreativeEnabled
-      ? Math.ceil(allMaterials.length / 10)
+      ? expectedDynamicCreativeCount
       : allMaterials.length
     const expectedAdCount = expectedCreativeCount * adsetsToUse.length
     const skippedCount = Math.max(expectedAdCount - adIds.length, 0)
