@@ -1,5 +1,7 @@
 import { createHash } from 'crypto'
 import path from 'path'
+import Ad from '../models/Ad'
+import AdMaterialMapping from '../models/AdMaterialMapping'
 import Creative from '../models/Creative'
 import Material from '../models/Material'
 import { fetchImageByHash, fetchVideoSource } from '../integration/facebook/ads.api'
@@ -576,6 +578,43 @@ export const ingestCreativeAssets = async (params: {
       $addToSet: { materialIds: { $each: uniqueMaterialIds } },
     },
   )
+
+  if (uniqueMaterialIds[0]) {
+    const materialId = uniqueMaterialIds[0]
+    const ads = await Ad.find({
+      channel: 'facebook',
+      creativeId,
+      ...(organizationId ? { organizationId } : {}),
+    }).select('_id adId accountId campaignId adsetId organizationId').lean()
+
+    if (ads.length) {
+      await Promise.all([
+        Ad.updateMany(
+          { _id: { $in: ads.map((ad: any) => ad._id) } },
+          { $set: { materialId } },
+        ),
+        AdMaterialMapping.bulkWrite(ads.map((ad: any) => ({
+          updateOne: {
+            filter: { adId: ad.adId },
+            update: {
+              $set: {
+                adId: ad.adId,
+                materialId,
+                organizationId: ad.organizationId || organizationId,
+                accountId: ad.accountId,
+                campaignId: ad.campaignId,
+                adsetId: ad.adsetId,
+                creativeId,
+                status: 'active',
+              },
+              $setOnInsert: { publishedAt: new Date() },
+            },
+            upsert: true,
+          },
+        })) as any),
+      ])
+    }
+  }
 
   if (errors.length) {
     logger.warn('[FacebookMaterial] Creative ingestion incomplete', {

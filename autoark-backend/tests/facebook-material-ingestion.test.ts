@@ -6,6 +6,9 @@ const mockMaterialFindOne = jest.fn()
 const mockMaterialFindOneAndUpdate = jest.fn()
 const mockMaterialUpdateOne = jest.fn()
 const mockCreativeFindOneAndUpdate = jest.fn()
+const mockAdFind = jest.fn()
+const mockAdUpdateMany = jest.fn()
+const mockAdMaterialMappingBulkWrite = jest.fn()
 
 jest.mock('../src/integration/facebook/ads.api', () => ({
   fetchVideoSource: mockFetchVideoSource,
@@ -33,6 +36,21 @@ jest.mock('../src/models/Creative', () => ({
   },
 }))
 
+jest.mock('../src/models/Ad', () => ({
+  __esModule: true,
+  default: {
+    find: mockAdFind,
+    updateMany: mockAdUpdateMany,
+  },
+}))
+
+jest.mock('../src/models/AdMaterialMapping', () => ({
+  __esModule: true,
+  default: {
+    bulkWrite: mockAdMaterialMappingBulkWrite,
+  },
+}))
+
 import {
   extractCreativeAssets,
   ingestCreativeAssets,
@@ -51,6 +69,13 @@ describe('facebook material ingestion', () => {
     mockMaterialFindOneAndUpdate.mockResolvedValue(materialDocument())
     mockMaterialUpdateOne.mockResolvedValue({ modifiedCount: 1 })
     mockCreativeFindOneAndUpdate.mockResolvedValue({})
+    mockAdFind.mockReturnValue({
+      select: jest.fn().mockReturnValue({
+        lean: jest.fn().mockResolvedValue([]),
+      }),
+    })
+    mockAdUpdateMany.mockResolvedValue({ modifiedCount: 0 })
+    mockAdMaterialMappingBulkWrite.mockResolvedValue({})
     mockUploadToR2.mockResolvedValue({
       success: true,
       key: 'tenant/facebook/video.mp4',
@@ -179,6 +204,81 @@ describe('facebook material ingestion', () => {
       materialIds: ['material-existing'],
       reused: 1,
     })
+  })
+
+  it('links every cross-account ad using the downloaded creative back to one material', async () => {
+    mockFetchVideoSource.mockResolvedValue({
+      success: true,
+      source: 'https://video.example/cross-account.mp4',
+      length: 8,
+    })
+    mockAdFind.mockReturnValue({
+      select: jest.fn().mockReturnValue({
+        lean: jest.fn().mockResolvedValue([
+          {
+            _id: 'mongo-ad-a',
+            adId: 'ad-a',
+            accountId: 'account-a',
+            campaignId: 'campaign-a',
+            adsetId: 'adset-a',
+            organizationId: '665000000000000000000001',
+          },
+          {
+            _id: 'mongo-ad-b',
+            adId: 'ad-b',
+            accountId: 'account-b',
+            campaignId: 'campaign-b',
+            adsetId: 'adset-b',
+            organizationId: '665000000000000000000001',
+          },
+        ]),
+      }),
+    })
+
+    await ingestCreativeAssets({
+      creative: { creativeId: 'creative-shared', videoId: 'video-shared' },
+      accountId: 'account-a',
+      organizationId: '665000000000000000000001',
+      token: 'TOKEN',
+    })
+
+    expect(mockAdFind).toHaveBeenCalledWith({
+      channel: 'facebook',
+      creativeId: 'creative-shared',
+      organizationId: '665000000000000000000001',
+    })
+    expect(mockAdUpdateMany).toHaveBeenCalledWith(
+      { _id: { $in: ['mongo-ad-a', 'mongo-ad-b'] } },
+      { $set: { materialId: 'material-1' } },
+    )
+    expect(mockAdMaterialMappingBulkWrite).toHaveBeenCalledWith([
+      expect.objectContaining({
+        updateOne: expect.objectContaining({
+          filter: { adId: 'ad-a' },
+          update: expect.objectContaining({
+            $set: expect.objectContaining({
+              materialId: 'material-1',
+              accountId: 'account-a',
+              creativeId: 'creative-shared',
+            }),
+          }),
+          upsert: true,
+        }),
+      }),
+      expect.objectContaining({
+        updateOne: expect.objectContaining({
+          filter: { adId: 'ad-b' },
+          update: expect.objectContaining({
+            $set: expect.objectContaining({
+              materialId: 'material-1',
+              accountId: 'account-b',
+              creativeId: 'creative-shared',
+            }),
+          }),
+          upsert: true,
+        }),
+      }),
+    ])
   })
 
   it('uses one global content fingerprint for unowned Facebook accounts', async () => {
