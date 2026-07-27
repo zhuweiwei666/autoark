@@ -27,6 +27,10 @@ describe('protected API routes', () => {
     ['POST', '/api/material-metrics/aggregate'],
     ['GET', '/api/bulk-ad/tasks/665000000000000000000001/diagnostics'],
     ['GET', '/api/bulk-ad/tasks/665000000000000000000001/support-package'],
+    ['GET', '/api/optimizer-learning/optimizers'],
+    ['GET', '/api/optimizer-learning/playbook-generations/665000000000000000000009'],
+    ['GET', '/api/optimizer-learning/playbooks'],
+    ['GET', '/api/optimizer-learning/replicas'],
   ] as const
 
   it.each(protectedRequests)('%s %s requires authentication', async (method, path) => {

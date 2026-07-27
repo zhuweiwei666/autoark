@@ -23,6 +23,7 @@ import aggregationRoutes from './controllers/aggregation.controller' // New: 预
 import automationJobRoutes from './routes/automationJob.routes' // New: 自动化 Job 编排
 import commercialRoutes from './routes/commercial.routes' // SaaS commercial readiness
 import agentV2Routes from './agent/agent.controller' // Agent V2: LLM-powered multi-agent system
+import optimizerLearningRoutes from './routes/optimizerLearning.routes'
 import { handleFeishuInteraction } from './controllers/feishu.webhook.controller'
 import logger from './utils/logger'
 import { errorHandler } from './middlewares/errorHandler'
@@ -176,6 +177,7 @@ app.use('/api/agg', aggregationRoutes) // New: 统一预聚合数据 API（前�
 app.use('/api/automation-jobs', automationJobRoutes) // New: AI Planner/Executor jobs
 app.use('/api/commercial', commercialRoutes) // SaaS readiness, plan and quota status
 app.use('/api/v2/agent', agentV2Routes) // Agent V2: LLM-powered multi-agent system
+app.use('/api/optimizer-learning', optimizerLearningRoutes)
 
 // 飞书 Webhook 交互回调
 app.post('/api/webhooks/feishu/interaction', handleFeishuInteraction)

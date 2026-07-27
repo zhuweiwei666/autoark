@@ -58,6 +58,9 @@ const creativeSchema = new mongoose.Schema(
     // 关联信息
     accountId: String,
     organizationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Organization', index: true },
+    tokenId: { type: mongoose.Schema.Types.ObjectId, ref: 'FbToken', index: true },
+    optimizer: { type: String, index: true },
+    sourceSyncedAt: { type: Date, index: true },
     
     // 标签和分类
     tags: [String],
@@ -91,6 +94,7 @@ creativeSchema.index({ accountId: 1 })
 creativeSchema.index({ materialId: 1 })
 creativeSchema.index({ materialIds: 1 })
 creativeSchema.index({ organizationId: 1, ingestionStatus: 1 })
+creativeSchema.index({ organizationId: 1, optimizer: 1, accountId: 1 })
 creativeSchema.index({ 'fingerprint.pHash': 1 })
 creativeSchema.index({ 'fingerprint.md5': 1 })
 creativeSchema.index({ downloaded: 1 })

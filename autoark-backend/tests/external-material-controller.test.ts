@@ -612,6 +612,12 @@ describe('external material bootstrap lifecycle', () => {
     jest.doMock('../src/queue/automation.worker', () => ({
       initAutomationWorker: jest.fn(() => events.push('automationWorker')),
     }))
+    jest.doMock('../src/queue/optimizerPlaybook.worker', () => ({
+      initOptimizerPlaybookWorker: jest.fn(() => events.push('optimizerPlaybookWorker')),
+      closeOptimizerPlaybookWorker: jest.fn(async () =>
+        events.push('closeOptimizerPlaybookWorker'),
+      ),
+    }))
     jest.doMock('../src/queue/externalMaterial.queue', () => ({
       initExternalMaterialQueue: jest.fn(async () =>
         events.push('externalQueue'),

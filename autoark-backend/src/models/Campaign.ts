@@ -4,6 +4,10 @@ const campaignSchema = new mongoose.Schema(
   {
     campaignId: { type: String, required: true, unique: true },
     accountId: String,
+    organizationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Organization', index: true },
+    tokenId: { type: mongoose.Schema.Types.ObjectId, ref: 'FbToken', index: true },
+    optimizer: { type: String, index: true },
+    sourceSyncedAt: { type: Date, index: true },
     channel: { type: String, default: 'facebook' },
     platform: { type: String, enum: ['facebook', 'tiktok'], default: 'facebook', index: true },
     name: String,
@@ -18,5 +22,7 @@ const campaignSchema = new mongoose.Schema(
   },
   { timestamps: true },
 )
+
+campaignSchema.index({ organizationId: 1, optimizer: 1, accountId: 1 })
 
 export default mongoose.model('Campaign', campaignSchema)
