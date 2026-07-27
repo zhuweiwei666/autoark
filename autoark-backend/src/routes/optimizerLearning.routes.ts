@@ -16,6 +16,10 @@ router.get('/playbooks', controller.getPlaybooks)
 router.get('/playbooks/:id', controller.getPlaybookById)
 router.get('/replica-assets', controller.getReplicaAssets)
 router.post('/playbooks/:id/reusable-assets', controller.createReusableAssets)
+router.post(
+  '/playbooks/:id/name-pixel-mappings',
+  controller.confirmNamePixelMapping,
+)
 router.post('/playbooks/:id/mandates', controller.createMandate)
 router.get('/mandates', controller.getMandates)
 router.post('/mandates/:id/revoke', controller.revokeMandate)

@@ -11,6 +11,7 @@ import {
 } from "@phosphor-icons/react";
 import {
   approveReplica,
+  confirmNamePixelMapping,
   createExecutionMandate,
   createReplica,
   evaluateReplica,
@@ -35,6 +36,9 @@ import {
 
 type Notice = { type: "success" | "error" | "info"; text: string };
 type AccountChoice = { selected: boolean; pageId: string };
+type NamePixelCandidate = NonNullable<
+  ExecutionSetup["copywritingPackages"][number]["nameMatch"]
+>["candidates"][number];
 
 const statusStyles: Record<string, string> = {
   ready: "bg-emerald-50 text-emerald-700 ring-emerald-200",
@@ -177,6 +181,7 @@ export default function AiOptimizerPage() {
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [materializing, setMaterializing] = useState(false);
+  const [confirmingNameMappingKey, setConfirmingNameMappingKey] = useState("");
   const [creatingMandate, setCreatingMandate] = useState(false);
   const [creating, setCreating] = useState(false);
   const [actionRunId, setActionRunId] = useState("");
@@ -200,6 +205,22 @@ export default function AiOptimizerPage() {
         (item) => item.id === selectedCopywritingPackageId,
       ),
     [executionSetup, selectedCopywritingPackageId],
+  );
+  const selectedNameCandidates = useMemo(
+    () =>
+      (selectedCopywritingPackage?.nameMatch?.candidates || []).filter(
+        (candidate) => candidate.tokenId === selectedTokenId,
+      ),
+    [selectedCopywritingPackage, selectedTokenId],
+  );
+  const selectedNameAmbiguities = useMemo(
+    () =>
+      (
+        selectedCopywritingPackage?.nameMatch?.ambiguousAccounts || []
+      ).filter(
+        (candidate) => candidate.tokenId === selectedTokenId,
+      ),
+    [selectedCopywritingPackage, selectedTokenId],
   );
   const activeMandates = useMemo(
     () =>
@@ -282,6 +303,7 @@ export default function AiOptimizerPage() {
       } else {
         setMaximumDailyBudget(nextPlaybook.guardrails.maximumPilotDailyBudget);
       }
+      return data;
     } catch (error: any) {
       setExecutionSetup(null);
       setTokens([]);
@@ -290,6 +312,7 @@ export default function AiOptimizerPage() {
         type: "error",
         text: error.message || "目标账户资产加载失败",
       });
+      return undefined;
     }
   };
 
@@ -526,6 +549,39 @@ export default function AiOptimizerPage() {
       });
     } finally {
       setCreatingMandate(false);
+    }
+  };
+
+  const handleConfirmNameMapping = async (
+    candidate: NamePixelCandidate,
+  ) => {
+    if (!playbook || !selectedCopywritingPackage) return;
+    const confirmationKey = `${candidate.tokenId}:${candidate.accountId}:${candidate.pixelId}`;
+    setConfirmingNameMappingKey(confirmationKey);
+    try {
+      const mapping = await confirmNamePixelMapping(playbook._id, {
+        copywritingPackageId: selectedCopywritingPackage.id,
+        tokenId: candidate.tokenId,
+        accountId: candidate.accountId,
+        pixelId: candidate.pixelId,
+      });
+      const refreshed = await loadAssets(playbook);
+      setSelectedCopywritingPackageId(selectedCopywritingPackage.id);
+      const refreshedToken = refreshed?.tokens.find(
+        (token) => token.tokenId === candidate.tokenId,
+      );
+      if (refreshedToken) initializeToken(refreshedToken);
+      setNotice({
+        type: "success",
+        text: `已确认 ${selectedCopywritingPackage.name} → ${mapping.productName} → ${mapping.pixelName || mapping.pixelId}；该账户现在可用于 AI 授权。`,
+      });
+    } catch (error: any) {
+      setNotice({
+        type: "error",
+        text: error.message || "名称匹配确认失败",
+      });
+    } finally {
+      setConfirmingNameMappingKey("");
     }
   };
 
@@ -1086,13 +1142,26 @@ export default function AiOptimizerPage() {
                               <option
                                 key={item.id}
                                 value={item.id}
-                                disabled={!item.ready}
+                                disabled={
+                                  !item.ready &&
+                                  (item.nameMatch?.candidates.length || 0) ===
+                                    0 &&
+                                  (item.nameMatch?.ambiguousAccounts.length ||
+                                    0) === 0
+                                }
                               >
                                 {item.name}
                                 {item.product?.name
                                   ? ` → ${item.product.name}`
                                   : ""}
-                                {!item.ready
+                                {!item.ready &&
+                                (item.nameMatch?.candidates.length || 0) > 0
+                                  ? `（待确认 ${item.nameMatch?.candidates.length} 个精确名称候选）`
+                                  : !item.ready &&
+                                      (item.nameMatch?.ambiguousAccounts
+                                        .length || 0) > 0
+                                    ? "（存在同名 Pixel 冲突）"
+                                    : !item.ready
                                   ? `（${item.blockers.join("、")}）`
                                   : ""}
                               </option>
@@ -1119,6 +1188,85 @@ export default function AiOptimizerPage() {
                             ))}
                           </select>
                         </label>
+                        {selectedCopywritingPackage &&
+                          !selectedCopywritingPackage.ready &&
+                          selectedCopywritingPackage.nameIdentity && (
+                            <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-3">
+                              <p className="text-xs font-black text-amber-900">
+                                名称解析：{selectedCopywritingPackage.name} →{" "}
+                                {
+                                  selectedCopywritingPackage.nameIdentity
+                                    .displayName
+                                }
+                              </p>
+                              <p className="mt-1 text-[11px] leading-4 text-amber-800">
+                                只展示归一化后产品名完全一致的 Pixel。确认后才会写入产品关系并标记为管理员已验证。
+                              </p>
+                              <div className="mt-3 space-y-2">
+                                {selectedNameCandidates.map((candidate) => {
+                                  const confirmationKey = `${candidate.tokenId}:${candidate.accountId}:${candidate.pixelId}`;
+                                  return (
+                                    <div
+                                      key={confirmationKey}
+                                      className="flex items-center justify-between gap-3 rounded-xl bg-white px-3 py-2 ring-1 ring-amber-200"
+                                    >
+                                      <div className="min-w-0">
+                                        <p className="truncate text-xs font-bold text-zinc-900">
+                                          {candidate.accountName ||
+                                            candidate.accountId}
+                                        </p>
+                                        <p className="mt-0.5 truncate text-[11px] text-zinc-500">
+                                          {candidate.pixelName ||
+                                            candidate.pixelId}{" "}
+                                          · 精确名称匹配
+                                        </p>
+                                      </div>
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          handleConfirmNameMapping(candidate)
+                                        }
+                                        disabled={
+                                          Boolean(confirmingNameMappingKey) ||
+                                          selectedNameAmbiguities.length > 0
+                                        }
+                                        className="shrink-0 rounded-lg bg-zinc-900 px-3 py-1.5 text-[11px] font-bold text-white disabled:cursor-not-allowed disabled:opacity-40"
+                                      >
+                                        {confirmingNameMappingKey ===
+                                        confirmationKey
+                                          ? "确认中…"
+                                          : "管理员确认"}
+                                      </button>
+                                    </div>
+                                  );
+                                })}
+                                {selectedNameAmbiguities.map((ambiguous) => (
+                                  <div
+                                    key={`${ambiguous.tokenId}:${ambiguous.accountId}`}
+                                    className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] leading-4 text-rose-700"
+                                  >
+                                    {ambiguous.accountName ||
+                                      ambiguous.accountId}{" "}
+                                    有 {ambiguous.pixels.length} 个同名 Pixel：
+                                    {ambiguous.pixels
+                                      .map(
+                                        (pixel) =>
+                                          pixel.pixelName || pixel.pixelId,
+                                      )
+                                      .join("、")}
+                                    。请先重命名或手工处理，系统不会猜。
+                                  </div>
+                                ))}
+                                {selectedNameCandidates.length === 0 &&
+                                  selectedNameAmbiguities.length === 0 && (
+                                    <p className="rounded-xl border border-dashed border-amber-300 px-3 py-3 text-center text-[11px] text-amber-800">
+                                      当前执行授权下没有与产品名完全一致的
+                                      Pixel；可切换授权检查其他账户。
+                                    </p>
+                                  )}
+                              </div>
+                            </div>
+                          )}
                         <div className="grid grid-cols-2 gap-2">
                           <label className="text-xs font-bold text-zinc-600">
                             默认日预算
