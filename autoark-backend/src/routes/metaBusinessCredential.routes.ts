@@ -13,6 +13,10 @@ router.get('/migration-inventory', controller.getMigrationInventory)
 router.get('/bootstrap-tokens', controller.getBootstrapTokens)
 router.post('/discover-businesses', controller.discoverBusinesses)
 router.post('/inspect-business', controller.inspectBusiness)
+router.post(
+  '/inspect-application-ownership',
+  controller.inspectApplicationOwnership,
+)
 router.post('/provision-plan', controller.getProvisionPlan)
 router.post('/provision', controller.provisionSystemUser)
 router.post('/:id/validate', controller.refreshCredential)

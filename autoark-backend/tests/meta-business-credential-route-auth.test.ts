@@ -27,6 +27,9 @@ jest.mock('../src/services/metaBusinessCredential.service', () => ({
   getMigrationInventory: jest.fn().mockResolvedValue({ organizations: [], apps: [] }),
   discoverBusinesses: jest.fn().mockResolvedValue([]),
   inspectBusiness: jest.fn(),
+  inspectApplicationOwnership: jest
+    .fn()
+    .mockResolvedValue({ graph: { isBusinessOwned: false } }),
   buildProvisionPlan: jest.fn(),
   provisionSystemUser: jest.fn(),
   refreshCredential: jest.fn(),
@@ -55,13 +58,29 @@ describe('Meta System User route authorization', () => {
   it.each([
     ['get', '/api/meta-business-credentials/migration-inventory', undefined],
     ['get', '/api/meta-business-credentials/bootstrap-tokens', undefined],
-    ['post', '/api/meta-business-credentials/discover-businesses', { bootstrapTokenId: 'token' }],
-    ['post', '/api/meta-business-credentials/provision', { confirmation: 'PROVISION_SYSTEM_USER' }],
-  ] as const)('blocks non-super-admin access to %s %s', async (method, path, body) => {
-    const call = request(createApp())[method](path)
-    const response = body ? await call.send(body) : await call
-    expect(response.status).toBe(403)
-  })
+    [
+      'post',
+      '/api/meta-business-credentials/discover-businesses',
+      { bootstrapTokenId: 'token' },
+    ],
+    [
+      'post',
+      '/api/meta-business-credentials/inspect-application-ownership',
+      { facebookAppId: 'app' },
+    ],
+    [
+      'post',
+      '/api/meta-business-credentials/provision',
+      { confirmation: 'PROVISION_SYSTEM_USER' },
+    ],
+  ] as const)(
+    'blocks non-super-admin access to %s %s',
+    async (method, path, body) => {
+      const call = request(createApp())[method](path)
+      const response = body ? await call.send(body) : await call
+      expect(response.status).toBe(403)
+    },
+  )
 
   it('allows a super admin to read the safe migration inventory', async () => {
     authState.user = {
