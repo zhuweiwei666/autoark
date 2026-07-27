@@ -884,6 +884,9 @@ const sanitizeCreativeGroupConfig = (input: any) => {
   if (typeof input.dynamicCreative === 'boolean') {
     config.dynamicCreative = input.dynamicCreative
   }
+  if (typeof input.metaAutoCrop === 'boolean') {
+    config.metaAutoCrop = input.metaAutoCrop
+  }
   if (input.carousel && typeof input.carousel === 'object' && !Array.isArray(input.carousel)) {
     config.carousel = {}
     if (typeof input.carousel.autoOptimize === 'boolean') {

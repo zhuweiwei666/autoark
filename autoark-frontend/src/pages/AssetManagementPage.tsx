@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useSearchParams, useNavigate } from 'react-router-dom'
+import { Crop } from '@phosphor-icons/react'
 import { authFetch } from '../services/api'
 
 const API_BASE = '/api'
@@ -864,6 +865,50 @@ export default function AssetManagementPage() {
               <select value={formData.config?.format || 'single'} onChange={(e) => setFormData({...formData, config: {...formData.config, format: e.target.value}})} className="w-full px-3 py-2 border rounded-lg">
                 <option value="single">单图/视频</option><option value="carousel">轮播</option>
               </select></div>
+
+            <div className={`rounded-xl border p-4 transition-colors ${
+              formData.config?.metaAutoCrop === true
+                ? 'border-blue-300 bg-blue-50'
+                : 'border-slate-200 bg-slate-50'
+            }`}>
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex min-w-0 gap-3">
+                  <span className={`mt-0.5 flex h-9 w-9 flex-none items-center justify-center rounded-lg ${
+                    formData.config?.metaAutoCrop === true
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-white text-slate-500 ring-1 ring-slate-200'
+                  }`}>
+                    <Crop size={20} weight="bold" />
+                  </span>
+                  <div>
+                    <div className="text-sm font-semibold text-slate-800">Meta 自动裁剪视频</div>
+                    <p className="mt-1 text-xs leading-5 text-slate-500">
+                      允许 Meta 根据版位和预估表现自动调整视频比例。是否裁剪及裁剪范围由 Meta 决定，不会修改素材库中的原视频。
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={formData.config?.metaAutoCrop === true}
+                  aria-label="Meta 自动裁剪视频"
+                  onClick={() => setFormData({
+                    ...formData,
+                    config: {
+                      ...formData.config,
+                      metaAutoCrop: formData.config?.metaAutoCrop !== true,
+                    },
+                  })}
+                  className={`relative mt-1 h-6 w-11 flex-none rounded-full transition-colors active:scale-[0.98] ${
+                    formData.config?.metaAutoCrop === true ? 'bg-blue-600' : 'bg-slate-300'
+                  }`}
+                >
+                  <span className={`absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${
+                    formData.config?.metaAutoCrop === true ? 'translate-x-5' : 'translate-x-0'
+                  }`} />
+                </button>
+              </div>
+            </div>
             
             {/* 素材选择 */}
             <div>
@@ -1039,6 +1084,11 @@ export default function AssetManagementPage() {
               <span className="mr-3">📷 {item.materials?.filter((m: any) => m.type === 'image').length || 0} 图片</span>
               <span className="mr-3">🎬 {item.materials?.filter((m: any) => m.type === 'video').length || 0} 视频</span>
               <span className="inline-block px-2 py-0.5 bg-slate-100 rounded text-xs">{item.config?.format || 'single'}</span>
+              {item.config?.metaAutoCrop === true && (
+                <span className="ml-2 inline-block rounded bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700">
+                  Meta 自动裁剪
+                </span>
+              )}
             </div>
             {/* 素材预览 */}
             {item.materials?.length > 0 && (

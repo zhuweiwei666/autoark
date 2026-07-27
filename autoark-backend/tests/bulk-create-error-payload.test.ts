@@ -1,6 +1,14 @@
-import { buildFacebookBulkCreateErrorPayload } from '../src/integration/facebook/bulkCreate.api'
+import {
+  buildFacebookBulkCreateErrorPayload,
+  createAdCreative,
+} from '../src/integration/facebook/bulkCreate.api'
+import { facebookClient } from '../src/integration/facebook/facebookClient'
 
 describe('facebook bulk create error payload', () => {
+  afterEach(() => {
+    jest.restoreAllMocks()
+  })
+
   it('preserves FacebookApiError style response.error fields', () => {
     const error: any = new Error('Facebook API failed')
     error.code = 100
@@ -50,5 +58,31 @@ describe('facebook bulk create error payload', () => {
       userTitle: '授权已失效',
     })
     expect(payload.details.access_token).toBe('[REDACTED]')
+  })
+
+  it('serializes Meta video auto-crop enrollment in the creative request', async () => {
+    const post = jest.spyOn(facebookClient, 'post').mockResolvedValue({ id: 'creative_1' } as any)
+    const degreesOfFreedomSpec = {
+      creative_features_spec: {
+        video_auto_crop: {
+          enroll_status: 'OPT_IN',
+        },
+      },
+    }
+
+    await createAdCreative({
+      accountId: '123',
+      token: 'secret-token',
+      name: 'Auto crop creative',
+      objectStorySpec: {
+        page_id: 'page_1',
+        video_data: { video_id: 'video_1' },
+      },
+      degreesOfFreedomSpec,
+    })
+
+    expect(post).toHaveBeenCalledWith('/act_123/adcreatives', expect.objectContaining({
+      degrees_of_freedom_spec: JSON.stringify(degreesOfFreedomSpec),
+    }))
   })
 })

@@ -93,6 +93,8 @@ const creativeGroupSchema = new mongoose.Schema(
       },
       // 是否启用动态素材
       dynamicCreative: { type: Boolean, default: false },
+      // 是否允许 Meta 在投放时按版位自动裁剪视频
+      metaAutoCrop: { type: Boolean },
       // 轮播图设置
       carousel: {
         autoOptimize: { type: Boolean, default: true },  // 自动优化排序
