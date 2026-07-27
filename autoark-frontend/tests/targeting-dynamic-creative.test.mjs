@@ -10,3 +10,7 @@ test('targeting packages expose and persist the dynamic creative switch', () => 
   assert.match(assetPage, /dynamicCreativeEnabled: e\.target\.checked/)
   assert.match(assetPage, /使用此定向包创建广告时，一个广告自动聚合多条素材/)
 })
+
+test('targeting package country choices exclude Singapore', () => {
+  assert.doesNotMatch(assetPage, /code:\s*['"]SG['"]/)
+})

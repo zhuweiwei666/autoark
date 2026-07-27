@@ -1661,6 +1661,39 @@ describe('bulk ad controller', () => {
     expect(res.json).toHaveBeenCalledWith({ success: true, data: savedPackage })
   })
 
+  it('rejects Singapore when creating or updating a targeting package', async () => {
+    const createReq = memberReq({
+      body: {
+        name: 'Singapore targeting',
+        geoLocations: { countries: ['US', 'sg'] },
+      },
+    })
+    const createRes = resMock()
+
+    await createTargetingPackage(createReq as any, createRes as any)
+
+    expect(createRes.status).toHaveBeenCalledWith(400)
+    expect(createRes.json).toHaveBeenCalledWith({
+      success: false,
+      error: '暂不支持新加坡定向，请选择其他国家或地区',
+    })
+
+    const updateReq = memberReq({
+      body: {
+        geoLocations: { countries: ['SG'] },
+      },
+    })
+    const updateRes = resMock()
+
+    await updateTargetingPackage(updateReq as any, updateRes as any)
+
+    expect(updateRes.status).toHaveBeenCalledWith(400)
+    expect(updateRes.json).toHaveBeenCalledWith({
+      success: false,
+      error: '暂不支持新加坡定向，请选择其他国家或地区',
+    })
+  })
+
   it('limits member copywriting package writes and product parsing to their own assets', async () => {
     jest.spyOn(CopywritingPackage, 'findOneAndUpdate').mockResolvedValue({
       _id: '665000000000000000000601',
