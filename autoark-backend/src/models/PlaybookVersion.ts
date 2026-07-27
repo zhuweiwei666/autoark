@@ -85,6 +85,10 @@ const playbookVersionSchema = new mongoose.Schema(
       required: true,
       immutable: true,
     },
+    executionBoundary: {
+      type: mongoose.Schema.Types.Mixed,
+      immutable: true,
+    },
     guardrails: {
       type: mongoose.Schema.Types.Mixed,
       required: true,

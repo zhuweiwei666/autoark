@@ -13,6 +13,8 @@ import User, { UserRole } from '../models/User'
 import Account from '../models/Account'
 import Ad from '../models/Ad'
 import ReplicaRun from '../models/ReplicaRun'
+import AiExecutionMandate from '../models/AiExecutionMandate'
+import PlaybookVersion from '../models/PlaybookVersion'
 import {
   createCampaign,
   createAdSet,
@@ -24,6 +26,11 @@ import {
 import { facebookClient } from '../integration/facebook/facebookClient'
 import { combineFilters } from '../utils/accessControl'
 import { getAccountIdsForQuery, normalizeForStorage } from '../utils/accountId'
+import {
+  canonicalJson,
+  frozenCopywritingSnapshot,
+  frozenCreativeSnapshot,
+} from '../utils/aiExecutionSnapshot'
 import { getBuildInfo } from '../utils/buildInfo'
 import { parseLimitedNumber, parsePagination, pickAllowedString } from '../utils/pagination'
 import {
@@ -37,6 +44,7 @@ import {
   recordOperationalCredentialFailure,
   resolvePublishingCredential,
 } from './metaBusinessCredential.service'
+import { resolveExecutionMandate } from './optimizerExecution.service'
 
 /**
  * 批量广告创建服务
@@ -54,6 +62,14 @@ const DRAFT_LIST_STATUSES = ['draft', 'ready', 'published', 'failed'] as const
 const TASK_LIST_STATUSES = ['pending', 'queued', 'processing', 'success', 'partial_success', 'failed', 'cancelled'] as const
 const TASK_LIST_TYPES = ['BULK_AD_CREATE', 'BULK_AD_UPDATE', 'BULK_AD_DELETE', 'MATERIAL_UPLOAD'] as const
 const TASK_LIST_PLATFORMS = ['facebook', 'tiktok', 'google'] as const
+
+const hasAiExecutionLineage = (origin: any) =>
+  Boolean(
+    origin?.replicaRunId ||
+      origin?.mandateId ||
+      origin?.playbookVersionId ||
+      origin?.statusLockedToPaused,
+  )
 
 const normalizeObjectIdList = (values: any[] = []) => {
   const unique = Array.from(new Set(values.map(value => value?.toString()).filter(Boolean)))
@@ -578,7 +594,7 @@ export const updateDraft = async (
   // AI replicas are immutable approval artifacts. Allowing the generic bulk
   // editor to mutate one would break the guarantee that the approved payload
   // is exactly the payload later sent to Meta.
-  if (draft.aiOrigin?.statusLockedToPaused) {
+  if (hasAiExecutionLineage(draft.aiOrigin)) {
     const error: any = new Error('AI 复制草稿不可编辑；如需调整，请重新生成并重新审批')
     error.statusCode = 409
     error.errorCode = 'AI_REPLICA_DRAFT_IMMUTABLE'
@@ -906,7 +922,12 @@ export const validateDraft = async (draftId: string, accessFilter: any = {}) => 
 /**
  * 发布草稿（创建任务）
  */
-export const publishDraft = async (draftId: string, userId?: string, accessFilter: any = {}) => {
+export const publishDraft = async (
+  draftId: string,
+  userId?: string,
+  accessFilter: any = {},
+  options: { aiReplicaRunId?: string } = {},
+) => {
   // 验证草稿
   const validation = await validateDraft(draftId, accessFilter)
   if (!validation.isValid) {
@@ -917,7 +938,25 @@ export const publishDraft = async (draftId: string, userId?: string, accessFilte
   // Reload so the task snapshot always carries that exact authorization.
   const draft: any = await getDraft(draftId, accessFilter)
 
-  if (draft.aiOrigin?.statusLockedToPaused) {
+  if (hasAiExecutionLineage(draft.aiOrigin)) {
+    if (draft.aiOrigin?.statusLockedToPaused !== true) {
+      const error: any = new Error('AI 投放草稿缺少 PAUSED 状态锁，禁止发布')
+      error.statusCode = 409
+      error.errorCode = 'AI_EXECUTION_LINEAGE_REQUIRED'
+      throw error
+    }
+    if (
+      !options.aiReplicaRunId ||
+      String(options.aiReplicaRunId) !==
+        String(draft.aiOrigin?.replicaRunId || '')
+    ) {
+      const error: any = new Error(
+        'AI 投放草稿只能通过授权单绑定的 AI 投放发布入口执行',
+      )
+      error.statusCode = 409
+      error.errorCode = 'AI_REPLICA_DEDICATED_PUBLISH_REQUIRED'
+      throw error
+    }
     const statuses = [
       draft.campaign?.status,
       draft.adset?.status,
@@ -933,12 +972,26 @@ export const publishDraft = async (draftId: string, userId?: string, accessFilte
     const replicaRun = await ReplicaRun.findOne({
       _id: draft.aiOrigin.replicaRunId,
       draftId: draft._id,
+      mandateId: draft.aiOrigin.mandateId,
       status: { $in: ['approved', 'publishing'] },
-    }).select('_id')
+    }).select('_id mandateId playbookVersionId')
     if (!replicaRun) {
       const error: any = new Error('AI 复制任务尚未完成明确审批，禁止发布')
       error.statusCode = 409
       error.errorCode = 'AI_REPLICA_APPROVAL_REQUIRED'
+      throw error
+    }
+    const activeMandate = await AiExecutionMandate.findOne({
+      _id: replicaRun.mandateId,
+      status: 'active',
+      playbookVersionId: replicaRun.playbookVersionId,
+    }).select('_id')
+    if (!activeMandate) {
+      const error: any = new Error(
+        'AI 投放授权单不存在或已撤销，禁止发布',
+      )
+      error.statusCode = 409
+      error.errorCode = 'AI_EXECUTION_MANDATE_REQUIRED'
       throw error
     }
   }
@@ -1019,6 +1072,14 @@ export const publishDraft = async (draftId: string, userId?: string, accessFilte
       adset: draft.adset,
       ad: draft.ad,
       publishStrategy: draft.publishStrategy,
+      aiOrigin: hasAiExecutionLineage(draft.aiOrigin)
+        ? {
+            replicaRunId: draft.aiOrigin.replicaRunId,
+            mandateId: draft.aiOrigin.mandateId,
+            playbookVersionId: draft.aiOrigin.playbookVersionId,
+            statusLockedToPaused: true,
+          }
+        : undefined,
     },
     
     // 设置预估总数
@@ -1141,6 +1202,242 @@ const executeTaskSynchronously = async (taskId: string) => {
   await task.save()
   
   logger.info(`[BulkAd] Task ${taskId} completed: ${successCount} success, ${failCount} failed`)
+}
+
+export const assertAiTaskExecutionAuthorized = async (task: any) => {
+  const origin = task?.configSnapshot?.aiOrigin
+  const hasAiLineage = hasAiExecutionLineage(origin)
+  if (!hasAiLineage) return true
+
+  const fail = (message: string, errorCode: string) => {
+    const error: any = new Error(
+      message,
+    )
+    error.statusCode = 409
+    error.errorCode = errorCode
+    throw error
+  }
+
+  if (
+    origin.statusLockedToPaused !== true ||
+    !origin.replicaRunId ||
+    !origin.mandateId ||
+    !origin.playbookVersionId ||
+    !task?.draftId
+  ) {
+    fail(
+      'AI 投放任务缺少完整授权单执行血缘，禁止调用 Meta 写接口',
+      'AI_EXECUTION_LINEAGE_REQUIRED',
+    )
+  }
+
+  const organizationConstraint = task.organizationId
+    ? { organizationId: task.organizationId }
+    : {}
+  const replicaRun: any = await ReplicaRun.findOne({
+    _id: origin.replicaRunId,
+    draftId: task.draftId,
+    mandateId: origin.mandateId,
+    status: 'publishing',
+    ...organizationConstraint,
+  })
+    .select(
+      '_id mandateId playbookVersionId sourceCreativeGroupId sourceCopywritingPackageId targetingPackageId productId creativeGroupId copywritingPackageId assetSnapshot targets',
+    )
+    .lean()
+  if (!replicaRun) {
+    fail(
+      'AI 投放任务不在已授权的发布状态，禁止调用 Meta 写接口',
+      'AI_REPLICA_EXECUTION_NOT_AUTHORIZED',
+    )
+  }
+
+  const playbook: any = await PlaybookVersion.findOne({
+    _id: replicaRun.playbookVersionId,
+    ...organizationConstraint,
+  })
+    .lean()
+  if (!playbook) {
+    fail(
+      'AI 投放打法版本不存在或已越过组织边界，禁止调用 Meta 写接口',
+      'AI_PLAYBOOK_EXECUTION_UNAVAILABLE',
+    )
+  }
+
+  const tokenOwnerUserId =
+    task.configSnapshot?.facebookTokenOwnerUserId?.toString()
+  let selection: any
+  try {
+    selection = await resolveExecutionMandate({
+      mandateId: String(replicaRun.mandateId),
+      playbook,
+      accessFilter: organizationConstraint,
+      tokenAccessFilter: {
+        ...organizationConstraint,
+        ...(tokenOwnerUserId ? { userId: tokenOwnerUserId } : {}),
+      },
+    })
+  } catch (error: any) {
+    error.errorCode =
+      error.errorCode || error.code || 'AI_EXECUTION_MANDATE_REQUIRED'
+    throw error
+  }
+
+  const config = task.configSnapshot || {}
+  const authorizationType =
+    selection.authorizationType ||
+    selection.mandate.authorizationType ||
+    (selection.mandate.metaCredentialId ? 'system_user' : 'personal_user')
+  const authorizationMatches =
+    authorizationType === 'system_user'
+      ? String(config.metaCredentialId || '') ===
+          String(selection.mandate.metaCredentialId || '') &&
+        !config.facebookTokenId
+      : String(config.facebookTokenId || '') ===
+          String(selection.mandate.facebookTokenId || '') &&
+        !config.metaCredentialId
+  if (!authorizationMatches) {
+    fail(
+      'AI 投放任务使用的 Facebook 授权与管理员授权单不一致',
+      'AI_EXECUTION_CREDENTIAL_CHANGED',
+    )
+  }
+  if (
+    [config.campaign?.status, config.adset?.status, config.ad?.status].some(
+      (status) => status !== 'PAUSED',
+    )
+  ) {
+    fail(
+      'AI 投放任务的 Campaign、AdSet 和 Ad 必须全部保持 PAUSED',
+      'AI_REPLICA_STATUS_LOCK_VIOLATION',
+    )
+  }
+
+  const expectedTargets = new Map(
+    selection.targets.map((target: any) => [
+      normalizeForStorage(target.accountId),
+      target,
+    ]),
+  )
+  const taskAccounts = config.accounts || []
+  if (
+    taskAccounts.length !== expectedTargets.size ||
+    new Set(
+      taskAccounts.map((account: any) =>
+        normalizeForStorage(account.accountId),
+      ),
+    ).size !== taskAccounts.length
+  ) {
+    fail(
+      'AI 投放任务的执行账户集合与管理员授权单不一致',
+      'AI_EXECUTION_ACCOUNTS_CHANGED',
+    )
+  }
+  for (const account of taskAccounts) {
+    const expected: any = expectedTargets.get(
+      normalizeForStorage(account.accountId),
+    )
+    if (
+      !expected ||
+      String(account.pageId || '') !== String(expected.pageId || '') ||
+      String(account.pixelId || '') !== String(expected.pixelId || '')
+    ) {
+      fail(
+        `AI 投放账户 ${account.accountId} 的 Page 或产品 Pixel 与当前授权不一致`,
+        'AI_EXECUTION_ASSET_CHANGED',
+      )
+    }
+  }
+
+  if (
+    String(replicaRun.sourceCreativeGroupId || '') !==
+      String(selection.creativeGroup._id) ||
+    String(replicaRun.sourceCopywritingPackageId || '') !==
+      String(selection.copywritingPackage._id) ||
+    String(replicaRun.targetingPackageId || '') !==
+      String(selection.targetingPackage._id) ||
+    String(replicaRun.productId || '') !== String(selection.product._id)
+  ) {
+    fail(
+      'AI 投放任务的方法资产、文案包或产品绑定已变化',
+      'AI_EXECUTION_METHOD_CHANGED',
+    )
+  }
+
+  const creativeGroupIds = (config.ad?.creativeGroupIds || []).map(String)
+  const copywritingPackageIds = (
+    config.ad?.copywritingPackageIds || []
+  ).map(String)
+  if (
+    creativeGroupIds.length !== 1 ||
+    creativeGroupIds[0] !== String(replicaRun.creativeGroupId || '') ||
+    copywritingPackageIds.length !== 1 ||
+    copywritingPackageIds[0] !==
+      String(replicaRun.copywritingPackageId || '')
+  ) {
+    fail(
+      'AI 投放任务未使用授权生成的冻结素材或文案快照',
+      'AI_EXECUTION_SNAPSHOT_CHANGED',
+    )
+  }
+  if (
+    canonicalJson(config.adset?.inlineTargeting || {}) !==
+    canonicalJson(replicaRun.assetSnapshot?.frozenTargeting || {})
+  ) {
+    fail(
+      'AI 投放任务的冻结定向已变化',
+      'AI_EXECUTION_TARGETING_CHANGED',
+    )
+  }
+
+  const selectedBudget = Number(replicaRun.targets?.dailyBudget)
+  const maximumBudget = Number(
+    selection.mandate.budget?.maximumDailyBudget,
+  )
+  if (
+    !Number.isFinite(selectedBudget) ||
+    selectedBudget < 1 ||
+    !Number.isFinite(maximumBudget) ||
+    selectedBudget > maximumBudget ||
+    Number(config.campaign?.budget) !== selectedBudget ||
+    Number(config.adset?.budget) !== selectedBudget
+  ) {
+    fail(
+      'AI 投放任务预算与管理员授权单或审批快照不一致',
+      'AI_EXECUTION_BUDGET_CHANGED',
+    )
+  }
+
+  const [executionCreativeGroup, executionCopywritingPackage]: any[] =
+    await Promise.all([
+      CreativeGroup.findOne({
+        _id: replicaRun.creativeGroupId,
+        ...organizationConstraint,
+      }).lean(),
+      CopywritingPackage.findOne({
+        _id: replicaRun.copywritingPackageId,
+        ...organizationConstraint,
+      }).lean(),
+    ])
+  if (!executionCreativeGroup || !executionCopywritingPackage) {
+    fail(
+      'AI 投放任务的冻结素材或文案快照不存在',
+      'AI_EXECUTION_SNAPSHOT_UNAVAILABLE',
+    )
+  }
+  if (
+    canonicalJson(frozenCreativeSnapshot(executionCreativeGroup)) !==
+      canonicalJson(replicaRun.assetSnapshot?.frozenCreative) ||
+    canonicalJson(frozenCopywritingSnapshot(executionCopywritingPackage)) !==
+      canonicalJson(replicaRun.assetSnapshot?.frozenCopywriting)
+  ) {
+    fail(
+      'AI 投放任务的冻结素材或文案已在审批后被修改',
+      'AI_EXECUTION_SNAPSHOT_CHANGED',
+    )
+  }
+
+  return true
 }
 
 // ==================== 任务执行 ====================
@@ -1338,6 +1635,8 @@ export const executeTaskForAccount = async (
   })
   
   try {
+    await assertAiTaskExecutionAuthorized(task)
+
     // ==================== 0. 资源预检（任何 Meta 写操作之前） ====================
     // 先确认定向、创意组、文案包都能按发布者权限读取，避免已经创建
     // Campaign/AdSet 后才发现资源不可用，留下无法复用的半成品。
@@ -2239,6 +2538,30 @@ export const retryFailedItems = async (taskId: string, accessFilter: any = {}) =
   if (!task) {
     throw new Error('Task not found')
   }
+
+  if (hasAiExecutionLineage(task.configSnapshot?.aiOrigin)) {
+    const error: any = new Error(
+      'AI 投放任务禁止通过通用失败重试重复写入 Meta；请检查已有对象后，以有效授权单创建新的 ReplicaRun',
+    )
+    error.statusCode = 409
+    error.errorCode = 'AI_REPLICA_RETRY_FORBIDDEN'
+    throw error
+  }
+  if (task.draftId) {
+    const sourceDraft: any = await AdDraft.findOne(
+      combineFilters({ _id: task.draftId }, accessFilter),
+    )
+      .select('aiOrigin')
+      .lean()
+    if (hasAiExecutionLineage(sourceDraft?.aiOrigin)) {
+      const error: any = new Error(
+        'AI 投放任务禁止通过通用失败重试重复写入 Meta；请检查已有对象后，以有效授权单创建新的 ReplicaRun',
+      )
+      error.statusCode = 409
+      error.errorCode = 'AI_REPLICA_RETRY_FORBIDDEN'
+      throw error
+    }
+  }
   
   const failedItems = task.items.filter((i: any) => i.status === 'failed')
   if (failedItems.length === 0) {
@@ -2349,6 +2672,31 @@ export const rerunTask = async (
   
   if (!originalTask.configSnapshot || !originalTask.configSnapshot.accounts) {
     throw new Error('Task config snapshot not found')
+  }
+
+  if (hasAiExecutionLineage(originalTask.configSnapshot?.aiOrigin)) {
+    const error: any = new Error(
+      'AI 投放任务不能通过通用重跑复制；必须使用当前有效授权单创建新的 ReplicaRun',
+    )
+    error.statusCode = 409
+    error.errorCode = 'AI_REPLICA_RERUN_FORBIDDEN'
+    throw error
+  }
+
+  if (originalTask.draftId) {
+    const sourceDraft: any = await AdDraft.findOne(
+      combineFilters({ _id: originalTask.draftId }, accessFilter),
+    )
+      .select('aiOrigin')
+      .lean()
+    if (hasAiExecutionLineage(sourceDraft?.aiOrigin)) {
+      const error: any = new Error(
+        'AI 投放任务不能通过通用重跑复制；必须使用当前有效授权单创建新的 ReplicaRun',
+      )
+      error.statusCode = 409
+      error.errorCode = 'AI_REPLICA_RERUN_FORBIDDEN'
+      throw error
+    }
   }
   
   const config = originalTask.configSnapshot

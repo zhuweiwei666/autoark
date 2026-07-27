@@ -1,4 +1,5 @@
 import mongoose from 'mongoose'
+import { sanitizeOptimizerTargeting } from '../utils/optimizerTargeting'
 
 /**
  * 定向包数据模型
@@ -10,6 +11,34 @@ const targetingPackageSchema = new mongoose.Schema(
     organizationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Organization', index: true }, // 组织隔离
     accountId: { type: String, index: true },  // 可选，定向包可跨账户使用
     platform: { type: String, default: 'facebook', enum: ['facebook', 'tiktok', 'google'] },
+
+    // 从真人投手上下文提炼出的跨账户 Meta 定向。写入前和读取时都会
+    // 去掉 custom audience、saved audience 等账户专属对象。
+    portableTargeting: { type: mongoose.Schema.Types.Mixed },
+    reusePolicy: {
+      scope: {
+        type: String,
+        enum: ['account', 'portable'],
+        default: 'account',
+      },
+      sourceMode: {
+        type: String,
+        enum: ['manual', 'human_buyer_context'],
+        default: 'manual',
+      },
+      accountScopedAssetsRemoved: { type: Boolean, default: false },
+    },
+    sourceContext: {
+      playbookVersionId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'PlaybookVersion',
+      },
+      optimizerId: String,
+      tokenIds: [String],
+      accountIds: [String],
+      generatedAt: Date,
+    },
+    deliveryInsights: { type: mongoose.Schema.Types.Mixed },
     
     // 地理位置定向
     geoLocations: {
@@ -176,9 +205,29 @@ targetingPackageSchema.index(
   },
 )
 targetingPackageSchema.index({ platform: 1, createdAt: -1 })
+targetingPackageSchema.index(
+  { 'sourceContext.playbookVersionId': 1, 'reusePolicy.scope': 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      'sourceContext.playbookVersionId': { $exists: true },
+      'reusePolicy.scope': 'portable',
+    },
+  },
+)
 
 // 转换为 Facebook API 格式的方法
 targetingPackageSchema.methods.toFacebookTargeting = function() {
+  if (
+    this.reusePolicy?.scope === 'portable' &&
+    this.portableTargeting &&
+    typeof this.portableTargeting === 'object'
+  ) {
+    return sanitizeOptimizerTargeting(
+      JSON.parse(JSON.stringify(this.portableTargeting)),
+    ).targeting
+  }
+
   const targeting: any = {}
   
   // 地理位置

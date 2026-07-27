@@ -11,6 +11,7 @@ import {
 } from "@phosphor-icons/react";
 import {
   approveReplica,
+  createExecutionMandate,
   createReplica,
   evaluateReplica,
   generatePlaybook,
@@ -19,17 +20,21 @@ import {
   getPlaybookGeneration,
   getReplicaAssets,
   getReplicas,
+  materializeReusableAssets,
   publishReplica,
+  revokeExecutionMandate,
+  type AiExecutionMandate,
+  type ExecutionAssetAccount,
+  type ExecutionAssetToken,
+  type ExecutionSetup,
   type OptimizerPlaybook,
   type OptimizerSummary,
   type RankedPerformance,
-  type ReplicaAssetAccount,
-  type ReplicaAssetToken,
   type ReplicaRun,
 } from "../services/optimizerLearning";
 
 type Notice = { type: "success" | "error" | "info"; text: string };
-type AccountChoice = { selected: boolean; pageId: string; pixelId: string };
+type AccountChoice = { selected: boolean; pageId: string };
 
 const statusStyles: Record<string, string> = {
   ready: "bg-emerald-50 text-emerald-700 ring-emerald-200",
@@ -45,7 +50,7 @@ const statusStyles: Record<string, string> = {
 };
 
 const statusLabels: Record<string, string> = {
-  ready: "可复制",
+  ready: "可授权",
   blocked: "未达门槛",
   building: "生成中",
   approval_required: "待人工审批",
@@ -150,18 +155,29 @@ export default function AiOptimizerPage() {
   const [selectedKey, setSelectedKey] = useState("");
   const [playbook, setPlaybook] = useState<OptimizerPlaybook | null>(null);
   const [replicas, setReplicas] = useState<ReplicaRun[]>([]);
-  const [tokens, setTokens] = useState<ReplicaAssetToken[]>([]);
+  const [executionSetup, setExecutionSetup] = useState<ExecutionSetup | null>(
+    null,
+  );
+  const [tokens, setTokens] = useState<ExecutionAssetToken[]>([]);
   const [selectedTokenId, setSelectedTokenId] = useState("");
+  const [selectedTargetingPackageId, setSelectedTargetingPackageId] =
+    useState("");
+  const [selectedCreativeGroupId, setSelectedCreativeGroupId] = useState("");
+  const [selectedCopywritingPackageId, setSelectedCopywritingPackageId] =
+    useState("");
+  const [selectedMandateId, setSelectedMandateId] = useState("");
   const [accountChoices, setAccountChoices] = useState<
     Record<string, AccountChoice>
   >({});
   const [selectedCurrency, setSelectedCurrency] = useState("");
   const [windowDays, setWindowDays] = useState(14);
   const [dailyBudget, setDailyBudget] = useState(20);
-  const [materialLimit, setMaterialLimit] = useState(3);
-  const [applyTopCountries, setApplyTopCountries] = useState(true);
+  const [maximumDailyBudget, setMaximumDailyBudget] = useState(50);
+  const [materialLimit, setMaterialLimit] = useState(5);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
+  const [materializing, setMaterializing] = useState(false);
+  const [creatingMandate, setCreatingMandate] = useState(false);
   const [creating, setCreating] = useState(false);
   const [actionRunId, setActionRunId] = useState("");
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -178,6 +194,24 @@ export default function AiOptimizerPage() {
     () => tokens.find((token) => token.tokenId === selectedTokenId),
     [tokens, selectedTokenId],
   );
+  const selectedCopywritingPackage = useMemo(
+    () =>
+      executionSetup?.copywritingPackages.find(
+        (item) => item.id === selectedCopywritingPackageId,
+      ),
+    [executionSetup, selectedCopywritingPackageId],
+  );
+  const activeMandates = useMemo(
+    () =>
+      (executionSetup?.mandates || []).filter(
+        (mandate) => mandate.status === "active",
+      ),
+    [executionSetup],
+  );
+  const selectedMandate = useMemo(
+    () => activeMandates.find((mandate) => mandate._id === selectedMandateId),
+    [activeMandates, selectedMandateId],
+  );
   const selectedAccounts = useMemo(
     () =>
       (selectedToken?.accounts || []).filter(
@@ -185,8 +219,25 @@ export default function AiOptimizerPage() {
       ),
     [selectedToken, accountChoices],
   );
+  const productMappingForAccount = (accountId: string) =>
+    selectedCopywritingPackage?.product?.accountMappings?.find(
+      (mapping) => mapping.accountId === accountId,
+    );
+  const isExecutionAccountReady = (account: ExecutionAssetAccount) => {
+    const mapping = productMappingForAccount(account.accountId);
+    return Boolean(
+      account.status === 1 &&
+      account.pages.length > 0 &&
+      mapping?.verified &&
+      (account.pixels || []).some(
+        (pixel) => pixel.pixelId === mapping.pixelId,
+      ) &&
+      (!playbook?.structure.currency ||
+        account.currency === playbook.structure.currency),
+    );
+  };
 
-  const initializeToken = (token?: ReplicaAssetToken) => {
+  const initializeToken = (token?: ExecutionAssetToken) => {
     if (!token) {
       setSelectedTokenId("");
       setAccountChoices({});
@@ -200,8 +251,6 @@ export default function AiOptimizerPage() {
           {
             selected: false,
             pageId: account.pages.length === 1 ? account.pages[0].pageId : "",
-            pixelId:
-              account.pixels.length === 1 ? account.pixels[0].pixelId : "",
           },
         ]),
       ),
@@ -211,9 +260,30 @@ export default function AiOptimizerPage() {
   const loadAssets = async (nextPlaybook: OptimizerPlaybook) => {
     try {
       const data = await getReplicaAssets(nextPlaybook._id);
+      setExecutionSetup(data);
       setTokens(data.tokens);
       initializeToken(data.tokens[0]);
+      setSelectedTargetingPackageId(
+        data.reusableAssets.targetingPackages[0]?.id || "",
+      );
+      setSelectedCreativeGroupId(
+        data.reusableAssets.creativeGroups[0]?.id || "",
+      );
+      setSelectedCopywritingPackageId(
+        data.copywritingPackages.find((item) => item.ready)?.id || "",
+      );
+      const firstMandate = data.mandates.find(
+        (mandate) => mandate.status === "active",
+      );
+      setSelectedMandateId(firstMandate?._id || "");
+      if (firstMandate) {
+        setDailyBudget(firstMandate.budget.defaultDailyBudget);
+        setMaximumDailyBudget(firstMandate.budget.maximumDailyBudget);
+      } else {
+        setMaximumDailyBudget(nextPlaybook.guardrails.maximumPilotDailyBudget);
+      }
     } catch (error: any) {
+      setExecutionSetup(null);
       setTokens([]);
       initializeToken(undefined);
       setNotice({
@@ -229,6 +299,7 @@ export default function AiOptimizerPage() {
     setSelectedKey(key);
     setSelectedCurrency(defaultCurrency);
     setPlaybook(null);
+    setExecutionSetup(null);
     setTokens([]);
     initializeToken(undefined);
     if (!optimizer.latestPlaybookId) return;
@@ -249,7 +320,7 @@ export default function AiOptimizerPage() {
     try {
       setReplicas(await getReplicas());
     } catch (error: any) {
-      setNotice({ type: "error", text: error.message || "复制任务加载失败" });
+      setNotice({ type: "error", text: error.message || "投放任务加载失败" });
     }
   };
 
@@ -353,6 +424,7 @@ export default function AiOptimizerPage() {
     if (currency === selectedCurrency) return;
     setSelectedCurrency(currency);
     setPlaybook(null);
+    setExecutionSetup(null);
     setTokens([]);
     initializeToken(undefined);
     setNotice({
@@ -368,27 +440,120 @@ export default function AiOptimizerPage() {
     }));
   };
 
-  const handleCreateReplica = async () => {
+  const handleMaterialize = async () => {
+    if (!playbook) return;
+    setMaterializing(true);
+    try {
+      await materializeReusableAssets(playbook._id, {
+        materialLimit,
+        countryLimit: 5,
+      });
+      await loadAssets(playbook);
+      setNotice({
+        type: "success",
+        text: "已提炼 AutoArk 定向包和创意组；来源账户资产与来源文案未进入执行资产。",
+      });
+    } catch (error: any) {
+      setNotice({
+        type: "error",
+        text: error.message || "可复用资产提炼失败",
+      });
+    } finally {
+      setMaterializing(false);
+    }
+  };
+
+  const handleCreateMandate = async () => {
     if (!playbook || !selectedToken) return;
-    if (selectedAccounts.length === 0) {
-      setNotice({ type: "error", text: "请至少选择一个目标广告账户" });
+    if (
+      !selectedTargetingPackageId ||
+      !selectedCreativeGroupId ||
+      !selectedCopywritingPackageId
+    ) {
+      setNotice({
+        type: "error",
+        text: "请先选定可复用定向包、创意组和决定产品的管理员文案包",
+      });
+      return;
+    }
+    if (
+      selectedAccounts.length === 0 ||
+      selectedAccounts.some(
+        (account) =>
+          !accountChoices[account.accountId]?.pageId ||
+          !isExecutionAccountReady(account),
+      )
+    ) {
+      setNotice({
+        type: "error",
+        text: "请至少选择一个已具备 Page、产品已验证 Pixel 和当前 Token 权限的 AI 执行账户",
+      });
+      return;
+    }
+    setCreatingMandate(true);
+    try {
+      const mandate = await createExecutionMandate(playbook._id, {
+        authorizationType: selectedToken.authorizationType || "personal_user",
+        ...(selectedToken.authorizationType === "system_user"
+          ? {
+              metaCredentialId:
+                selectedToken.metaCredentialId || selectedToken.tokenId,
+            }
+          : { facebookTokenId: selectedToken.tokenId }),
+        accounts: selectedAccounts.map((account) => ({
+          accountId: account.accountId,
+          accountName: account.name,
+          pageId: accountChoices[account.accountId].pageId,
+        })),
+        targetingPackageId: selectedTargetingPackageId,
+        creativeGroupId: selectedCreativeGroupId,
+        copywritingPackageId: selectedCopywritingPackageId,
+        defaultDailyBudget: dailyBudget,
+        maximumDailyBudget,
+      });
+      await loadAssets(playbook);
+      setSelectedMandateId(mandate._id);
+      setDailyBudget(mandate.budget.defaultDailyBudget);
+      setMaximumDailyBudget(mandate.budget.maximumDailyBudget);
+      setNotice({
+        type: "success",
+        text: `授权单已就绪：${mandate.productSnapshot.name || "产品"}；系统已按产品映射锁定各账户 Pixel。`,
+      });
+    } catch (error: any) {
+      setNotice({
+        type: "error",
+        text: error.message || "AI 投放授权单创建失败",
+      });
+    } finally {
+      setCreatingMandate(false);
+    }
+  };
+
+  const handleRevokeMandate = async (mandate: AiExecutionMandate) => {
+    if (
+      !window.confirm(`确认撤销授权单“${mandate.name}”？未发布任务将无法继续。`)
+    ) {
+      return;
+    }
+    try {
+      await revokeExecutionMandate(mandate._id, "管理员在 AI 投手工作台撤销");
+      if (playbook) await loadAssets(playbook);
+      setNotice({ type: "success", text: "AI 投放授权单已撤销" });
+    } catch (error: any) {
+      setNotice({ type: "error", text: error.message || "授权单撤销失败" });
+    }
+  };
+
+  const handleCreateReplica = async () => {
+    if (!playbook || !selectedMandate) {
+      setNotice({ type: "error", text: "请先选择管理员已创建的有效授权单" });
       return;
     }
     setCreating(true);
     try {
       const result = await createReplica(playbook._id, {
-        facebookTokenId: selectedToken.tokenId,
-        accounts: selectedAccounts.map((account) => ({
-          accountId: account.accountId,
-          accountName: account.name,
-          pageId: accountChoices[account.accountId]?.pageId || undefined,
-          pixelId: accountChoices[account.accountId]?.pixelId || undefined,
-          conversionEvent: "PURCHASE",
-        })),
+        mandateId: selectedMandate._id,
         dailyBudget,
-        materialLimit,
-        applyTopCountries,
-        countryLimit: 5,
       });
       await refreshReplicas();
       setNotice({
@@ -398,12 +563,9 @@ export default function AiOptimizerPage() {
           : "草稿已生成，但预检存在阻断项",
       });
     } catch (error: any) {
-      const details = error.details?.candidates?.length
-        ? `；可选资产：${error.details.candidates.map((candidate: any) => candidate.name || candidate.id).join("、")}`
-        : "";
       setNotice({
         type: "error",
-        text: `${error.message || "复制草稿创建失败"}${details}`,
+        text: error.message || "AI 投放草稿创建失败",
       });
     } finally {
       setCreating(false);
@@ -461,7 +623,7 @@ export default function AiOptimizerPage() {
             <div className="max-w-3xl">
               <div className="mb-4 inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1.5 text-xs font-bold text-zinc-200 ring-1 ring-white/15">
                 <Robot size={16} weight="fill" />
-                AI 投手 · 可审计复制
+                AI 投手 · 可审计授权
               </div>
               <h1 className="text-3xl font-black tracking-tight sm:text-4xl">
                 从真人投手数据，生成可控的 AI 试投
@@ -481,7 +643,7 @@ export default function AiOptimizerPage() {
                     0,
                   ),
                 ],
-                ["复制任务", replicas.length],
+                ["投放任务", replicas.length],
               ].map(([label, value]) => (
                 <div
                   key={String(label)}
@@ -603,9 +765,7 @@ export default function AiOptimizerPage() {
                     学习币种
                     <select
                       value={selectedCurrency}
-                      onChange={(event) =>
-                        switchCurrency(event.target.value)
-                      }
+                      onChange={(event) => switchCurrency(event.target.value)}
                       className="mt-1 block rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm font-bold text-zinc-800"
                     >
                       {(selectedOptimizer?.currencies || []).map((item) => (
@@ -704,11 +864,11 @@ export default function AiOptimizerPage() {
                         <h3 className="text-sm font-black">素材与文案</h3>
                       </div>
                       <p className="mt-3 text-xs leading-5 text-zinc-600">
-                        {playbook.creatives.materials.length} 个可复用高表现素材
-                        · {playbook.copywriting.headlines.length} 条标题
+                        {playbook.creatives.materials.length} 个高表现素材候选 ·
+                        来源文案仅供方法分析
                       </p>
                       <p className="truncate text-xs leading-5 text-zinc-500">
-                        {playbook.copywriting.websiteUrl || "落地页未知"}
+                        执行产品和落地链接必须由管理员文案包决定
                       </p>
                     </div>
                     <div className="rounded-2xl border border-zinc-200 p-4">
@@ -790,199 +950,425 @@ export default function AiOptimizerPage() {
                 <div className="flex items-start justify-between gap-4">
                   <div>
                     <p className="text-xs font-bold uppercase tracking-[0.2em] text-zinc-400">
-                      Replicate
+                      Authorize → Execute
                     </p>
                     <h2 className="mt-1 text-xl font-black text-zinc-950">
-                      创建 PAUSED 试投草稿
+                      管理员授权 AI 投放
                     </h2>
-                    <p className="mt-1 text-xs text-zinc-500">
-                      优先选择组织 System User 已验证的账户、Page 和
-                      Pixel；不会在此步骤调用 Meta 写接口。
+                    <p className="mt-1 text-xs leading-5 text-zinc-500">
+                      真人投手资产只读。管理员先绑定定向包、创意组、文案包/产品和
+                      AI 专用账户；Pixel 由产品账户映射自动解析，不能手选。
+                      {"执行凭证优先分配组织 System User。"}
                     </p>
                   </div>
                   <Megaphone size={26} className="text-zinc-400" />
                 </div>
 
-                <div className="mt-5 grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
-                  <div className="space-y-4 rounded-2xl bg-zinc-50 p-4">
-                    <label className="block text-xs font-bold text-zinc-600">
-                      目标 Facebook 授权
-                      <select
-                        value={selectedTokenId}
-                        onChange={(event) => switchToken(event.target.value)}
-                        className="mt-1.5 w-full rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-sm font-semibold"
-                      >
-                        {tokens.map((token) => (
-                          <option key={token.tokenId} value={token.tokenId}>
-                            {token.authorizationType === "system_user"
-                              ? "[System User] "
-                              : "[个人授权] "}
-                            {token.fbUserName ||
-                              token.optimizer ||
-                              token.tokenId.slice(-8)}{" "}
-                            · {token.accounts.length} 账户
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <div className="grid grid-cols-2 gap-2">
-                      <label className="text-xs font-bold text-zinc-600">
-                        单账户日预算
-                        <input
-                          type="number"
-                          min={1}
-                          max={playbook.guardrails.maximumPilotDailyBudget}
-                          value={dailyBudget}
-                          onChange={(event) =>
-                            setDailyBudget(Number(event.target.value))
-                          }
-                          className="mt-1.5 w-full rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-sm font-semibold"
-                        />
-                      </label>
-                      <label className="text-xs font-bold text-zinc-600">
-                        素材数
-                        <select
-                          value={materialLimit}
-                          onChange={(event) =>
-                            setMaterialLimit(Number(event.target.value))
-                          }
-                          className="mt-1.5 w-full rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-sm font-semibold"
-                        >
-                          {[1, 2, 3, 5].map((count) => (
-                            <option key={count} value={count}>
-                              {count}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                    </div>
-                    <label className="flex items-start gap-2 rounded-xl border border-zinc-200 bg-white p-3 text-xs text-zinc-600">
-                      <input
-                        type="checkbox"
-                        checked={applyTopCountries}
-                        onChange={(event) =>
-                          setApplyTopCountries(event.target.checked)
-                        }
-                        className="mt-0.5"
-                      />
-                      <span>
-                        <strong className="text-zinc-900">
-                          收敛到高转化国家
-                        </strong>
-                        <br />
-                        会记录为 AI 修改；版位保持来源定向，小时仅给建议。
-                      </span>
-                    </label>
-                    <button
-                      disabled={
-                        creating ||
-                        selectedAccounts.length === 0 ||
-                        !selectedToken
-                      }
-                      onClick={() => void handleCreateReplica()}
-                      className="w-full rounded-xl bg-zinc-950 px-4 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      {creating
-                        ? "生成并预检中…"
-                        : `生成 ${selectedAccounts.length || 0} 个账户的 PAUSED 草稿`}
-                    </button>
-                  </div>
+                <div className="mt-4 rounded-2xl border border-sky-100 bg-sky-50 p-4 text-xs leading-5 text-sky-900">
+                  <p className="font-black">来源边界：只读上下文</p>
+                  <p className="mt-1">
+                    {executionSetup?.sourceBoundary.accountIds.length || 0}{" "}
+                    个真人来源账户和{" "}
+                    {executionSetup?.sourceBoundary.tokenIds.length || 0} 个
+                    Token 永远不可被选为 AI 执行资产。可复用的是方法、稳定素材
+                    URL、定向与结构；不可复用的是来源账户、Page、Pixel、自定义受众、
+                    saved audience 和 Facebook 素材 ID。
+                  </p>
+                </div>
 
-                  <div className="space-y-3">
-                    {(selectedToken?.accounts || []).map(
-                      (account: ReplicaAssetAccount) => {
-                        const choice = accountChoices[account.accountId];
-                        const ready =
-                          account.status === 1 &&
-                          account.pages.length > 0 &&
-                          account.pixels.length > 0 &&
-                          (!playbook.structure.currency ||
-                            account.currency === playbook.structure.currency);
-                        return (
-                          <div
-                            key={account.accountId}
-                            className={`rounded-2xl border p-4 ${choice?.selected ? "border-zinc-900 bg-white" : "border-zinc-200 bg-zinc-50/50"}`}
+                {executionSetup &&
+                  (executionSetup.reusableAssets.targetingPackages.length ===
+                    0 ||
+                    executionSetup.reusableAssets.creativeGroups.length ===
+                      0) && (
+                    <div className="mt-4 flex flex-col gap-3 rounded-2xl border border-dashed border-zinc-300 bg-zinc-50 p-4 sm:flex-row sm:items-end sm:justify-between">
+                      <div>
+                        <p className="text-sm font-black text-zinc-900">
+                          先把方法提炼成 AutoArk 资产
+                        </p>
+                        <p className="mt-1 text-xs leading-5 text-zinc-500">
+                          生成跨账户定向包和创意组；不会生成文案包，也不会继承来源
+                          Facebook 资产 ID。
+                        </p>
+                      </div>
+                      <div className="flex items-end gap-2">
+                        <label className="text-xs font-bold text-zinc-600">
+                          素材上限
+                          <select
+                            value={materialLimit}
+                            onChange={(event) =>
+                              setMaterialLimit(Number(event.target.value))
+                            }
+                            className="mt-1 block rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm"
                           >
-                            <div className="flex items-center gap-3">
-                              <input
-                                type="checkbox"
-                                checked={choice?.selected || false}
-                                disabled={!ready}
-                                onChange={(event) =>
-                                  updateChoice(account.accountId, {
-                                    selected: event.target.checked,
-                                  })
-                                }
-                              />
-                              <div className="min-w-0 flex-1">
-                                <p className="truncate text-sm font-black text-zinc-900">
-                                  {account.name || account.accountId}
-                                </p>
-                                <p className="text-[11px] text-zinc-500">
-                                  {account.accountId} ·{" "}
-                                  {account.currency || "币种未知"} ·{" "}
-                                  {ready
-                                    ? "资产就绪"
-                                    : playbook.structure.currency &&
-                                        account.currency !==
-                                          playbook.structure.currency
-                                      ? `需 ${playbook.structure.currency} 账户`
-                                      : "Page/Pixel 未就绪"}
-                                </p>
-                              </div>
-                            </div>
-                            {choice?.selected && (
-                              <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                                <select
-                                  value={choice.pageId}
-                                  onChange={(event) =>
-                                    updateChoice(account.accountId, {
-                                      pageId: event.target.value,
-                                    })
-                                  }
-                                  className="rounded-xl border border-zinc-200 bg-white px-3 py-2 text-xs font-semibold"
-                                >
-                                  <option value="">选择 Page</option>
-                                  {account.pages.map((page) => (
-                                    <option
-                                      key={page.pageId}
-                                      value={page.pageId}
-                                    >
-                                      {page.name || page.pageId}
-                                    </option>
-                                  ))}
-                                </select>
-                                <select
-                                  value={choice.pixelId}
-                                  onChange={(event) =>
-                                    updateChoice(account.accountId, {
-                                      pixelId: event.target.value,
-                                    })
-                                  }
-                                  className="rounded-xl border border-zinc-200 bg-white px-3 py-2 text-xs font-semibold"
-                                >
-                                  <option value="">选择 Pixel</option>
-                                  {account.pixels.map((pixel) => (
-                                    <option
-                                      key={pixel.pixelId}
-                                      value={pixel.pixelId}
-                                    >
-                                      {pixel.name || pixel.pixelId}
-                                    </option>
-                                  ))}
-                                </select>
-                              </div>
+                            {[1, 3, 5, 10].map((count) => (
+                              <option key={count} value={count}>
+                                {count}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <button
+                          disabled={materializing}
+                          onClick={() => void handleMaterialize()}
+                          className="rounded-xl bg-zinc-950 px-4 py-2.5 text-xs font-black text-white disabled:opacity-40"
+                        >
+                          {materializing ? "提炼中…" : "提炼可复用资产"}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                {executionSetup &&
+                  executionSetup.reusableAssets.targetingPackages.length > 0 &&
+                  executionSetup.reusableAssets.creativeGroups.length > 0 && (
+                    <div className="mt-5 grid gap-4 xl:grid-cols-[340px_minmax(0,1fr)]">
+                      <div className="space-y-3 rounded-2xl bg-zinc-50 p-4">
+                        <label className="block text-xs font-bold text-zinc-600">
+                          可复用定向包
+                          <select
+                            value={selectedTargetingPackageId}
+                            onChange={(event) =>
+                              setSelectedTargetingPackageId(event.target.value)
+                            }
+                            className="mt-1.5 w-full rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-sm font-semibold"
+                          >
+                            {executionSetup.reusableAssets.targetingPackages.map(
+                              (item) => (
+                                <option key={item.id} value={item.id}>
+                                  {item.name}
+                                </option>
+                              ),
                             )}
+                          </select>
+                        </label>
+                        <label className="block text-xs font-bold text-zinc-600">
+                          可复用创意组
+                          <select
+                            value={selectedCreativeGroupId}
+                            onChange={(event) =>
+                              setSelectedCreativeGroupId(event.target.value)
+                            }
+                            className="mt-1.5 w-full rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-sm font-semibold"
+                          >
+                            {executionSetup.reusableAssets.creativeGroups.map(
+                              (item) => (
+                                <option key={item.id} value={item.id}>
+                                  {item.name} · {item.materialCount} 素材
+                                </option>
+                              ),
+                            )}
+                          </select>
+                        </label>
+                        <label className="block text-xs font-bold text-zinc-600">
+                          管理员文案包（决定产品/链接）
+                          <select
+                            value={selectedCopywritingPackageId}
+                            onChange={(event) => {
+                              setSelectedCopywritingPackageId(
+                                event.target.value,
+                              );
+                              setAccountChoices((current) =>
+                                Object.fromEntries(
+                                  Object.entries(current).map(
+                                    ([accountId, choice]) => [
+                                      accountId,
+                                      { ...choice, selected: false },
+                                    ],
+                                  ),
+                                ),
+                              );
+                            }}
+                            className="mt-1.5 w-full rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-sm font-semibold"
+                          >
+                            <option value="">选择已就绪文案包</option>
+                            {executionSetup.copywritingPackages.map((item) => (
+                              <option
+                                key={item.id}
+                                value={item.id}
+                                disabled={!item.ready}
+                              >
+                                {item.name}
+                                {item.product?.name
+                                  ? ` → ${item.product.name}`
+                                  : ""}
+                                {!item.ready
+                                  ? `（${item.blockers.join("、")}）`
+                                  : ""}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="block text-xs font-bold text-zinc-600">
+                          AI 执行 Facebook 授权
+                          <select
+                            value={selectedTokenId}
+                            onChange={(event) =>
+                              switchToken(event.target.value)
+                            }
+                            className="mt-1.5 w-full rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-sm font-semibold"
+                          >
+                            {tokens.map((token) => (
+                              <option key={token.tokenId} value={token.tokenId}>
+                                {token.authorizationType === "system_user"
+                                  ? "[System User] "
+                                  : "[个人授权] "}
+                                {token.fbUserName || token.tokenId.slice(-8)} ·
+                                {token.accounts.length} 账户
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <div className="grid grid-cols-2 gap-2">
+                          <label className="text-xs font-bold text-zinc-600">
+                            默认日预算
+                            <input
+                              type="number"
+                              min={1}
+                              max={maximumDailyBudget}
+                              value={dailyBudget}
+                              onChange={(event) =>
+                                setDailyBudget(Number(event.target.value))
+                              }
+                              className="mt-1.5 w-full rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-sm font-semibold"
+                            />
+                          </label>
+                          <label className="text-xs font-bold text-zinc-600">
+                            授权日预算上限
+                            <input
+                              type="number"
+                              min={1}
+                              max={playbook.guardrails.maximumPilotDailyBudget}
+                              value={maximumDailyBudget}
+                              onChange={(event) =>
+                                setMaximumDailyBudget(
+                                  Number(event.target.value),
+                                )
+                              }
+                              className="mt-1.5 w-full rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-sm font-semibold"
+                            />
+                          </label>
+                        </div>
+                        <button
+                          disabled={
+                            creatingMandate ||
+                            !selectedToken ||
+                            selectedAccounts.length === 0
+                          }
+                          onClick={() => void handleCreateMandate()}
+                          className="w-full rounded-xl bg-zinc-950 px-4 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          {creatingMandate
+                            ? "验证产品与 Pixel 映射中…"
+                            : "创建 AI 投放授权单"}
+                        </button>
+                      </div>
+
+                      <div className="space-y-3">
+                        {(selectedToken?.accounts || []).map(
+                          (account: ExecutionAssetAccount) => {
+                            const choice = accountChoices[account.accountId];
+                            const productMapping = productMappingForAccount(
+                              account.accountId,
+                            );
+                            const productPixelVisible = (
+                              account.pixels || []
+                            ).some(
+                              (pixel) =>
+                                pixel.pixelId === productMapping?.pixelId,
+                            );
+                            const ready = isExecutionAccountReady(account);
+                            return (
+                              <div
+                                key={account.accountId}
+                                className={`rounded-2xl border p-4 ${
+                                  choice?.selected
+                                    ? "border-zinc-900 bg-white"
+                                    : "border-zinc-200 bg-zinc-50/50"
+                                }`}
+                              >
+                                <div className="flex items-center gap-3">
+                                  <input
+                                    type="checkbox"
+                                    checked={choice?.selected || false}
+                                    disabled={!ready}
+                                    onChange={(event) =>
+                                      updateChoice(account.accountId, {
+                                        selected: event.target.checked,
+                                      })
+                                    }
+                                  />
+                                  <div className="min-w-0 flex-1">
+                                    <p className="truncate text-sm font-black text-zinc-900">
+                                      {account.name || account.accountId}
+                                    </p>
+                                    <p className="text-[11px] text-zinc-500">
+                                      {account.accountId} ·{" "}
+                                      {account.currency || "币种未知"} ·{" "}
+                                      {ready
+                                        ? `产品 Pixel 已锁定：${productMapping?.pixelName || productMapping?.pixelId}`
+                                        : !productMapping?.verified
+                                          ? "所选产品未给该账户配置已验证 Pixel"
+                                          : !productPixelVisible
+                                            ? "产品 Pixel 不在当前 Token 资产快照中"
+                                            : "账户、Page 或币种未就绪"}
+                                    </p>
+                                  </div>
+                                  <span className="rounded-lg bg-zinc-100 px-2 py-1 text-[10px] font-bold text-zinc-600">
+                                    {ready ? "Pixel 就绪" : "不可授权"}
+                                  </span>
+                                </div>
+                                {choice?.selected && (
+                                  <div className="mt-3">
+                                    <select
+                                      value={choice.pageId}
+                                      onChange={(event) =>
+                                        updateChoice(account.accountId, {
+                                          pageId: event.target.value,
+                                        })
+                                      }
+                                      className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-xs font-semibold"
+                                    >
+                                      <option value="">管理员选择 Page</option>
+                                      {account.pages.map((page) => (
+                                        <option
+                                          key={page.pageId}
+                                          value={page.pageId}
+                                        >
+                                          {page.name || page.pageId}
+                                        </option>
+                                      ))}
+                                    </select>
+                                    <p className="mt-2 text-[11px] leading-4 text-zinc-500">
+                                      Pixel 不手选：当前将按文案包对应产品锁定{" "}
+                                      {productMapping?.pixelName ||
+                                        productMapping?.pixelId ||
+                                        "尚未配置的 throughPixelId"}
+                                      ，服务端还会再次核验。
+                                    </p>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          },
+                        )}
+                        {tokens.length === 0 && (
+                          <div className="rounded-2xl border border-dashed border-zinc-200 p-8 text-center text-xs text-zinc-500">
+                            没有可分配的 AI 执行授权；真人来源 Token
+                            和账户已自动排除。
                           </div>
-                        );
-                      },
-                    )}
-                    {tokens.length === 0 && (
-                      <div className="rounded-2xl border border-dashed border-zinc-200 p-8 text-center text-xs text-zinc-500">
-                        当前范围没有完成资产同步的活跃 Facebook 授权。
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                <div className="mt-6 border-t border-zinc-200 pt-5">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="text-sm font-black text-zinc-900">
+                        有效授权单
+                      </h3>
+                      <p className="mt-1 text-xs text-zinc-500">
+                        AI 只能从这里选择授权单创建冻结的 PAUSED 草稿。
+                      </p>
+                    </div>
+                    <span className="text-xs font-bold text-zinc-400">
+                      {activeMandates.length} 个
+                    </span>
+                  </div>
+                  <div className="mt-3 grid gap-3 lg:grid-cols-2">
+                    {activeMandates.map((mandate) => (
+                      <div
+                        key={mandate._id}
+                        className={`rounded-2xl border p-4 ${
+                          selectedMandateId === mandate._id
+                            ? "border-emerald-400 bg-emerald-50/50"
+                            : "border-zinc-200"
+                        }`}
+                      >
+                        <div className="flex items-start gap-3">
+                          <input
+                            type="radio"
+                            name="execution-mandate"
+                            checked={selectedMandateId === mandate._id}
+                            onChange={() => {
+                              setSelectedMandateId(mandate._id);
+                              setDailyBudget(mandate.budget.defaultDailyBudget);
+                              setMaximumDailyBudget(
+                                mandate.budget.maximumDailyBudget,
+                              );
+                            }}
+                            className="mt-1"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-sm font-black text-zinc-900">
+                              {mandate.name}
+                            </p>
+                            <p className="mt-1 text-xs text-zinc-600">
+                              {mandate.productSnapshot.name || "产品"} ·{" "}
+                              {mandate.accounts.length} 账户 · 上限{" "}
+                              {mandate.budget.maximumDailyBudget}{" "}
+                              {mandate.budget.currency}/日
+                            </p>
+                            <p className="mt-1 truncate text-[11px] text-zinc-500">
+                              {mandate.productSnapshot.landingUrl}
+                            </p>
+                            <p className="mt-2 text-[11px] font-bold text-emerald-700">
+                              产品 Pixel 已逐账户验证 · 仅允许 PAUSED 写入
+                            </p>
+                          </div>
+                          <button
+                            onClick={() => void handleRevokeMandate(mandate)}
+                            className="rounded-lg px-2 py-1 text-[11px] font-bold text-rose-600 hover:bg-rose-50"
+                          >
+                            撤销
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                    {activeMandates.length === 0 && (
+                      <div className="rounded-2xl border border-dashed border-zinc-200 p-6 text-center text-xs text-zinc-500 lg:col-span-2">
+                        尚无有效授权单。满足文案包产品映射、执行账户、Page
+                        和产品 Pixel 后才能创建 AI 投放任务。
                       </div>
                     )}
                   </div>
+
+                  {selectedMandate && (
+                    <div className="mt-4 flex flex-col gap-3 rounded-2xl bg-zinc-950 p-4 text-white sm:flex-row sm:items-end sm:justify-between">
+                      <div>
+                        <p className="text-sm font-black">
+                          用授权单创建冻结试投
+                        </p>
+                        <p className="mt-1 text-xs text-zinc-400">
+                          此步骤只写 AutoArk 草稿，不调用 Meta；审批后才能创建
+                          PAUSED 对象。
+                        </p>
+                      </div>
+                      <div className="flex items-end gap-2">
+                        <label className="text-xs font-bold text-zinc-300">
+                          单账户日预算
+                          <input
+                            type="number"
+                            min={1}
+                            max={selectedMandate.budget.maximumDailyBudget}
+                            value={dailyBudget}
+                            onChange={(event) =>
+                              setDailyBudget(Number(event.target.value))
+                            }
+                            className="mt-1 block w-32 rounded-xl border border-white/20 bg-white px-3 py-2 text-sm font-black text-zinc-900"
+                          />
+                        </label>
+                        <button
+                          disabled={creating}
+                          onClick={() => void handleCreateReplica()}
+                          className="rounded-xl bg-white px-4 py-2.5 text-xs font-black text-zinc-950 disabled:opacity-40"
+                        >
+                          {creating ? "生成并预检中…" : "创建 PAUSED 草稿"}
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -996,7 +1382,7 @@ export default function AiOptimizerPage() {
                 Operate
               </p>
               <h2 className="mt-1 text-xl font-black text-zinc-950">
-                AI 复制任务
+                AI 投放任务
               </h2>
             </div>
             <button
@@ -1114,7 +1500,7 @@ export default function AiOptimizerPage() {
             </table>
             {replicas.length === 0 && (
               <div className="py-12 text-center text-sm text-zinc-500">
-                还没有 AI 复制任务。
+                还没有 AI 投放任务。
               </div>
             )}
           </div>
