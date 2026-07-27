@@ -546,6 +546,32 @@ const safeBusinessReference = (value: unknown) => {
   }
 }
 
+const safeApplicationRole = (value: unknown) => {
+  if (!value || typeof value !== 'object') return undefined
+  const roleValue = value as {
+    id?: unknown
+    role?: unknown
+    user?: unknown
+  }
+  const user = roleValue.user
+  const userReference =
+    user && typeof user === 'object' ? safeBusinessReference(user) : undefined
+  const userId =
+    userReference?.id ||
+    (typeof user === 'string' || typeof user === 'number'
+      ? String(user)
+      : roleValue.id
+        ? String(roleValue.id)
+        : undefined)
+  const role = typeof roleValue.role === 'string' ? roleValue.role : undefined
+  if (!userId && !role) return undefined
+  return {
+    userId,
+    userName: userReference?.name,
+    role,
+  }
+}
+
 export const inspectApplicationOwnership = async (
   facebookAppIdValue: string,
 ) => {
@@ -558,14 +584,29 @@ export const inspectApplicationOwnership = async (
     throw inputError('Facebook App secret is unavailable', 500)
   }
 
-  const graphApp = await facebookClient.get(
-    `/${requiredGraphId(app.appId, 'appId')}`,
-    {
-      access_token: `${app.appId}|${app.appSecret}`,
-      fields: 'id,name,owner_business',
-    },
-  )
-  const ownerBusiness = safeBusinessReference(graphApp?.owner_business)
+  const appId = requiredGraphId(app.appId, 'appId')
+  const appAccessToken = `${app.appId}|${app.appSecret}`
+  const graphApp = await facebookClient.get(`/${appId}`, {
+    access_token: appAccessToken,
+    fields: 'id,name',
+  })
+  const [rolesResult, agenciesResult, connectedClientBusinessesResult] =
+    await Promise.all([
+      safeGraphEdge(`/${appId}/roles`, appAccessToken),
+      safeGraphEdge(`/${appId}/agencies`, appAccessToken, {
+        fields: 'id,name',
+      }),
+      safeGraphEdge(`/${appId}/connected_client_businesses`, appAccessToken, {
+        fields: 'id,name',
+      }),
+    ])
+  const warnings = [
+    rolesResult.warning,
+    agenciesResult.warning,
+    connectedClientBusinessesResult.warning,
+  ]
+    .filter(Boolean)
+    .map((warning) => redactSensitiveData(warning))
 
   return {
     app: {
@@ -577,9 +618,18 @@ export const inspectApplicationOwnership = async (
     graph: {
       id: graphApp?.id ? String(graphApp.id) : String(app.appId),
       name: graphApp?.name || app.appName,
-      ownerBusiness,
-      isBusinessOwned: Boolean(ownerBusiness),
     },
+    ownership: {
+      status: 'not_exposed_by_application_api',
+    },
+    relationships: {
+      roles: rolesResult.items.map(safeApplicationRole).filter(Boolean),
+      agencies: agenciesResult.items.map(safeBusinessReference).filter(Boolean),
+      connectedClientBusinesses: connectedClientBusinessesResult.items
+        .map(safeBusinessReference)
+        .filter(Boolean),
+    },
+    warnings,
   }
 }
 
