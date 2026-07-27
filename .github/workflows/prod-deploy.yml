@@ -94,7 +94,7 @@ jobs:
           'cd /opt/autoark &&
           docker compose --env-file deploy/.env --env-file deploy/.deploy-metadata.env
           -f deploy/docker-compose.prod.yml exec -T backend
-          node dist/scripts/repairLeyonIosTargeting.js --expected=16'
+          node dist/scripts/repairLeyonIosTargeting.js --expected-total-ios=17'
 
       - name: Apply and verify exact Leyon iOS targeting repair
         if: ${{ inputs.repair_leyon_ios_targeting }}
@@ -103,4 +103,4 @@ jobs:
           'cd /opt/autoark &&
           docker compose --env-file deploy/.env --env-file deploy/.deploy-metadata.env
           -f deploy/docker-compose.prod.yml exec -T backend
-          node dist/scripts/repairLeyonIosTargeting.js --apply --expected=16'
+          node dist/scripts/repairLeyonIosTargeting.js --apply --expected-total-ios=17'
