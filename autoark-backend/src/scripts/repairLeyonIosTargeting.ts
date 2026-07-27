@@ -10,7 +10,6 @@ const PACKAGE_ID = '6a6338c049f54d72f9a3b16b'
 const PACKAGE_NAME = 'autoark-leyon'
 const EXPECTED_TASK_COUNT = 6
 const EXPECTED_RECORDED_ADSET_COUNT = 19
-const EXPECTED_ALREADY_IOS_COUNT = 1
 const EXPECTED_MISSING_ADSET_COUNT = 2
 
 type Targeting = Record<string, any>
@@ -41,8 +40,11 @@ const normalizeAccountId = (value: string) => value.replace(/^act_/, '')
 
 export const hasOnlyIosTargeting = (targeting: Targeting | undefined) => (
   Array.isArray(targeting?.user_os)
-  && targeting.user_os.length === 1
-  && targeting.user_os[0] === 'iOS'
+  && targeting.user_os.length > 0
+  && targeting.user_os.every(
+    (value: unknown) => value === 'iOS'
+      || (typeof value === 'string' && value.startsWith('iOS_ver_')),
+  )
 )
 
 export const addIosTargeting = (targeting: Targeting): Targeting => ({
@@ -111,7 +113,7 @@ export const classifyRepairScope = (
   }
 }
 
-export const assertExpectedRepairScope = (scope: RepairScope, expectedRepairCount: number) => {
+export const assertExpectedRepairScope = (scope: RepairScope, expectedFinalIosCount: number) => {
   const failures: string[] = []
   if (scope.taskCount !== EXPECTED_TASK_COUNT) {
     failures.push(`task count ${scope.taskCount} != ${EXPECTED_TASK_COUNT}`)
@@ -121,14 +123,15 @@ export const assertExpectedRepairScope = (scope: RepairScope, expectedRepairCoun
       `recorded AdSet count ${scope.recordedAdsetCount} != ${EXPECTED_RECORDED_ADSET_COUNT}`,
     )
   }
-  if (scope.activeMissingIos.length !== expectedRepairCount) {
+  if (scope.foundCount !== expectedFinalIosCount) {
     failures.push(
-      `ACTIVE AdSets missing iOS ${scope.activeMissingIos.length} != ${expectedRepairCount}`,
+      `existing AdSet count ${scope.foundCount} != ${expectedFinalIosCount}`,
     )
   }
-  if (scope.alreadyIos.length !== EXPECTED_ALREADY_IOS_COUNT) {
+  if (scope.activeMissingIos.length + scope.alreadyIos.length !== expectedFinalIosCount) {
     failures.push(
-      `already-iOS AdSet count ${scope.alreadyIos.length} != ${EXPECTED_ALREADY_IOS_COUNT}`,
+      `repairable plus already-iOS count `
+      + `${scope.activeMissingIos.length + scope.alreadyIos.length} != ${expectedFinalIosCount}`,
     )
   }
   if (scope.missing.length !== EXPECTED_MISSING_ADSET_COUNT) {
@@ -144,10 +147,10 @@ export const assertExpectedRepairScope = (scope: RepairScope, expectedRepairCoun
 }
 
 const parseExpectedCount = () => {
-  const argument = process.argv.find(value => value.startsWith('--expected='))
+  const argument = process.argv.find(value => value.startsWith('--expected-total-ios='))
   const value = Number(argument?.split('=')[1])
   if (!Number.isInteger(value) || value <= 0) {
-    throw new Error('A positive integer --expected=<count> argument is required')
+    throw new Error('A positive integer --expected-total-ios=<count> argument is required')
   }
   return value
 }
@@ -263,6 +266,7 @@ const scopeOutput = (mode: 'dry-run' | 'apply', scope: RepairScope) => ({
   mode,
   packageId: PACKAGE_ID,
   packageName: PACKAGE_NAME,
+  expectedFinalIosCount: scope.foundCount,
   taskCount: scope.taskCount,
   recordedAdsetCount: scope.recordedAdsetCount,
   foundCount: scope.foundCount,
@@ -275,7 +279,7 @@ const scopeOutput = (mode: 'dry-run' | 'apply', scope: RepairScope) => ({
 
 const main = async () => {
   const apply = process.argv.includes('--apply')
-  const expectedRepairCount = parseExpectedCount()
+  const expectedFinalIosCount = parseExpectedCount()
   await connectDB()
 
   try {
@@ -292,7 +296,7 @@ const main = async () => {
     const tokens = await loadAccountTokens(records)
     const initialRecords = await loadCurrentAdSets(records, tokens)
     const initialScope = classifyRepairScope(taskCount, initialRecords)
-    assertExpectedRepairScope(initialScope, expectedRepairCount)
+    assertExpectedRepairScope(initialScope, expectedFinalIosCount)
     console.log(JSON.stringify(scopeOutput(apply ? 'apply' : 'dry-run', initialScope)))
 
     if (!apply) return
@@ -355,8 +359,8 @@ const main = async () => {
 
     if (
       failures.length > 0
-      || updated.length !== expectedRepairCount
-      || finalIosCount !== expectedRepairCount + EXPECTED_ALREADY_IOS_COUNT
+      || updated.length !== initialScope.activeMissingIos.length
+      || finalIosCount !== expectedFinalIosCount
       || remainingActiveMissingIos.length > 0
     ) {
       throw new Error('Leyon iOS targeting repair did not reach the exact expected final state')

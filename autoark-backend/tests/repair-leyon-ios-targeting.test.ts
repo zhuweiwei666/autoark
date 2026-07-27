@@ -42,10 +42,12 @@ describe('Leyon iOS targeting repair safeguards', () => {
     expect(targetingMatchesExceptUserOs(before, reorderedWithIos)).toBe(true)
     expect(targetingMatchesExceptUserOs(before, drifted)).toBe(false)
     expect(hasOnlyIosTargeting(reorderedWithIos)).toBe(true)
+    expect(hasOnlyIosTargeting({ user_os: ['iOS_ver_14.0_and_above'] })).toBe(true)
+    expect(hasOnlyIosTargeting({ user_os: ['iOS', 'Android'] })).toBe(false)
   })
 
-  test('requires the exact known production scope before mutation', () => {
-    const activeMissingIos = Array.from({ length: 16 }, (_, index) => ({
+  test('accepts safe partial progress but requires the exact known final scope', () => {
+    const activeMissingIos = Array.from({ length: 15 }, (_, index) => ({
       taskId: `task-${index}`,
       accountId: 'account',
       adsetId: `repair-${index}`,
@@ -64,6 +66,14 @@ describe('Leyon iOS targeting repair safeguards', () => {
         targeting: { user_os: ['iOS'] },
       },
       {
+        taskId: 'task-versioned-ios',
+        accountId: 'account',
+        adsetId: 'already-versioned-ios',
+        found: true,
+        status: 'ACTIVE',
+        targeting: { user_os: ['iOS_ver_14.0_and_above'] },
+      },
+      {
         taskId: 'task-missing-1',
         accountId: 'account',
         adsetId: 'missing-1',
@@ -77,8 +87,8 @@ describe('Leyon iOS targeting repair safeguards', () => {
       },
     ])
 
-    expect(() => assertExpectedRepairScope(scope, 16)).not.toThrow()
-    expect(() => assertExpectedRepairScope(scope, 15)).toThrow(
+    expect(() => assertExpectedRepairScope(scope, 17)).not.toThrow()
+    expect(() => assertExpectedRepairScope(scope, 16)).toThrow(
       'Leyon repair scope changed; refusing mutation',
     )
   })
