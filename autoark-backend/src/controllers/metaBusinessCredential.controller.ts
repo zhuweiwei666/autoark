@@ -70,6 +70,20 @@ export const inspectBusiness = async (req: Request, res: Response) => {
   }
 }
 
+export const inspectApplicationOwnership = async (
+  req: Request,
+  res: Response,
+) => {
+  try {
+    const ownership = await credentialService.inspectApplicationOwnership(
+      req.body?.facebookAppId,
+    )
+    res.json({ success: true, data: ownership })
+  } catch (error: unknown) {
+    sendError(res, error)
+  }
+}
+
 export const getProvisionPlan = async (req: Request, res: Response) => {
   try {
     const plan = await credentialService.buildProvisionPlan(req.body)

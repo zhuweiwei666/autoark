@@ -536,6 +536,55 @@ export const discoverBusinesses = async (bootstrapTokenId: string) => {
   }))
 }
 
+const safeBusinessReference = (value: unknown) => {
+  if (!value || typeof value !== 'object' || !('id' in value)) return undefined
+  const reference = value as { id?: unknown; name?: unknown }
+  if (!reference.id) return undefined
+  return {
+    id: String(reference.id),
+    name: typeof reference.name === 'string' ? reference.name : undefined,
+  }
+}
+
+export const inspectApplicationOwnership = async (
+  facebookAppIdValue: string,
+) => {
+  const facebookAppId = requiredObjectId(facebookAppIdValue, 'facebookAppId')
+  const app = await FacebookApp.findById(facebookAppId)
+    .select('_id appId appSecret appName status')
+    .lean()
+  if (!app) throw inputError('Facebook App not found', 404)
+  if (!app.appSecret) {
+    throw inputError('Facebook App secret is unavailable', 500)
+  }
+
+  const graphApp = await facebookClient.get(
+    `/${requiredGraphId(app.appId, 'appId')}`,
+    {
+      access_token: `${app.appId}|${app.appSecret}`,
+      fields: 'id,name,business,owner_business',
+    },
+  )
+  const business = safeBusinessReference(graphApp?.business)
+  const ownerBusiness = safeBusinessReference(graphApp?.owner_business)
+
+  return {
+    app: {
+      id: String(app._id),
+      appId: String(app.appId),
+      appName: app.appName,
+      status: app.status,
+    },
+    graph: {
+      id: graphApp?.id ? String(graphApp.id) : String(app.appId),
+      name: graphApp?.name || app.appName,
+      business,
+      ownerBusiness,
+      isBusinessOwned: Boolean(business || ownerBusiness),
+    },
+  }
+}
+
 export const inspectBusiness = async (
   bootstrapTokenId: string,
   businessIdValue: string,
@@ -1485,6 +1534,7 @@ export default {
   listBootstrapTokens,
   getMigrationInventory,
   discoverBusinesses,
+  inspectApplicationOwnership,
   inspectBusiness,
   buildProvisionPlan,
   provisionSystemUser,
