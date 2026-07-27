@@ -108,7 +108,7 @@ const COUNTRIES = {
     { code: 'TH', name: '泰国' },
     { code: 'VN', name: '越南' },
     { code: 'MY', name: '马来西亚' },
-    { code: 'SG', name: '新加坡' },
+    // SG 新加坡需要 Meta 区域性受监管类别，定向包暂不开放选择
     { code: 'PH', name: '菲律宾' },
     // MM 缅甸 - Facebook 受限国家
     { code: 'KH', name: '柬埔寨' },

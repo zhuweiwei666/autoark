@@ -468,6 +468,17 @@ const sanitizeTargetingGeoLocations = (input: any) => {
   const geo: any = {}
 
   const countries = pickLimitedStringArray(input.countries, 250, 8)
+  const targetsSingapore =
+    countries?.some((country) => country.toUpperCase() === 'SG') ||
+    (Array.isArray(input.regions) && input.regions.some((region: any) => (
+      typeof region?.country === 'string' && region.country.trim().toUpperCase() === 'SG'
+    ))) ||
+    (Array.isArray(input.cities) && input.cities.some((city: any) => (
+      typeof city?.country === 'string' && city.country.trim().toUpperCase() === 'SG'
+    )))
+  if (targetsSingapore) {
+    throw createHttpError('暂不支持新加坡定向，请选择其他国家或地区', 400)
+  }
   if (countries) geo.countries = countries
 
   const regions = pickObjectArray(input.regions, 250, (item) => {
