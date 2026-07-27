@@ -154,6 +154,8 @@ export const syncCampaignsFromAdAccountsV2 = async (options?: {
           {
             accountId: account.accountId,
             token: account.token,
+            tokenId: account.tokenId?.toString(),
+            optimizer: account.operator,
             organizationId: account.organizationId?.toString(),
           },
           {

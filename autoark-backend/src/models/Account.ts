@@ -5,8 +5,11 @@ export interface IAccount extends mongoose.Document {
   accountId: string
   name?: string
   timezone?: string
+  currency?: string
   operator?: string
   token?: string
+  tokenId?: mongoose.Types.ObjectId
+  sourceSyncedAt?: Date
   status?: string
   balance?: number
   spendCap?: string
@@ -31,8 +34,11 @@ const accountSchema = new mongoose.Schema(
     accountId: { type: String, required: true, index: true },
     name: String,
     timezone: String,
+    currency: String,
     operator: String, // 优化师
     token: String,
+    tokenId: { type: mongoose.Schema.Types.ObjectId, ref: 'FbToken', index: true },
+    sourceSyncedAt: { type: Date, index: true },
     status: String,
     balance: Number,
     spendCap: String,
@@ -106,5 +112,6 @@ accountSchema.index({ organizationId: 1, status: 1 })
 accountSchema.index({ tags: 1 })
 accountSchema.index({ groupId: 1 })
 accountSchema.index({ createdBy: 1 })
+accountSchema.index({ organizationId: 1, operator: 1, status: 1 })
 
 export default mongoose.model<IAccount>('Account', accountSchema)

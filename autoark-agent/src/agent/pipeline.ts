@@ -120,7 +120,11 @@ export async function runPipeline(trigger: 'cron' | 'manual' = 'cron'): Promise<
       } else {
         // 进审批队列
         await Action.create({
-          type: action.type === 'increase_budget' ? 'adjust_budget' : action.type,
+          type:
+            action.type === 'increase_budget' ||
+            action.type === 'decrease_budget'
+              ? 'adjust_budget'
+              : action.type,
           platform: 'facebook',
           accountId: action.accountId,
           entityId: action.campaignId,

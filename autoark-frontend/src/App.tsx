@@ -29,6 +29,7 @@ const FacebookAppPage = lazy(() => import('./pages/FacebookAppPage'))
 const AdReviewStatusPage = lazy(() => import('./pages/AdReviewStatusPage'))
 const AutomationJobsPage = lazy(() => import('./pages/AutomationJobsPage'))
 const AgentChatPage = lazy(() => import('./pages/AgentChatPage'))
+const AiOptimizerPage = lazy(() => import('./pages/AiOptimizerPage'))
 
 // 创建 QueryClient 实例，配置全局缓存策略
 // 策略：显示缓存数据的同时后台刷新（stale-while-revalidate）
@@ -116,6 +117,11 @@ function App() {
               <Route path="/ai/automation-jobs" element={
                 <ProtectedRoute requireRole="super_admin">
                   <AutomationJobsPage />
+                </ProtectedRoute>
+              } />
+              <Route path="/ai/optimizers" element={
+                <ProtectedRoute requireRole="org_admin">
+                  <AiOptimizerPage />
                 </ProtectedRoute>
               } />
                     {/* 用户和组织管理 */}

@@ -12,6 +12,7 @@ import logger from '../utils/logger'
 import User, { UserRole } from '../models/User'
 import Account from '../models/Account'
 import Ad from '../models/Ad'
+import ReplicaRun from '../models/ReplicaRun'
 import {
   createCampaign,
   createAdSet,
@@ -284,13 +285,14 @@ const emptyFacebookAssetSnapshot = (tokenCount = 0, selectedTokenId?: string) =>
 })
 
 const buildFacebookAssetSnapshot = async (draft: any) => {
+  const tokenOwnerUserId = draft.facebookTokenOwnerUserId || draft.createdBy
   const tokenAccessFilter = draft.organizationId
     ? {
         organizationId: draft.organizationId,
-        ...(draft.createdBy ? { userId: draft.createdBy } : {}),
+        ...(tokenOwnerUserId ? { userId: tokenOwnerUserId } : {}),
       }
-    : draft.createdBy
-      ? { userId: draft.createdBy }
+    : tokenOwnerUserId
+      ? { userId: tokenOwnerUserId }
       : null
 
   if (!tokenAccessFilter) {
@@ -511,6 +513,16 @@ export const updateDraft = async (
   const draft: any = await AdDraft.findOne(combineFilters({ _id: draftId }, accessFilter))
   if (!draft) {
     throw new Error('Draft not found')
+  }
+
+  // AI replicas are immutable approval artifacts. Allowing the generic bulk
+  // editor to mutate one would break the guarantee that the approved payload
+  // is exactly the payload later sent to Meta.
+  if (draft.aiOrigin?.statusLockedToPaused) {
+    const error: any = new Error('AI 复制草稿不可编辑；如需调整，请重新生成并重新审批')
+    error.statusCode = 409
+    error.errorCode = 'AI_REPLICA_DRAFT_IMMUTABLE'
+    throw error
   }
   
   // 已发布的草稿不能修改
@@ -840,6 +852,32 @@ export const publishDraft = async (draftId: string, userId?: string, accessFilte
   // validateDraft may pin a legacy draft to the only compatible Facebook token.
   // Reload so the task snapshot always carries that exact authorization.
   const draft: any = await getDraft(draftId, accessFilter)
+
+  if (draft.aiOrigin?.statusLockedToPaused) {
+    const statuses = [
+      draft.campaign?.status,
+      draft.adset?.status,
+      draft.ad?.status,
+    ]
+    if (statuses.some((status) => status !== 'PAUSED')) {
+      const error: any = new Error('AI 复制草稿必须保持 Campaign、AdSet 和 Ad 全部为 PAUSED')
+      error.statusCode = 409
+      error.errorCode = 'AI_REPLICA_STATUS_LOCK_VIOLATION'
+      throw error
+    }
+
+    const replicaRun = await ReplicaRun.findOne({
+      _id: draft.aiOrigin.replicaRunId,
+      draftId: draft._id,
+      status: { $in: ['approved', 'publishing'] },
+    }).select('_id')
+    if (!replicaRun) {
+      const error: any = new Error('AI 复制任务尚未完成明确审批，禁止发布')
+      error.statusCode = 409
+      error.errorCode = 'AI_REPLICA_APPROVAL_REQUIRED'
+      throw error
+    }
+  }
   
   // 计算预估
   const accountCount = draft.accounts?.length || 0
@@ -910,7 +948,7 @@ export const publishDraft = async (draftId: string, userId?: string, accessFilte
     // 保存配置快照
     configSnapshot: {
       facebookTokenId: draft.facebookTokenId,
-      facebookTokenOwnerUserId: draft.createdBy,
+      facebookTokenOwnerUserId: draft.facebookTokenOwnerUserId || draft.createdBy,
       accounts: draft.accounts,
       campaign: draft.campaign,
       adset: draft.adset,

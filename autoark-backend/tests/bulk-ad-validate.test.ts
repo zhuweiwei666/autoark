@@ -20,7 +20,7 @@ import TargetingPackage from '../src/models/TargetingPackage'
 import Account from '../src/models/Account'
 import User from '../src/models/User'
 import { addBulkAdJobsBatch } from '../src/queue/bulkAd.queue'
-import { publishDraft, validateDraft } from '../src/services/bulkAd.service'
+import { publishDraft, updateDraft, validateDraft } from '../src/services/bulkAd.service'
 
 const draftId = '665000000000000000000010'
 const creativeGroupId = '665000000000000000000011'
@@ -116,6 +116,24 @@ const mockValidPackages = () => {
 describe('bulk ad draft validation preflight', () => {
   afterEach(() => {
     jest.restoreAllMocks()
+  })
+
+  it('keeps AI replica drafts immutable after generation', async () => {
+    const draft = baseDraft({
+      aiOrigin: {
+        replicaRunId: '665000000000000000000020',
+        statusLockedToPaused: true,
+      },
+    })
+    jest.spyOn(AdDraft, 'findOne').mockResolvedValue(draft as any)
+
+    await expect(updateDraft(draftId, {
+      campaign: { status: 'ACTIVE' },
+    }, '665000000000000000000002', {})).rejects.toMatchObject({
+      statusCode: 409,
+      errorCode: 'AI_REPLICA_DRAFT_IMMUTABLE',
+    })
+    expect(draft.save).not.toHaveBeenCalled()
   })
 
   it('blocks publish when authorization, page, and pixel prerequisites are missing', async () => {

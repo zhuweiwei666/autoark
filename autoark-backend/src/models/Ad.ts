@@ -20,6 +20,9 @@ const adSchema = new mongoose.Schema(
     campaignName: String,
     accountId: String,
     organizationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Organization', index: true },
+    tokenId: { type: mongoose.Schema.Types.ObjectId, ref: 'FbToken', index: true },
+    optimizer: { type: String, index: true },
+    sourceSyncedAt: { type: Date, index: true },
     channel: { type: String, default: 'facebook' },
     platform: { type: String, enum: ['facebook', 'tiktok'], default: 'facebook', index: true },
     name: String,
@@ -83,6 +86,7 @@ adSchema.index({ campaignId: 1 })
 adSchema.index({ adsetId: 1 })
 adSchema.index({ accountId: 1 })
 adSchema.index({ organizationId: 1, taskId: 1 })
+adSchema.index({ organizationId: 1, optimizer: 1, accountId: 1 })
 adSchema.index({ creativeId: 1 })
 adSchema.index({ materialId: 1 })  // 🎯 素材归因索引
 adSchema.index({ imageHash: 1 })

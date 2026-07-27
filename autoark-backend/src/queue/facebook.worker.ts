@@ -99,7 +99,7 @@ export const initWorkers = async (): Promise<void> => {
   accountWorker = new Worker(
     'facebook.account.sync',
     async (job) => {
-      const { accountId, token, organizationId } = job.data
+      const { accountId, token, tokenId, optimizer, organizationId } = job.data
       logger.info(`[AccountWorker] Processing account: ${accountId}`)
 
       try {
@@ -113,6 +113,10 @@ export const initWorkers = async (): Promise<void> => {
             {
               campaignId: camp.id,
               accountId: normalizeForStorage(accountId),
+              organizationId,
+              tokenId,
+              optimizer,
+              sourceSyncedAt: new Date(),
               channel: 'facebook',
               platform: 'facebook',
               name: camp.name,
@@ -129,7 +133,7 @@ export const initWorkers = async (): Promise<void> => {
           if (campaignQueue) {
             jobs.push(campaignQueue.add(
               'sync-campaign',
-              { accountId, campaignId: camp.id, token, organizationId },
+              { accountId, campaignId: camp.id, token, tokenId, optimizer, organizationId },
               {
                 jobId: `campaign-sync-${camp.id}-${dayjs().format('YYYY-MM-DD-HH')}`,
                 priority: 2,
@@ -160,7 +164,7 @@ export const initWorkers = async (): Promise<void> => {
   campaignWorker = new Worker(
     'facebook.campaign.sync',
     async (job) => {
-      const { accountId, campaignId, token, organizationId } = job.data
+      const { accountId, campaignId, token, tokenId, optimizer, organizationId } = job.data
 
       try {
         // 2.1 同步该 Campaign 下的 AdSets
@@ -179,6 +183,10 @@ export const initWorkers = async (): Promise<void> => {
                 adsetId: adset.id,
                 accountId: normalizeForStorage(accountId),
                 campaignId: campaignId,
+                organizationId,
+                tokenId,
+                optimizer,
+                sourceSyncedAt: new Date(),
                 channel: 'facebook',
                 platform: 'facebook',
                 name: adset.name,
@@ -217,6 +225,10 @@ export const initWorkers = async (): Promise<void> => {
               adsetId: ad.adset_id,
               campaignId: ad.campaign_id,
               accountId: normalizeForStorage(accountId),
+              organizationId,
+              tokenId,
+              optimizer,
+              sourceSyncedAt: new Date(),
               channel: 'facebook',
               platform: 'facebook',
               name: ad.name,
@@ -246,6 +258,9 @@ export const initWorkers = async (): Promise<void> => {
                   channel: 'facebook',
                   accountId: normalizeForStorage(accountId),
                   organizationId,
+                  tokenId,
+                  optimizer,
+                  sourceSyncedAt: new Date(),
                   name: creative.name,
                   status: creative.status,
                   type: creativeType,
@@ -273,6 +288,8 @@ export const initWorkers = async (): Promise<void> => {
                   },
                   accountId,
                   organizationId,
+                  tokenId,
+                  optimizer,
                   token,
                 },
                 {
@@ -294,6 +311,9 @@ export const initWorkers = async (): Promise<void> => {
                 adId: ad.id,
                 adsetId: ad.adset_id,
                 creativeId: creativeId,
+                organizationId,
+                tokenId,
+                optimizer,
                 token,
               },
               {
@@ -318,7 +338,7 @@ export const initWorkers = async (): Promise<void> => {
   adWorker = new Worker(
     'facebook.ad.sync',
     async (job) => {
-      const { accountId, campaignId, adId, adsetId, token } = job.data
+      const { accountId, campaignId, adId, adsetId, token, tokenId } = job.data
 
       try {
         const datePresets = FACEBOOK_INSIGHTS_DATE_PRESETS
@@ -361,7 +381,7 @@ export const initWorkers = async (): Promise<void> => {
               clicks: insight.clicks || 0,
               purchase_value: purchaseValue,
               syncedAt: new Date(),
-              tokenId: job.data.tokenId || 'unknown',
+              tokenId: tokenId || 'unknown',
             })
 
             if (preset === 'today' || preset === 'yesterday') {

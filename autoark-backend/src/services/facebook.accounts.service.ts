@@ -48,6 +48,8 @@ export const syncCachedAccountsForToken = async (
       channel: 'facebook',
       accountId,
       token: tokenDoc.token,
+      tokenId: tokenDoc._id,
+      sourceSyncedAt: new Date(),
       ...(tokenDoc.organizationId && { organizationId: tokenDoc.organizationId }),
     }
     if (account.name !== undefined) accountData.name = account.name

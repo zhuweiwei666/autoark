@@ -309,7 +309,7 @@ export async function seedSkills(): Promise<void> {
   for (const seed of SEEDS) {
     const exists = await Skill.findOne({ name: seed.name, agentId: seed.agentId })
     if (exists) continue
-    await Skill.create({ ...seed, enabled: true })
+    await Skill.create({ ...seed, enabled: true } as any)
     created++
   }
 

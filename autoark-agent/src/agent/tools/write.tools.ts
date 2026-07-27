@@ -4,8 +4,19 @@
 import { ToolDef, S } from '../tools'
 import { Action } from '../../action/action.model'
 
+type ActionType =
+  | 'create_campaign'
+  | 'create_adset'
+  | 'create_ad'
+  | 'adjust_budget'
+  | 'pause'
+  | 'resume'
+  | 'update_targeting'
+  | 'update_creative'
+  | 'copy_campaign'
+
 function makeProposeTool(p: {
-  name: string; desc: string; type: string
+  name: string; desc: string; type: ActionType
   params: any; required: string[]
 }): ToolDef {
   return {
@@ -30,6 +41,7 @@ function makeProposeTool(p: {
         reason: args.reason,
         status: 'pending',
       })
+      if (!action) throw new Error('Failed to create action record')
       return {
         actionId: action._id.toString(),
         status: 'pending',

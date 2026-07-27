@@ -79,6 +79,7 @@ const request = async (method: 'GET' | 'POST', endpoint: string, dataOrParams: a
   const url = `${FB_BASE_URL}/${FB_API_VERSION}${endpoint}`
 
   // 尝试使用 Token Pool（如果可用）
+  const explicitToken = Boolean(dataOrParams.access_token)
   let token = dataOrParams.access_token
   if (!token) {
     if (tokenPool && tokenPool.getNextToken) {
@@ -172,7 +173,7 @@ const request = async (method: 'GET' | 'POST', endpoint: string, dataOrParams: a
         }
         
         // 尝试获取新 token
-        if (tokenPool && tokenPool.getNextToken) {
+        if (!explicitToken && tokenPool && tokenPool.getNextToken) {
           const newToken = tokenPool.getNextToken()
           if (newToken && newToken !== token) {
             token = newToken

@@ -109,6 +109,7 @@ function computeBenchmarks(campaigns: CampaignMetrics[]): MarketBenchmark {
 export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Promise<BrainCycleResult> {
   const startTime = Date.now()
   const snapshot = await Snapshot.create({ runAt: new Date(), triggeredBy: trigger, status: 'running' })
+  if (!snapshot) throw new Error('Failed to create pipeline snapshot')
   const result: BrainCycleResult = {
     snapshotId: snapshot._id.toString(),
     phase: '', events: [], reflections: [], actions: [], summary: '', durationMs: 0,
@@ -275,7 +276,10 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
           })
           continue
         }
-        const dbType = action.type === 'increase_budget' ? 'adjust_budget' : action.type
+        const dbType =
+          action.type === 'increase_budget' || action.type === 'decrease_budget'
+            ? 'adjust_budget'
+            : action.type
         const key = `${action.campaignId}:${dbType}`
         if (pendingKeys.has(key)) { skippedDuplicate++; continue }
         pendingKeys.add(key)
@@ -301,6 +305,7 @@ export async function think(trigger: 'cron' | 'manual' | 'event' = 'cron'): Prom
           reason: action.reason + (isAutoManaged ? ` [AI接管: ${optimizer}]` : ''),
           status: isAuto ? 'approved' : 'pending',
         })
+        if (!actionDoc) throw new Error('Failed to create action record')
 
         if (isAuto) {
           const execResult = await executeWithRetry(action)

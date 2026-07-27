@@ -150,6 +150,7 @@ const adDraftSchema = new mongoose.Schema(
     // 本次创建广告使用的 Facebook 个人号授权。账户、Page、Pixel 和发布
     // 执行必须来自同一枚 token，避免跨个人号拼接资产。
     facebookTokenId: { type: mongoose.Schema.Types.ObjectId, ref: 'FbToken' },
+    facebookTokenOwnerUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     status: { 
       type: String, 
       default: 'draft',
@@ -187,6 +188,15 @@ const adDraftSchema = new mongoose.Schema(
     
     // 关联的任务（发布后）
     taskId: { type: mongoose.Schema.Types.ObjectId, ref: 'AdTask' },
+
+    // AI 投手生成链路。任何带该标记的草稿都必须保持 Campaign / AdSet / Ad 为 PAUSED。
+    aiOrigin: {
+      replicaRunId: { type: mongoose.Schema.Types.ObjectId, ref: 'ReplicaRun', index: true },
+      playbookVersionId: { type: mongoose.Schema.Types.ObjectId, ref: 'PlaybookVersion' },
+      sourceOptimizerId: { type: String },
+      generatedAt: { type: Date },
+      statusLockedToPaused: { type: Boolean, default: false },
+    },
     
     // 元数据
     createdBy: { type: String },

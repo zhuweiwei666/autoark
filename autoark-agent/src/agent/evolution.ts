@@ -158,7 +158,7 @@ async function autoApplyThresholdAdjustments(
         { 'decision.action': actionType },
         { 'decision.action': actionType === 'increase_budget' ? 'adjust_budget' : actionType },
       ],
-    }).lean() as any[]
+    } as any).lean() as any[]
 
     for (const skill of relatedSkills) {
       const stats = skill.stats || {}

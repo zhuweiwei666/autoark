@@ -4,6 +4,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "audit:production": "node ../../scripts/audit-browser-spa-production-dependencies.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

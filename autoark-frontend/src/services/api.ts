@@ -13,7 +13,7 @@ const getApiBaseUrl = () => {
   return 'http://localhost:3001'
 }
 
-const API_BASE_URL = getApiBaseUrl()
+export const API_BASE_URL = getApiBaseUrl()
 const DEFAULT_FETCH_TIMEOUT_MS = 45000
 
 export type FetchWithTimeoutOptions = RequestInit & {

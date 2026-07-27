@@ -38,12 +38,16 @@ const accounts = [
     accountId: '111',
     token: 'TOKEN_111',
     status: 'active',
+    tokenId: { toString: () => '665000000000000000000011' },
+    operator: 'buyer-a',
     organizationId: '665000000000000000000001',
   },
   {
     accountId: '222',
     token: 'TOKEN_222',
     status: 'active',
+    tokenId: { toString: () => '665000000000000000000022' },
+    operator: 'buyer-b',
     organizationId: '665000000000000000000002',
   },
 ]
@@ -141,6 +145,8 @@ describe('facebook queue scheduler safety', () => {
       'sync-account',
       expect.objectContaining({
         accountId: '222',
+        tokenId: '665000000000000000000022',
+        optimizer: 'buyer-b',
         organizationId: '665000000000000000000002',
       }),
       expect.any(Object),

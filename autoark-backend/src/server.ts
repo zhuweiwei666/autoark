@@ -15,6 +15,10 @@ import { initWorkers } from './queue/facebook.worker'
 import { initBulkAdWorker } from './queue/bulkAd.worker'
 import { initAutomationWorker } from './queue/automation.worker'
 import {
+  closeOptimizerPlaybookWorker,
+  initOptimizerPlaybookWorker,
+} from './queue/optimizerPlaybook.worker'
+import {
   closeExternalMaterialQueue,
   initExternalMaterialQueue,
 } from './queue/externalMaterial.queue'
@@ -45,6 +49,7 @@ export const shutdown = async (): Promise<void> => {
   if (shuttingDown) return shuttingDown
   shuttingDown = (async () => {
     closeExternalMaterialCron()
+    await closeOptimizerPlaybookWorker()
     await closeExternalMaterialWorker()
     await closeExternalMaterialQueue()
     const server = httpServer
@@ -102,6 +107,7 @@ export async function bootstrap() {
   }
   initBulkAdWorker()
   initAutomationWorker()
+  initOptimizerPlaybookWorker()
   await initExternalMaterialQueue(redis)
   await initExternalMaterialWorker(redis)
 
