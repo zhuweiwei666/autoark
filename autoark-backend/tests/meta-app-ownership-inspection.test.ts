@@ -36,7 +36,6 @@ describe('Meta App ownership inspection', () => {
     mockFacebookGet.mockResolvedValue({
       id: '1688691382308509',
       name: 'BAIZ 56',
-      business: { id: '123456789', name: 'AutoArk Central' },
       owner_business: { id: '123456789', name: 'AutoArk Central' },
     })
 
@@ -44,12 +43,11 @@ describe('Meta App ownership inspection', () => {
 
     expect(mockFacebookGet).toHaveBeenCalledWith('/1688691382308509', {
       access_token: '1688691382308509|APP_SECRET',
-      fields: 'id,name,business,owner_business',
+      fields: 'id,name,owner_business',
     })
     expect(result.graph).toEqual({
       id: '1688691382308509',
       name: 'BAIZ 56',
-      business: { id: '123456789', name: 'AutoArk Central' },
       ownerBusiness: { id: '123456789', name: 'AutoArk Central' },
       isBusinessOwned: true,
     })
@@ -64,7 +62,6 @@ describe('Meta App ownership inspection', () => {
 
     const result = await inspectApplicationOwnership('6a422088296518ea88ed4950')
 
-    expect(result.graph.business).toBeUndefined()
     expect(result.graph.ownerBusiness).toBeUndefined()
     expect(result.graph.isBusinessOwned).toBe(false)
   })
