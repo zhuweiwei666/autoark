@@ -153,27 +153,44 @@ const isHttpUrl = (value: any) => {
   }
 }
 
-type MetaVideoAutoCropEnrollment = 'OPT_IN' | 'OPT_OUT'
+type MetaCreativeOptimizationMode = 'off' | 'auto_crop' | 'advantage_plus'
 
-const getMetaVideoAutoCropEnrollment = (
+const getMetaCreativeOptimizationMode = (
   creativeGroup: any,
-): MetaVideoAutoCropEnrollment | undefined => {
+): MetaCreativeOptimizationMode | undefined => {
+  const configuredMode = creativeGroup?.config?.metaCreativeOptimizationMode
+  if (configuredMode === 'off' || configuredMode === 'auto_crop' || configuredMode === 'advantage_plus') {
+    return configuredMode
+  }
+
   const configured = creativeGroup?.config?.metaAutoCrop
   if (typeof configured !== 'boolean') return undefined
-  return configured ? 'OPT_IN' : 'OPT_OUT'
+  return configured ? 'auto_crop' : 'off'
 }
 
-const buildMetaVideoAutoCropSpec = (
-  enrollment: MetaVideoAutoCropEnrollment | undefined,
-) => enrollment
-  ? {
+const buildMetaCreativeOptimizationSpec = (
+  mode: MetaCreativeOptimizationMode | undefined,
+) => {
+  if (!mode) return undefined
+  if (mode === 'advantage_plus') {
+    return {
+      creative_features_spec: {
+        advantage_plus_creative: { enroll_status: 'OPT_IN' },
+        standard_enhancements: { enroll_status: 'OPT_IN' },
+        video_auto_crop: { enroll_status: 'OPT_IN' },
+        adapt_to_placement: { enroll_status: 'OPT_IN' },
+      },
+    }
+  }
+
+  return {
     creative_features_spec: {
       video_auto_crop: {
-        enroll_status: enrollment,
+        enroll_status: mode === 'auto_crop' ? 'OPT_IN' : 'OPT_OUT',
       },
     },
   }
-  : undefined
+}
 
 const isAllowedAttributionWindow = (value: any, allowedValues: number[]) => {
   const next = Number(value)
@@ -1712,6 +1729,20 @@ export const executeTaskForAccount = async (
     if (missingCopywritingIds.length > 0) {
       throw createBulkAssetAccessError('Copywriting packages', [...new Set(missingCopywritingIds)], foundCopywritingIds)
     }
+
+    const metaCloudOptimizationEnabled = creativeGroups.some((group) => (
+      getMetaCreativeOptimizationMode(group) === 'advantage_plus' &&
+      (group.materials || []).some((material: any) => material.type === 'video' && hasUsableMaterial(material))
+    ))
+    if (dynamicCreativeEnabled && metaCloudOptimizationEnabled) {
+      // Meta's full Advantage+ creative flow requires a non-dynamic AdSet.
+      // Prefer the package's explicit cloud-optimization policy and publish
+      // each material as its own Creative so Meta can optimize it independently.
+      dynamicCreativeEnabled = false
+      logger.info(
+        `[BulkAd] Meta cloud creative optimization selected; disabling dynamic creative for account ${accountId}`,
+      )
+    }
     
     // ==================== 1. 创建 Campaign ====================
     const campaignName = generateName(config.campaign.nameTemplate, {
@@ -1963,7 +1994,7 @@ export const executeTaskForAccount = async (
 
       // degrees_of_freedom_spec applies to the whole Creative. Keep assets with
       // different package-level policies separate so one package cannot
-      // silently override another package's auto-crop choice.
+      // silently override another package's optimization choice.
       const videoGroupIndexes = new Set(
         dynamicMaterials
           .filter(({ asset }) => asset.type === 'video')
@@ -1971,10 +2002,10 @@ export const executeTaskForAccount = async (
       )
       const dynamicMaterialBuckets = new Map<string, Array<any>>()
       for (const entry of dynamicMaterials) {
-        const enrollment = videoGroupIndexes.has(entry.cgIndex)
-          ? getMetaVideoAutoCropEnrollment(creativeGroups[entry.cgIndex])
+        const mode = videoGroupIndexes.has(entry.cgIndex)
+          ? getMetaCreativeOptimizationMode(creativeGroups[entry.cgIndex])
           : undefined
-        const bucketKey = enrollment || 'DEFAULT'
+        const bucketKey = mode || 'DEFAULT'
         const bucket = dynamicMaterialBuckets.get(bucketKey) || []
         bucket.push(entry)
         dynamicMaterialBuckets.set(bucketKey, bucket)
@@ -2014,11 +2045,11 @@ export const executeTaskForAccount = async (
           if (accountConfig.instagramAccountId) {
             objectStorySpec.instagram_actor_id = accountConfig.instagramAccountId
           }
-          const enrollment = bucketKey === 'DEFAULT'
+          const mode = bucketKey === 'DEFAULT'
             ? undefined
-            : bucketKey as MetaVideoAutoCropEnrollment
+            : bucketKey as MetaCreativeOptimizationMode
           const degreesOfFreedomSpec = videos.length > 0
-            ? buildMetaVideoAutoCropSpec(enrollment)
+            ? buildMetaCreativeOptimizationSpec(mode)
             : undefined
 
           creativeIndex++
@@ -2153,7 +2184,7 @@ export const executeTaskForAccount = async (
           name: creativeName,
           objectStorySpec,
           degreesOfFreedomSpec: material.type === 'video'
-            ? buildMetaVideoAutoCropSpec(getMetaVideoAutoCropEnrollment(creativeGroup))
+            ? buildMetaCreativeOptimizationSpec(getMetaCreativeOptimizationMode(creativeGroup))
             : undefined,
         })
         

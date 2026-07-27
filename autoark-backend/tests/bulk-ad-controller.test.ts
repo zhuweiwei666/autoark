@@ -1843,6 +1843,7 @@ describe('bulk ad controller', () => {
           format: 'carousel',
           dynamicCreative: true,
           metaAutoCrop: true,
+          metaCreativeOptimizationMode: 'advantage_plus',
           carousel: {
             autoOptimize: false,
             linkPerCard: true,
@@ -1875,6 +1876,7 @@ describe('bulk ad controller', () => {
     expect(savedGroup.tags).toEqual(['hero', 'video'])
     expect(savedGroup.config.format).toBe('carousel')
     expect(savedGroup.config.metaAutoCrop).toBe(true)
+    expect(savedGroup.config.metaCreativeOptimizationMode).toBe('advantage_plus')
     expect(savedGroup.config.carousel.autoOptimize).toBe(false)
     expect(savedGroup.config.carousel.linkPerCard).toBe(true)
 
@@ -1912,6 +1914,7 @@ describe('bulk ad controller', () => {
           format: 'carousel',
           dynamicCreative: true,
           metaAutoCrop: false,
+          metaCreativeOptimizationMode: 'off',
           carousel: {
             autoOptimize: false,
             linkPerCard: true,
@@ -1947,6 +1950,7 @@ describe('bulk ad controller', () => {
         format: 'carousel',
         dynamicCreative: true,
         metaAutoCrop: false,
+        metaCreativeOptimizationMode: 'off',
         carousel: {
           autoOptimize: false,
           linkPerCard: true,

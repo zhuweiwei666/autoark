@@ -348,6 +348,90 @@ describe('bulk ad execution diagnostics', () => {
     expect(createAd).toHaveBeenCalledTimes(1)
   })
 
+  it('uses single-asset creatives and full Meta cloud optimization when Advantage+ is selected', async () => {
+    const task: any = buildTask()
+    task.configSnapshot.adset.targetingPackageId = '665000000000000000000710'
+    delete task.configSnapshot.adset.inlineTargeting
+    jest.spyOn(AdTask, 'findById')
+      .mockResolvedValueOnce(task)
+      .mockResolvedValueOnce(task)
+    jest.spyOn(AdTask, 'findOneAndUpdate').mockResolvedValue(task)
+    jest.spyOn(AdTask, 'findByIdAndUpdate').mockResolvedValue(task)
+    jest.spyOn(FbToken, 'findOne').mockResolvedValue({ token: 'fb_token' } as any)
+    jest.spyOn(TargetingPackage, 'findOne').mockResolvedValue({
+      _id: '665000000000000000000710',
+      name: 'Dynamic broad',
+      dynamicCreativeEnabled: true,
+      toFacebookTargeting: () => ({ geo_locations: { countries: ['US'] } }),
+    } as any)
+    jest.spyOn(CreativeGroup, 'find').mockResolvedValue([{
+      _id: '665000000000000000000711',
+      name: 'Meta cloud videos',
+      config: {
+        metaAutoCrop: true,
+        metaCreativeOptimizationMode: 'advantage_plus',
+      },
+      materials: [
+        {
+          _id: '665000000000000000000713',
+          type: 'video',
+          name: 'Video 1',
+          facebookVideoId: 'video_1',
+          status: 'uploaded',
+        },
+        {
+          _id: '665000000000000000000714',
+          type: 'video',
+          name: 'Video 2',
+          facebookVideoId: 'video_2',
+          status: 'uploaded',
+        },
+      ],
+    }] as any)
+    jest.spyOn(CopywritingPackage, 'find').mockResolvedValue([{
+      _id: '665000000000000000000712',
+      links: { websiteUrl: 'https://example.com' },
+      content: {
+        primaryTexts: ['Primary'],
+        headlines: ['Headline'],
+        descriptions: ['Description'],
+      },
+      callToAction: 'SHOP_NOW',
+    }] as any)
+    jest.spyOn(Ad, 'findOneAndUpdate').mockResolvedValue({} as any)
+    jest.spyOn(AdMaterialMapping as any, 'recordMapping').mockResolvedValue({} as any)
+    ;(createCampaign as jest.Mock).mockResolvedValue({ success: true, id: 'camp_1' })
+    ;(createAdSet as jest.Mock).mockResolvedValue({ success: true, id: 'adset_1' })
+    ;(createAdCreative as jest.Mock)
+      .mockResolvedValueOnce({ success: true, id: 'creative_1' })
+      .mockResolvedValueOnce({ success: true, id: 'creative_2' })
+    ;(createAd as jest.Mock)
+      .mockResolvedValueOnce({ success: true, id: 'ad_1' })
+      .mockResolvedValueOnce({ success: true, id: 'ad_2' })
+
+    await executeTaskForAccount(taskId, '123')
+
+    expect(createAdSet).toHaveBeenCalledWith(expect.objectContaining({
+      isDynamicCreative: false,
+    }))
+    expect(createAdCreative).toHaveBeenCalledTimes(2)
+    expect(createAdCreative).toHaveBeenCalledWith(expect.objectContaining({
+      degreesOfFreedomSpec: {
+        creative_features_spec: {
+          advantage_plus_creative: { enroll_status: 'OPT_IN' },
+          standard_enhancements: { enroll_status: 'OPT_IN' },
+          video_auto_crop: { enroll_status: 'OPT_IN' },
+          adapt_to_placement: { enroll_status: 'OPT_IN' },
+        },
+      },
+    }))
+    expect((createAdCreative as jest.Mock).mock.calls.every(([payload]) => (
+      payload.assetFeedSpec === undefined &&
+      payload.objectStorySpec?.video_data?.video_id
+    ))).toBe(true)
+    expect(createAd).toHaveBeenCalledTimes(2)
+  })
+
   it('keeps conflicting package auto-crop policies in separate dynamic creatives', async () => {
     const task: any = buildTask()
     task.configSnapshot.ad.creativeGroupIds = [

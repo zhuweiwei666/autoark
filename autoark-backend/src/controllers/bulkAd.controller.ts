@@ -273,6 +273,7 @@ const CREATIVE_MATERIAL_STATUSES = ['pending', 'uploaded', 'failed'] as const
 const CREATIVE_MATERIAL_SOURCES = ['manual', 'facebook_sync', 'url_import'] as const
 const CREATIVE_GROUP_PLATFORMS = ['facebook', 'tiktok', 'google'] as const
 const CREATIVE_GROUP_FORMATS = ['single', 'carousel', 'collection'] as const
+const META_CREATIVE_OPTIMIZATION_MODES = ['off', 'auto_crop', 'advantage_plus'] as const
 const PLATFORMS = ['facebook', 'tiktok', 'google'] as const
 const TARGETING_OPTIMIZATION_VALUES = ['none', 'expansion_all'] as const
 const TARGETING_OPTIMIZATION_GOALS = ['OFFSITE_CONVERSIONS', 'LINK_CLICKS', 'IMPRESSIONS', 'REACH', 'LANDING_PAGE_VIEWS', 'APP_INSTALLS'] as const
@@ -886,6 +887,15 @@ const sanitizeCreativeGroupConfig = (input: any) => {
   }
   if (typeof input.metaAutoCrop === 'boolean') {
     config.metaAutoCrop = input.metaAutoCrop
+  }
+  if (typeof input.metaCreativeOptimizationMode === 'string') {
+    config.metaCreativeOptimizationMode = pickAllowedString(
+      input.metaCreativeOptimizationMode,
+      META_CREATIVE_OPTIMIZATION_MODES,
+      'off',
+    )
+    // Keep the legacy field canonical for older readers during rolling deploys.
+    config.metaAutoCrop = config.metaCreativeOptimizationMode !== 'off'
   }
   if (input.carousel && typeof input.carousel === 'object' && !Array.isArray(input.carousel)) {
     config.carousel = {}
