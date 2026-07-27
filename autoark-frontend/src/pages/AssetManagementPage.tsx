@@ -546,6 +546,21 @@ export default function AssetManagementPage() {
           <div className="space-y-4">
             <div><label className="block text-sm text-slate-600 mb-1">名称 *</label>
               <input type="text" value={formData.name || ''} onChange={(e) => setFormData({...formData, name: e.target.value})} className="w-full px-3 py-2 border rounded-lg" required /></div>
+
+            <label className="flex items-start justify-between gap-4 rounded-lg border border-violet-200 bg-violet-50 p-3 cursor-pointer">
+              <div>
+                <div className="text-sm font-medium text-slate-800">开启动态素材</div>
+                <div className="mt-1 text-xs leading-5 text-slate-500">
+                  使用此定向包创建广告时，一个广告自动聚合多条素材，由 Meta 组合并优化投放。
+                </div>
+              </div>
+              <input
+                type="checkbox"
+                checked={formData.dynamicCreativeEnabled === true}
+                onChange={(e) => setFormData({...formData, dynamicCreativeEnabled: e.target.checked})}
+                className="mt-1 h-4 w-4 rounded border-slate-300 text-violet-600"
+              />
+            </label>
             
             {/* 受众定向 */}
             <div className="border-t pt-4 mt-4">
@@ -924,6 +939,11 @@ export default function AssetManagementPage() {
                    item.optimizationGoal === 'LANDING_PAGE_VIEWS' ? '浏览' : 
                    item.optimizationGoal || '转化'}
                 </span>
+                {item.dynamicCreativeEnabled && (
+                  <span className="inline-block px-2 py-0.5 bg-violet-100 text-violet-700 rounded text-xs">
+                    动态素材
+                  </span>
+                )}
               </div>
             </div>
           </div>

@@ -11,6 +11,8 @@ const targetingPackageSchema = new mongoose.Schema(
     organizationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Organization', index: true }, // 组织隔离
     accountId: { type: String, index: true },  // 可选，定向包可跨账户使用
     platform: { type: String, default: 'facebook', enum: ['facebook', 'tiktok', 'google'] },
+    // 使用该定向包发布时，按 Meta 动态素材结构创建：一个 Ad 聚合多条素材。
+    dynamicCreativeEnabled: { type: Boolean, default: false },
 
     // 从真人投手上下文提炼出的跨账户 Meta 定向。写入前和读取时都会
     // 去掉 custom audience、saved audience 等账户专属对象。

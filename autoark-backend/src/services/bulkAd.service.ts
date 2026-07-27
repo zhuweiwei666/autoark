@@ -1642,6 +1642,7 @@ export const executeTaskForAccount = async (
     // Campaign/AdSet 后才发现资源不可用，留下无法复用的半成品。
     let targeting: any = {}
     let targetingName = ''  // 定向包名称，用于名称模板
+    let dynamicCreativeEnabled = false
     if (config.adset.targetingPackageId) {
       const targetingPackageId = config.adset.targetingPackageId.toString()
       if (!mongoose.Types.ObjectId.isValid(targetingPackageId)) {
@@ -1654,6 +1655,7 @@ export const executeTaskForAccount = async (
         throw createBulkAssetAccessError('Targeting package', [targetingPackageId])
       }
       targetingName = targetingPackage.name || ''
+      dynamicCreativeEnabled = targetingPackage.dynamicCreativeEnabled === true
       if (targetingPackage.toFacebookTargeting) {
         targeting = targetingPackage.toFacebookTargeting()
       }
@@ -1789,6 +1791,7 @@ export const executeTaskForAccount = async (
         attribution_spec: attributionSpec,
         dsa_beneficiary: dsaBeneficiary,
         dsa_payor: dsaBeneficiary,
+        isDynamicCreative: dynamicCreativeEnabled,
       })
       
       if (!adsetResult.success) {
@@ -1885,12 +1888,116 @@ export const executeTaskForAccount = async (
       matIndex: number
       creativeGroup: any
       material: any
+      materials?: any[]
       copywriting: any
       creativeId: string
     }> = []
     
     let creativeIndex = 0
-    for (const { cgIndex, matIndex, material, copywriting } of allMaterials) {
+    let failedDynamicMaterialCount = 0
+
+    if (dynamicCreativeEnabled) {
+      const imageUploadResults = new Map<string, string>()
+      const imagesToUpload = allMaterials.filter(({ material }) =>
+        material.type === 'image' && !material.facebookImageHash && material.url
+      )
+      const IMAGE_BATCH_SIZE = 5
+      for (let i = 0; i < imagesToUpload.length; i += IMAGE_BATCH_SIZE) {
+        const results = await Promise.all(imagesToUpload.slice(i, i + IMAGE_BATCH_SIZE).map(async ({ material }) => {
+          const result = await uploadImageFromUrl({
+            accountId,
+            token,
+            imageUrl: material.url,
+            name: material.name,
+          })
+          if (!result.success || !result.hash) {
+            stepDiagnostics.push(diagnoseFacebookStepError(
+              'image_upload',
+              result.error,
+              `Image upload failed: ${material.name || material.url}`,
+            ))
+            return undefined
+          }
+          return { url: material.url, hash: result.hash }
+        }))
+        results.filter(Boolean).forEach((result: any) => imageUploadResults.set(result.url, result.hash))
+      }
+
+      const dynamicMaterials = allMaterials.map((entry) => {
+        const { material } = entry
+        if (material.type === 'image') {
+          const hash = material.facebookImageHash || imageUploadResults.get(material.url)
+          return hash ? { ...entry, asset: { type: 'image', hash } } : undefined
+        }
+        if (material.type === 'video') {
+          const videoId = material.facebookVideoId || videoUploadResults.get(material.url)?.video_id
+          return videoId ? { ...entry, asset: { type: 'video', videoId } } : undefined
+        }
+        return undefined
+      }).filter(Boolean) as Array<any>
+
+      failedDynamicMaterialCount = allMaterials.length - dynamicMaterials.length
+
+      // Meta 动态素材单条广告最多聚合 10 个媒体资产；超出时自动拆成下一条 Ad。
+      const DYNAMIC_MEDIA_LIMIT = 10
+      for (let offset = 0; offset < dynamicMaterials.length; offset += DYNAMIC_MEDIA_LIMIT) {
+        const chunk = dynamicMaterials.slice(offset, offset + DYNAMIC_MEDIA_LIMIT)
+        const first = chunk[0]
+        const copywriting = first.copywriting
+        const websiteUrl = copywriting.links?.websiteUrl || ''
+        const images = chunk.filter(({ asset }) => asset.type === 'image').map(({ asset }) => ({ hash: asset.hash }))
+        const videos = chunk.filter(({ asset }) => asset.type === 'video').map(({ asset }) => ({ video_id: asset.videoId }))
+        const primaryTexts = copywriting.content?.primaryTexts?.length ? copywriting.content.primaryTexts : ['']
+        const headlines = copywriting.content?.headlines?.length ? copywriting.content.headlines : ['']
+        const descriptions = copywriting.content?.descriptions?.length ? copywriting.content.descriptions : ['']
+        const assetFeedSpec: any = {
+          images,
+          videos,
+          bodies: primaryTexts.slice(0, 5).map((text: string) => ({ text })),
+          titles: headlines.slice(0, 5).map((text: string) => ({ text })),
+          descriptions: descriptions.slice(0, 5).map((text: string) => ({ text })),
+          link_urls: [{ website_url: websiteUrl }],
+          call_to_action_types: [copywriting.callToAction || 'SHOP_NOW'],
+          ad_formats: [
+            ...(images.length > 0 ? ['SINGLE_IMAGE'] : []),
+            ...(videos.length > 0 ? ['SINGLE_VIDEO'] : []),
+          ],
+        }
+        if (assetFeedSpec.images.length === 0) delete assetFeedSpec.images
+        if (assetFeedSpec.videos.length === 0) delete assetFeedSpec.videos
+
+        const objectStorySpec: any = { page_id: accountConfig.pageId }
+        if (accountConfig.instagramAccountId) {
+          objectStorySpec.instagram_actor_id = accountConfig.instagramAccountId
+        }
+
+        creativeIndex++
+        const creativeResult = await createAdCreative({
+          accountId,
+          token,
+          name: `${campaignName}_dynamic_creative_${creativeIndex}`,
+          objectStorySpec,
+          assetFeedSpec,
+        })
+        if (!creativeResult.success) {
+          stepDiagnostics.push(diagnoseFacebookStepError(
+            'creative',
+            creativeResult.error,
+            `Dynamic creative ${creativeIndex} creation failed`,
+          ))
+          continue
+        }
+        creativeEntries.push({
+          cgIndex: first.cgIndex,
+          matIndex: first.matIndex,
+          creativeGroup: creativeGroups[first.cgIndex],
+          material: first.material,
+          materials: chunk.map(({ material }) => material),
+          copywriting,
+          creativeId: creativeResult.id,
+        })
+      }
+    } else for (const { cgIndex, matIndex, material, copywriting } of allMaterials) {
       const creativeGroup = creativeGroups[cgIndex]
       
       // 处理素材引用
@@ -2069,10 +2176,13 @@ export const executeTaskForAccount = async (
     
     // ==================== 6. 完成任务 ====================
     // 素材数量必须和最终广告数量一致；否则不能把“部分成功”伪装成成功。
-    const expectedAdCount = allMaterials.length * adsetsToUse.length
+    const expectedCreativeCount = dynamicCreativeEnabled
+      ? Math.ceil(allMaterials.length / 10)
+      : allMaterials.length
+    const expectedAdCount = expectedCreativeCount * adsetsToUse.length
     const skippedCount = Math.max(expectedAdCount - adIds.length, 0)
     const noAdsCreated = adIds.length === 0
-    const materialsIncomplete = expectedAdCount === 0 || skippedCount > 0
+    const materialsIncomplete = expectedAdCount === 0 || skippedCount > 0 || failedDynamicMaterialCount > 0
     const finalStatus = materialsIncomplete ? 'failed' : 'success'
     const errorInfo = noAdsCreated
       ? [
@@ -2092,7 +2202,9 @@ export const executeTaskForAccount = async (
           diagnoseBulkAdError({
             entityType: 'material',
             errorCode: 'BULK_MATERIALS_INCOMPLETE',
-            errorMessage: `素材广告创建不完整：应创建 ${expectedAdCount} 条，实际创建 ${adIds.length} 条，跳过 ${skippedCount} 条`,
+            errorMessage: dynamicCreativeEnabled
+              ? `动态素材广告创建不完整：应创建 ${expectedAdCount} 条，实际创建 ${adIds.length} 条，另有 ${failedDynamicMaterialCount} 个素材上传失败`
+              : `素材广告创建不完整：应创建 ${expectedAdCount} 条，实际创建 ${adIds.length} 条，跳过 ${skippedCount} 条`,
             timestamp: new Date(),
           }),
         ]

@@ -513,6 +513,7 @@ const sanitizeTargetingPackageInput = (input: any, options: { requireName?: bool
   }
 
   sanitizePlatformFields(input, data)
+  assignBoolean(data, input, 'dynamicCreativeEnabled')
 
   const geoLocations = sanitizeTargetingGeoLocations(input?.geoLocations)
   if (geoLocations) data.geoLocations = geoLocations
