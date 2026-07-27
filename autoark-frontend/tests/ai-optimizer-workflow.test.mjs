@@ -35,6 +35,9 @@ test("the UI exposes learn, PAUSED draft, explicit approval, publish, and evalua
   assert.match(pageSource, /evaluateReplica/);
   assert.match(pageSource, /Campaign \/ AdSet \/ Ad 全部 PAUSED/);
   assert.match(pageSource, /尚未调用 Meta 写接口/);
+  assert.match(pageSource, /组织 System User/);
+  assert.match(pageSource, /\[System User\]/);
+  assert.match(apiSource, /authorizationType\?: "system_user" \| "personal_user"/);
   assert.doesNotMatch(pageSource, /启用广告[^。]*button/);
 });
 

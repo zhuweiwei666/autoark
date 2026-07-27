@@ -33,6 +33,10 @@ import {
   normalizeTaskErrors,
 } from './bulkAd.diagnostics'
 import { assertBulkAdPublishAllowed } from './commercial.service'
+import {
+  recordOperationalCredentialFailure,
+  resolvePublishingCredential,
+} from './metaBusinessCredential.service'
 
 /**
  * 批量广告创建服务
@@ -285,6 +289,48 @@ const emptyFacebookAssetSnapshot = (tokenCount = 0, selectedTokenId?: string) =>
 })
 
 const buildFacebookAssetSnapshot = async (draft: any) => {
+  if (draft.metaCredentialId && draft.organizationId) {
+    const requestedAccounts = (draft.accounts || [])
+      .map((account: any) => normalizeForStorage(account.accountId))
+      .filter(Boolean)
+    const requestedPages = (draft.accounts || [])
+      .map((account: any) => account.pageId && String(account.pageId))
+      .filter(Boolean)
+    const requestedPixels = (draft.accounts || [])
+      .map((account: any) => account.pixelId && String(account.pixelId))
+      .filter(Boolean)
+    const resolved = await resolvePublishingCredential({
+      organizationId: draft.organizationId,
+      credentialId: draft.metaCredentialId,
+      adAccountIds: requestedAccounts,
+      pageIds: requestedPages,
+      pixelIds: requestedPixels,
+    })
+    if (!resolved) {
+      return emptyFacebookAssetSnapshot(0, String(draft.metaCredentialId))
+    }
+
+    const snapshot = emptyFacebookAssetSnapshot(
+      1,
+      String(resolved.credential._id),
+    )
+    snapshot.hasCachedAssets = true
+    requestedAccounts.forEach((accountId: string) => {
+      snapshot.adAccountStatuses.set(accountId, 1)
+    })
+    ;(draft.accounts || []).forEach((account: any) => {
+      const accountId = normalizeForStorage(account.accountId)
+      if (!accountId) return
+      if (account.pageId) {
+        snapshot.pageAccountPairs.add(`${account.pageId}:${accountId}`)
+      }
+      if (account.pixelId) {
+        snapshot.pixelAccountPairs.add(`${account.pixelId}:${accountId}`)
+      }
+    })
+    return snapshot
+  }
+
   const tokenOwnerUserId = draft.facebookTokenOwnerUserId || draft.createdBy
   const tokenAccessFilter = draft.organizationId
     ? {
@@ -485,10 +531,24 @@ const findScopedDraftAccountAsset = async (accountId: string, draft: any) => {
  * 创建广告草稿
  */
 export const createDraft = async (data: any, userId?: string) => {
+  const nextData = { ...data }
+  if (nextData.organizationId && !nextData.metaCredentialId) {
+    const resolved = await resolvePublishingCredential({
+      organizationId: nextData.organizationId,
+      adAccountIds: (nextData.accounts || []).map((account: any) => account.accountId),
+      pageIds: (nextData.accounts || []).map((account: any) => account.pageId).filter(Boolean),
+      pixelIds: (nextData.accounts || []).map((account: any) => account.pixelId).filter(Boolean),
+    })
+    if (resolved) {
+      nextData.metaCredentialId = resolved.credential._id
+      delete nextData.facebookTokenId
+      delete nextData.facebookTokenOwnerUserId
+    }
+  }
   const draft: any = new AdDraft({
-    ...data,
-    createdBy: userId || data.createdBy,
-    lastModifiedBy: userId || data.lastModifiedBy || data.createdBy,
+    ...nextData,
+    createdBy: userId || nextData.createdBy,
+    lastModifiedBy: userId || nextData.lastModifiedBy || nextData.createdBy,
   })
   
   // 计算预估数据
@@ -631,16 +691,20 @@ export const validateDraft = async (draftId: string, accessFilter: any = {}) => 
     const assetSnapshot = await buildFacebookAssetSnapshot(draft)
 
     if (assetSnapshot.tokenCount === 0) {
-      addError('facebookAuthorization', draft.facebookTokenId
-        ? '当前选择的 Facebook 个人号授权已失效或不属于当前组织，请重新授权'
-        : '当前组织没有活跃 Facebook 授权，请先完成 Facebook Login for Business 授权')
+      addError('facebookAuthorization', draft.metaCredentialId
+        ? '当前组织的 Meta System User 发布凭证已失效、未覆盖所选资产或不属于当前组织，请联系管理员重新协调资产授权'
+        : draft.facebookTokenId
+          ? '当前选择的 Facebook 个人号授权已失效或不属于当前组织，请重新授权'
+          : '当前组织没有可用的 Meta System User 发布凭证或个人号授权，请联系管理员完成资产授权')
     } else if (!assetSnapshot.hasCachedAssets) {
-      addError('facebookAssets', '当前选择的 Facebook 个人号资产尚未同步完成，请重新同步后再发布')
-    } else if (!draft.facebookTokenId && !assetSnapshot.selectedTokenId) {
+      addError('facebookAssets', draft.metaCredentialId
+        ? '当前 Meta System User 资产授权尚未完成读回验证，请联系管理员重新校验'
+        : '当前选择的 Facebook 个人号资产尚未同步完成，请重新同步后再发布')
+    } else if (!draft.metaCredentialId && !draft.facebookTokenId && !assetSnapshot.selectedTokenId) {
       addError('facebookAuthorization', '所选广告账户、Page 和 Pixel 不属于同一个 Facebook 个人号授权，请切换个人号后重新选择资产')
     }
 
-    if (!draft.facebookTokenId && assetSnapshot.selectedTokenId) {
+    if (!draft.metaCredentialId && !draft.facebookTokenId && assetSnapshot.selectedTokenId) {
       inferredFacebookTokenId = assetSnapshot.selectedTokenId
     }
 
@@ -947,6 +1011,7 @@ export const publishDraft = async (draftId: string, userId?: string, accessFilte
     
     // 保存配置快照
     configSnapshot: {
+      metaCredentialId: draft.metaCredentialId,
       facebookTokenId: draft.facebookTokenId,
       facebookTokenOwnerUserId: draft.facebookTokenOwnerUserId || draft.createdBy,
       accounts: draft.accounts,
@@ -1161,84 +1226,110 @@ export const executeTaskForAccount = async (
     throw new Error(`账户 ${accountConfig.accountName || accountId} 没有配置 Facebook 主页，无法创建广告`)
   }
 
-  // 获取 Token。新任务固定使用预检时选中的个人号授权，防止发布阶段
-  // 自动换到另一枚只能访问广告账户、却不能使用所选 Page 的 token。
+  // 获取发布凭证。新任务优先使用预检时固定的组织级 System User；
+  // 个人号 token 只用于兼容迁移前已创建的任务。
   const taskAccessFilter = await resolveTaskAssetAccessFilter(task)
-  const tokenAccessFilter = task.organizationId
-    ? {
-        organizationId: task.organizationId,
-        ...(task.createdBy ? { userId: task.createdBy } : {}),
-      }
-    : task.createdBy
-      ? { userId: task.createdBy }
-      : {}
+  const pinnedCredentialId = config.metaCredentialId?.toString()
+  let token: string
 
-  const pinnedTokenId = config.facebookTokenId?.toString()
-  const pinnedTokenOwnerUserId = config.facebookTokenOwnerUserId?.toString()
-  let fbToken: any
-  if (pinnedTokenId) {
-    fbToken = await FbToken.findOne({
-      _id: pinnedTokenId,
-      status: 'active',
-      ...(task.organizationId ? { organizationId: task.organizationId } : {}),
-      ...(pinnedTokenOwnerUserId
-        ? { userId: pinnedTokenOwnerUserId }
-        : task.createdBy
-          ? { userId: task.createdBy }
-          : {}),
-    })
-    if (!fbToken) {
-      throw new Error('预检使用的 Facebook 个人号授权已失效，请重新验证草稿后再发布')
+  if (pinnedCredentialId) {
+    if (!task.organizationId) {
+      throw new Error('System User 发布任务缺少组织边界，任务已停止')
     }
-  } else {
-    // 兼容修复上线前已创建的历史任务。
-    fbToken = await FbToken.findOne({
-      status: 'active',
-      ...tokenAccessFilter,
-      'accounts.accountId': accountId,
+    const resolved = await resolvePublishingCredential({
+      organizationId: task.organizationId,
+      credentialId: pinnedCredentialId,
+      adAccountIds: [accountId],
+      pageIds: [accountConfig.pageId],
+      pixelIds: accountConfig.pixelId ? [accountConfig.pixelId] : [],
     })
-  }
-  
-  // 2. 如果没有绑定关系，尝试从 Account 模型获取 fbUserId
-  // 注意：Account 模型可能不包含 fbUserId 字段，这是历史兼容代码
-  if (!pinnedTokenId && !fbToken) {
-    const account: any = await Account.findOne(combineFilters({ accountId }, task.organizationId ? { organizationId: task.organizationId } : {})).lean()
-    if (account?.fbUserId) {
-      fbToken = await FbToken.findOne({ 
-        status: 'active', 
+    if (!resolved) {
+      throw new Error(
+        '预检使用的 Meta System User 凭证已失效或不再覆盖所选账户、Page、Pixel，请联系管理员重新协调资产授权',
+      )
+    }
+    token = resolved.token
+    logger.info(
+      `[BulkAd] Using organization System User credential ${pinnedCredentialId} for account ${accountId}`,
+    )
+  } else {
+    const tokenAccessFilter = task.organizationId
+      ? {
+          organizationId: task.organizationId,
+          ...(task.createdBy ? { userId: task.createdBy } : {}),
+        }
+      : task.createdBy
+        ? { userId: task.createdBy }
+        : {}
+
+    const pinnedTokenId = config.facebookTokenId?.toString()
+    const pinnedTokenOwnerUserId = config.facebookTokenOwnerUserId?.toString()
+    let fbToken: any
+    if (pinnedTokenId) {
+      fbToken = await FbToken.findOne({
+        _id: pinnedTokenId,
+        status: 'active',
+        ...(task.organizationId ? { organizationId: task.organizationId } : {}),
+        ...(pinnedTokenOwnerUserId
+          ? { userId: pinnedTokenOwnerUserId }
+          : task.createdBy
+            ? { userId: task.createdBy }
+            : {}),
+      })
+      if (!fbToken) {
+        throw new Error('预检使用的 Facebook 个人号授权已失效，请重新验证草稿后再发布')
+      }
+    } else {
+      // 兼容修复上线前已创建的历史任务。
+      fbToken = await FbToken.findOne({
+        status: 'active',
         ...tokenAccessFilter,
-        fbUserId: account.fbUserId 
+        'accounts.accountId': accountId,
       })
     }
-  }
-  
-  // 3. 如果还没找到，查找所有 active token 并验证权限
-  if (!pinnedTokenId && !fbToken) {
-    const allTokens = await FbToken.find({ status: 'active', ...tokenAccessFilter })
-    for (const t of allTokens) {
-      try {
-        // 验证此 token 是否有权访问该账户
-        const res = await facebookClient.get(`/act_${accountId}`, { 
-          access_token: t.token,
-          fields: 'id,name'
+
+    // 如果没有绑定关系，尝试从 Account 模型获取历史 fbUserId。
+    if (!pinnedTokenId && !fbToken) {
+      const account: any = await Account.findOne(combineFilters(
+        { accountId },
+        task.organizationId ? { organizationId: task.organizationId } : {},
+      )).lean()
+      if (account?.fbUserId) {
+        fbToken = await FbToken.findOne({
+          status: 'active',
+          ...tokenAccessFilter,
+          fbUserId: account.fbUserId,
         })
-        if (res && res.id) {
-          fbToken = t
-          // 可选：缓存这个绑定关系
-          logger.info(`[BulkAd] Found scoped token for account ${accountId}`)
-          break
-        }
-      } catch (e: any) {
-        // 这个 token 没有权限，继续尝试下一个
-        logger.debug(`[BulkAd] Scoped token candidate has no access to account ${accountId}`)
       }
     }
+
+    // 最后的历史兼容：仅在同一用户/组织范围内实时验证候选 token。
+    if (!pinnedTokenId && !fbToken) {
+      const allTokens = await FbToken.find({ status: 'active', ...tokenAccessFilter })
+      for (const candidate of allTokens) {
+        try {
+          const response = await facebookClient.get(`/act_${accountId}`, {
+            access_token: candidate.token,
+            fields: 'id,name',
+          })
+          if (response?.id) {
+            fbToken = candidate
+            logger.info(`[BulkAd] Found scoped legacy token for account ${accountId}`)
+            break
+          }
+        } catch {
+          logger.debug(
+            `[BulkAd] Scoped legacy token candidate has no access to account ${accountId}`,
+          )
+        }
+      }
+    }
+
+    if (!fbToken) {
+      throw new Error(`没有找到可访问账户 ${accountId} 的 Facebook Token，请检查授权`)
+    }
+    token = fbToken.token
   }
-  
-  if (!fbToken) {
-    throw new Error(`没有找到可访问账户 ${accountId} 的 Facebook Token，请检查授权`)
-  }
-  const token = fbToken.token
   
   // 原子更新状态为处理中
   await updateTaskItemAtomic(taskId, accountId, {
@@ -1796,6 +1887,16 @@ export const executeTaskForAccount = async (
     
   } catch (error: any) {
     logger.error(`[BulkAd] Task failed for account ${accountId}:`, error)
+    if (pinnedCredentialId) {
+      try {
+        await recordOperationalCredentialFailure(pinnedCredentialId, error)
+      } catch (credentialError) {
+        logger.error(
+          `[BulkAd] Failed to record System User credential failure ${pinnedCredentialId}:`,
+          credentialError,
+        )
+      }
+    }
     
     // 原子更新失败状态
     await updateTaskItemAtomic(taskId, accountId, {

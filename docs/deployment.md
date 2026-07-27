@@ -12,6 +12,7 @@ host-level Nginx app process. It runs through Docker Compose under
 - Server app dir: `/opt/autoark`
 - Server env file: `/opt/autoark/deploy/.env`
 - Local env backup: `/Users/zww/.config/autoark/prod.env`
+- Meta credential key: GitHub production secret `META_CREDENTIAL_ENCRYPTION_KEY`
 
 Do not print secrets from either env file.
 

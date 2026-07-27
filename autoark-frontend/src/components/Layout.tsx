@@ -19,6 +19,7 @@ import {
   Megaphone,
   Pulse,
   Robot,
+  ShieldCheck,
   SignOut,
   Stack,
   UserGear,
@@ -173,6 +174,12 @@ export default function Layout({ children }: LayoutProps) {
         },
         { to: "/fb-settings", label: "Token 与像素", icon: Key },
         { to: "/fb-apps", label: "App 管理", icon: Stack, superAdminOnly: true },
+        {
+          to: "/meta-system-users",
+          label: "System User 授权",
+          icon: ShieldCheck,
+          superAdminOnly: true,
+        },
       ],
     },
     {

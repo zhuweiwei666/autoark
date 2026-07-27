@@ -107,6 +107,10 @@ const adTaskSchema = new mongoose.Schema(
     
     // 任务配置快照（防止草稿被修改）
     configSnapshot: {
+      metaCredentialId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'MetaBusinessCredential',
+      },
       facebookTokenId: { type: mongoose.Schema.Types.ObjectId, ref: 'FbToken' },
       facebookTokenOwnerUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
       accounts: [{ type: Object }],

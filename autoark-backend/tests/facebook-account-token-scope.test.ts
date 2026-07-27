@@ -26,6 +26,10 @@ jest.mock('../src/models/Account', () => ({
   },
 }))
 
+jest.mock('../src/services/metaBusinessCredential.service', () => ({
+  resolvePublishingCredential: jest.fn().mockResolvedValue(null),
+}))
+
 import Account from '../src/models/Account'
 import FbToken from '../src/models/FbToken'
 import * as facebookService from '../src/services/facebook.service'

@@ -5,6 +5,7 @@ const mockGetJobCounts = jest.fn()
 const mockIsPaused = jest.fn()
 const mockResume = jest.fn()
 const mockAccountFind = jest.fn()
+const mockResolveAccountAuthorization = jest.fn()
 
 jest.mock('../src/queue/facebook.queue', () => ({
   accountQueue: {
@@ -25,6 +26,10 @@ jest.mock('../src/models/Account', () => ({
   default: {
     find: mockAccountFind,
   },
+}))
+
+jest.mock('../src/services/metaBusinessCredential.service', () => ({
+  resolveAccountOperationalAuthorization: mockResolveAccountAuthorization,
 }))
 
 import {
@@ -67,6 +72,11 @@ describe('facebook queue scheduler safety', () => {
     mockIsPaused.mockResolvedValue(false)
     mockResume.mockResolvedValue(undefined)
     mockAdd.mockImplementation(async (_name, data, options) => ({ data, opts: options }))
+    mockResolveAccountAuthorization.mockImplementation(async (input) => ({
+      authorizationType: 'personal',
+      token: input.legacyToken,
+      legacyTokenId: input.legacyTokenId?.toString(),
+    }))
   })
 
   afterAll(() => {

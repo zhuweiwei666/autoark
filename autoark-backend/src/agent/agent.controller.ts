@@ -31,8 +31,8 @@ import Session from './memory/session.model'
 import Decision from './memory/decision.model'
 import Knowledge from './memory/knowledge.model'
 import { AgentConfig as AgentConfigModel } from '../domain/agent/agent.model'
-import FbToken from '../models/FbToken'
 import logger from '../utils/logger'
+import { resolveAgentOperationalAuthorization } from '../services/metaBusinessCredential.service'
 
 const router = Router()
 
@@ -84,24 +84,12 @@ async function buildAgentConfig(agentDoc: any): Promise<AgentConfig> {
  * Resolve FB token for the agent
  */
 async function resolveAgentToken(agentDoc: any): Promise<string | undefined> {
-  const tokenIds = agentDoc.scope?.fbTokenIds || []
-  if (tokenIds.length > 0) {
-    const tokenDoc = await FbToken.findOne({
-      _id: { $in: tokenIds },
-      status: 'active',
-    }).lean() as any
-    if (tokenDoc) return tokenDoc.token
-  }
-
-  if (agentDoc.organizationId) {
-    const tokenDoc = await FbToken.findOne({
-      organizationId: agentDoc.organizationId,
-      status: 'active',
-    }).lean() as any
-    if (tokenDoc) return tokenDoc.token
-  }
-
-  return undefined
+  const authorization = await resolveAgentOperationalAuthorization({
+    organizationId: agentDoc.organizationId,
+    adAccountIds: agentDoc.scope?.adAccountIds || agentDoc.accountIds || [],
+    legacyTokenIds: agentDoc.scope?.fbTokenIds || [],
+  })
+  return authorization?.token
 }
 
 // ==================== Chat Endpoint ====================

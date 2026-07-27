@@ -1,8 +1,9 @@
 import * as fbApi from './facebook.api'
-import { Campaign, AdSet, Ad, MetricsDaily, SyncLog, Creative } from '../models'
+import { Account, Campaign, AdSet, Ad, MetricsDaily, SyncLog, Creative } from '../models'
 import logger from '../utils/logger'
 import { normalizeForApi, normalizeForStorage } from '../utils/accountId'
 import { extractPurchaseValue } from '../utils/facebookPurchase'
+import { resolveAccountOperationalAuthorization } from './metaBusinessCredential.service'
 
 // 从 object_story_spec 中提取 image_hash
 const extractImageHashFromSpec = (spec: any): string | undefined => {
@@ -49,6 +50,15 @@ export const getEffectiveAdAccounts = async (): Promise<string[]> => {
     return [process.env.FB_AD_ACCOUNT_ID]
   }
 
+  const cachedAccounts: any[] = await Account.find({ status: 'active' })
+    .select('accountId')
+    .lean()
+  if (cachedAccounts.length > 0) {
+    return cachedAccounts
+      .map((account) => normalizeForStorage(account.accountId))
+      .filter(Boolean)
+  }
+
   // Auto-discover: 遍历所有 active token，获取各自的账户
   const FbToken = require('../models/FbToken').default
   const tokens = await FbToken.find({ status: 'active' }).lean()
@@ -91,10 +101,24 @@ export const syncAccount = async (accountId: string) => {
   // 统一格式：API 调用需要带 act_ 前缀
   const accountIdForApi = normalizeForApi(accountId)
   const accountIdForStorage = normalizeForStorage(accountId)
+  const account: any = await Account.findOne({
+    accountId: { $in: [accountIdForStorage, accountIdForApi] },
+  }).lean()
+  const authorization = await resolveAccountOperationalAuthorization({
+    accountId: accountIdForStorage,
+    organizationId: account?.organizationId,
+    legacyToken: account?.token,
+    legacyTokenId: account?.tokenId,
+  })
+  if (!authorization) {
+    logger.warn(`No operational authorization for account ${accountId}; skipping sync`)
+    return
+  }
+  const accessToken = authorization.token
 
   // 1. Campaigns
   try {
-    const campaigns = await fbApi.fetchCampaigns(accountIdForApi)
+    const campaigns = await fbApi.fetchCampaigns(accountIdForApi, accessToken)
     logger.info(`Syncing ${campaigns.length} campaigns for ${accountId}`)
     for (const c of campaigns) {
       await writeToMongo(
@@ -120,7 +144,7 @@ export const syncAccount = async (accountId: string) => {
 
   // 2. AdSets
   try {
-    const adsets = await fbApi.fetchAdSets(accountIdForApi)
+    const adsets = await fbApi.fetchAdSets(accountIdForApi, accessToken)
     logger.info(`Syncing ${adsets.length} adsets for ${accountId}`)
     for (const a of adsets) {
       await writeToMongo(
@@ -148,7 +172,7 @@ export const syncAccount = async (accountId: string) => {
 
   // 3. Ads（增强：提取 creative 的 image_hash/video_id）
   try {
-    const ads = await fbApi.fetchAds(accountIdForApi)
+    const ads = await fbApi.fetchAds(accountIdForApi, accessToken)
     logger.info(`Syncing ${ads.length} ads for ${accountId}`)
     for (const a of ads) {
       // 从 creative 中提取素材标识
@@ -185,7 +209,7 @@ export const syncAccount = async (accountId: string) => {
 
   // 4. Creatives（增强：存储完整的素材标识信息）
   try {
-    const creatives = await fbApi.fetchCreatives(accountIdForApi)
+    const creatives = await fbApi.fetchCreatives(accountIdForApi, accessToken)
     logger.info(`Syncing ${creatives.length} creatives for ${accountId}`)
     for (const c of creatives) {
       // 提取素材标识
@@ -228,7 +252,7 @@ export const syncAccount = async (accountId: string) => {
   // 5. Insights (Daily) - 使用 campaign 级别以获取完整的维度数据
   try {
     // 改用 campaign 级别 + country breakdown 以支持多维度聚合
-    const insights = await fbApi.fetchInsights(accountIdForApi, 'campaign', 'today', undefined, ['country'])
+    const insights = await fbApi.fetchInsights(accountIdForApi, 'campaign', 'today', accessToken, ['country'])
     logger.info(`Syncing ${insights.length} campaign-level insight records for ${accountId}`)
 
     for (const i of insights) {
@@ -303,7 +327,7 @@ export const syncAccount = async (accountId: string) => {
 
   // 6. Ad-level Insights (用于素材数据聚合)
   try {
-    const adInsights = await fbApi.fetchInsights(accountIdForApi, 'ad', 'today', undefined, ['country'])
+    const adInsights = await fbApi.fetchInsights(accountIdForApi, 'ad', 'today', accessToken, ['country'])
     logger.info(`Syncing ${adInsights.length} ad-level insight records for ${accountId}`)
 
     for (const i of adInsights) {

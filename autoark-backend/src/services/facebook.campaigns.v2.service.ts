@@ -7,6 +7,7 @@ import {
   getFacebookSyncAccountBatchLimit,
   isFacebookSyncEnabled,
 } from '../config/facebookSync'
+import { resolveAccountOperationalAuthorization } from './metaBusinessCredential.service'
 
 // 检查队列是否可用
 const isQueueAvailable = (): boolean => {
@@ -137,8 +138,14 @@ export const syncCampaignsFromAdAccountsV2 = async (options?: {
     const jobs = []
     let jobsSkippedPending = 0
     for (const account of accounts) {
-      if (!account.token) {
-        logger.warn(`[Scheduler] Account ${account.accountId} has no token, skipping`)
+      const authorization = await resolveAccountOperationalAuthorization({
+        accountId: account.accountId,
+        organizationId: account.organizationId,
+        legacyToken: account.token,
+        legacyTokenId: account.tokenId,
+      })
+      if (!authorization) {
+        logger.warn(`[Scheduler] Account ${account.accountId} has no operational authorization, skipping`)
         continue
       }
 
@@ -153,8 +160,10 @@ export const syncCampaignsFromAdAccountsV2 = async (options?: {
           'sync-account',
           {
             accountId: account.accountId,
-            token: account.token,
-            tokenId: account.tokenId?.toString(),
+            token: authorization.token,
+            tokenId: authorization.legacyTokenId,
+            authorizationType: authorization.authorizationType,
+            metaCredentialId: authorization.metaCredentialId,
             optimizer: account.operator,
             organizationId: account.organizationId?.toString(),
           },

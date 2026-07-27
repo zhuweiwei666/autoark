@@ -14,6 +14,8 @@ const mockAdSetFindOneAndUpdate = jest.fn()
 const mockAdFindOneAndUpdate = jest.fn()
 const mockCreativeFindOneAndUpdate = jest.fn()
 const mockMetricsFindOneAndUpdate = jest.fn()
+const mockAccountFindOne = jest.fn()
+const mockResolveAccountAuthorization = jest.fn()
 
 jest.mock('../src/services/facebook.api', () => ({
   fetchCampaigns: mockFetchCampaigns,
@@ -36,8 +38,13 @@ jest.mock('../src/models', () => ({
   Ad: { findOneAndUpdate: mockAdFindOneAndUpdate },
   Creative: { findOneAndUpdate: mockCreativeFindOneAndUpdate },
   MetricsDaily: { findOneAndUpdate: mockMetricsFindOneAndUpdate },
+  Account: { findOne: mockAccountFindOne },
   SyncLog: jest.fn(),
   TiktokToken: { find: jest.fn() },
+}))
+
+jest.mock('../src/services/metaBusinessCredential.service', () => ({
+  resolveAccountOperationalAuthorization: mockResolveAccountAuthorization,
 }))
 
 import { syncAccount } from '../src/services/facebook.sync.service'
@@ -50,6 +57,16 @@ describe('platform sync channel-scoped upserts', () => {
     mockAdFindOneAndUpdate.mockResolvedValue({})
     mockCreativeFindOneAndUpdate.mockResolvedValue({})
     mockMetricsFindOneAndUpdate.mockResolvedValue({})
+    mockAccountFindOne.mockReturnValue({
+      lean: jest.fn().mockResolvedValue({
+        accountId: '123',
+        token: 'LEGACY_TOKEN',
+      }),
+    })
+    mockResolveAccountAuthorization.mockResolvedValue({
+      authorizationType: 'personal',
+      token: 'LEGACY_TOKEN',
+    })
   })
 
   afterEach(() => {

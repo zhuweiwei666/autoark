@@ -201,12 +201,14 @@ MONGO_URI=mongodb://canonical-example
 $root_marker
 GUANGDADA_API_KEY=old-canonical-placeholder
 EXTERNAL_MATERIAL_SYNC_ENABLED=false
+META_CREDENTIAL_ENCRYPTION_KEY=old-canonical-meta-key
 EOF
   cat > "$DEPLOY_ENV" <<EOF
 MONGO_URI=mongodb://runtime-example
 $runtime_marker
 GUANGDADA_API_KEY=old-runtime-placeholder
 EXTERNAL_MATERIAL_SYNC_ENABLED=false
+META_CREDENTIAL_ENCRYPTION_KEY=old-runtime-meta-key
 EOF
   chmod 600 "$ROOT_ENV" "$DEPLOY_ENV"
 }
@@ -221,6 +223,7 @@ assert_consistent_pair() {
   test "$(file_mode "$DEPLOY_ENV")" = '600'
   test "$(grep -c '^GUANGDADA_API_KEY=' "$ROOT_ENV")" -eq 1
   test "$(grep -c '^EXTERNAL_MATERIAL_SYNC_ENABLED=' "$ROOT_ENV")" -eq 1
+  test "$(grep -c '^META_CREDENTIAL_ENCRYPTION_KEY=' "$ROOT_ENV")" -eq 1
   if grep -Fq 'AUTOARK_DEPLOY_UPLOAD_GENERATION=' "$ROOT_ENV"; then
     echo 'internal upload generation leaked into runtime configuration'
     exit 1
@@ -231,6 +234,7 @@ run_deploy() {
   env \
     -u GUANGDADA_API_KEY \
     -u EXTERNAL_MATERIAL_SYNC_ENABLED \
+    -u META_CREDENTIAL_ENCRYPTION_KEY \
     PATH="$FAKE_BIN:$PATH" \
     SSH_ARG_LOG="$SSH_ARG_LOG" \
     SCP_REMOTE_LOG="$SCP_REMOTE_LOG" \
@@ -261,6 +265,7 @@ MONGO_URI=mongodb://uploaded-example
 $marker
 GUANGDADA_API_KEY=file-owned-placeholder
 EXTERNAL_MATERIAL_SYNC_ENABLED=true
+META_CREDENTIAL_ENCRYPTION_KEY=file-owned-meta-key
 EOF
 }
 
@@ -269,10 +274,12 @@ EOF
 seed_pair 'CANONICAL_ONLY=preserved' 'STALE_RUNTIME_ONLY=must-disappear'
 reset_observation_logs
 SECRET_SENTINEL='SENSITIVE_VALUE_SHOULD_STAY_STDIN_ONLY'
+META_SECRET_SENTINEL='META_VALUE_SHOULD_STAY_STDIN_ONLY'
 output="$(
   run_deploy \
     GUANGDADA_API_KEY="$SECRET_SENTINEL" \
-    EXTERNAL_MATERIAL_SYNC_ENABLED=true
+    EXTERNAL_MATERIAL_SYNC_ENABLED=true \
+    META_CREDENTIAL_ENCRYPTION_KEY="$META_SECRET_SENTINEL"
 )"
 assert_consistent_pair
 grep -qx 'CANONICAL_ONLY=preserved' "$ROOT_ENV"
@@ -282,6 +289,7 @@ if grep -Fq 'STALE_RUNTIME_ONLY' "$ROOT_ENV"; then
 fi
 grep -qx "GUANGDADA_API_KEY=$SECRET_SENTINEL" "$ROOT_ENV"
 grep -qx 'EXTERNAL_MATERIAL_SYNC_ENABLED=true' "$ROOT_ENV"
+grep -qx "META_CREDENTIAL_ENCRYPTION_KEY=$META_SECRET_SENTINEL" "$ROOT_ENV"
 test "$(grep -c '^commit-root$' "$REMOTE_ORDER_LOG")" -eq 1
 test "$(grep -c '^commit-runtime$' "$REMOTE_ORDER_LOG")" -eq 1
 expected_order=$'remote-session\nlock-acquired\ncheckout\ncommit-root\ncommit-runtime\nserver-deploy-executed'
@@ -290,12 +298,21 @@ if grep -Fq "$SECRET_SENTINEL" "$SSH_ARG_LOG"; then
   echo 'provider key reached ssh command-line arguments'
   exit 1
 fi
+if grep -Fq "$META_SECRET_SENTINEL" "$SSH_ARG_LOG"; then
+  echo 'Meta credential key reached ssh command-line arguments'
+  exit 1
+fi
 if grep -Fq "$SECRET_SENTINEL" <<<"$output"; then
   echo 'provider key reached deploy logs'
   exit 1
 fi
+if grep -Fq "$META_SECRET_SENTINEL" <<<"$output"; then
+  echo 'Meta credential key reached deploy logs'
+  exit 1
+fi
 grep -Fq 'GUANGDADA_API_KEY' <<<"$output"
 grep -Fq 'EXTERNAL_MATERIAL_SYNC_ENABLED' <<<"$output"
+grep -Fq 'META_CREDENTIAL_ENCRYPTION_KEY' <<<"$output"
 
 # Local validation remains strict and must not leak under tracing.
 if run_deploy \
@@ -308,6 +325,11 @@ if run_deploy \
   GUANGDADA_API_KEY='invalid-flag-placeholder' \
   EXTERNAL_MATERIAL_SYNC_ENABLED=yes >"$TEST_DIR/invalid-flag.log" 2>&1; then
   echo 'external sync accepted a non-boolean feature flag'
+  exit 1
+fi
+if run_deploy \
+  META_CREDENTIAL_ENCRYPTION_KEY='' >"$TEST_DIR/missing-meta-key.log" 2>&1; then
+  echo 'empty Meta credential key was accepted as an explicit override'
   exit 1
 fi
 if grep -Fq 'invalid-flag-placeholder' "$TEST_DIR/invalid-flag.log"; then
@@ -325,10 +347,22 @@ if grep -Fq 'must-not-appear' "$TEST_DIR/multiline-key.log"; then
   echo 'multiline-key failure leaked the provider key'
   exit 1
 fi
+META_MULTILINE_PLACEHOLDER=$'meta-placeholder-line\nINJECTED_META_ENTRY=must-not-appear'
+if run_deploy \
+  META_CREDENTIAL_ENCRYPTION_KEY="$META_MULTILINE_PLACEHOLDER" >"$TEST_DIR/multiline-meta-key.log" 2>&1; then
+  echo 'Meta credential encryption accepted a multiline key'
+  exit 1
+fi
+if grep -Fq 'INJECTED_META_ENTRY' "$TEST_DIR/multiline-meta-key.log"; then
+  echo 'multiline Meta key failure leaked the key'
+  exit 1
+fi
 TRACE_SENTINEL='TRACE_MODE_MUST_NOT_PRINT_THIS_VALUE'
+META_TRACE_SENTINEL='META_TRACE_MODE_MUST_NOT_PRINT_THIS_VALUE'
 env \
   -u GUANGDADA_API_KEY \
   -u EXTERNAL_MATERIAL_SYNC_ENABLED \
+  -u META_CREDENTIAL_ENCRYPTION_KEY \
   PATH="$FAKE_BIN:$PATH" \
   SSH_ARG_LOG="$SSH_ARG_LOG" \
   SCP_REMOTE_LOG="$SCP_REMOTE_LOG" \
@@ -343,9 +377,14 @@ env \
   AUTOARK_SKIP_VERIFY=true \
   GUANGDADA_API_KEY="$TRACE_SENTINEL" \
   EXTERNAL_MATERIAL_SYNC_ENABLED=true \
+  META_CREDENTIAL_ENCRYPTION_KEY="$META_TRACE_SENTINEL" \
   bash -x "$REPO_ROOT/deploy/prod-deploy.sh" >"$TEST_DIR/trace.log" 2>&1
 if grep -Fq "$TRACE_SENTINEL" "$TEST_DIR/trace.log"; then
   echo 'provider key leaked when shell tracing was requested'
+  exit 1
+fi
+if grep -Fq "$META_TRACE_SENTINEL" "$TEST_DIR/trace.log"; then
+  echo 'Meta credential key leaked when shell tracing was requested'
   exit 1
 fi
 
@@ -360,6 +399,7 @@ assert_consistent_pair
 grep -qx 'UPLOAD_ONLY=preserved' "$ROOT_ENV"
 grep -qx 'GUANGDADA_API_KEY=file-owned-placeholder' "$ROOT_ENV"
 grep -qx 'EXTERNAL_MATERIAL_SYNC_ENABLED=true' "$ROOT_ENV"
+grep -qx 'META_CREDENTIAL_ENCRYPTION_KEY=file-owned-meta-key' "$ROOT_ENV"
 if grep -Eq 'OLD_CANONICAL|OLD_RUNTIME' "$ROOT_ENV"; then
   echo 'full environment rotation retained stale configuration'
   exit 1
@@ -570,16 +610,19 @@ MONGO_URI=mongodb://cold-start-example
 COLD_START_ONLY=preserved
 GUANGDADA_API_KEY=cold-file-placeholder
 EXTERNAL_MATERIAL_SYNC_ENABLED=false
+META_CREDENTIAL_ENCRYPTION_KEY=cold-file-meta-key
 EOF
 chmod 600 "$ROOT_ENV"
 reset_observation_logs
 run_deploy \
   GUANGDADA_API_KEY='cold-override-placeholder' \
-  EXTERNAL_MATERIAL_SYNC_ENABLED=true >"$TEST_DIR/cold-start.log"
+  EXTERNAL_MATERIAL_SYNC_ENABLED=true \
+  META_CREDENTIAL_ENCRYPTION_KEY='cold-override-meta-key' >"$TEST_DIR/cold-start.log"
 test -d "$APP_DIR/.git"
 assert_consistent_pair
 grep -qx 'COLD_START_ONLY=preserved' "$ROOT_ENV"
 grep -qx 'GUANGDADA_API_KEY=cold-override-placeholder' "$ROOT_ENV"
+grep -qx 'META_CREDENTIAL_ENCRYPTION_KEY=cold-override-meta-key' "$ROOT_ENV"
 expected_order=$'remote-session\nlock-acquired\ncheckout\ncommit-root\ncommit-runtime\nserver-deploy-executed'
 test "$(cat "$REMOTE_ORDER_LOG")" = "$expected_order"
 

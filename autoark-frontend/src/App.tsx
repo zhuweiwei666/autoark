@@ -30,6 +30,7 @@ const AdReviewStatusPage = lazy(() => import('./pages/AdReviewStatusPage'))
 const AutomationJobsPage = lazy(() => import('./pages/AutomationJobsPage'))
 const AgentChatPage = lazy(() => import('./pages/AgentChatPage'))
 const AiOptimizerPage = lazy(() => import('./pages/AiOptimizerPage'))
+const MetaSystemUserPage = lazy(() => import('./pages/MetaSystemUserPage'))
 
 // 创建 QueryClient 实例，配置全局缓存策略
 // 策略：显示缓存数据的同时后台刷新（stale-while-revalidate）
@@ -92,6 +93,11 @@ function App() {
               <Route path="/fb-apps" element={
                 <ProtectedRoute requireRole="super_admin">
                   <FacebookAppPage />
+                </ProtectedRoute>
+              } />
+              <Route path="/meta-system-users" element={
+                <ProtectedRoute requireRole="super_admin">
+                  <MetaSystemUserPage />
                 </ProtectedRoute>
               } />
               {/* Bulk Ad Creation Routes */}

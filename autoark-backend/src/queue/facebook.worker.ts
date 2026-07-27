@@ -23,6 +23,7 @@ import {
   getFacebookWorkerConcurrency,
   isFacebookSyncEnabled,
 } from '../config/facebookSync'
+import { recordOperationalCredentialFailure } from '../services/metaBusinessCredential.service'
 
 // Worker 实例（延迟初始化）
 let accountWorker: Worker | null = null
@@ -99,7 +100,15 @@ export const initWorkers = async (): Promise<void> => {
   accountWorker = new Worker(
     'facebook.account.sync',
     async (job) => {
-      const { accountId, token, tokenId, optimizer, organizationId } = job.data
+      const {
+        accountId,
+        token,
+        tokenId,
+        optimizer,
+        organizationId,
+        authorizationType,
+        metaCredentialId,
+      } = job.data
       logger.info(`[AccountWorker] Processing account: ${accountId}`)
 
       try {
@@ -133,7 +142,16 @@ export const initWorkers = async (): Promise<void> => {
           if (campaignQueue) {
             jobs.push(campaignQueue.add(
               'sync-campaign',
-              { accountId, campaignId: camp.id, token, tokenId, optimizer, organizationId },
+              {
+                accountId,
+                campaignId: camp.id,
+                token,
+                tokenId,
+                optimizer,
+                organizationId,
+                authorizationType,
+                metaCredentialId,
+              },
               {
                 jobId: `campaign-sync-${camp.id}-${dayjs().format('YYYY-MM-DD-HH')}`,
                 priority: 2,
@@ -145,13 +163,27 @@ export const initWorkers = async (): Promise<void> => {
         await Promise.all(jobs)
         return { campaignsCount: campaigns.length }
       } catch (error: any) {
-        try {
-          const quarantined = await quarantineTerminalFacebookAccount(accountId, error)
-          if (quarantined) {
-            logger.warn(`[AccountWorker] Account ${accountId} requires Facebook reauthorization; future scheduled syncs disabled`)
+        if (authorizationType === 'system_user') {
+          try {
+            const invalidated = await recordOperationalCredentialFailure(
+              metaCredentialId,
+              error,
+            )
+            if (invalidated) {
+              logger.warn(`[AccountWorker] System User credential ${metaCredentialId} is invalid; disabled for future operations`)
+            }
+          } catch (credentialError) {
+            logger.error('[AccountWorker] Failed to record System User authorization failure:', credentialError)
           }
-        } catch (quarantineError) {
-          logger.error(`[AccountWorker] Failed to record terminal authorization failure for ${accountId}:`, quarantineError)
+        } else {
+          try {
+            const quarantined = await quarantineTerminalFacebookAccount(accountId, error)
+            if (quarantined) {
+              logger.warn(`[AccountWorker] Account ${accountId} requires Facebook reauthorization; future scheduled syncs disabled`)
+            }
+          } catch (quarantineError) {
+            logger.error(`[AccountWorker] Failed to record terminal authorization failure for ${accountId}:`, quarantineError)
+          }
         }
         logger.error(`[AccountWorker] Failed for account ${accountId}:`, error)
         throw error
@@ -164,7 +196,16 @@ export const initWorkers = async (): Promise<void> => {
   campaignWorker = new Worker(
     'facebook.campaign.sync',
     async (job) => {
-      const { accountId, campaignId, token, tokenId, optimizer, organizationId } = job.data
+      const {
+        accountId,
+        campaignId,
+        token,
+        tokenId,
+        optimizer,
+        organizationId,
+        authorizationType,
+        metaCredentialId,
+      } = job.data
 
       try {
         // 2.1 同步该 Campaign 下的 AdSets
@@ -291,6 +332,8 @@ export const initWorkers = async (): Promise<void> => {
                   tokenId,
                   optimizer,
                   token,
+                  authorizationType,
+                  metaCredentialId,
                 },
                 {
                   jobId: `material-sync-${creativeId}-${dayjs().format('YYYY-MM-DD')}`,
@@ -315,6 +358,8 @@ export const initWorkers = async (): Promise<void> => {
                 tokenId,
                 optimizer,
                 token,
+                authorizationType,
+                metaCredentialId,
               },
               {
                 jobId: `ad-sync-${ad.id}-${dayjs().format('YYYY-MM-DD-HH')}`,

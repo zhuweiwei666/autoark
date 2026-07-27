@@ -10,6 +10,7 @@ import { getFromCache, setToCache, getCacheKey, CACHE_TTL } from '../utils/cache
 import { extractPurchaseValue } from '../utils/facebookPurchase'
 import mongoose from 'mongoose'
 import { buildInsightsDateRequest } from '../utils/insightsDateRange'
+import { resolveAccountOperationalAuthorization } from './metaBusinessCredential.service'
 
 export const syncCampaignsFromAdAccounts = async () => {
   const startTime = Date.now()
@@ -24,8 +25,14 @@ export const syncCampaignsFromAdAccounts = async () => {
     logger.info(`Starting campaign sync for ${accounts.length} active ad accounts`)
 
     for (const account of accounts) {
-      if (!account.token) {
-        logger.warn(`Account ${account.accountId} has no associated token, skipping campaign sync.`)
+      const authorization = await resolveAccountOperationalAuthorization({
+        accountId: account.accountId,
+        organizationId: account.organizationId,
+        legacyToken: account.token,
+        legacyTokenId: account.tokenId,
+      })
+      if (!authorization) {
+        logger.warn(`Account ${account.accountId} has no operational authorization, skipping campaign sync.`)
         continue
       }
 
@@ -33,7 +40,7 @@ export const syncCampaignsFromAdAccounts = async () => {
         // 2. 拉取该账户下的所有广告系列
         // 使用统一工具函数：Facebook API 调用需要带 act_ 前缀
         const accountIdForApi = normalizeForApi(account.accountId)
-        const campaigns = await fetchCampaigns(accountIdForApi, account.token)
+        const campaigns = await fetchCampaigns(accountIdForApi, authorization.token)
         logger.info(`Found ${campaigns.length} campaigns for account ${account.accountId}`)
 
         for (const camp of campaigns) {
@@ -66,7 +73,7 @@ export const syncCampaignsFromAdAccounts = async () => {
             camp.id,
             'campaign',
             'today', // 或者选择一个日期范围
-            account.token,
+            authorization.token,
             ['country'] // 按国家分组
           )
 
@@ -161,12 +168,18 @@ const buildAccountTokenMap = async (accountIds: string[]): Promise<Map<string, s
     if (queryIds.length === 0) return tokenMap
 
     const accountDocs = await Account.find({ accountId: { $in: queryIds } })
-        .select('accountId token')
+        .select('accountId organizationId token tokenId')
         .lean()
 
-    for (const account of accountDocs as any[]) {
-        rememberAccountToken(tokenMap, account.accountId, account.token)
-    }
+    await Promise.all((accountDocs as any[]).map(async (account) => {
+        const authorization = await resolveAccountOperationalAuthorization({
+            accountId: account.accountId,
+            organizationId: account.organizationId,
+            legacyToken: account.token,
+            legacyTokenId: account.tokenId,
+        })
+        rememberAccountToken(tokenMap, account.accountId, authorization?.token)
+    }))
 
     return tokenMap
 }

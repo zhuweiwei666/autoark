@@ -57,9 +57,14 @@ interface AccountConfig {
 
 interface AuthStatus {
   authorized: boolean
+  authorizationType?: 'personal_user' | 'system_user'
   fbUserId?: string
   fbUserName?: string
   tokenId?: string
+  credentialId?: string
+  businessName?: string
+  systemUserName?: string
+  personalTokenRequired?: boolean
 }
 
 interface AuthDiagnostics {
@@ -1329,18 +1334,22 @@ export default function BulkAdCreatePage() {
     setPublishBlocker(null)
     try {
       if (authLoading || loginLoading) {
-        throw new Error('Facebook 个人号授权正在切换或校验，请等待资产加载完成后再发布')
+        throw new Error('Facebook 发布授权正在切换或校验，请等待资产加载完成后再发布')
       }
       const facebookTokenId = authStatus?.tokenId
       if (!facebookTokenId || !isActiveFacebookToken(facebookTokenId)) {
-        throw new Error('请先选择并授权一个 Facebook 个人号')
+        throw new Error('当前没有可用的 Facebook 发布授权')
       }
-      const draft = {
+      const draft: any = {
         name: `批量广告_${new Date().toISOString().slice(0, 10)}`,
         facebookTokenId,
         accounts: selectedAccounts,
         campaign, adset, ad,
         publishStrategy,
+      }
+      if (authStatus?.authorizationType === 'system_user') {
+        draft.metaCredentialId = facebookTokenId
+        delete draft.facebookTokenId
       }
       const createRes = await authFetch(`${API_BASE}/bulk-ad/drafts`, {
         method: 'POST',
@@ -1545,11 +1554,17 @@ export default function BulkAdCreatePage() {
                         </svg>
                       </div>
                       <div>
-                        <span className="text-sm font-medium text-green-800">已授权: {authStatus.fbUserName}</span>
+                        <span className="text-sm font-medium text-green-800">
+                          已授权: {authStatus.authorizationType === 'system_user'
+                            ? authStatus.systemUserName || '组织 System User'
+                            : authStatus.fbUserName}
+                        </span>
                         {pixelsLoading && <span className="text-xs text-green-600 ml-2">（正在加载 Pixel...）</span>}
                         {allPixels.length > 0 && <span className="text-xs text-green-600 ml-2">（已加载 {allPixels.length} 个 Pixel）</span>}
                         <div className="mt-0.5 text-[11px] text-green-700">
-                          本次仅展示并使用此个人号 Token 下的广告账户、Page 和 Pixel
+                          {authStatus.authorizationType === 'system_user'
+                            ? '本次仅展示并使用组织 System User 已授权的广告账户、Page 和 Pixel'
+                            : '本次仅展示并使用此个人号 Token 下的广告账户、Page 和 Pixel'}
                         </div>
                       </div>
                     </div>
@@ -1561,13 +1576,15 @@ export default function BulkAdCreatePage() {
                       >
                         {resyncing ? '同步中...' : '重新同步'}
                       </button>
-                      <button
-                        onClick={handleFacebookLogin}
-                        disabled={loginLoading}
-                        className="text-xs text-green-600 hover:underline disabled:cursor-not-allowed disabled:text-green-400 disabled:no-underline"
-                      >
-                        {loginLoading ? '等待授权中...' : '切换账号'}
-                      </button>
+                      {authStatus.authorizationType !== 'system_user' && (
+                        <button
+                          onClick={handleFacebookLogin}
+                          disabled={loginLoading}
+                          className="text-xs text-green-600 hover:underline disabled:cursor-not-allowed disabled:text-green-400 disabled:no-underline"
+                        >
+                          {loginLoading ? '等待授权中...' : '切换账号'}
+                        </button>
+                      )}
                     </div>
                   </div>
                   {loginAttempt && loginLoading && (

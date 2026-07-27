@@ -4,11 +4,16 @@ jest.mock('../src/integration/facebook/facebookClient', () => ({
   },
 }))
 
+jest.mock('../src/services/metaBusinessCredential.service', () => ({
+  resolvePublishingCredential: jest.fn().mockResolvedValue(null),
+}))
+
 import mongoose from 'mongoose'
 import Ad from '../src/models/Ad'
 import AdTask from '../src/models/AdTask'
 import FbToken from '../src/models/FbToken'
 import { facebookClient } from '../src/integration/facebook/facebookClient'
+import { resolvePublishingCredential } from '../src/services/metaBusinessCredential.service'
 import {
   checkPendingAdsReview,
   refreshAllReviewStatus,
@@ -16,6 +21,7 @@ import {
 } from '../src/services/adReview.service'
 
 const mockFacebookClient = facebookClient as jest.Mocked<typeof facebookClient>
+const mockResolvePublishingCredential = resolvePublishingCredential as jest.Mock
 
 const buildTokenQuery = (token: string | null) => {
   const lean = jest.fn().mockResolvedValue(token ? { token } : null)
@@ -31,6 +37,45 @@ describe('ad review tenant scope', () => {
   afterEach(() => {
     jest.restoreAllMocks()
     jest.clearAllMocks()
+  })
+
+  it('uses a covering System User without querying a personal token', async () => {
+    const organizationId = new mongoose.Types.ObjectId('665000000000000000000741')
+    const taskId = new mongoose.Types.ObjectId('665000000000000000000742')
+    const task: any = {
+      _id: taskId,
+      organizationId,
+      toObject: () => ({
+        _id: taskId,
+        organizationId,
+        items: [{ accountId: 'act_123', ads: [{ adId: 'ad_123' }] }],
+      }),
+    }
+    mockResolvePublishingCredential.mockResolvedValueOnce({
+      credential: { _id: '665000000000000000000799' },
+      token: 'SYSTEM_TOKEN',
+    })
+    jest.spyOn(AdTask, 'findById').mockResolvedValue(task)
+    const personalTokenFind = jest.spyOn(FbToken, 'findOne')
+    jest.spyOn(Ad, 'findOneAndUpdate').mockResolvedValue({} as any)
+    jest.spyOn(AdTask, 'findByIdAndUpdate').mockResolvedValue({} as any)
+    mockFacebookClient.get.mockResolvedValue({
+      effective_status: 'ACTIVE',
+      status: 'ACTIVE',
+      name: 'System User ad',
+    })
+
+    const result = await updateTaskAdsReviewStatus(String(taskId))
+
+    expect(mockResolvePublishingCredential).toHaveBeenCalledWith({
+      organizationId,
+      adAccountIds: ['123'],
+    })
+    expect(personalTokenFind).not.toHaveBeenCalled()
+    expect(mockFacebookClient.get).toHaveBeenCalledWith('/ad_123', expect.objectContaining({
+      access_token: 'SYSTEM_TOKEN',
+    }))
+    expect(result.updated).toBe(1)
   })
 
   it('uses the task organization token when refreshing task ad review status', async () => {

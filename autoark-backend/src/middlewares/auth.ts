@@ -2,6 +2,8 @@ import { Request, Response, NextFunction } from 'express'
 import { verifyToken, JwtPayload } from '../utils/jwt'
 import { UserRole } from '../models/User'
 import User from '../models/User'
+import MetaBusinessCredential from '../models/MetaBusinessCredential'
+import { normalizeForStorage } from '../utils/accountId'
 
 const normalizeOrganizationId = (organizationId: any): string | undefined => {
   if (!organizationId) return undefined
@@ -146,7 +148,7 @@ export const getOrgFilter = (req: Request): { organizationId?: any } => {
  * 
  * 逻辑：
  * - 超级管理员：返回 null（表示不限制）
- * - 其他用户：返回该用户绑定的 Token 关联的所有账户 ID
+ * - 其他用户：返回该用户个人授权账户与所在组织 System User 已验证账户的并集
  */
 export const getUserAccountIds = async (req: Request): Promise<string[] | null> => {
   if (!req.user) return []
@@ -157,6 +159,27 @@ export const getUserAccountIds = async (req: Request): Promise<string[] | null> 
   // 查找用户绑定的 Token
   const FbToken = require('../models/FbToken').default
   const Account = require('../models/Account').default
+  const accountIds = new Set<string>()
+
+  if (req.user.organizationId) {
+    const credentials = await MetaBusinessCredential.find({
+      organizationId: req.user.organizationId,
+      status: 'active',
+      $or: [
+        { expiresAt: { $exists: false } },
+        { expiresAt: null },
+        { expiresAt: { $gt: new Date() } },
+      ],
+    })
+      .select('assetGrants.adAccounts.assetId')
+      .lean()
+    credentials.forEach((credential: any) => {
+      ;(credential.assetGrants?.adAccounts || []).forEach((grant: any) => {
+        const accountId = normalizeForStorage(grant.assetId)
+        if (accountId) accountIds.add(accountId)
+      })
+    })
+  }
   
   let tokenQuery: any = { status: 'active' }
   
@@ -171,15 +194,18 @@ export const getUserAccountIds = async (req: Request): Promise<string[] | null> 
   // 旧实现依赖 Account.fbUserId 字段，但当前 Account 模型并未保证该字段存在。
   // 为了与现有数据结构兼容，这里改为通过 Account.token（同步账户时已写入）进行关联。
   const tokens = await FbToken.find(tokenQuery).select('token').lean()
-  if (!tokens || tokens.length === 0) return []
-  
-  const tokenValues = tokens.map((t: any) => t.token).filter(Boolean)
-  if (tokenValues.length === 0) return []
-  
-  const accounts = await Account.find({ token: { $in: tokenValues } }).select('accountId').lean()
-  const accountIds = accounts.map((a: any) => a.accountId).filter(Boolean)
-  // 去重
-  return Array.from(new Set(accountIds))
+  const tokenValues = (tokens || []).map((token: any) => token.token).filter(Boolean)
+  if (tokenValues.length > 0) {
+    const accounts = await Account.find({ token: { $in: tokenValues } })
+      .select('accountId')
+      .lean()
+    accounts.forEach((account: any) => {
+      const accountId = normalizeForStorage(account.accountId)
+      if (accountId) accountIds.add(accountId)
+    })
+  }
+
+  return Array.from(accountIds)
 }
 
 /**

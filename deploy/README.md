@@ -19,10 +19,16 @@ GUANGDADA_API_KEY=
 EXTERNAL_MATERIAL_SYNC_ENABLED=false
 ```
 
+Meta System User credentials use a separate production-only encryption key:
+
+```dotenv
+META_CREDENTIAL_ENCRYPTION_KEY=
+```
+
 Keep the feature flag at `false` until a rotated provider key has been installed.
 The deploy wrapper accepts only `true` or `false`, refuses to enable sync with an
-empty key, and streams both values over SSH standard input. It atomically updates
-only these named entries in `/root/prod.env` and
+empty key, and streams all managed production values over SSH standard input. It
+atomically updates only these named entries in `/root/prod.env` and
 `/opt/autoark/deploy/.env`, preserving the rest of each file and enforcing mode
 `600`. The values are never placed in SSH arguments or deploy logs. When an
 override is not set, the value already present in the selected environment source
@@ -49,9 +55,10 @@ AUTOARK_REF=<verified-40-character-sha> AUTOARK_ENV_FILE=/Users/zww/.config/auto
 AUTOARK_REF=<verified-40-character-sha> AUTOARK_SKIP_VERIFY=true bash deploy/prod-deploy.sh
 ```
 
-GitHub Actions supplies `GUANGDADA_API_KEY` from the repository secret of the
-same name and `EXTERNAL_MATERIAL_SYNC_ENABLED` from the repository variable of
-the same name only to the deploy step. The production job is protected by the
+GitHub Actions supplies `GUANGDADA_API_KEY` and
+`META_CREDENTIAL_ENCRYPTION_KEY` from repository secrets of the same names, and
+`EXTERNAL_MATERIAL_SYNC_ENABLED` from the repository variable of the same name
+only to the deploy step. The production job is protected by the
 GitHub `production` environment. Before any production secret is exposed, the
 workflow proves the requested commit is already contained in `origin/main` and
 passes only its immutable SHA to the deploy wrapper.

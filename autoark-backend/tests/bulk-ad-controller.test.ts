@@ -36,6 +36,11 @@ jest.mock('../src/services/facebook.accounts.service', () => ({
   syncCachedAccountsForToken: jest.fn(),
 }))
 
+jest.mock('../src/services/metaBusinessCredential.service', () => ({
+  getOrganizationAuthorization: jest.fn().mockResolvedValue(null),
+  refreshCredential: jest.fn(),
+}))
+
 jest.mock('../src/models/FacebookApp', () => ({
   __esModule: true,
   default: {
@@ -54,6 +59,7 @@ import { writeAuditLog } from '../src/services/auditLog.service'
 import * as oauthService from '../src/services/facebook.oauth.service'
 import * as facebookUserService from '../src/services/facebookUser.service'
 import * as facebookAccountsService from '../src/services/facebook.accounts.service'
+import * as metaBusinessCredentialService from '../src/services/metaBusinessCredential.service'
 import FacebookApp from '../src/models/FacebookApp'
 import FacebookUser from '../src/models/FacebookUser'
 import Account from '../src/models/Account'
@@ -105,6 +111,7 @@ const mockWriteAuditLog = writeAuditLog as jest.Mock
 const mockOauthService = oauthService as jest.Mocked<typeof oauthService>
 const mockFacebookUserService = facebookUserService as jest.Mocked<typeof facebookUserService>
 const mockFacebookAccountsService = facebookAccountsService as jest.Mocked<typeof facebookAccountsService>
+const mockMetaBusinessCredentialService = metaBusinessCredentialService as jest.Mocked<typeof metaBusinessCredentialService>
 const mockFacebookApp = FacebookApp as jest.Mocked<typeof FacebookApp>
 const mockFacebookClient = facebookClient as jest.Mocked<typeof facebookClient>
 
@@ -154,6 +161,7 @@ describe('bulk ad controller', () => {
       paginationTruncated: false,
     } as any)
     mockFacebookUserService.getCachedPages.mockResolvedValue([] as any)
+    mockMetaBusinessCredentialService.getOrganizationAuthorization.mockResolvedValue(null)
   })
 
   afterEach(() => {
@@ -352,6 +360,42 @@ describe('bulk ad controller', () => {
         message: '请先绑定您的 Facebook 账号',
       },
     })
+  })
+
+  it('uses an organization System User without falling back to a personal token', async () => {
+    const credentialId = '665000000000000000000099'
+    mockMetaBusinessCredentialService.getOrganizationAuthorization.mockResolvedValue({
+      authorizationType: 'system_user',
+      tokenId: credentialId,
+      credentialId,
+      businessId: 'bm_1',
+      systemUserId: 'su_1',
+      systemUserName: 'AutoArk Publisher team',
+      status: 'active',
+      tokenFingerprint: 'abc123',
+      assets: {
+        adAccounts: [],
+        pages: [],
+        pixels: [],
+      },
+    } as any)
+    const tokenFind = jest.spyOn(FbToken, 'findOne')
+    const req = memberReq({ query: {} })
+    const res = resMock()
+
+    await getAuthStatus(req as any, res as any)
+
+    expect(tokenFind).not.toHaveBeenCalled()
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      data: expect.objectContaining({
+        authorized: true,
+        authorizationType: 'system_user',
+        credentialId,
+        personalTokenRequired: false,
+      }),
+    })
+    expect(JSON.stringify(res.json.mock.calls)).not.toContain('access_token')
   })
 
   it('sanitizes nested draft configs before saving', async () => {

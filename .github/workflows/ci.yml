@@ -80,6 +80,9 @@ jobs:
       working-directory: ./autoark-agent/web
       run: npm run build
 
+    - name: Test Production Secret Synchronization
+      run: bash deploy/tests/prod-secret-sync.test.sh
+
     - name: Docker Backend Runtime Smoke Build
       run: docker build --target backend-runtime -t autoark-backend:ci .
 
