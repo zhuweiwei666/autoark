@@ -7,6 +7,11 @@ on:
         description: Git ref to deploy
         required: true
         default: main
+      repair_leyon_ios_targeting:
+        description: Repair the exact known Leyon ACTIVE AdSets after deployment
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -81,3 +86,21 @@ jobs:
           GUANGDADA_API_KEY: ${{ secrets.GUANGDADA_API_KEY }}
           EXTERNAL_MATERIAL_SYNC_ENABLED: ${{ vars.EXTERNAL_MATERIAL_SYNC_ENABLED || 'false' }}
         run: bash deploy/prod-deploy.sh
+
+      - name: Dry-run exact Leyon iOS targeting repair
+        if: ${{ inputs.repair_leyon_ios_targeting }}
+        run: >-
+          ssh autoark-prod
+          'cd /opt/autoark &&
+          docker compose --env-file deploy/.env --env-file deploy/.deploy-metadata.env
+          -f deploy/docker-compose.prod.yml exec -T backend
+          node dist/scripts/repairLeyonIosTargeting.js --expected=16'
+
+      - name: Apply and verify exact Leyon iOS targeting repair
+        if: ${{ inputs.repair_leyon_ios_targeting }}
+        run: >-
+          ssh autoark-prod
+          'cd /opt/autoark &&
+          docker compose --env-file deploy/.env --env-file deploy/.deploy-metadata.env
+          -f deploy/docker-compose.prod.yml exec -T backend
+          node dist/scripts/repairLeyonIosTargeting.js --apply --expected=16'

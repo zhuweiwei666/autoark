@@ -266,18 +266,16 @@ targetingPackageSchema.methods.toFacebookTargeting = function() {
   }
   
   // ==================== 设备和操作系统设置 ====================
-  // 注意：Facebook Marketing API 对设备定向有严格限制
-  // 2024年后的 API 版本不再支持 user_os, user_device, min_os_version 等参数
-  // 这些参数会导致 "Invalid parameter" 错误
-  // 建议使用 Advantage+ 自动定向或在 Facebook Ads Manager 中手动设置
-  
-  // 暂时禁用所有设备和操作系统定向，避免 API 错误
-  // if (this.deviceSettings) {
-  //   // 仅 Wi-Fi - 这个参数可能也不再支持
-  //   if (this.deviceSettings.wifiOnly) {
-  //     targeting.wireless_carrier = ['Wifi']
-  //   }
-  // }
+  // Meta 的 AdSet targeting 仍支持 user_os。版本、机型和 Wi-Fi 字段需单独验证后再映射。
+  const mobileOS = this.deviceSettings?.mobileOS
+  if (mobileOS?.length && !mobileOS.includes('all')) {
+    const supportedMobileOS = Array.from(new Set(
+      mobileOS.filter((os: string) => os === 'iOS' || os === 'Android'),
+    ))
+    if (supportedMobileOS.length) {
+      targeting.user_os = supportedMobileOS
+    }
+  }
   
   return targeting
 }
