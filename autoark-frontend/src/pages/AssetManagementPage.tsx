@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useSearchParams, useNavigate } from 'react-router-dom'
 import { authFetch } from '../services/api'
 
@@ -330,6 +330,9 @@ export default function AssetManagementPage() {
   const [selectedMaterials, setSelectedMaterials] = useState<Material[]>([])
   const [materialFilter, setMaterialFilter] = useState({ folder: '', type: '' })
   const [loadingMaterials, setLoadingMaterials] = useState(false)
+  const [materialPage, setMaterialPage] = useState(1)
+  const [materialTotal, setMaterialTotal] = useState(0)
+  const materialRequestId = useRef(0)
   
   // 产品名编辑
   const [editingProductId, setEditingProductId] = useState<string | null>(null)
@@ -353,13 +356,18 @@ export default function AssetManagementPage() {
     }
   }
   
-  const loadMaterials = async (overrideFilter?: { folder: string; type: string }) => {
+  const loadMaterials = async (
+    overrideFilter: { folder: string; type: string } = materialFilter,
+    page = 1,
+    append = false,
+  ) => {
+    const requestId = ++materialRequestId.current
     setLoadingMaterials(true)
     try {
-      const f = overrideFilter || materialFilter
       const params = new URLSearchParams({ pageSize: '100' })
-      if (f.folder) params.append('folder', f.folder)
-      if (f.type) params.append('type', f.type)
+      params.set('page', String(page))
+      if (overrideFilter.folder) params.append('folder', overrideFilter.folder)
+      if (overrideFilter.type) params.append('type', overrideFilter.type)
       
       const [matRes, folderRes] = await Promise.all([
         authFetch(`${API_BASE}/materials?${params}`),
@@ -368,13 +376,20 @@ export default function AssetManagementPage() {
       
       const matData = await matRes.json()
       const folderData = await folderRes.json()
+
+      if (requestId !== materialRequestId.current) return
       
-      if (matData.success) setMaterials(matData.data.list || [])
+      if (matData.success) {
+        const nextMaterials = matData.data.list || []
+        setMaterials(current => append ? [...current, ...nextMaterials] : nextMaterials)
+        setMaterialPage(page)
+        setMaterialTotal(Number(matData.data.total) || 0)
+      }
       if (folderData.success) setFolders(folderData.data.folders || [])
     } catch (err) {
       console.error('Failed to load materials:', err)
     } finally {
-      setLoadingMaterials(false)
+      if (requestId === materialRequestId.current) setLoadingMaterials(false)
     }
   }
   
@@ -1106,7 +1121,7 @@ export default function AssetManagementPage() {
               
               {/* Materials Grid */}
               <div className="flex-1 overflow-y-auto p-4">
-                {loadingMaterials ? (
+                {loadingMaterials && materials.length === 0 ? (
                   <div className="text-center py-12 text-slate-500">加载中...</div>
                 ) : materials.length === 0 ? (
                   <div className="text-center py-12 text-slate-500">
@@ -1148,6 +1163,20 @@ export default function AssetManagementPage() {
                         </div>
                       )
                     })}
+                  </div>
+                )}
+                {materials.length < materialTotal && (
+                  <div className="flex justify-center pt-5">
+                    <button
+                      type="button"
+                      disabled={loadingMaterials}
+                      onClick={() => loadMaterials(materialFilter, materialPage + 1, true)}
+                      className="px-4 py-2 border border-slate-300 rounded-lg text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      {loadingMaterials
+                        ? '加载中...'
+                        : `加载更多（已显示 ${materials.length} / ${materialTotal}）`}
+                    </button>
                   </div>
                 )}
               </div>
