@@ -69,9 +69,32 @@ export async function refreshAggregation(date: string, forceRefresh = false): Pr
     }
     logger.info(`[Aggregation] Loaded ${activeTokens.length} active tokens`)
 
-    // 获取所有活跃账户（包含 token 字段）
-    const accounts = await Account.find({ status: 'active' }).lean()
-    logger.info(`[Aggregation] Found ${accounts.length} active accounts`)
+    // 已经写入当天聚合的账户也必须继续参与当天重算，否则账户封禁后
+    // 下一轮全量覆盖会把它此前已计入的花费从日汇总中抹掉。
+    const previouslyAggregatedAccountIds = await AggAccount.distinct(
+      'accountId',
+      { date },
+    )
+    const accountEligibility: Array<Record<string, unknown>> = [
+      { status: 'active' },
+      { insightsFinalizationUntil: { $gte: new Date() } },
+    ]
+    if (previouslyAggregatedAccountIds.length > 0) {
+      accountEligibility.push({
+        accountId: { $in: previouslyAggregatedAccountIds },
+      })
+    }
+
+    // 活跃账户持续刷新；刚转为非活跃的账户在有限窗口内继续刷新，
+    // 当天已有聚合行的账户则在该日期停止滚动刷新前保持可重算。
+    const accounts = await Account.find({
+      channel: 'facebook',
+      $or: accountEligibility,
+    }).lean()
+    logger.info(
+      `[Aggregation] Found ${accounts.length} insights-eligible accounts ` +
+        `(${previouslyAggregatedAccountIds.length} already aggregated for ${date})`,
+    )
 
     // 预先查询所有 Campaign 名称（Facebook API 可能不返回名称）
     const allCampaigns = await Campaign.find({}).select('campaignId name').lean()

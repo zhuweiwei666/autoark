@@ -11,6 +11,9 @@ export interface IAccount extends mongoose.Document {
   tokenId?: mongoose.Types.ObjectId
   sourceSyncedAt?: Date
   status?: string
+  lastActiveAt?: Date
+  statusChangedAt?: Date
+  insightsFinalizationUntil?: Date
   balance?: number
   spendCap?: string
   amountSpent?: string
@@ -40,6 +43,9 @@ const accountSchema = new mongoose.Schema(
     tokenId: { type: mongoose.Schema.Types.ObjectId, ref: 'FbToken', index: true },
     sourceSyncedAt: { type: Date, index: true },
     status: String,
+    lastActiveAt: Date,
+    statusChangedAt: Date,
+    insightsFinalizationUntil: Date,
     balance: Number,
     spendCap: String,
     amountSpent: String,
@@ -113,5 +119,6 @@ accountSchema.index({ tags: 1 })
 accountSchema.index({ groupId: 1 })
 accountSchema.index({ createdBy: 1 })
 accountSchema.index({ organizationId: 1, operator: 1, status: 1 })
+accountSchema.index({ insightsFinalizationUntil: 1 })
 
 export default mongoose.model<IAccount>('Account', accountSchema)
