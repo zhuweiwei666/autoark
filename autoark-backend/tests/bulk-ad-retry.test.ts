@@ -7,8 +7,9 @@ jest.mock('../src/queue/bulkAd.queue', () => ({
 }))
 
 import AdTask from '../src/models/AdTask'
+import AdDraft from '../src/models/AdDraft'
 import { addBulkAdJobsBatch } from '../src/queue/bulkAd.queue'
-import { retryFailedItems } from '../src/services/bulkAd.service'
+import { rerunTask, retryFailedItems } from '../src/services/bulkAd.service'
 
 describe('bulk ad retry guardrails', () => {
   afterEach(() => {
@@ -39,6 +40,57 @@ describe('bulk ad retry guardrails', () => {
 
     expect(task.items[0].status).toBe('failed')
     expect(task.save).not.toHaveBeenCalled()
+    expect(addBulkAdJobsBatch).not.toHaveBeenCalled()
+  })
+
+  it('does not let the generic rerun path duplicate an AI mandate task', async () => {
+    const task: any = {
+      _id: '665000000000000000000303',
+      draftId: '665000000000000000000304',
+      configSnapshot: { accounts: [{ accountId: '123' }] },
+    }
+    jest.spyOn(AdTask, 'findOne').mockResolvedValue(task)
+    jest.spyOn(AdDraft, 'findOne').mockReturnValue({
+      select: jest.fn().mockReturnValue({
+        lean: jest.fn().mockResolvedValue({
+          aiOrigin: { statusLockedToPaused: true },
+        }),
+      }),
+    } as any)
+
+    await expect(rerunTask(task._id, 1, undefined, {})).rejects.toMatchObject({
+      statusCode: 409,
+      errorCode: 'AI_REPLICA_RERUN_FORBIDDEN',
+    })
+    expect(addBulkAdJobsBatch).not.toHaveBeenCalled()
+  })
+
+  it('does not let generic failed-item retry duplicate partial AI objects', async () => {
+    const task: any = {
+      _id: '665000000000000000000305',
+      configSnapshot: {
+        aiOrigin: {
+          replicaRunId: '665000000000000000000306',
+          mandateId: '665000000000000000000307',
+          playbookVersionId: '665000000000000000000308',
+          statusLockedToPaused: true,
+        },
+      },
+      items: [{
+        accountId: '123',
+        status: 'failed',
+        errors: [{
+          errorCode: 'META_RATE_LIMIT',
+          errorMessage: 'Rate limit',
+        }],
+      }],
+    }
+    jest.spyOn(AdTask, 'findOne').mockResolvedValue(task)
+
+    await expect(retryFailedItems(task._id, {})).rejects.toMatchObject({
+      statusCode: 409,
+      errorCode: 'AI_REPLICA_RETRY_FORBIDDEN',
+    })
     expect(addBulkAdJobsBatch).not.toHaveBeenCalled()
   })
 

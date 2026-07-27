@@ -118,6 +118,7 @@ const adTaskSchema = new mongoose.Schema(
       adset: { type: Object },
       ad: { type: Object },
       publishStrategy: { type: Object },
+      aiOrigin: { type: mongoose.Schema.Types.Mixed },
     },
     
     // 发布设置

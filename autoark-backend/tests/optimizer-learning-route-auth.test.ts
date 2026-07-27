@@ -30,6 +30,10 @@ jest.mock('../src/controllers/optimizerLearning.controller', () => {
     getPlaybooks: jest.fn(ok),
     getPlaybookById: jest.fn(ok),
     getReplicaAssets: jest.fn(ok),
+    createReusableAssets: jest.fn(ok),
+    createMandate: jest.fn(ok),
+    getMandates: jest.fn(ok),
+    revokeMandate: jest.fn(ok),
     createReplicaRun: jest.fn(ok),
     getReplicaRuns: jest.fn(ok),
     getReplicaRun: jest.fn(ok),
@@ -67,6 +71,19 @@ describe('optimizer learning route authorization', () => {
       '/api/optimizer-learning/playbook-generations/665000000000000000000009',
     ],
     ['GET', '/api/optimizer-learning/playbooks'],
+    [
+      'POST',
+      '/api/optimizer-learning/playbooks/665000000000000000000010/reusable-assets',
+    ],
+    [
+      'POST',
+      '/api/optimizer-learning/playbooks/665000000000000000000010/mandates',
+    ],
+    ['GET', '/api/optimizer-learning/mandates'],
+    [
+      'POST',
+      '/api/optimizer-learning/mandates/665000000000000000000030/revoke',
+    ],
     [
       'POST',
       '/api/optimizer-learning/playbooks/665000000000000000000010/replicas',

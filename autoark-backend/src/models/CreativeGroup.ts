@@ -54,6 +54,31 @@ const creativeGroupSchema = new mongoose.Schema(
     organizationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Organization', index: true }, // 组织隔离
     accountId: { type: String, index: true },  // 可选，创意组可跨账户使用
     platform: { type: String, default: 'facebook', enum: ['facebook', 'tiktok', 'google'] },
+
+    reusePolicy: {
+      scope: {
+        type: String,
+        enum: ['account', 'portable'],
+        default: 'account',
+      },
+      sourceMode: {
+        type: String,
+        enum: ['manual', 'human_buyer_context'],
+        default: 'manual',
+      },
+      requiresTargetUpload: { type: Boolean, default: false },
+    },
+    sourceContext: {
+      playbookVersionId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'PlaybookVersion',
+      },
+      optimizerId: String,
+      tokenIds: [String],
+      accountIds: [String],
+      generatedAt: Date,
+    },
+    performanceContext: { type: mongoose.Schema.Types.Mixed },
     
     // 素材列表
     materials: [materialSchema],
@@ -114,6 +139,16 @@ creativeGroupSchema.index(
 creativeGroupSchema.index({ platform: 1, createdAt: -1 })
 creativeGroupSchema.index({ tags: 1 })
 creativeGroupSchema.index({ folderId: 1 })
+creativeGroupSchema.index(
+  { 'sourceContext.playbookVersionId': 1, 'reusePolicy.scope': 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      'sourceContext.playbookVersionId': { $exists: true },
+      'reusePolicy.scope': 'portable',
+    },
+  },
+)
 
 // 更新素材统计的中间件
 creativeGroupSchema.pre('save', function() {

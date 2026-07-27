@@ -1,18 +1,23 @@
 import mongoose from 'mongoose'
-import Account from '../models/Account'
 import AdDraft from '../models/AdDraft'
 import AdTask from '../models/AdTask'
 import CopywritingPackage from '../models/CopywritingPackage'
 import CreativeGroup from '../models/CreativeGroup'
-import FacebookUser from '../models/FacebookUser'
-import FbToken from '../models/FbToken'
 import MetricsDaily from '../models/MetricsDaily'
-import MetaBusinessCredential from '../models/MetaBusinessCredential'
 import PlaybookVersion from '../models/PlaybookVersion'
 import ReplicaRun from '../models/ReplicaRun'
-import { combineFilters, objectIdValue } from '../utils/accessControl'
-import { getAccountIdsForQuery, normalizeForStorage } from '../utils/accountId'
+import { combineFilters } from '../utils/accessControl'
+import { normalizeForStorage } from '../utils/accountId'
+import {
+  canonicalJson,
+  frozenCopywritingSnapshot,
+  frozenCreativeSnapshot,
+} from '../utils/aiExecutionSnapshot'
 import { createDraft, publishDraft, validateDraft } from './bulkAd.service'
+import {
+  listExecutionSetup,
+  resolveExecutionMandate,
+} from './optimizerExecution.service'
 
 const APPROVE_CONFIRMATION = 'APPROVE_PAUSED_REPLICA'
 const PUBLISH_CONFIRMATION = 'PUBLISH_PAUSED_REPLICA'
@@ -67,13 +72,6 @@ const uniqueStrings = (values: any[]): string[] =>
     new Set(values.map((value) => cleanString(value, 300)).filter(Boolean)),
   )
 
-const orgConstraint = (organizationId?: any) =>
-  organizationId
-    ? { organizationId: objectIdValue(String(organizationId)) }
-    : {
-        $or: [{ organizationId: { $exists: false } }, { organizationId: null }],
-      }
-
 const findPlaybook = async (id: string, accessFilter: any) => {
   if (!mongoose.Types.ObjectId.isValid(id))
     throw errorWithStatus('打法版本 ID 无效')
@@ -118,124 +116,6 @@ const buildEffectiveReplica = (run: any, task?: any) => {
   }
 }
 
-const candidatePagesForAccount = (snapshot: any, accountId: string) =>
-  (snapshot.pages || []).filter((page: any) => {
-    const explicitlyLinked = (page.accounts || []).some(
-      (account: any) => normalizeForStorage(account.accountId) === accountId,
-    )
-    const sameTokenManaged =
-      typeof page.accessToken === 'string' && page.accessToken.trim().length > 0
-    return explicitlyLinked || sameTokenManaged
-  })
-
-const candidatePixelsForAccount = (snapshot: any, accountId: string) =>
-  (snapshot.pixels || []).filter((pixel: any) =>
-    (pixel.accounts || []).some(
-      (account: any) => normalizeForStorage(account.accountId) === accountId,
-    ),
-  )
-
-const sanitizedAssetSnapshot = (token: any, snapshot: any) => ({
-  tokenId: String(token._id),
-  optimizer: token.optimizer,
-  fbUserId: token.fbUserId,
-  fbUserName: token.fbUserName || snapshot?.fbUserName,
-  status: token.status,
-  lastSyncedAt: snapshot?.lastSyncedAt,
-  syncStatus: snapshot?.syncStatus,
-  accounts: (snapshot?.adAccounts || []).map((account: any) => {
-    const accountId = normalizeForStorage(account.accountId)
-    return {
-      accountId,
-      name: account.name,
-      status: account.status,
-      currency: account.currency,
-      timezone: account.timezone,
-      pages: candidatePagesForAccount(snapshot, accountId).map((page: any) => ({
-        pageId: page.pageId,
-        name: page.name,
-      })),
-      pixels: candidatePixelsForAccount(snapshot, accountId).map(
-        (pixel: any) => ({
-          pixelId: pixel.pixelId,
-          name: pixel.name,
-        }),
-      ),
-    }
-  }),
-})
-
-const buildSystemCredentialSnapshot = async (credential: any) => {
-  const adAccountGrants = credential.assetGrants?.adAccounts || []
-  const accountIds = adAccountGrants
-    .map((grant: any) => normalizeForStorage(grant.assetId))
-    .filter(Boolean)
-  const accounts: any[] = accountIds.length > 0
-    ? await Account.find({
-        channel: 'facebook',
-        accountId: { $in: getAccountIdsForQuery(accountIds) },
-        ...orgConstraint(credential.organizationId),
-      })
-      .select('accountId name status currency timezone organizationId')
-      .lean()
-    : []
-  const accountById = new Map(accounts.map((account) => [
-    normalizeForStorage(account.accountId),
-    account,
-  ]))
-  const linkedAccounts = accountIds.map((accountId: string) => ({ accountId }))
-
-  return {
-    fbUserName: credential.systemUserName,
-    lastSyncedAt: credential.lastReconciledAt,
-    syncStatus: 'completed',
-    adAccounts: adAccountGrants.map((grant: any) => {
-      const accountId = normalizeForStorage(grant.assetId)
-      const account = accountById.get(accountId)
-      return {
-        accountId,
-        name: grant.name || account?.name,
-        status: grant.accountStatus !== undefined
-          && grant.accountStatus !== null
-          && Number.isFinite(Number(grant.accountStatus))
-          ? Number(grant.accountStatus)
-          : 1,
-        currency: grant.currency || account?.currency,
-        timezone: grant.timezoneName || account?.timezone,
-      }
-    }),
-    pages: (credential.assetGrants?.pages || []).map((grant: any) => ({
-      pageId: grant.assetId,
-      name: grant.name,
-      accounts: linkedAccounts,
-    })),
-    pixels: (credential.assetGrants?.pixels || []).map((grant: any) => ({
-      pixelId: grant.assetId,
-      name: grant.name,
-      accounts: (grant.accountIds || []).length > 0
-        ? grant.accountIds.map((accountId: string) => ({
-            accountId: normalizeForStorage(accountId),
-          }))
-        : linkedAccounts,
-    })),
-  }
-}
-
-const sanitizedSystemCredentialSnapshot = async (credential: any) => {
-  const snapshot = await buildSystemCredentialSnapshot(credential)
-  return {
-    ...sanitizedAssetSnapshot({
-      _id: credential._id,
-      optimizer: 'System User',
-      fbUserId: credential.systemUserId,
-      fbUserName: credential.systemUserName,
-      status: credential.status,
-    }, snapshot),
-    authorizationType: 'system_user',
-    metaCredentialId: String(credential._id),
-  }
-}
-
 export const listReplicaAssets = async ({
   playbookId,
   accessFilter = {},
@@ -245,232 +125,10 @@ export const listReplicaAssets = async ({
   accessFilter?: any
   tokenAccessFilter?: any
 }) => {
-  const playbook = await findPlaybook(playbookId, accessFilter)
-  const tokens: any[] = await FbToken.find(
-    combineFilters(
-      {
-        status: 'active',
-        $or: [
-          { expiresAt: { $exists: false } },
-          { expiresAt: null },
-          { expiresAt: { $gt: new Date() } },
-        ],
-      },
-      tokenAccessFilter,
-      orgConstraint(playbook.organizationId),
-    ),
-  )
-    .select('_id userId optimizer status fbUserId fbUserName organizationId')
-    .lean()
-  const tokenIds = tokens.map((token) => token._id)
-  const snapshots: any[] =
-    tokenIds.length > 0
-      ? await FacebookUser.find({
-          tokenId: { $in: tokenIds },
-          syncStatus: 'completed',
-        }).lean()
-      : []
-  const snapshotByToken = new Map(
-    snapshots.map((snapshot) => [String(snapshot.tokenId), snapshot]),
-  )
-  const credentials: any[] = playbook.organizationId
-    ? await MetaBusinessCredential.find({
-        organizationId: playbook.organizationId,
-        status: 'active',
-        $or: [
-          { expiresAt: { $exists: false } },
-          { expiresAt: null },
-          { expiresAt: { $gt: new Date() } },
-        ],
-      })
-      .sort({ isDefault: -1, updatedAt: -1 })
-      .lean()
-    : []
-  const systemAssets = await Promise.all(
-    credentials.map(sanitizedSystemCredentialSnapshot),
-  )
-
-  return {
-    playbookId: String(playbook._id),
-    organizationId: playbook.organizationId,
-    tokens: [
-      ...systemAssets,
-      ...tokens
-        .map((token) => {
-          const snapshot = snapshotByToken.get(String(token._id))
-          return snapshot
-            ? {
-                ...sanitizedAssetSnapshot(token, snapshot),
-                authorizationType: 'personal_user',
-              }
-            : null
-        })
-        .filter(Boolean),
-    ],
-  }
-}
-
-const selectSingleAsset = ({
-  requestedId,
-  candidates,
-  idKey,
-  label,
-  accountId,
-}: {
-  requestedId?: string
-  candidates: any[]
-  idKey: string
-  label: string
-  accountId: string
-}) => {
-  if (requestedId) {
-    const selected = candidates.find(
-      (candidate) => String(candidate[idKey]) === requestedId,
-    )
-    if (!selected) {
-      throw errorWithStatus(`账户 ${accountId} 无权使用所选 ${label}`, 409, {
-        accountId,
-        candidates: candidates.map((candidate) => ({
-          id: candidate[idKey],
-          name: candidate.name,
-        })),
-      })
-    }
-    return selected
-  }
-  if (candidates.length !== 1) {
-    throw errorWithStatus(
-      `账户 ${accountId} 的可用 ${label} 数量为 ${candidates.length}，需要明确选择`,
-      409,
-      {
-        accountId,
-        candidates: candidates.map((candidate) => ({
-          id: candidate[idKey],
-          name: candidate.name,
-        })),
-      },
-    )
-  }
-  return candidates[0]
-}
-
-const resolveTargetAccounts = async ({
-  snapshot,
-  requestedAccounts,
-  organizationId,
-  requiresPixel,
-}: {
-  snapshot: any
-  requestedAccounts: any[]
-  organizationId?: any
-  requiresPixel: boolean
-}) => {
-  if (!Array.isArray(requestedAccounts) || requestedAccounts.length === 0) {
-    throw errorWithStatus('请至少选择一个目标广告账户')
-  }
-  if (requestedAccounts.length > 20) {
-    throw errorWithStatus('单个 AI 复制任务最多支持 20 个目标账户')
-  }
-  const normalizedRequested = requestedAccounts.map((account) => ({
-    ...account,
-    accountId: normalizeForStorage(
-      typeof account === 'string' ? account : account?.accountId,
-    ),
-  }))
-  if (normalizedRequested.some((account) => !account.accountId)) {
-    throw errorWithStatus('目标账户列表包含无效 accountId')
-  }
-  if (
-    uniqueStrings(normalizedRequested.map((account) => account.accountId))
-      .length !== normalizedRequested.length
-  ) {
-    throw errorWithStatus('目标广告账户不能重复')
-  }
-
-  const cachedAccountById = new Map(
-    (snapshot.adAccounts || []).map((account: any) => [
-      normalizeForStorage(account.accountId),
-      account,
-    ]),
-  )
-  const scopedAccounts: any[] = await Account.find({
-    channel: 'facebook',
-    accountId: {
-      $in: getAccountIdsForQuery(
-        normalizedRequested.map((account) => account.accountId),
-      ),
-    },
-    ...orgConstraint(organizationId),
-  })
-    .select('accountId name status organizationId')
-    .lean()
-  const scopedAccountById = new Map(
-    scopedAccounts.map((account) => [
-      normalizeForStorage(account.accountId),
-      account,
-    ]),
-  )
-
-  return normalizedRequested.map((requested) => {
-    const cachedAccount: any = cachedAccountById.get(requested.accountId)
-    const scopedAccount: any = scopedAccountById.get(requested.accountId)
-    if (!cachedAccount || !scopedAccount) {
-      throw errorWithStatus(
-        `目标账户 ${requested.accountId} 不在当前授权或组织范围内`,
-        409,
-      )
-    }
-    if (cachedAccount.status !== 1) {
-      throw errorWithStatus(
-        `目标账户 ${requested.accountId} 当前状态不可投放`,
-        409,
-      )
-    }
-
-    const page = selectSingleAsset({
-      requestedId: cleanString(requested.pageId),
-      candidates: candidatePagesForAccount(snapshot, requested.accountId),
-      idKey: 'pageId',
-      label: 'Facebook Page',
-      accountId: requested.accountId,
-    })
-    const pixelCandidates = candidatePixelsForAccount(
-      snapshot,
-      requested.accountId,
-    )
-    const pixel = requiresPixel
-      ? selectSingleAsset({
-          requestedId: cleanString(requested.pixelId),
-          candidates: pixelCandidates,
-          idKey: 'pixelId',
-          label: 'Pixel',
-          accountId: requested.accountId,
-        })
-      : requested.pixelId
-        ? selectSingleAsset({
-            requestedId: cleanString(requested.pixelId),
-            candidates: pixelCandidates,
-            idKey: 'pixelId',
-            label: 'Pixel',
-            accountId: requested.accountId,
-          })
-        : undefined
-
-    return {
-      accountId: requested.accountId,
-      accountName: cleanString(
-        requested.accountName || cachedAccount.name || scopedAccount.name,
-      ),
-      currency: cleanString(cachedAccount.currency, 20) || undefined,
-      pageId: String(page.pageId),
-      pageName: page.name,
-      instagramAccountId:
-        cleanString(requested.instagramAccountId) || undefined,
-      pixelId: pixel?.pixelId ? String(pixel.pixelId) : undefined,
-      pixelName: pixel?.name,
-      domain: cleanString(requested.domain) || undefined,
-      conversionEvent: cleanString(requested.conversionEvent || 'PURCHASE', 80),
-    }
+  return listExecutionSetup({
+    playbookId,
+    accessFilter,
+    tokenAccessFilter,
   })
 }
 
@@ -509,54 +167,31 @@ export const assertAiDraftPaused = (draft: any) => {
   return true
 }
 
-const buildTargeting = (
-  playbook: any,
-  applyTopCountries: boolean,
-  countryLimit: number,
-) => {
-  const targeting = JSON.parse(JSON.stringify(playbook.targeting?.value || {}))
-  const changes: string[] = [
-    ...(playbook.targeting?.removedAccountScopedKeys || []).map(
-      (key: string) => `移除账户专属定向字段 ${key}`,
-    ),
-  ]
-  if (applyTopCountries) {
-    const countries = uniqueStrings(
-      (playbook.geography || [])
-        .filter(
-          (entry: any) =>
-            entry?.dimension?.country &&
-            entry.purchases > 0 &&
-            entry.confidence >= 0.34,
-        )
-        .slice(0, countryLimit)
-        .map((entry: any) => entry.dimension.country),
-    )
-    if (countries.length > 0) {
-      targeting.geo_locations = { countries }
-      changes.push(`将地域收敛为高转化国家：${countries.join(', ')}`)
-    }
-  }
-  return { targeting, changes }
-}
-
-const createReplicaAssets = async ({
+const createExecutionSnapshots = async ({
   run,
   playbook,
-  materialLimit,
+  selection,
   createdBy,
 }: {
   run: any
   playbook: any
-  materialLimit: number
+  selection: any
   createdBy?: string
 }) => {
-  const selectedMaterials = (playbook.creatives?.materials || []).slice(
-    0,
-    materialLimit,
+  const selectedMaterials = (selection.creativeGroup?.materials || []).filter(
+    (material: any) =>
+      ['image', 'video'].includes(material?.type) &&
+      /^https?:\/\//i.test(cleanString(material?.url, 2000)),
   )
-  if (selectedMaterials.length === 0)
-    throw errorWithStatus('打法版本没有可复制素材', 409)
+  if (
+    selectedMaterials.length === 0 ||
+    selectedMaterials.length !== selection.creativeGroup.materials.length
+  ) {
+    throw errorWithStatus(
+      '管理员所选创意组包含不可跨账户执行的素材；每个素材都必须有稳定 URL',
+      409,
+    )
+  }
   const suffix = String(run._id).slice(-8)
   const optimizerLabel = cleanString(playbook.optimizerId, 40).replace(
     /[^\w\u4e00-\u9fa5-]+/g,
@@ -570,53 +205,65 @@ const createReplicaAssets = async ({
       type: material.type,
       url: material.url,
       name: material.name,
-      thumbnail: material.thumbnailUrl,
+      width: material.width,
+      height: material.height,
+      duration: material.duration,
+      size: material.size,
+      format: material.format,
+      thumbnail: material.thumbnail || material.thumbnailUrl,
       status: 'uploaded',
-      source: 'facebook_sync',
-      sourceId: material.materialId,
+      source: 'url_import',
     })),
     config: {
-      format: 'single',
-      dynamicCreative: false,
+      format: selection.creativeGroup.config?.format || 'single',
+      dynamicCreative: selection.creativeGroup.config?.dynamicCreative === true,
+      carousel: selection.creativeGroup.config?.carousel,
     },
-    description: `由投手 ${playbook.optimizerId} 的打法 v${playbook.version} 自动生成`,
+    reusePolicy: {
+      scope: 'account',
+      sourceMode: 'manual',
+      requiresTargetUpload: true,
+    },
+    description:
+      `AI 执行快照；来源为管理员授权的创意组 ${selection.creativeGroup._id}。` +
+      '仅保留稳定 URL，不继承来源 Facebook image hash/video id。',
     tags: [
-      'AI复制',
+      'AI执行快照',
       `投手:${playbook.optimizerId}`,
       `打法:v${playbook.version}`,
+      `授权单:${selection.mandate._id}`,
     ],
     createdBy,
   })
 
-  const copy = playbook.copywriting || {}
+  const copy = selection.copywritingPackage
   const callToAction = CTA_VALUES.has(copy.callToAction)
     ? copy.callToAction
     : 'SHOP_NOW'
   const copywritingPackage: any = await CopywritingPackage.create({
-    name: `AI_${optimizerLabel}_v${playbook.version}_${suffix}_文案`,
+    name: `AI_${optimizerLabel}_v${playbook.version}_${suffix}_执行文案`,
     organizationId: playbook.organizationId,
     platform: 'facebook',
     content: {
-      primaryTexts: (copy.primaryTexts || []).slice(0, 5),
-      headlines: (copy.headlines || []).slice(0, 5),
-      descriptions: (copy.descriptions || []).slice(0, 5),
+      primaryTexts: (copy.content?.primaryTexts || []).slice(0, 5),
+      headlines: (copy.content?.headlines || []).slice(0, 5),
+      descriptions: (copy.content?.descriptions || []).slice(0, 5),
     },
     callToAction,
     links: {
-      websiteUrl: copy.websiteUrl,
-      displayLink: copy.displayLink,
+      websiteUrl: copy.links?.websiteUrl,
+      displayLink: copy.links?.displayLink,
+      deepLink: copy.links?.deepLink,
     },
-    urlParameters: {
-      utmSource: 'autoark_ai',
-      utmMedium: 'paid_social',
-      utmCampaign: `optimizer_${optimizerLabel}_v${playbook.version}`,
-      utmContent: suffix,
-    },
-    description: `由投手 ${playbook.optimizerId} 的打法 v${playbook.version} 自动生成`,
+    product: copy.product,
+    urlParameters: copy.urlParameters,
+    language: copy.language,
+    description: `AI 执行快照；产品与落地链接来自管理员授权的文案包 ${copy._id}。`,
     tags: [
-      'AI复制',
+      'AI执行快照',
       `投手:${playbook.optimizerId}`,
       `打法:v${playbook.version}`,
+      `授权单:${selection.mandate._id}`,
     ],
     createdBy,
   })
@@ -625,23 +272,15 @@ const createReplicaAssets = async ({
 
 export const createReplica = async ({
   playbookId,
-  facebookTokenId,
-  accounts: requestedAccounts,
+  mandateId,
   dailyBudget,
-  materialLimit: materialLimitInput = 3,
-  applyTopCountries = true,
-  countryLimit: countryLimitInput = 5,
   createdBy,
   accessFilter = {},
   tokenAccessFilter = {},
 }: {
   playbookId: string
-  facebookTokenId: string
-  accounts: any[]
+  mandateId: string
   dailyBudget?: number
-  materialLimit?: number
-  applyTopCountries?: boolean
-  countryLimit?: number
   createdBy?: string
   accessFilter?: any
   tokenAccessFilter?: any
@@ -654,108 +293,37 @@ export const createReplica = async ({
       playbook.eligibility,
     )
   }
-  if (!mongoose.Types.ObjectId.isValid(facebookTokenId)) {
-    throw errorWithStatus('Facebook 授权 ID 无效')
-  }
-  const systemCredential: any = await MetaBusinessCredential.findOne(
-    combineFilters(
-      { _id: facebookTokenId, status: 'active' },
-      orgConstraint(playbook.organizationId),
-      {
-        $or: [
-          { expiresAt: { $exists: false } },
-          { expiresAt: null },
-          { expiresAt: { $gt: new Date() } },
-        ],
-      },
-    ),
-  ).lean()
-  const token: any = systemCredential
-    ? null
-    : await FbToken.findOne(
-        combineFilters(
-          {
-            _id: facebookTokenId,
-            status: 'active',
-            $or: [
-              { expiresAt: { $exists: false } },
-              { expiresAt: null },
-              { expiresAt: { $gt: new Date() } },
-            ],
-          },
-          tokenAccessFilter,
-          orgConstraint(playbook.organizationId),
-        ),
-      ).lean()
-  if (!systemCredential && !token)
-    throw errorWithStatus('目标 Facebook 授权不存在、已失效或无权访问', 404)
-  const snapshot: any = systemCredential
-    ? await buildSystemCredentialSnapshot(systemCredential)
-    : await FacebookUser.findOne({
-        tokenId: token._id,
-        syncStatus: 'completed',
-        ...orgConstraint(playbook.organizationId),
-      }).lean()
-  if (!snapshot)
-    throw errorWithStatus(
-      '目标 Facebook 授权的账户、Page、Pixel 尚未同步完成',
+  if (!mandateId) {
+    const error: any = errorWithStatus(
+      '创建 AI 投放任务前必须由管理员提供有效授权单',
       409,
     )
-
-  const requiresPixel =
-    playbook.structure?.objective === 'OUTCOME_SALES' ||
-    playbook.structure?.optimizationGoal === 'OFFSITE_CONVERSIONS'
-  const targets = await resolveTargetAccounts({
-    snapshot,
-    requestedAccounts,
-    organizationId: playbook.organizationId,
-    requiresPixel,
-  })
-  const sourceCurrencies = uniqueStrings(playbook.source?.currencies || [])
-  const targetCurrencies = uniqueStrings(
-    targets.map((target) => target.currency),
-  )
-  if (targetCurrencies.length > 1) {
-    throw errorWithStatus(
-      `目标账户包含多种币种（${targetCurrencies.join(', ')}），当前复制任务只支持单一预算币种`,
-      409,
-    )
+    error.code = 'AI_EXECUTION_MANDATE_REQUIRED'
+    throw error
   }
-  if (
-    sourceCurrencies.length === 1 &&
-    targetCurrencies.length === 1 &&
-    sourceCurrencies[0] !== targetCurrencies[0]
-  ) {
-    throw errorWithStatus(
-      `来源币种 ${sourceCurrencies[0]} 与目标币种 ${targetCurrencies[0]} 不一致，不能直接复制预算`,
-      409,
-    )
-  }
-  const maxBudget = asNumber(playbook.guardrails?.maximumPilotDailyBudget, 50)
-  const suggestedBudget = asNumber(
-    playbook.guardrails?.suggestedPilotDailyBudget,
-    20,
-  )
-  const selectedBudget = Math.min(
-    maxBudget,
-    Math.max(1, asNumber(dailyBudget, suggestedBudget)),
-  )
-  if (dailyBudget !== undefined && asNumber(dailyBudget) > maxBudget) {
-    throw errorWithStatus(`试投日预算不能超过打法护栏 ${maxBudget}`, 409)
-  }
-  const materialLimit = Math.min(
-    10,
-    Math.max(1, Math.round(asNumber(materialLimitInput, 3))),
-  )
-  const countryLimit = Math.min(
-    20,
-    Math.max(1, Math.round(asNumber(countryLimitInput, 5))),
-  )
-  const { targeting, changes } = buildTargeting(
+  const selection = await resolveExecutionMandate({
+    mandateId,
     playbook,
-    applyTopCountries,
-    countryLimit,
+    accessFilter,
+    tokenAccessFilter,
+  })
+  const maximumBudget = Math.max(
+    1,
+    asNumber(selection.mandate.budget?.maximumDailyBudget),
   )
+  const defaultBudget = Math.max(
+    1,
+    asNumber(selection.mandate.budget?.defaultDailyBudget, 20),
+  )
+  const selectedBudget = asNumber(dailyBudget, defaultBudget)
+  if (selectedBudget < 1 || selectedBudget > maximumBudget) {
+    throw errorWithStatus(
+      `试投日预算必须在 1-${maximumBudget} ${selection.currency} 之间`,
+      409,
+      { maximumDailyBudget: maximumBudget, currency: selection.currency },
+    )
+  }
+  const targetIds = selection.targets.map((target: any) => target.accountId)
   const run: any = await ReplicaRun.create({
     organizationId: playbook.organizationId,
     scopeKey: playbook.scopeKey,
@@ -763,53 +331,76 @@ export const createReplica = async ({
     profileId: playbook.profileId,
     playbookVersionId: playbook._id,
     playbookVersion: playbook.version,
+    mandateId: selection.mandate._id,
     status: 'building',
     source: {
       accountIds: playbook.source?.accountIds,
+      tokenIds: playbook.source?.tokenIds,
       campaignId: playbook.structure?.sourceCampaignId,
       adsetId: playbook.structure?.sourceAdsetId,
+      mode: 'read_only_context',
+      executable: false,
     },
     targets: {
-      ...(systemCredential
-        ? {
-            authorizationType: 'system_user',
-            metaCredentialId: systemCredential._id,
-          }
-        : {
-            authorizationType: 'personal_user',
-            facebookTokenId: token._id,
-          }),
-      accountIds: targets.map((target) => target.accountId),
-      accounts: targets,
+      authorizationType: selection.authorizationType,
+      ...(selection.authorizationType === 'system_user'
+        ? { metaCredentialId: selection.metaCredential._id }
+        : { facebookTokenId: selection.token._id }),
+      accountIds: targetIds,
+      accounts: selection.targets,
       dailyBudget: selectedBudget,
-      currency: targetCurrencies[0] || sourceCurrencies[0],
+      currency: selection.currency,
+      assignmentMode: 'admin_explicit',
     },
     blueprint: {
       structure: playbook.structure,
-      targeting,
+      targeting: selection.targeting,
       recommendedGeography: playbook.geography,
       recommendedPlacements: playbook.placements,
       recommendedHours: playbook.hours,
+      deliveryInsights: selection.targetingPackage.deliveryInsights,
       guardrails: playbook.guardrails,
     },
     aiChanges: [
-      ...changes,
+      '真人投手账户、Token、Page、Pixel 和账户专属素材 ID 仅作只读上下文，不进入执行链',
+      '执行定向来自管理员授权的 AutoArk 可复用定向包',
+      '执行素材来自管理员授权的 AutoArk 创意组，并在目标账户重新上传',
+      '产品、文案和落地链接只来自管理员授权的文案包',
+      'Pixel 按文案包对应产品和每个执行账户的已验证映射解析',
       'Campaign、AdSet、Ad 强制设为 PAUSED',
-      `试投日预算限制为 ${selectedBudget}`,
+      `试投日预算为 ${selectedBudget} ${selection.currency}，不超过授权上限 ${maximumBudget}`,
       '高转化小时仅作为建议，未自动设置分时排期',
     ],
+    sourceCreativeGroupId: selection.creativeGroup._id,
+    sourceCopywritingPackageId: selection.copywritingPackage._id,
+    targetingPackageId: selection.targetingPackage._id,
+    productId: selection.product._id,
+    assetSnapshot: {
+      mandateId: selection.mandate._id,
+      targetingPackageId: selection.targetingPackage._id,
+      creativeGroupId: selection.creativeGroup._id,
+      copywritingPackageId: selection.copywritingPackage._id,
+      productId: selection.product._id,
+      landingUrl: selection.copywritingPackage.links?.websiteUrl,
+      authorizationType: selection.authorizationType,
+      authorizationId: selection.authorizationId,
+      targets: selection.targets,
+      sourceBoundary: selection.boundary,
+      capturedAt: new Date(),
+    },
     approval: { required: true },
     createdBy,
     updatedBy: createdBy,
   })
 
   try {
-    const { creativeGroup, copywritingPackage } = await createReplicaAssets({
-      run,
-      playbook,
-      materialLimit,
-      createdBy,
-    })
+    const { creativeGroup, copywritingPackage } =
+      await createExecutionSnapshots({
+        run,
+        playbook,
+        selection,
+        createdBy,
+      })
     const budgetOptimization = playbook.structure?.budgetOptimization !== false
     const optimizerLabel = cleanString(playbook.optimizerId, 40).replace(
       /[^\w\u4e00-\u9fa5-]+/g,
@@ -818,15 +409,15 @@ export const createReplica = async ({
     const draft: any = await createDraft(
       {
         organizationId: playbook.organizationId,
-        name: `AI复制_${optimizerLabel}_v${playbook.version}_${String(run._id).slice(-8)}`,
-        ...(systemCredential
-          ? { metaCredentialId: systemCredential._id }
+        name: `AI投放_${optimizerLabel}_v${playbook.version}_${String(run._id).slice(-8)}`,
+        ...(selection.authorizationType === 'system_user'
+          ? { metaCredentialId: selection.metaCredential._id }
           : {
-              facebookTokenId: token._id,
-              facebookTokenOwnerUserId: token.userId,
+              facebookTokenId: (selection.token as any)._id,
+              facebookTokenOwnerUserId: (selection.token as any).userId,
             }),
         status: 'draft',
-        accounts: targets,
+        accounts: selection.targets,
         campaign: {
           nameTemplate: `AI_${optimizerLabel}_v${playbook.version}_{accountName}_{date}`,
           status: 'PAUSED',
@@ -852,7 +443,7 @@ export const createReplica = async ({
             playbook.structure?.attributionSpec,
           ),
           pacingType: 'standard',
-          inlineTargeting: targeting,
+          inlineTargeting: selection.targeting,
         },
         ad: {
           nameTemplate: `AI_${optimizerLabel}_v${playbook.version}_{materialName}_{index}`,
@@ -862,10 +453,15 @@ export const createReplica = async ({
             appEvent: false,
             urlTags: `utm_source=autoark_ai&utm_medium=paid_social&utm_campaign=optimizer_${optimizerLabel}_v${playbook.version}`,
           },
-          format: 'SINGLE',
+          format: ['CAROUSEL', 'COLLECTION'].includes(
+            String(selection.creativeGroup.config?.format || '').toUpperCase(),
+          )
+            ? String(selection.creativeGroup.config?.format).toUpperCase()
+            : 'SINGLE',
           creativeGroupIds: [creativeGroup._id],
           copywritingPackageIds: [copywritingPackage._id],
-          dynamicCreative: false,
+          dynamicCreative:
+            selection.creativeGroup.config?.dynamicCreative === true,
         },
         publishStrategy: {
           targetingLevel: 'ADSET',
@@ -876,11 +472,14 @@ export const createReplica = async ({
         aiOrigin: {
           replicaRunId: run._id,
           playbookVersionId: playbook._id,
+          mandateId: selection.mandate._id,
           sourceOptimizerId: playbook.optimizerId,
           generatedAt: new Date(),
           statusLockedToPaused: true,
         },
-        notes: `AI 投手复制任务 ${run._id}；真实启用前必须人工审核。`,
+        notes:
+          `AI 投手执行任务 ${run._id}；管理员授权单 ${selection.mandate._id}。` +
+          '仅创建 PAUSED 广告，真实启用前必须人工审核。',
       },
       createdBy,
     )
@@ -889,6 +488,14 @@ export const createReplica = async ({
     run.creativeGroupId = creativeGroup._id
     run.copywritingPackageId = copywritingPackage._id
     run.draftId = draft._id
+    run.assetSnapshot = {
+      ...(run.assetSnapshot || {}),
+      executionCreativeGroupId: creativeGroup._id,
+      executionCopywritingPackageId: copywritingPackage._id,
+      frozenTargeting: selection.targeting,
+      frozenCreative: frozenCreativeSnapshot(creativeGroup),
+      frozenCopywriting: frozenCopywritingSnapshot(copywritingPackage),
+    }
     run.validation = validation
     run.status = validation.isValid ? 'approval_required' : 'blocked'
     run.blockedReasons = validation.isValid
@@ -923,18 +530,141 @@ const findRun = async (id: string, accessFilter: any = {}) => {
   return run
 }
 
+const revalidateReplicaMandate = async ({
+  run,
+  draft,
+  accessFilter,
+  tokenAccessFilter,
+}: {
+  run: any
+  draft: any
+  accessFilter: any
+  tokenAccessFilter: any
+}) => {
+  if (!run.mandateId) {
+    const error: any = errorWithStatus(
+      '旧版 AI 复制任务没有管理员授权单，不能审批或发布',
+      409,
+    )
+    error.code = 'AI_EXECUTION_MANDATE_REQUIRED'
+    throw error
+  }
+  const playbook = await findPlaybook(
+    String(run.playbookVersionId),
+    accessFilter,
+  )
+  const selection = await resolveExecutionMandate({
+    mandateId: String(run.mandateId),
+    playbook,
+    accessFilter,
+    tokenAccessFilter,
+  })
+  const mandateId = String(selection.mandate._id)
+  if (
+    String(draft.aiOrigin?.mandateId || '') !== mandateId ||
+    String(draft.aiOrigin?.replicaRunId || '') !== String(run._id)
+  ) {
+    throw errorWithStatus('AI 草稿与管理员授权单绑定不一致', 409)
+  }
+  const authorizationType =
+    selection.authorizationType ||
+    selection.mandate.authorizationType ||
+    (selection.mandate.metaCredentialId ? 'system_user' : 'personal_user')
+  const draftAuthorizationMatches =
+    authorizationType === 'system_user'
+      ? String(draft.metaCredentialId || '') ===
+          String(selection.mandate.metaCredentialId || '') &&
+        !draft.facebookTokenId
+      : String(draft.facebookTokenId || '') ===
+          String(selection.mandate.facebookTokenId || '') &&
+        !draft.metaCredentialId
+  if (!draftAuthorizationMatches) {
+    throw errorWithStatus('AI 草稿使用的 Facebook 授权与授权单不一致', 409)
+  }
+  const expectedTargets = new Map(
+    selection.targets.map((target: any) => [target.accountId, target]),
+  )
+  if ((draft.accounts || []).length !== expectedTargets.size) {
+    throw errorWithStatus('AI 草稿执行账户数量与授权单不一致', 409)
+  }
+  for (const account of draft.accounts || []) {
+    const expected: any = expectedTargets.get(
+      normalizeForStorage(account.accountId),
+    )
+    if (
+      !expected ||
+      String(account.pageId || '') !== String(expected.pageId || '') ||
+      String(account.pixelId || '') !== String(expected.pixelId || '')
+    ) {
+      throw errorWithStatus(
+        `AI 草稿账户 ${account.accountId} 的 Page 或 Pixel 与授权单不一致`,
+        409,
+      )
+    }
+  }
+  if (
+    String(run.sourceCreativeGroupId || '') !==
+      String(selection.creativeGroup._id) ||
+    String(run.sourceCopywritingPackageId || '') !==
+      String(selection.copywritingPackage._id) ||
+    String(run.targetingPackageId || '') !==
+      String(selection.targetingPackage._id) ||
+    String(run.productId || '') !== String(selection.product._id)
+  ) {
+    throw errorWithStatus('AI 任务的方法资产或产品绑定与授权单不一致', 409)
+  }
+  const selectedBudget = asNumber(run.targets?.dailyBudget)
+  if (
+    selectedBudget < 1 ||
+    selectedBudget > asNumber(selection.mandate.budget?.maximumDailyBudget)
+  ) {
+    throw errorWithStatus('AI 任务预算已超出当前授权单上限', 409)
+  }
+  if (
+    canonicalJson(draft.adset?.inlineTargeting || {}) !==
+    canonicalJson(run.assetSnapshot?.frozenTargeting || {})
+  ) {
+    throw errorWithStatus('AI 草稿的冻结定向已被修改，必须重新创建任务', 409)
+  }
+  const [creativeGroup, copywritingPackage]: any[] = await Promise.all([
+    CreativeGroup.findOne(
+      combineFilters({ _id: run.creativeGroupId }, accessFilter),
+    ).lean(),
+    CopywritingPackage.findOne(
+      combineFilters({ _id: run.copywritingPackageId }, accessFilter),
+    ).lean(),
+  ])
+  if (!creativeGroup || !copywritingPackage) {
+    throw errorWithStatus('AI 执行素材或文案快照不存在', 409)
+  }
+  if (
+    canonicalJson(frozenCreativeSnapshot(creativeGroup)) !==
+      canonicalJson(run.assetSnapshot?.frozenCreative) ||
+    canonicalJson(frozenCopywritingSnapshot(copywritingPackage)) !==
+      canonicalJson(run.assetSnapshot?.frozenCopywriting)
+  ) {
+    throw errorWithStatus(
+      'AI 执行素材或文案快照已被修改，必须重新创建任务',
+      409,
+    )
+  }
+  return selection
+}
+
 export const approveReplica = async ({
   id,
   confirmation,
   note,
   approvedBy,
   accessFilter = {},
+  tokenAccessFilter = {},
 }: {
   id: string
   confirmation: string
   note?: string
   approvedBy?: string
   accessFilter?: any
+  tokenAccessFilter?: any
 }) => {
   if (confirmation !== APPROVE_CONFIRMATION) {
     throw errorWithStatus(`审批确认文本必须为 ${APPROVE_CONFIRMATION}`)
@@ -948,6 +678,12 @@ export const approveReplica = async ({
   )
   if (!draft) throw errorWithStatus('关联草稿不存在或无权访问', 404)
   assertAiDraftPaused(draft)
+  await revalidateReplicaMandate({
+    run,
+    draft,
+    accessFilter,
+    tokenAccessFilter,
+  })
   const validation = await validateDraft(String(draft._id), accessFilter)
   if (!validation.isValid) {
     run.status = 'blocked'
@@ -984,11 +720,13 @@ export const publishReplica = async ({
   confirmation,
   publishedBy,
   accessFilter = {},
+  tokenAccessFilter = {},
 }: {
   id: string
   confirmation: string
   publishedBy?: string
   accessFilter?: any
+  tokenAccessFilter?: any
 }) => {
   if (confirmation !== PUBLISH_CONFIRMATION) {
     throw errorWithStatus(`发布确认文本必须为 ${PUBLISH_CONFIRMATION}`)
@@ -1005,6 +743,12 @@ export const publishReplica = async ({
   )
   if (!draft) throw errorWithStatus('关联草稿不存在或无权访问', 404)
   assertAiDraftPaused(draft)
+  await revalidateReplicaMandate({
+    run,
+    draft,
+    accessFilter,
+    tokenAccessFilter,
+  })
   const claimedRun: any = await ReplicaRun.findOneAndUpdate(
     combineFilters({ _id: run._id, status: 'approved' }, accessFilter),
     { $set: { status: 'publishing', updatedBy: publishedBy } },
@@ -1018,6 +762,7 @@ export const publishReplica = async ({
       String(draft._id),
       publishedBy,
       accessFilter,
+      { aiReplicaRunId: String(run._id) },
     )
     const updatedRun: any = await ReplicaRun.findByIdAndUpdate(
       claimedRun._id,

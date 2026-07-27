@@ -20,6 +20,12 @@ import {
   publishReplica,
   replicaConfirmations,
 } from '../services/optimizerReplica.service'
+import {
+  createExecutionMandate,
+  listExecutionMandates,
+  materializeReusableAssets,
+  revokeExecutionMandate,
+} from '../services/optimizerExecution.service'
 import { writeAuditLog } from '../services/auditLog.service'
 import { scopedOrgFilter, scopedTokenFilter } from '../utils/accessControl'
 
@@ -62,6 +68,7 @@ const sendError = async (
   return res.status(error?.statusCode || 500).json({
     success: false,
     message: error?.message || 'AI 投手操作失败',
+    code: error?.code || error?.errorCode,
     details: error?.details,
   })
 }
@@ -192,16 +199,149 @@ export const getReplicaAssets = async (req: Request, res: Response) => {
   }
 }
 
+export const createReusableAssets = async (req: Request, res: Response) => {
+  try {
+    const data = await materializeReusableAssets({
+      playbookId: req.params.id,
+      materialLimit: req.body?.materialLimit,
+      countryLimit: req.body?.countryLimit,
+      createdBy: req.user?.userId,
+      accessFilter: scopedOrgFilter(req),
+    })
+    await writeAuditLog(req, {
+      category: 'ai_optimizer',
+      action: 'materialize_reusable_assets',
+      targetType: 'PlaybookVersion',
+      targetId: req.params.id,
+      organizationId: data.targetingPackage?.organizationId,
+      summary: '将真人投手只读方法提炼为 AutoArk 可复用定向包和创意组',
+      metadata: {
+        targetingPackageId: data.targetingPackage?._id,
+        creativeGroupId: data.creativeGroup?._id,
+        generatedCopywritingPackage: false,
+        sourceMode: 'read_only_context',
+      },
+    })
+    res.json({ success: true, data })
+  } catch (error: any) {
+    await sendError(
+      req,
+      res,
+      error,
+      'materialize_reusable_assets',
+      'PlaybookVersion',
+      req.params.id,
+    )
+  }
+}
+
+export const createMandate = async (req: Request, res: Response) => {
+  try {
+    const data = await createExecutionMandate({
+      playbookId: req.params.id,
+      name: req.body?.name,
+      authorizationType: req.body?.authorizationType,
+      facebookTokenId: req.body?.facebookTokenId,
+      metaCredentialId: req.body?.metaCredentialId,
+      accounts: req.body?.accounts,
+      targetingPackageId: req.body?.targetingPackageId,
+      creativeGroupId: req.body?.creativeGroupId,
+      copywritingPackageId: req.body?.copywritingPackageId,
+      defaultDailyBudget: req.body?.defaultDailyBudget,
+      maximumDailyBudget: req.body?.maximumDailyBudget,
+      createdBy: req.user?.userId,
+      accessFilter: scopedOrgFilter(req),
+      tokenAccessFilter: scopedTokenFilter(req),
+    })
+    await writeAuditLog(req, {
+      category: 'ai_optimizer',
+      action: 'create_execution_mandate',
+      targetType: 'AiExecutionMandate',
+      targetId: String(data._id),
+      organizationId: data.organizationId,
+      summary: '管理员创建 AI 投放授权单',
+      metadata: {
+        playbookVersionId: data.playbookVersionId,
+        sourceBoundary: data.sourceBoundary,
+        authorizationType: data.authorizationType,
+        facebookTokenId: data.facebookTokenId,
+        metaCredentialId: data.metaCredentialId,
+        accountIds: (data.accounts || []).map(
+          (account: any) => account.accountId,
+        ),
+        targetingPackageId: data.targetingPackageId,
+        creativeGroupId: data.creativeGroupId,
+        copywritingPackageId: data.copywritingPackageId,
+        productId: data.productId,
+        budget: data.budget,
+      },
+    })
+    res.status(201).json({ success: true, data })
+  } catch (error: any) {
+    await sendError(
+      req,
+      res,
+      error,
+      'create_execution_mandate',
+      'PlaybookVersion',
+      req.params.id,
+    )
+  }
+}
+
+export const getMandates = async (req: Request, res: Response) => {
+  try {
+    const data = await listExecutionMandates({
+      playbookId:
+        typeof req.query.playbookId === 'string'
+          ? req.query.playbookId
+          : undefined,
+      status:
+        typeof req.query.status === 'string' ? req.query.status : undefined,
+      accessFilter: scopedOrgFilter(req),
+    })
+    res.json({ success: true, data })
+  } catch (error: any) {
+    await sendError(req, res, error, 'list_execution_mandates')
+  }
+}
+
+export const revokeMandate = async (req: Request, res: Response) => {
+  try {
+    const data = await revokeExecutionMandate({
+      id: req.params.id,
+      revokedBy: req.user?.userId,
+      reason: req.body?.reason,
+      accessFilter: scopedOrgFilter(req),
+    })
+    await writeAuditLog(req, {
+      category: 'ai_optimizer',
+      action: 'revoke_execution_mandate',
+      targetType: 'AiExecutionMandate',
+      targetId: String(data._id),
+      organizationId: data.organizationId,
+      summary: '管理员撤销 AI 投放授权单',
+      metadata: { reason: data.revokeReason },
+    })
+    res.json({ success: true, data })
+  } catch (error: any) {
+    await sendError(
+      req,
+      res,
+      error,
+      'revoke_execution_mandate',
+      'AiExecutionMandate',
+      req.params.id,
+    )
+  }
+}
+
 export const createReplicaRun = async (req: Request, res: Response) => {
   try {
     const data = await createReplica({
       playbookId: req.params.id,
-      facebookTokenId: req.body?.facebookTokenId,
-      accounts: req.body?.accounts,
+      mandateId: req.body?.mandateId,
       dailyBudget: req.body?.dailyBudget,
-      materialLimit: req.body?.materialLimit,
-      applyTopCountries: boolValue(req.body?.applyTopCountries, true),
-      countryLimit: req.body?.countryLimit,
       createdBy: req.user?.userId,
       accessFilter: scopedOrgFilter(req),
       tokenAccessFilter: scopedTokenFilter(req),
@@ -214,8 +354,11 @@ export const createReplicaRun = async (req: Request, res: Response) => {
       organizationId: data.run.organizationId,
       summary: `创建打法 v${data.run.playbookVersion} 的 PAUSED AI 复制草稿`,
       metadata: {
+        mandateId: data.run.mandateId,
         status: data.run.status,
         targets: data.run.targets,
+        productId: data.run.productId,
+        sourceBoundary: data.run.assetSnapshot?.sourceBoundary,
         aiChanges: data.run.aiChanges,
         validation: data.validation,
       },
@@ -268,6 +411,7 @@ export const approveReplicaRun = async (req: Request, res: Response) => {
       note: req.body?.note,
       approvedBy: req.user?.userId,
       accessFilter: scopedOrgFilter(req),
+      tokenAccessFilter: scopedTokenFilter(req),
     })
     await writeAuditLog(req, {
       category: 'ai_optimizer',
@@ -298,6 +442,7 @@ export const publishReplicaRun = async (req: Request, res: Response) => {
       confirmation: req.body?.confirmation,
       publishedBy: req.user?.userId,
       accessFilter: scopedOrgFilter(req),
+      tokenAccessFilter: scopedTokenFilter(req),
     })
     await writeAuditLog(req, {
       category: 'ai_optimizer',

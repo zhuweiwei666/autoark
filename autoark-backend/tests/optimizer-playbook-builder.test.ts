@@ -183,6 +183,28 @@ describe('optimizer playbook builder', () => {
     expect(playbook.copywriting).toMatchObject({
       headlines: ['Headline'],
       websiteUrl: 'https://example.com/product',
+      usage: 'context_only',
+      executionUseAllowed: false,
+    })
+    expect(playbook.executionBoundary).toMatchObject({
+      sourceMode: 'read_only_context',
+      reusableThroughAutoArk: expect.arrayContaining([
+        'campaign_structure',
+        'targeting_method',
+        'creative_materials_after_portable_import',
+      ]),
+      neverInheritedFromSource: expect.arrayContaining([
+        'facebook_token',
+        'ad_account',
+        'pixel',
+        'source_copywriting',
+        'source_landing_url',
+      ]),
+      executionRequires: expect.arrayContaining([
+        'active_admin_mandate',
+        'admin_copywriting_package',
+        'verified_product_pixel_per_account',
+      ]),
     })
     expect(playbook.targeting.value).not.toHaveProperty('custom_audiences')
     expect(playbook.targeting.removedAccountScopedKeys).toContain(
@@ -195,6 +217,32 @@ describe('optimizer playbook builder', () => {
       automaticActivationAllowed: false,
       automaticScalingAllowed: false,
     })
+  })
+
+  it('keeps a strong method eligible when source copy has no landing URL', () => {
+    const input = buildInput()
+    input.creatives = input.creatives.map((creative: any) => ({
+      ...creative,
+      raw: {
+        object_story_spec: {
+          link_data: {
+            message: 'Context only',
+            name: 'Context headline',
+            call_to_action: { type: 'SHOP_NOW' },
+          },
+        },
+      },
+    }))
+
+    const playbook = buildOptimizerPlaybookSnapshot(input)
+
+    expect(playbook.eligibility.eligible).toBe(true)
+    expect(playbook.copywriting).toMatchObject({
+      websiteUrl: '',
+      usage: 'context_only',
+      executionUseAllowed: false,
+    })
+    expect(playbook.eligibility.warnings.join(' ')).toContain('文案')
   })
 
   it('blocks mixed-currency evidence and treats missing dimensions as unknown warnings', () => {

@@ -136,6 +136,49 @@ describe('bulk ad draft validation preflight', () => {
     expect(draft.save).not.toHaveBeenCalled()
   })
 
+  it('blocks generic bulk publish from bypassing the AI mandate workflow', async () => {
+    const draft = baseDraft()
+    draft.campaign.status = 'PAUSED'
+    draft.adset.status = 'PAUSED'
+    draft.ad.status = 'PAUSED'
+    draft.aiOrigin = {
+      replicaRunId: '665000000000000000000020',
+      mandateId: '665000000000000000000021',
+      statusLockedToPaused: true,
+    }
+    jest
+      .spyOn(AdDraft, 'findOne')
+      .mockResolvedValueOnce(draft as any)
+      .mockReturnValueOnce(populatedDraftQuery(draft) as any)
+    jest.spyOn(FbToken, 'find').mockReturnValue(
+      tokenQuery([{ _id: tokenId, fbUserId: 'fb_1' }]) as any,
+    )
+    jest.spyOn(FacebookUser, 'find').mockReturnValue(
+      queryWithLean([
+        {
+          fbUserId: 'fb_1',
+          tokenId,
+          syncStatus: 'completed',
+          adAccounts: [{ accountId: 'act_123', status: 1 }],
+          pages: [
+            { pageId: 'page_1', accounts: [{ accountId: 'act_123' }] },
+          ],
+          pixels: [
+            { pixelId: 'pixel_1', accounts: [{ accountId: 'act_123' }] },
+          ],
+        },
+      ]) as any,
+    )
+    mockValidPackages()
+
+    await expect(
+      publishDraft(draftId, '665000000000000000000002', {}),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      errorCode: 'AI_REPLICA_DEDICATED_PUBLISH_REQUIRED',
+    })
+  })
+
   it('blocks publish when authorization, page, and pixel prerequisites are missing', async () => {
     const draft = baseDraft({
       accounts: [{

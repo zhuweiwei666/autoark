@@ -200,6 +200,7 @@ const adDraftSchema = new mongoose.Schema(
     aiOrigin: {
       replicaRunId: { type: mongoose.Schema.Types.ObjectId, ref: 'ReplicaRun', index: true },
       playbookVersionId: { type: mongoose.Schema.Types.ObjectId, ref: 'PlaybookVersion' },
+      mandateId: { type: mongoose.Schema.Types.ObjectId, ref: 'AiExecutionMandate' },
       sourceOptimizerId: { type: String },
       generatedAt: { type: Date },
       statusLockedToPaused: { type: Boolean, default: false },

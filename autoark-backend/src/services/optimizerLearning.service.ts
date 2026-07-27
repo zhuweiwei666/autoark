@@ -559,7 +559,11 @@ export const buildOptimizerPlaybookSnapshot = (input: BuildPlaybookInput) => {
   }
   if (rankedMaterials.length === 0)
     blockers.push('缺少已入库且可复用的来源素材')
-  if (!copywriting.websiteUrl) blockers.push('来源文案缺少可用落地页链接')
+  if (!copywriting.websiteUrl) {
+    warnings.push(
+      '来源广告未提取到落地页；来源文案仅作方法上下文，实际产品仍由管理员文案包决定',
+    )
+  }
   if (placements.length === 0)
     warnings.push('版位维度暂无数据，保留来源定向中的版位设置')
   if (hours.length === 0) warnings.push('小时维度暂无数据，不自动设置分时排期')
@@ -598,9 +602,7 @@ export const buildOptimizerPlaybookSnapshot = (input: BuildPlaybookInput) => {
     100 *
       (baseline.confidence * 0.6 +
         coverageRatio * 0.25 +
-        (targeting && rankedMaterials.length > 0 && copywriting.websiteUrl
-          ? 0.15
-          : 0)),
+        (targeting && rankedMaterials.length > 0 ? 0.15 : 0)),
   )
 
   return {
@@ -703,7 +705,44 @@ export const buildOptimizerPlaybookSnapshot = (input: BuildPlaybookInput) => {
       attributionMode: 'creative-level-shared',
       materials: rankedMaterials.slice(0, 10),
     },
-    copywriting,
+    copywriting: {
+      ...copywriting,
+      usage: 'context_only',
+      executionUseAllowed: false,
+    },
+    executionBoundary: {
+      sourceMode: 'read_only_context',
+      reusableThroughAutoArk: [
+        'campaign_structure',
+        'targeting_method',
+        'geography',
+        'placements',
+        'high_conversion_hours',
+        'creative_materials_after_portable_import',
+      ],
+      neverInheritedFromSource: [
+        'facebook_token',
+        'ad_account',
+        'page',
+        'pixel',
+        'custom_audience',
+        'saved_audience',
+        'facebook_creative_id',
+        'facebook_image_hash',
+        'facebook_video_id',
+        'source_copywriting',
+        'source_landing_url',
+      ],
+      executionRequires: [
+        'active_admin_mandate',
+        'portable_targeting_package',
+        'portable_creative_group',
+        'admin_copywriting_package',
+        'resolved_product',
+        'verified_product_pixel_per_account',
+        'dedicated_target_token_account_and_page',
+      ],
+    },
     guardrails: {
       approvalRequired: true,
       campaignStatus: 'PAUSED',

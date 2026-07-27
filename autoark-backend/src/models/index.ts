@@ -13,6 +13,7 @@ export { default as CopywritingPackage } from './CopywritingPackage'
 export { default as CreativeGroup } from './CreativeGroup'
 export { default as AdDraft } from './AdDraft'
 export { default as AdTask } from './AdTask'
+export { default as AiExecutionMandate } from './AiExecutionMandate'
 
 // 素材管理
 export { default as Material } from './Material'

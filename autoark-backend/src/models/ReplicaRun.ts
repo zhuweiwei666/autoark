@@ -34,6 +34,11 @@ const replicaRunSchema = new mongoose.Schema(
       index: true,
     },
     playbookVersion: { type: Number, required: true },
+    mandateId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'AiExecutionMandate',
+      index: true,
+    },
     status: {
       type: String,
       enum: REPLICA_RUN_STATUSES,
@@ -48,10 +53,27 @@ const replicaRunSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'CreativeGroup',
     },
+    sourceCreativeGroupId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'CreativeGroup',
+    },
     copywritingPackageId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'CopywritingPackage',
     },
+    sourceCopywritingPackageId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'CopywritingPackage',
+    },
+    targetingPackageId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'TargetingPackage',
+    },
+    productId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Product',
+    },
+    assetSnapshot: { type: mongoose.Schema.Types.Mixed },
     draftId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'AdDraft',

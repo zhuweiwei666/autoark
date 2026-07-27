@@ -53,6 +53,7 @@ export interface OptimizerPlaybook {
   source: {
     window: { since: string; until: string };
     accountIds: string[];
+    tokenIds?: string[];
     currencies?: string[];
     sourceSyncedAt?: string;
     liveCollectedAt?: string;
@@ -106,6 +107,14 @@ export interface OptimizerPlaybook {
     descriptions: string[];
     websiteUrl: string;
     callToAction: string;
+    usage?: "context_only";
+    executionUseAllowed?: false;
+  };
+  executionBoundary?: {
+    sourceMode: "read_only_context";
+    reusableThroughAutoArk: string[];
+    neverInheritedFromSource: string[];
+    executionRequires: string[];
   };
   guardrails: {
     approvalRequired: boolean;
@@ -134,7 +143,7 @@ export interface PlaybookGeneration {
   error?: string;
 }
 
-export interface ReplicaAssetAccount {
+export interface ExecutionAssetAccount {
   accountId: string;
   name?: string;
   status?: number;
@@ -142,17 +151,117 @@ export interface ReplicaAssetAccount {
   timezone?: string;
   pages: Array<{ pageId: string; name?: string }>;
   pixels: Array<{ pixelId: string; name?: string }>;
+  pixelCount: number;
 }
 
-export interface ReplicaAssetToken {
+export interface ExecutionAssetToken {
   tokenId: string;
   authorizationType?: "system_user" | "personal_user";
   metaCredentialId?: string;
-  optimizer?: string;
   fbUserName?: string;
   syncStatus?: string;
   lastSyncedAt?: string;
-  accounts: ReplicaAssetAccount[];
+  executionRole: "admin_assignable";
+  accounts: ExecutionAssetAccount[];
+}
+
+export interface ExecutionSourceBoundary {
+  mode: "read_only_context";
+  accountIds: string[];
+  tokenIds: string[];
+  selectableForExecution: false;
+}
+
+export interface AiExecutionMandate {
+  _id: string;
+  name: string;
+  status: "active" | "revoked";
+  playbookVersionId: string;
+  optimizerId: string;
+  sourceBoundary: ExecutionSourceBoundary;
+  authorizationType: "system_user" | "personal_user";
+  metaCredentialId?: string;
+  facebookTokenId?: string;
+  accounts: Array<{
+    accountId: string;
+    accountName?: string;
+    pageId: string;
+    pageName?: string;
+    pixelId: string;
+    pixelName?: string;
+    currency?: string;
+    domain?: string;
+    conversionEvent?: string;
+  }>;
+  targetingPackageId: string;
+  creativeGroupId: string;
+  copywritingPackageId: string;
+  productId: string;
+  productSnapshot: {
+    name?: string;
+    identifier?: string;
+    landingUrl: string;
+    landingDomain?: string;
+  };
+  budget: {
+    defaultDailyBudget: number;
+    maximumDailyBudget: number;
+    currency: string;
+  };
+  readiness: { ready: boolean; warnings?: string[] };
+  permissions: {
+    metaWriteMode: "paused_only";
+    automaticActivationAllowed: false;
+    automaticScalingAllowed: false;
+  };
+  createdAt: string;
+}
+
+export interface ExecutionSetup {
+  playbookId: string;
+  organizationId?: string;
+  sourceBoundary: ExecutionSourceBoundary;
+  reusableAssets: {
+    targetingPackages: Array<{
+      id: string;
+      name: string;
+      sourceContext?: Record<string, any>;
+      deliveryInsights?: Record<string, any>;
+    }>;
+    creativeGroups: Array<{
+      id: string;
+      name: string;
+      materialCount: number;
+      sourceContext?: Record<string, any>;
+    }>;
+  };
+  copywritingPackages: Array<{
+    id: string;
+    name: string;
+    websiteUrl?: string;
+    productMetadata?: Record<string, any>;
+    product?: {
+      id: string;
+      name: string;
+      identifier?: string;
+      primaryDomain?: string;
+      verifiedPixelCount: number;
+      activeAccountCount: number;
+      accountMappings: Array<{
+        accountId: string;
+        accountName?: string;
+        pixelId: string;
+        pixelName?: string;
+        verified: boolean;
+      }>;
+      resolutionMode: string;
+    };
+    ready: boolean;
+    blockers: string[];
+  }>;
+  tokens: ExecutionAssetToken[];
+  mandates: AiExecutionMandate[];
+  requirements: string[];
 }
 
 export interface ReplicaRun {
@@ -161,12 +270,13 @@ export interface ReplicaRun {
   optimizerId: string;
   playbookVersionId: string;
   playbookVersion: number;
+  mandateId?: string;
   status: string;
   effectiveStatus?: string;
   targets: {
     authorizationType?: "system_user" | "personal_user";
-    facebookTokenId?: string;
     metaCredentialId?: string;
+    facebookTokenId?: string;
     accountIds: string[];
     dailyBudget: number;
     currency?: string;
@@ -198,6 +308,7 @@ const requestJson = async <T>(
   const payload = await response.json().catch(() => ({}));
   if (!response.ok || payload.success === false) {
     const error: any = new Error(payload.message || "请求失败");
+    error.code = payload.code;
     error.details = payload.details;
     throw error;
   }
@@ -258,29 +369,79 @@ export const getPlaybookById = (id: string) =>
   );
 
 export const getReplicaAssets = (playbookId: string) =>
+  requestJson<ExecutionSetup>(
+    `/api/optimizer-learning/replica-assets?playbookId=${encodeURIComponent(playbookId)}`,
+  );
+
+export const materializeReusableAssets = (
+  playbookId: string,
+  input: { materialLimit?: number; countryLimit?: number } = {},
+) =>
   requestJson<{
     playbookId: string;
-    organizationId?: string;
-    tokens: ReplicaAssetToken[];
+    targetingPackage: Record<string, any>;
+    creativeGroup: Record<string, any>;
+    generatedCopywritingPackage: false;
+    boundary: string;
   }>(
-    `/api/optimizer-learning/replica-assets?playbookId=${encodeURIComponent(playbookId)}`,
+    `/api/optimizer-learning/playbooks/${encodeURIComponent(playbookId)}/reusable-assets`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
+
+export const createExecutionMandate = (
+  playbookId: string,
+  input: {
+    name?: string;
+    authorizationType?: "system_user" | "personal_user";
+    metaCredentialId?: string;
+    facebookTokenId?: string;
+    accounts: Array<{
+      accountId: string;
+      accountName?: string;
+      pageId: string;
+      instagramAccountId?: string;
+    }>;
+    targetingPackageId: string;
+    creativeGroupId: string;
+    copywritingPackageId: string;
+    defaultDailyBudget?: number;
+    maximumDailyBudget?: number;
+  },
+) =>
+  requestJson<AiExecutionMandate>(
+    `/api/optimizer-learning/playbooks/${encodeURIComponent(playbookId)}/mandates`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
+
+export const getExecutionMandates = (playbookId?: string) => {
+  const query = playbookId
+    ? `?playbookId=${encodeURIComponent(playbookId)}`
+    : "";
+  return requestJson<AiExecutionMandate[]>(
+    `/api/optimizer-learning/mandates${query}`,
+  );
+};
+
+export const revokeExecutionMandate = (id: string, reason?: string) =>
+  requestJson<AiExecutionMandate>(
+    `/api/optimizer-learning/mandates/${encodeURIComponent(id)}/revoke`,
+    {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+    },
   );
 
 export const createReplica = (
   playbookId: string,
   input: {
-    facebookTokenId: string;
-    accounts: Array<{
-      accountId: string;
-      accountName?: string;
-      pageId?: string;
-      pixelId?: string;
-      conversionEvent?: string;
-    }>;
+    mandateId: string;
     dailyBudget?: number;
-    materialLimit?: number;
-    applyTopCountries?: boolean;
-    countryLimit?: number;
   },
 ) =>
   requestJson<{
