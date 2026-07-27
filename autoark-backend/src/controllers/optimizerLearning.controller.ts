@@ -21,6 +21,7 @@ import {
   replicaConfirmations,
 } from '../services/optimizerReplica.service'
 import {
+  confirmNameMatchedPixel,
   createExecutionMandate,
   listExecutionMandates,
   materializeReusableAssets,
@@ -283,6 +284,46 @@ export const createMandate = async (req: Request, res: Response) => {
       res,
       error,
       'create_execution_mandate',
+      'PlaybookVersion',
+      req.params.id,
+    )
+  }
+}
+
+export const confirmNamePixelMapping = async (req: Request, res: Response) => {
+  try {
+    const data = await confirmNameMatchedPixel({
+      playbookId: req.params.id,
+      copywritingPackageId: req.body?.copywritingPackageId,
+      tokenId: req.body?.tokenId,
+      accountId: req.body?.accountId,
+      pixelId: req.body?.pixelId,
+      confirmedBy: req.user?.userId,
+      accessFilter: scopedOrgFilter(req),
+      tokenAccessFilter: scopedTokenFilter(req),
+    })
+    await writeAuditLog(req, {
+      category: 'ai_optimizer',
+      action: 'confirm_name_pixel_mapping',
+      targetType: 'Product',
+      targetId: data.productId,
+      summary: '管理员确认文案包与 Pixel 的精确名称关联',
+      metadata: {
+        playbookVersionId: req.params.id,
+        copywritingPackageId: data.copywritingPackageId,
+        productKey: data.productKey,
+        tokenId: data.tokenId,
+        accountId: data.accountId,
+        pixelId: data.pixelId,
+      },
+    })
+    res.status(201).json({ success: true, data })
+  } catch (error: any) {
+    await sendError(
+      req,
+      res,
+      error,
+      'confirm_name_pixel_mapping',
       'PlaybookVersion',
       req.params.id,
     )

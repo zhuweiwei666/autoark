@@ -31,6 +31,7 @@ jest.mock('../src/controllers/optimizerLearning.controller', () => {
     getPlaybookById: jest.fn(ok),
     getReplicaAssets: jest.fn(ok),
     createReusableAssets: jest.fn(ok),
+    confirmNamePixelMapping: jest.fn(ok),
     createMandate: jest.fn(ok),
     getMandates: jest.fn(ok),
     revokeMandate: jest.fn(ok),
@@ -74,6 +75,10 @@ describe('optimizer learning route authorization', () => {
     [
       'POST',
       '/api/optimizer-learning/playbooks/665000000000000000000010/reusable-assets',
+    ],
+    [
+      'POST',
+      '/api/optimizer-learning/playbooks/665000000000000000000010/name-pixel-mappings',
     ],
     [
       'POST',

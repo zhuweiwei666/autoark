@@ -12,6 +12,10 @@ import TargetingPackage from '../models/TargetingPackage'
 import { combineFilters, objectIdValue } from '../utils/accessControl'
 import { getAccountIdsForQuery, normalizeForStorage } from '../utils/accountId'
 import { sanitizeOptimizerTargeting } from '../utils/optimizerTargeting'
+import {
+  parseProductAssetName,
+  productIdentifierFromName,
+} from '../utils/productAssetName'
 import { resolvePublishingCredential } from './metaBusinessCredential.service'
 
 const MAX_TARGET_ACCOUNTS = 20
@@ -526,7 +530,79 @@ const sanitizedSystemCredentialSnapshot = async (
   }
 }
 
-const productCandidatesForCopy = (copywritingPackage: any, products: any[]) => {
+export const buildNamePixelMatch = (
+  copywritingPackage: any,
+  authorizations: any[] = [],
+) => {
+  const identity = parseProductAssetName(copywritingPackage?.name)
+  if (!identity) {
+    return {
+      status: 'unparseable',
+      candidates: [],
+      ambiguousAccounts: [],
+    }
+  }
+
+  const candidates: any[] = []
+  const ambiguousAccounts: any[] = []
+  for (const authorization of authorizations) {
+    for (const account of authorization.accounts || []) {
+      const exactPixels = Array.from(
+        new Map(
+          (account.pixels || [])
+            .filter(
+              (pixel: any) =>
+                parseProductAssetName(pixel.name)?.key === identity.key,
+            )
+            .map((pixel: any) => [String(pixel.pixelId), pixel]),
+        ).values(),
+      ) as any[]
+      const authorizationSnapshot = {
+        authorizationType: authorization.authorizationType || 'personal_user',
+        tokenId: String(authorization.tokenId),
+        metaCredentialId: authorization.metaCredentialId,
+        authorizationName: authorization.fbUserName,
+        accountId: normalizeForStorage(account.accountId),
+        accountName: account.name,
+      }
+      if (exactPixels.length === 1) {
+        candidates.push({
+          ...authorizationSnapshot,
+          pixelId: String(exactPixels[0].pixelId),
+          pixelName: exactPixels[0].name,
+          confidence: 100,
+          matchMethod: 'exact_normalized_name',
+        })
+      } else if (exactPixels.length > 1) {
+        ambiguousAccounts.push({
+          ...authorizationSnapshot,
+          pixels: exactPixels.map((pixel: any) => ({
+            pixelId: String(pixel.pixelId),
+            pixelName: pixel.name,
+          })),
+        })
+      }
+    }
+  }
+
+  return {
+    status:
+      ambiguousAccounts.length > 0
+        ? 'ambiguous'
+        : candidates.length > 0
+          ? 'candidates'
+          : 'not_found',
+    productKey: identity.key,
+    productName: identity.displayName,
+    candidates,
+    ambiguousAccounts,
+  }
+}
+
+export const productCandidatesForCopy = (
+  copywritingPackage: any,
+  products: any[],
+) => {
   const copyId = String(copywritingPackage._id)
   const direct = products.filter((product) =>
     (product.copywritingPackageIds || []).some(
@@ -545,14 +621,31 @@ const productCandidatesForCopy = (copywritingPackage: any, products: any[]) => {
       (domain &&
         cleanString(product.primaryDomain, 255).toLowerCase() === domain),
   )
-  return { products: inferred, mode: 'package_metadata' }
+  if (inferred.length > 0) {
+    return { products: inferred, mode: 'package_metadata' }
+  }
+
+  const packageIdentity = parseProductAssetName(copywritingPackage.name)
+  const nameInferred = packageIdentity
+    ? products.filter(
+        (product) =>
+          parseProductAssetName(product.name)?.key === packageIdentity.key,
+      )
+    : []
+  return {
+    products: nameInferred,
+    mode: 'package_name',
+    nameIdentity: packageIdentity,
+  }
 }
 
 const summarizeCopywritingPackage = (
   copywritingPackage: any,
   products: any[],
+  authorizations: any[] = [],
 ) => {
   const resolution = productCandidatesForCopy(copywritingPackage, products)
+  const nameMatch = buildNamePixelMatch(copywritingPackage, authorizations)
   const product =
     resolution.products.length === 1 ? resolution.products[0] : null
   const productPixelById = new Map(
@@ -594,6 +687,8 @@ const summarizeCopywritingPackage = (
     name: copywritingPackage.name,
     websiteUrl,
     productMetadata: copywritingPackage.product,
+    nameIdentity: parseProductAssetName(copywritingPackage.name) || undefined,
+    nameMatch,
     product: product
       ? {
           id: String(product._id),
@@ -734,6 +829,10 @@ export const listExecutionSetup = async ({
         : null
     })
     .filter((item: any) => item && item.accounts.length > 0)
+  const executionAuthorizations = [
+    ...systemAuthorizations.filter((item: any) => item.accounts.length > 0),
+    ...personalAuthorizations,
+  ]
   return {
     playbookId: String(playbook._id),
     organizationId: playbook.organizationId,
@@ -759,20 +858,292 @@ export const listExecutionSetup = async ({
       })),
     },
     copywritingPackages: copyPackages.map((item: any) =>
-      summarizeCopywritingPackage(item, products),
+      summarizeCopywritingPackage(item, products, executionAuthorizations),
     ),
-    tokens: [
-      ...systemAuthorizations.filter((item: any) => item.accounts.length > 0),
-      ...personalAuthorizations,
-    ],
+    tokens: executionAuthorizations,
     mandates,
     requirements: [
       '真人来源账户与 Token 永远只读',
       '管理员明确分配 AI 执行凭证、账户和 Page；优先使用组织 System User',
       '管理员选择文案包；文案包决定产品和投放链接',
+      '文案包与 Pixel 名称仅做精确归一化候选；重名冲突必须先处理',
       '每个执行账户必须存在产品已验证 Pixel 映射',
       '定向包与创意组必须标记为跨账户可复用',
     ],
+  }
+}
+
+export const confirmNameMatchedPixel = async ({
+  playbookId,
+  copywritingPackageId,
+  tokenId,
+  accountId: rawAccountId,
+  pixelId,
+  confirmedBy,
+  accessFilter = {},
+  tokenAccessFilter = {},
+}: {
+  playbookId: string
+  copywritingPackageId: string
+  tokenId: string
+  accountId: string
+  pixelId: string
+  confirmedBy?: string
+  accessFilter?: any
+  tokenAccessFilter?: any
+}) => {
+  const accountId = normalizeForStorage(rawAccountId)
+  const selectedTokenId = cleanString(tokenId, 160)
+  const selectedPixelId = cleanString(pixelId, 160)
+  if (
+    !copywritingPackageId ||
+    !selectedTokenId ||
+    !accountId ||
+    !selectedPixelId
+  ) {
+    throw errorWithStatus(
+      '文案包、执行授权、账户和 Pixel 均不能为空',
+      400,
+      'NAME_PIXEL_CONFIRMATION_REQUIRED',
+    )
+  }
+
+  const setup: any = await listExecutionSetup({
+    playbookId,
+    accessFilter,
+    tokenAccessFilter,
+  })
+  const copySummary = setup.copywritingPackages.find(
+    (item: any) => item.id === String(copywritingPackageId),
+  )
+  if (!copySummary) {
+    throw errorWithStatus(
+      '文案包不存在或不属于当前打法组织',
+      404,
+      'COPYWRITING_PACKAGE_NOT_FOUND',
+    )
+  }
+  if (
+    (copySummary.blockers || []).some((blocker: string) =>
+      blocker.includes('多个产品'),
+    )
+  ) {
+    throw errorWithStatus(
+      '文案包匹配到多个产品，不能自动确认 Pixel',
+      409,
+      'COPY_PRODUCT_AMBIGUOUS',
+    )
+  }
+
+  const ambiguousAccount = (
+    copySummary.nameMatch?.ambiguousAccounts || []
+  ).find(
+    (item: any) =>
+      item.tokenId === selectedTokenId &&
+      normalizeForStorage(item.accountId) === accountId,
+  )
+  if (ambiguousAccount) {
+    throw errorWithStatus(
+      '同一账户存在多个同名 Pixel，请先重命名或手工处理',
+      409,
+      'NAME_PIXEL_AMBIGUOUS',
+      {
+        accountId,
+        pixels: ambiguousAccount.pixels,
+      },
+    )
+  }
+
+  const candidate = (copySummary.nameMatch?.candidates || []).find(
+    (item: any) =>
+      item.tokenId === selectedTokenId &&
+      normalizeForStorage(item.accountId) === accountId &&
+      item.pixelId === selectedPixelId,
+  )
+  if (!candidate) {
+    throw errorWithStatus(
+      '所选 Pixel 不是当前资产快照中的唯一精确名称候选',
+      409,
+      'NAME_PIXEL_CANDIDATE_CHANGED',
+    )
+  }
+
+  const assetFilter = combineFilters(
+    accessFilter,
+    orgConstraint(setup.organizationId),
+  )
+  const copywritingPackage: any = await CopywritingPackage.findOne(
+    combineFilters({ _id: copywritingPackageId }, assetFilter),
+  ).lean()
+  if (!copywritingPackage) {
+    throw errorWithStatus(
+      '文案包不存在或无权访问',
+      404,
+      'COPYWRITING_PACKAGE_NOT_FOUND',
+    )
+  }
+
+  let product: any = copySummary.product?.id
+    ? await Product.findOne(
+        combineFilters({ _id: copySummary.product.id }, assetFilter),
+      )
+    : null
+  if (!product) {
+    const activeProducts: any[] = await Product.find(
+      combineFilters({ status: 'active' }, assetFilter),
+    )
+    const resolution = productCandidatesForCopy(
+      copywritingPackage,
+      activeProducts,
+    )
+    if (resolution.products.length > 1) {
+      throw errorWithStatus(
+        '文案包名称匹配到多个产品，不能自动创建关联',
+        409,
+        'COPY_PRODUCT_AMBIGUOUS',
+      )
+    }
+    product = resolution.products[0]
+  }
+
+  if (!product) {
+    const identity = parseProductAssetName(copywritingPackage.name)
+    const identifier = productIdentifierFromName(copywritingPackage.name)
+    if (!identity || !identifier) {
+      throw errorWithStatus(
+        '文案包名称无法解析出稳定产品名',
+        409,
+        'COPY_PRODUCT_NAME_UNPARSABLE',
+      )
+    }
+    const existingByIdentifier: any = await Product.findOne(
+      combineFilters({ identifier }, assetFilter),
+    )
+    if (existingByIdentifier && existingByIdentifier.status !== 'active') {
+      throw errorWithStatus(
+        '同名产品已停用，请先由管理员恢复或手工处理',
+        409,
+        'COPY_PRODUCT_INACTIVE',
+      )
+    }
+    product =
+      existingByIdentifier ||
+      (await Product.create({
+        name: identity.displayName,
+        identifier,
+        ...(setup.organizationId && {
+          organizationId: setup.organizationId,
+        }),
+        ...(confirmedBy && { createdBy: confirmedBy }),
+        primaryDomain: landingDomain(copywritingPackage.links?.websiteUrl),
+        urlPatterns: landingDomain(copywritingPackage.links?.websiteUrl)
+          ? [
+              {
+                pattern: landingDomain(copywritingPackage.links?.websiteUrl),
+                type: 'domain',
+                priority: 1,
+              },
+            ]
+          : [],
+        copywritingPackageIds: [copywritingPackage._id],
+      }))
+  }
+  if (product.status && product.status !== 'active') {
+    throw errorWithStatus(
+      '匹配到的产品已停用，请先由管理员恢复',
+      409,
+      'COPY_PRODUCT_INACTIVE',
+    )
+  }
+
+  product.copywritingPackageIds = product.copywritingPackageIds || []
+  if (
+    !product.copywritingPackageIds.some(
+      (id: any) => String(id) === String(copywritingPackage._id),
+    )
+  ) {
+    product.copywritingPackageIds.push(copywritingPackage._id)
+  }
+
+  product.pixels = product.pixels || []
+  let pixelMapping = product.pixels.find(
+    (pixel: any) => String(pixel.pixelId) === selectedPixelId,
+  )
+  if (!pixelMapping) {
+    pixelMapping = {
+      pixelId: selectedPixelId,
+      pixelName: candidate.pixelName,
+      confidence: 100,
+      matchMethod: 'manual',
+      verified: true,
+      verifiedBy: confirmedBy,
+      verifiedAt: new Date(),
+    }
+    product.pixels.push(pixelMapping)
+  } else {
+    pixelMapping.pixelName = candidate.pixelName || pixelMapping.pixelName
+    pixelMapping.confidence = 100
+    pixelMapping.matchMethod = 'manual'
+    pixelMapping.verified = true
+    pixelMapping.verifiedBy = confirmedBy
+    pixelMapping.verifiedAt = new Date()
+  }
+
+  product.accounts = product.accounts || []
+  let accountMapping = product.accounts.find(
+    (account: any) => normalizeForStorage(account.accountId) === accountId,
+  )
+  if (
+    accountMapping?.throughPixelId &&
+    String(accountMapping.throughPixelId) !== selectedPixelId
+  ) {
+    const existingVerifiedPixel = product.pixels.find(
+      (pixel: any) =>
+        String(pixel.pixelId) === String(accountMapping.throughPixelId) &&
+        pixel.verified === true,
+    )
+    if (existingVerifiedPixel) {
+      throw errorWithStatus(
+        '该产品账户已绑定另一个管理员验证 Pixel',
+        409,
+        'PRODUCT_ACCOUNT_PIXEL_CONFLICT',
+        {
+          accountId,
+          existingPixelId: accountMapping.throughPixelId,
+          candidatePixelId: selectedPixelId,
+        },
+      )
+    }
+  }
+  if (!accountMapping) {
+    accountMapping = {
+      accountId,
+      accountName: candidate.accountName,
+      throughPixelId: selectedPixelId,
+      status: 'active',
+    }
+    product.accounts.push(accountMapping)
+  } else {
+    accountMapping.accountName =
+      candidate.accountName || accountMapping.accountName
+    accountMapping.throughPixelId = selectedPixelId
+    accountMapping.status = 'active'
+  }
+  if (!product.primaryPixelId) product.primaryPixelId = selectedPixelId
+
+  await product.save()
+  return {
+    productId: String(product._id),
+    productName: product.name,
+    copywritingPackageId: String(copywritingPackage._id),
+    productKey: copySummary.nameMatch?.productKey,
+    tokenId: selectedTokenId,
+    accountId,
+    accountName: candidate.accountName,
+    pixelId: selectedPixelId,
+    pixelName: candidate.pixelName,
+    verified: true,
+    confirmedBy,
   }
 }
 

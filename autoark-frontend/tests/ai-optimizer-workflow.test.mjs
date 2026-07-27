@@ -61,6 +61,16 @@ test("human buyer assets stay read-only and execution is mandate-driven", () => 
   );
 });
 
+test("copy package and Pixel names produce an admin-confirmed exact-match workflow", () => {
+  assert.match(pageSource, /confirmNamePixelMapping/);
+  assert.match(pageSource, /名称解析：/);
+  assert.match(pageSource, /管理员确认/);
+  assert.match(pageSource, /系统不会猜/);
+  assert.match(apiSource, /name-pixel-mappings/);
+  assert.match(apiSource, /matchMethod: "exact_normalized_name"/);
+  assert.match(apiSource, /status: "unparseable" \| "not_found" \| "candidates" \| "ambiguous"/);
+});
+
 test("the API uses an async generation poll and explicit PAUSED confirmations", () => {
   assert.match(apiSource, /playbook-generations/);
   assert.match(pageSource, /getPlaybookGeneration/);

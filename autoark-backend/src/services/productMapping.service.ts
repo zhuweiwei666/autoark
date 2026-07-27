@@ -8,6 +8,10 @@ import { URL } from 'url'
 import { createHash } from 'crypto'
 import { combineFilters } from '../utils/accessControl'
 import { normalizeForStorage } from '../utils/accountId'
+import {
+  parseProductAssetName,
+  productIdentifierFromName,
+} from '../utils/productAssetName'
 
 const PRODUCT_MAPPING_FACEBOOK_PAGE_LIMIT = 10
 const PRODUCT_MAPPING_FACEBOOK_PAGE_SIZE = 100
@@ -43,11 +47,11 @@ export function parseProductUrl(urlString: string): UrlParseResult | null {
     const url = new URL(urlString)
     const domain = url.hostname.replace(/^www\./, '')
     const path = url.pathname
-    
+
     // 尝试从路径中提取产品标识
     let productIdentifier = ''
     let productName = ''
-    
+
     // 模式1: /products/{slug} 或 /p/{id}
     const pathPatterns = [
       /\/products?\/([^\/\?]+)/i,
@@ -56,7 +60,7 @@ export function parseProductUrl(urlString: string): UrlParseResult | null {
       /\/goods\/([^\/\?]+)/i,
       /\/shop\/([^\/\?]+)/i,
     ]
-    
+
     for (const pattern of pathPatterns) {
       const match = path.match(pattern)
       if (match) {
@@ -65,7 +69,7 @@ export function parseProductUrl(urlString: string): UrlParseResult | null {
         break
       }
     }
-    
+
     // 模式2: 从查询参数提取
     if (!productIdentifier) {
       const paramNames = ['product', 'item', 'id', 'sku', 'pid']
@@ -78,13 +82,13 @@ export function parseProductUrl(urlString: string): UrlParseResult | null {
         }
       }
     }
-    
+
     // 如果仍然没有找到，使用域名作为标识符
     if (!productIdentifier) {
       productIdentifier = domain
       productName = domain.split('.')[0]
     }
-    
+
     return {
       domain,
       path,
@@ -108,7 +112,7 @@ function formatProductName(slug: string): string {
     .replace(/[-_]/g, ' ')
     .replace(/([a-z])([A-Z])/g, '$1 $2')
     .split(' ')
-    .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
     .join(' ')
     .trim()
 }
@@ -118,31 +122,78 @@ function formatProductName(slug: string): string {
 /**
  * 从所有文案包扫描并创建产品
  */
-export async function scanProductsFromCopyPackages(accessFilter: any = {}, ownerData: any = {}): Promise<{
+export async function scanProductsFromCopyPackages(
+  accessFilter: any = {},
+  ownerData: any = {},
+): Promise<{
   created: number
   updated: number
   errors: string[]
 }> {
   const result = { created: 0, updated: 0, errors: [] as string[] }
-  
+
   try {
-    const packages = await CopywritingPackage.find(combineFilters(accessFilter, {
-      'links.websiteUrl': { $exists: true, $ne: '' }
-    }))
-    
-    logger.info(`[ProductMapping] Scanning ${packages.length} copy packages for products`)
-    
+    const packages = await CopywritingPackage.find(
+      combineFilters(accessFilter, {
+        'links.websiteUrl': { $exists: true, $ne: '' },
+      }),
+    )
+    const existingProducts: any[] = await Product.find(accessFilter)
+
+    logger.info(
+      `[ProductMapping] Scanning ${packages.length} copy packages for products`,
+    )
+
     for (const pkg of packages) {
       try {
         const urlString = (pkg as any).links?.websiteUrl
         if (!urlString) continue
-        
+
         const parsed = parseProductUrl(urlString)
         if (!parsed) continue
-        
+        const nameIdentity = parseProductAssetName((pkg as any).name)
+        const nameIdentifier = productIdentifierFromName((pkg as any).name)
+        const copyId = String((pkg as any)._id)
+
+        const directlyLinked = existingProducts.filter((candidate: any) =>
+          (candidate.copywritingPackageIds || []).some(
+            (id: any) => String(id) === copyId,
+          ),
+        )
+        const nameMatched = nameIdentity
+          ? existingProducts.filter(
+              (candidate: any) =>
+                candidate.status === 'active' &&
+                parseProductAssetName(candidate.name)?.key === nameIdentity.key,
+            )
+          : []
+        const identifierMatched = nameIdentifier
+          ? existingProducts.filter(
+              (candidate: any) => candidate.identifier === nameIdentifier,
+            )
+          : []
+        if (
+          directlyLinked.length > 1 ||
+          nameMatched.length > 1 ||
+          identifierMatched.length > 1
+        ) {
+          throw new Error(
+            `文案包 ${(pkg as any).name || copyId} 匹配到多个产品`,
+          )
+        }
+
         // 查找或创建产品
-        let product = await Product.findOne(combineFilters({ identifier: parsed.productIdentifier }, accessFilter))
-        
+        let product =
+          directlyLinked[0] ||
+          nameMatched[0] ||
+          identifierMatched[0] ||
+          (!nameIdentity
+            ? existingProducts.find(
+                (candidate: any) =>
+                  candidate.identifier === parsed.productIdentifier,
+              )
+            : null)
+
         if (product) {
           // 更新：添加文案包引用
           if (!product.copywritingPackageIds.includes(pkg._id)) {
@@ -153,26 +204,33 @@ export async function scanProductsFromCopyPackages(accessFilter: any = {}, owner
         } else {
           // 创建新产品
           product = await Product.create({
-            name: parsed.productName,
-            identifier: parsed.productIdentifier,
+            name: nameIdentity?.displayName || parsed.productName,
+            identifier: nameIdentifier || parsed.productIdentifier,
             ...ownerData,
             primaryDomain: parsed.domain,
-            urlPatterns: [{
-              pattern: parsed.domain,
-              type: 'domain',
-              priority: 1,
-            }],
+            urlPatterns: [
+              {
+                pattern: parsed.domain,
+                type: 'domain',
+                priority: 1,
+              },
+            ],
             copywritingPackageIds: [pkg._id],
           })
+          existingProducts.push(product)
           result.created++
-          logger.info(`[ProductMapping] Created product: ${parsed.productName} (${parsed.productIdentifier})`)
+          logger.info(
+            `[ProductMapping] Created product: ${product.name} (${product.identifier})`,
+          )
         }
       } catch (error: any) {
         result.errors.push(`Package ${pkg._id}: ${error.message}`)
       }
     }
-    
-    logger.info(`[ProductMapping] Scan complete: ${result.created} created, ${result.updated} updated`)
+
+    logger.info(
+      `[ProductMapping] Scan complete: ${result.created} created, ${result.updated} updated`,
+    )
     return result
   } catch (error: any) {
     logger.error('[ProductMapping] Scan failed:', error)
@@ -194,7 +252,9 @@ const getScopedTokenForAccount = async (account: any, tokens: any[]) => {
   if (!accountId || tokens.length === 0) return null
 
   if (account.token) {
-    const directlyLinkedToken = tokens.find(token => token.token === account.token)
+    const directlyLinkedToken = tokens.find(
+      (token) => token.token === account.token,
+    )
     if (directlyLinkedToken) {
       return directlyLinkedToken
     }
@@ -210,7 +270,9 @@ const getScopedTokenForAccount = async (account: any, tokens: any[]) => {
         return token
       }
     } catch (error: any) {
-      logger.debug(`[ProductMapping] Token ${token.fbUserName || token._id} cannot access account ${accountId}`)
+      logger.debug(
+        `[ProductMapping] Token ${token.fbUserName || token._id} cannot access account ${accountId}`,
+      )
     }
   }
 
@@ -249,32 +311,49 @@ const fetchAccountPixelsFromFacebook = async (
 /**
  * 从所有授权账户获取 Pixels
  */
-export async function fetchAllPixels(accountFilter: any = {}, tokenFilter: any = {}): Promise<PixelInfo[]> {
+export async function fetchAllPixels(
+  accountFilter: any = {},
+  tokenFilter: any = {},
+): Promise<PixelInfo[]> {
   const allPixels: PixelInfo[] = []
-  
+
   try {
     // 获取所有活跃账户
-    const accounts = await Account.find(combineFilters({
-      channel: 'facebook',
-      status: { $ne: 'disabled' },
-    }, accountFilter))
-    
+    const accounts = await Account.find(
+      combineFilters(
+        {
+          channel: 'facebook',
+          status: { $ne: 'disabled' },
+        },
+        accountFilter,
+      ),
+    )
+
     // 获取有效 Token
-    const fbTokens: any[] = await FbToken.find({ status: 'active', ...tokenFilter })
+    const fbTokens: any[] = await FbToken.find({
+      status: 'active',
+      ...tokenFilter,
+    })
     if (fbTokens.length === 0) {
       logger.warn('[ProductMapping] No active Facebook token found')
       return []
     }
-    
+
     for (const account of accounts) {
       try {
         const accountId = normalizeForStorage(account.accountId)
         const fbToken = await getScopedTokenForAccount(account, fbTokens)
         if (!fbToken) {
-          logger.warn(`[ProductMapping] No scoped Facebook token can access account ${accountId}`)
+          logger.warn(
+            `[ProductMapping] No scoped Facebook token can access account ${accountId}`,
+          )
           continue
         }
-        const pixels = await fetchAccountPixelsFromFacebook(accountId, fbToken.token, 'id,name')
+        const pixels = await fetchAccountPixelsFromFacebook(
+          accountId,
+          fbToken.token,
+          'id,name',
+        )
         for (const pixel of pixels) {
           allPixels.push({
             id: pixel.id,
@@ -284,11 +363,15 @@ export async function fetchAllPixels(accountFilter: any = {}, tokenFilter: any =
           })
         }
       } catch (error: any) {
-        logger.warn(`[ProductMapping] Failed to fetch pixels for account ${account.accountId}: ${error.message}`)
+        logger.warn(
+          `[ProductMapping] Failed to fetch pixels for account ${account.accountId}: ${error.message}`,
+        )
       }
     }
-    
-    logger.info(`[ProductMapping] Fetched ${allPixels.length} pixels from ${accounts.length} accounts`)
+
+    logger.info(
+      `[ProductMapping] Fetched ${allPixels.length} pixels from ${accounts.length} accounts`,
+    )
     return allPixels
   } catch (error: any) {
     logger.error('[ProductMapping] Failed to fetch pixels:', error)
@@ -302,10 +385,10 @@ export async function fetchAllPixels(accountFilter: any = {}, tokenFilter: any =
 function calculateSimilarity(str1: string, str2: string): number {
   const s1 = str1.toLowerCase().replace(/[^a-z0-9]/g, '')
   const s2 = str2.toLowerCase().replace(/[^a-z0-9]/g, '')
-  
+
   if (s1 === s2) return 100
   if (s1.includes(s2) || s2.includes(s1)) return 80
-  
+
   // Levenshtein 距离
   const matrix: number[][] = []
   for (let i = 0; i <= s1.length; i++) {
@@ -314,21 +397,21 @@ function calculateSimilarity(str1: string, str2: string): number {
   for (let j = 0; j <= s2.length; j++) {
     matrix[0][j] = j
   }
-  
+
   for (let i = 1; i <= s1.length; i++) {
     for (let j = 1; j <= s2.length; j++) {
       const cost = s1[i - 1] === s2[j - 1] ? 0 : 1
       matrix[i][j] = Math.min(
         matrix[i - 1][j] + 1,
         matrix[i][j - 1] + 1,
-        matrix[i - 1][j - 1] + cost
+        matrix[i - 1][j - 1] + cost,
       )
     }
   }
-  
+
   const maxLen = Math.max(s1.length, s2.length)
   if (maxLen === 0) return 100
-  
+
   const distance = matrix[s1.length][s2.length]
   return Math.round((1 - distance / maxLen) * 100)
 }
@@ -344,35 +427,71 @@ export async function matchProductsWithPixels(
 ): Promise<{
   matched: number
   unmatched: number
-  details: Array<{ productId: string; productName: string; pixelId?: string; pixelName?: string; confidence: number }>
+  details: Array<{
+    productId: string
+    productName: string
+    pixelId?: string
+    pixelName?: string
+    confidence: number
+  }>
 }> {
   const result = { matched: 0, unmatched: 0, details: [] as any[] }
-  
+
   try {
-    const products = await Product.find(combineFilters({ status: 'active' }, accessFilter))
+    const products = await Product.find(
+      combineFilters({ status: 'active' }, accessFilter),
+    )
     const pixels = await fetchAllPixels(accountFilter, tokenFilter)
-    
-    logger.info(`[ProductMapping] Matching ${products.length} products with ${pixels.length} pixels`)
-    
+
+    logger.info(
+      `[ProductMapping] Matching ${products.length} products with ${pixels.length} pixels`,
+    )
+
     for (const product of products) {
-      let bestMatch: { pixel: PixelInfo; confidence: number } | null = null
-      
+      let bestMatches: Array<{ pixel: PixelInfo; confidence: number }> = []
+
       // 尝试匹配每个 Pixel
       for (const pixel of pixels) {
-        // 计算相似度
+        const productIdentity = parseProductAssetName(product.name)
+        const pixelIdentity = parseProductAssetName(pixel.name)
+        const exactOperationalNameMatch = Boolean(
+          productIdentity &&
+          pixelIdentity &&
+          productIdentity.key === pixelIdentity.key,
+        )
         const nameConfidence = calculateSimilarity(product.name, pixel.name)
-        const domainInName = pixel.name.toLowerCase().includes(product.primaryDomain?.split('.')[0] || '')
-        const confidence = domainInName ? Math.max(nameConfidence, 70) : nameConfidence
-        
-        if (confidence >= minConfidence && (!bestMatch || confidence > bestMatch.confidence)) {
-          bestMatch = { pixel, confidence }
+        const domainPrefix = product.primaryDomain?.split('.')[0]
+        const domainInName = Boolean(
+          domainPrefix &&
+          pixel.name.toLowerCase().includes(domainPrefix.toLowerCase()),
+        )
+        const confidence = exactOperationalNameMatch
+          ? 100
+          : domainInName
+            ? Math.max(nameConfidence, 70)
+            : nameConfidence
+
+        if (
+          confidence >= minConfidence &&
+          (bestMatches.length === 0 || confidence > bestMatches[0].confidence)
+        ) {
+          bestMatches = [{ pixel, confidence }]
+        } else if (
+          confidence >= minConfidence &&
+          bestMatches.length > 0 &&
+          confidence === bestMatches[0].confidence
+        ) {
+          bestMatches.push({ pixel, confidence })
         }
       }
-      
+      const bestMatch = bestMatches.length === 1 ? bestMatches[0] : null
+
       if (bestMatch) {
         // 更新产品的 Pixel 关联
-        const existingPixel = product.pixels.find((p: any) => p.pixelId === bestMatch!.pixel.id)
-        
+        const existingPixel = product.pixels.find(
+          (p: any) => p.pixelId === bestMatch!.pixel.id,
+        )
+
         if (!existingPixel) {
           product.pixels.push({
             pixelId: bestMatch.pixel.id,
@@ -381,9 +500,11 @@ export async function matchProductsWithPixels(
             matchMethod: 'auto_name',
             verified: false,
           })
-          
+
           // 同时添加账户关联
-          const existingAccount = product.accounts.find((a: any) => a.accountId === bestMatch!.pixel.accountId)
+          const existingAccount = product.accounts.find(
+            (a: any) => a.accountId === bestMatch!.pixel.accountId,
+          )
           if (!existingAccount) {
             product.accounts.push({
               accountId: bestMatch.pixel.accountId,
@@ -392,15 +513,15 @@ export async function matchProductsWithPixels(
               status: 'active',
             })
           }
-          
+
           // 设置主 Pixel（如果没有）
           if (!product.primaryPixelId) {
             product.primaryPixelId = bestMatch.pixel.id
           }
-          
+
           await product.save()
         }
-        
+
         result.matched++
         result.details.push({
           productId: product._id,
@@ -414,12 +535,22 @@ export async function matchProductsWithPixels(
         result.details.push({
           productId: product._id,
           productName: product.name,
-          confidence: 0,
+          confidence: bestMatches[0]?.confidence || 0,
+          ...(bestMatches.length > 1 && {
+            reason: 'ambiguous_best_match',
+            candidates: bestMatches.map((match) => ({
+              pixelId: match.pixel.id,
+              pixelName: match.pixel.name,
+              accountId: match.pixel.accountId,
+            })),
+          }),
         })
       }
     }
-    
-    logger.info(`[ProductMapping] Matching complete: ${result.matched} matched, ${result.unmatched} unmatched`)
+
+    logger.info(
+      `[ProductMapping] Matching complete: ${result.matched} matched, ${result.unmatched} unmatched`,
+    )
     return result
   } catch (error: any) {
     logger.error('[ProductMapping] Matching failed:', error)
@@ -441,36 +572,58 @@ export async function discoverAccountsByPixels(
   newAccountMappings: number
 }> {
   const result = { productsUpdated: 0, newAccountMappings: 0 }
-  
+
   try {
-    const products = await Product.find(combineFilters({
+    const products = await Product.find(
+      combineFilters(
+        {
+          status: 'active',
+          'pixels.0': { $exists: true }, // 至少有一个 Pixel
+        },
+        accessFilter,
+      ),
+    )
+
+    const accounts = await Account.find(
+      combineFilters(
+        {
+          channel: 'facebook',
+          status: { $ne: 'disabled' },
+        },
+        accountFilter,
+      ),
+    )
+    const fbTokens: any[] = await FbToken.find({
       status: 'active',
-      'pixels.0': { $exists: true } // 至少有一个 Pixel
-    }, accessFilter))
-    
-    const accounts = await Account.find(combineFilters({
-      channel: 'facebook',
-      status: { $ne: 'disabled' },
-    }, accountFilter))
-    const fbTokens: any[] = await FbToken.find({ status: 'active', ...tokenFilter })
-    
+      ...tokenFilter,
+    })
+
     if (fbTokens.length === 0) {
       logger.warn('[ProductMapping] No active Facebook token found')
       return result
     }
-    
+
     // 建立 Pixel -> Accounts 的映射
-    const pixelToAccounts = new Map<string, Array<{ accountId: string; accountName?: string }>>()
-    
+    const pixelToAccounts = new Map<
+      string,
+      Array<{ accountId: string; accountName?: string }>
+    >()
+
     for (const account of accounts) {
       try {
         const accountId = normalizeForStorage(account.accountId)
         const fbToken = await getScopedTokenForAccount(account, fbTokens)
         if (!fbToken) {
-          logger.warn(`[ProductMapping] No scoped Facebook token can access account ${accountId}`)
+          logger.warn(
+            `[ProductMapping] No scoped Facebook token can access account ${accountId}`,
+          )
           continue
         }
-        const pixels = await fetchAccountPixelsFromFacebook(accountId, fbToken.token, 'id')
+        const pixels = await fetchAccountPixelsFromFacebook(
+          accountId,
+          fbToken.token,
+          'id',
+        )
         for (const pixel of pixels) {
           const existing = pixelToAccounts.get(pixel.id) || []
           existing.push({ accountId, accountName: account.name })
@@ -480,16 +633,18 @@ export async function discoverAccountsByPixels(
         // 跳过失败的账户
       }
     }
-    
+
     // 更新产品的账户关联
     for (const product of products) {
       let updated = false
-      
+
       for (const pixelMapping of product.pixels) {
         const accountsForPixel = pixelToAccounts.get(pixelMapping.pixelId) || []
-        
+
         for (const acct of accountsForPixel) {
-          const existing = product.accounts.find((a: any) => a.accountId === acct.accountId)
+          const existing = product.accounts.find(
+            (a: any) => a.accountId === acct.accountId,
+          )
           if (!existing) {
             product.accounts.push({
               accountId: acct.accountId,
@@ -502,14 +657,16 @@ export async function discoverAccountsByPixels(
           }
         }
       }
-      
+
       if (updated) {
         await product.save()
         result.productsUpdated++
       }
     }
-    
-    logger.info(`[ProductMapping] Account discovery complete: ${result.productsUpdated} products updated, ${result.newAccountMappings} new account mappings`)
+
+    logger.info(
+      `[ProductMapping] Account discovery complete: ${result.productsUpdated} products updated, ${result.newAccountMappings} new account mappings`,
+    )
     return result
   } catch (error: any) {
     logger.error('[ProductMapping] Account discovery failed:', error)
@@ -522,35 +679,51 @@ export async function discoverAccountsByPixels(
 /**
  * 通过 URL 查找匹配的产品
  */
-export async function findProductByUrl(urlString: string, accessFilter: any = {}): Promise<any | null> {
+export async function findProductByUrl(
+  urlString: string,
+  accessFilter: any = {},
+): Promise<any | null> {
   const parsed = parseProductUrl(urlString)
   if (!parsed) return null
-  
+
   // 精确匹配
-  let product = await Product.findOne(combineFilters({ identifier: parsed.productIdentifier }, accessFilter))
+  let product = await Product.findOne(
+    combineFilters({ identifier: parsed.productIdentifier }, accessFilter),
+  )
   if (product) return product
-  
+
   // 域名匹配
-  product = await Product.findOne(combineFilters({ primaryDomain: parsed.domain }, accessFilter))
+  product = await Product.findOne(
+    combineFilters({ primaryDomain: parsed.domain }, accessFilter),
+  )
   return product
 }
 
 /**
  * 获取产品的可用投放账户
  */
-export async function getAvailableAccountsForProduct(productId: string, accessFilter: any = {}): Promise<Array<{
-  accountId: string
-  accountName?: string
-  pixelId?: string
-  pixelName?: string
-}>> {
-  const product = await Product.findOne(combineFilters({ _id: productId }, accessFilter))
+export async function getAvailableAccountsForProduct(
+  productId: string,
+  accessFilter: any = {},
+): Promise<
+  Array<{
+    accountId: string
+    accountName?: string
+    pixelId?: string
+    pixelName?: string
+  }>
+> {
+  const product = await Product.findOne(
+    combineFilters({ _id: productId }, accessFilter),
+  )
   if (!product) return []
-  
+
   return product.accounts
     .filter((a: any) => a.status === 'active')
     .map((a: any) => {
-      const pixel = product.pixels.find((p: any) => p.pixelId === a.throughPixelId)
+      const pixel = product.pixels.find(
+        (p: any) => p.pixelId === a.throughPixelId,
+      )
       return {
         accountId: a.accountId,
         accountName: a.accountName,
@@ -563,22 +736,27 @@ export async function getAvailableAccountsForProduct(productId: string, accessFi
 /**
  * 为自动投放选择最佳账户和 Pixel
  */
-export async function selectBestAccountForProduct(productId: string, accessFilter: any = {}): Promise<{
+export async function selectBestAccountForProduct(
+  productId: string,
+  accessFilter: any = {},
+): Promise<{
   accountId: string
   pixelId: string
   pixelName?: string
 } | null> {
-  const product = await Product.findOne(combineFilters({ _id: productId }, accessFilter))
+  const product = await Product.findOne(
+    combineFilters({ _id: productId }, accessFilter),
+  )
   if (!product) return null
-  
+
   // 获取主 Pixel
   const primaryPixel = (product as any).getPrimaryPixel()
   if (!primaryPixel) return null
-  
+
   // 获取最佳账户
   const accountId = (product as any).getBestAccount()
   if (!accountId) return null
-  
+
   return {
     accountId,
     pixelId: primaryPixel.pixelId,
@@ -600,21 +778,39 @@ export async function syncAllProductMappings(
   accountDiscovery: { productsUpdated: number; newAccountMappings: number }
 }> {
   logger.info('[ProductMapping] Starting full sync...')
-  
+
   // 步骤1: 从文案包扫描产品
-  const productResult = await scanProductsFromCopyPackages(accessFilter, ownerData)
-  
+  const productResult = await scanProductsFromCopyPackages(
+    accessFilter,
+    ownerData,
+  )
+
   // 步骤2: 匹配 Pixels
-  const pixelResult = await matchProductsWithPixels(50, accessFilter, accountFilter, tokenFilter)
-  
+  const pixelResult = await matchProductsWithPixels(
+    50,
+    accessFilter,
+    accountFilter,
+    tokenFilter,
+  )
+
   // 步骤3: 发现账户
-  const accountResult = await discoverAccountsByPixels(accessFilter, accountFilter, tokenFilter)
-  
+  const accountResult = await discoverAccountsByPixels(
+    accessFilter,
+    accountFilter,
+    tokenFilter,
+  )
+
   logger.info('[ProductMapping] Full sync complete!')
-  
+
   return {
-    products: { created: productResult.created, updated: productResult.updated },
-    pixelMatches: { matched: pixelResult.matched, unmatched: pixelResult.unmatched },
+    products: {
+      created: productResult.created,
+      updated: productResult.updated,
+    },
+    pixelMatches: {
+      matched: pixelResult.matched,
+      unmatched: pixelResult.unmatched,
+    },
     accountDiscovery: accountResult,
   }
 }

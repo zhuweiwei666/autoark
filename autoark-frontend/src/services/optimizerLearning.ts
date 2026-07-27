@@ -240,6 +240,37 @@ export interface ExecutionSetup {
     name: string;
     websiteUrl?: string;
     productMetadata?: Record<string, any>;
+    nameIdentity?: {
+      key: string;
+      displayName: string;
+      tokens: string[];
+    };
+    nameMatch?: {
+      status: "unparseable" | "not_found" | "candidates" | "ambiguous";
+      productKey?: string;
+      productName?: string;
+      candidates: Array<{
+        authorizationType: "system_user" | "personal_user";
+        tokenId: string;
+        metaCredentialId?: string;
+        authorizationName?: string;
+        accountId: string;
+        accountName?: string;
+        pixelId: string;
+        pixelName?: string;
+        confidence: number;
+        matchMethod: "exact_normalized_name";
+      }>;
+      ambiguousAccounts: Array<{
+        authorizationType: "system_user" | "personal_user";
+        tokenId: string;
+        metaCredentialId?: string;
+        authorizationName?: string;
+        accountId: string;
+        accountName?: string;
+        pixels: Array<{ pixelId: string; pixelName?: string }>;
+      }>;
+    };
     product?: {
       id: string;
       name: string;
@@ -371,6 +402,34 @@ export const getPlaybookById = (id: string) =>
 export const getReplicaAssets = (playbookId: string) =>
   requestJson<ExecutionSetup>(
     `/api/optimizer-learning/replica-assets?playbookId=${encodeURIComponent(playbookId)}`,
+  );
+
+export const confirmNamePixelMapping = (
+  playbookId: string,
+  input: {
+    copywritingPackageId: string;
+    tokenId: string;
+    accountId: string;
+    pixelId: string;
+  },
+) =>
+  requestJson<{
+    productId: string;
+    productName: string;
+    copywritingPackageId: string;
+    productKey?: string;
+    tokenId: string;
+    accountId: string;
+    accountName?: string;
+    pixelId: string;
+    pixelName?: string;
+    verified: true;
+  }>(
+    `/api/optimizer-learning/playbooks/${encodeURIComponent(playbookId)}/name-pixel-mappings`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
   );
 
 export const materializeReusableAssets = (
