@@ -51,6 +51,19 @@ export const isFacebookSyncEnabled = (): boolean => {
   return TRUE_VALUES.has(configured)
 }
 
+export const isFacebookAggregationEnabled = (): boolean => {
+  const configured =
+    process.env.FACEBOOK_AGGREGATION_ENABLED?.trim().toLowerCase()
+  if (!configured) {
+    return isFacebookSyncEnabled()
+  }
+  return TRUE_VALUES.has(configured)
+}
+
+export const getFacebookAggregationConcurrency = (): number => {
+  return boundedInteger(process.env.FACEBOOK_AGGREGATION_CONCURRENCY, 2, 1, 5)
+}
+
 export const getFacebookSyncAccountBatchLimit = (): number => {
   return boundedInteger(
     process.env.FACEBOOK_SYNC_ACCOUNT_BATCH_LIMIT,

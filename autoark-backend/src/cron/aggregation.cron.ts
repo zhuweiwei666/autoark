@@ -1,47 +1,59 @@
 /**
  * 📊 预聚合数据定时刷新
  *
- * - 服务启动时立即刷新一次
- * - 每 10 分钟刷新最近 3 天的数据
+ * - 服务启动时刷新今天一次
+ * - 每 10 分钟刷新今天的数据
+ * - 上一轮未结束时跳过，避免重叠放大 Meta 请求
  */
 
 import cron from 'node-cron'
+import dayjs from 'dayjs'
 import logger from '../utils/logger'
-import { isFacebookSyncEnabled } from '../config/facebookSync'
-import { refreshRecentDays } from '../services/aggregation.service'
+import { isFacebookAggregationEnabled } from '../config/facebookSync'
+import { refreshAggregation } from '../services/aggregation.service'
 
 export function initAggregationCron() {
-  if (!isFacebookSyncEnabled()) {
+  if (!isFacebookAggregationEnabled()) {
     logger.warn(
-      '[AggregationCron] Facebook sync disabled; aggregation cron not scheduled',
+      '[AggregationCron] Meta aggregation disabled; cron not scheduled',
     )
     return
   }
 
-  // 🚀 服务启动时立即刷新一次（异步，不阻塞启动）
-  setTimeout(async () => {
-    logger.info('[AggregationCron] Starting initial refresh...')
-    try {
-      await refreshRecentDays()
-      logger.info('[AggregationCron] Initial refresh completed')
-    } catch (error: any) {
-      logger.error('[AggregationCron] Initial refresh failed:', error.message)
+  let refreshInFlight = false
+  const runRefresh = async (trigger: 'initial' | 'scheduled') => {
+    if (refreshInFlight) {
+      logger.warn(
+        `[AggregationCron] Refresh already in progress; skipping ${trigger} refresh`,
+      )
+      return
     }
-  }, 5000) // 延迟5秒启动，等待数据库连接稳定
+
+    refreshInFlight = true
+    const date = dayjs().format('YYYY-MM-DD')
+    logger.info(`[AggregationCron] Starting ${trigger} refresh for ${date}...`)
+    try {
+      await refreshAggregation(date)
+      logger.info(`[AggregationCron] ${trigger} refresh for ${date} completed`)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      logger.error(
+        `[AggregationCron] ${trigger} refresh for ${date} failed:`,
+        message,
+      )
+    } finally {
+      refreshInFlight = false
+    }
+  }
+
+  // 🚀 服务启动时立即刷新一次（异步，不阻塞启动）
+  setTimeout(() => runRefresh('initial'), 5000)
 
   // 每 10 分钟刷新一次
-  cron.schedule('*/10 * * * *', async () => {
-    logger.info('[AggregationCron] Starting scheduled refresh...')
-    try {
-      await refreshRecentDays()
-      logger.info('[AggregationCron] Scheduled refresh completed')
-    } catch (error: any) {
-      logger.error('[AggregationCron] Scheduled refresh failed:', error.message)
-    }
-  })
+  cron.schedule('*/10 * * * *', () => runRefresh('scheduled'))
 
   logger.info(
-    '[AggregationCron] Aggregation cron initialized (runs every 10 minutes)',
+    '[AggregationCron] Meta aggregation initialized (today only, every 10 minutes)',
   )
 }
 
