@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useAuth } from '../contexts/AuthContext'
 import { authFetch } from '../services/api'
+import MaterialVariantPanel from '../components/MaterialVariantPanel'
 import {
   buildMaterialQuery,
   createLatestRequestRunner,
@@ -111,8 +112,13 @@ interface Material {
   createdAt: string
   isFavorite?: boolean
   source?: {
+    type?: string
     platform?: string
     externalAccountId?: string
+  }
+  variant?: {
+    parentMaterialId?: string
+    reviewStatus?: 'pending' | 'approved' | 'rejected'
   }
   facebookMappings?: Array<{ accountId?: string }>
   usage?: {
@@ -194,6 +200,7 @@ export default function MaterialLibraryPage() {
   )
   const canManageExternal = isSuperAdmin ||
     Boolean(user?.permissions?.includes('materials:external:manage'))
+  const canCreateVideoVariants = isSuperAdmin || user?.role === 'org_admin'
   
   useEffect(() => {
     checkConfig()
@@ -782,6 +789,9 @@ export default function MaterialLibraryPage() {
       (selection.kind === 'smart' && selection.type === 'external-package')
     ) {
       badges.push('广大大')
+    }
+    if (platform === 'ai-host-v2' || material.source?.type === 'ai_variant') {
+      badges.push('AI变体')
     }
     return badges
   }
@@ -1617,7 +1627,7 @@ export default function MaterialLibraryPage() {
                 </svg>
               </button>
             </div>
-            <div className="p-4">
+            <div className="max-h-[calc(90vh-65px)] overflow-y-auto p-4">
               <div className="bg-slate-100 rounded-lg overflow-hidden mb-4">
                 {viewMaterial.type === 'image' ? (
                   <img src={viewMaterial.storage.url} alt={viewMaterial.name} className="max-w-full max-h-[60vh] mx-auto" />
@@ -1713,6 +1723,26 @@ export default function MaterialLibraryPage() {
                     <div className="mt-2 text-xs text-slate-500">暂无外部来源</div>
                   )}
                 </div>
+              )}
+              {viewMaterial.variant?.reviewStatus && (
+                <div className="mt-3 rounded-lg border border-indigo-100 bg-indigo-50 p-3 text-sm text-indigo-800">
+                  AI 变体审核状态：
+                  {viewMaterial.variant.reviewStatus === 'pending'
+                    ? '待人工审核'
+                    : viewMaterial.variant.reviewStatus === 'approved'
+                      ? '已通过'
+                      : '已拒绝'}
+                </div>
+              )}
+              {canCreateVideoVariants && viewMaterial.type === 'video' && (
+                <MaterialVariantPanel
+                  key={viewMaterial._id}
+                  material={viewMaterial}
+                  onCompleted={() => {
+                    void loadMaterials()
+                    void loadFolders()
+                  }}
+                />
               )}
               <div className="mt-4">
                 <span className="text-slate-500 text-sm">URL：</span>
