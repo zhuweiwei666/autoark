@@ -27,6 +27,7 @@ import {
   createAdCreative,
   createAdSet,
   createCampaign,
+  uploadImageFromUrl,
   uploadVideoFromUrl,
 } from '../src/integration/facebook/bulkCreate.api'
 import { executeTaskForAccount, retryFailedItems } from '../src/services/bulkAd.service'
@@ -176,6 +177,65 @@ describe('bulk ad execution diagnostics', () => {
       source: 'meta',
     })
     expect(storedErrors[0].operatorMessage).toContain('Invalid image hash')
+  })
+
+  it('uploads images into the target ad account instead of reusing a stored hash', async () => {
+    const task = buildTask()
+    jest.spyOn(AdTask, 'findById')
+      .mockResolvedValueOnce(task as any)
+      .mockResolvedValueOnce(task as any)
+    jest.spyOn(AdTask, 'findOneAndUpdate').mockResolvedValue(task as any)
+    jest.spyOn(AdTask, 'findByIdAndUpdate').mockResolvedValue(task as any)
+    jest.spyOn(FbToken, 'findOne').mockResolvedValue({ token: 'fb_token' } as any)
+    jest.spyOn(CreativeGroup, 'find').mockResolvedValue([{
+      _id: '665000000000000000000711',
+      name: 'Image Group',
+      accountId: '999',
+      materials: [{
+        _id: '665000000000000000000713',
+        type: 'image',
+        name: 'Image 1',
+        url: 'https://example.com/image.jpg',
+        facebookImageHash: 'source_account_hash',
+        status: 'uploaded',
+      }],
+    }] as any)
+    jest.spyOn(CopywritingPackage, 'find').mockResolvedValue([{
+      _id: '665000000000000000000712',
+      name: 'Copy Package',
+      links: { websiteUrl: 'https://example.com' },
+      content: {
+        primaryTexts: ['Primary'],
+        headlines: ['Headline'],
+        descriptions: ['Description'],
+      },
+      callToAction: 'SHOP_NOW',
+    }] as any)
+    jest.spyOn(Ad, 'findOneAndUpdate').mockResolvedValue({} as any)
+    jest.spyOn(AdMaterialMapping as any, 'recordMapping').mockResolvedValue({} as any)
+    ;(createCampaign as jest.Mock).mockResolvedValue({ success: true, id: 'camp_1' })
+    ;(createAdSet as jest.Mock).mockResolvedValue({ success: true, id: 'adset_1' })
+    ;(uploadImageFromUrl as jest.Mock).mockResolvedValue({
+      success: true,
+      hash: 'target_account_hash',
+    })
+    ;(createAdCreative as jest.Mock).mockResolvedValue({ success: true, id: 'creative_1' })
+    ;(createAd as jest.Mock).mockResolvedValue({ success: true, id: 'ad_1' })
+
+    await executeTaskForAccount(taskId, '123')
+
+    expect(uploadImageFromUrl).toHaveBeenCalledWith({
+      accountId: '123',
+      token: 'fb_token',
+      imageUrl: 'https://example.com/image.jpg',
+      name: 'Image 1',
+    })
+    const creativePayload = (createAdCreative as jest.Mock).mock.calls[0][0]
+    expect(creativePayload.objectStorySpec.link_data).toMatchObject({
+      image_hash: 'target_account_hash',
+    })
+    expect(creativePayload.objectStorySpec.link_data.image_hash).not.toBe('source_account_hash')
+    expect(creativePayload.objectStorySpec.link_data.picture).toBeUndefined()
   })
 
   it('does not send displayLink as video_data.caption', async () => {

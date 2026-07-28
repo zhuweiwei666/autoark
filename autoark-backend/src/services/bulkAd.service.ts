@@ -1881,7 +1881,7 @@ export const executeTaskForAccount = async (
       adsetName: allAdsetNames[idx] || `adset_${idx + 1}`,
     }))
     
-    // ===== 优化：先并行上传所有视频 =====
+    // ===== 优化：先并行上传需要绑定到目标广告账户的素材 =====
     const allMaterials: Array<{ cgIndex: number; matIndex: number; material: any; copywriting: any }> = []
     for (let cgIndex = 0; cgIndex < creativeGroups.length; cgIndex++) {
       const creativeGroup = creativeGroups[cgIndex]
@@ -1934,6 +1934,97 @@ export const executeTaskForAccount = async (
       }
       logger.info(`[BulkAd] All videos uploaded: ${videoUploadResults.size}/${videosToUpload.length} success`)
     }
+
+    // Meta image_hash is scoped to an ad account. A stored hash can only be
+    // reused when the creative group is explicitly bound to this same account;
+    // portable/legacy groups must upload their URL into the target account first.
+    type ImageMaterialEntry = Pick<
+      (typeof allMaterials)[number],
+      'cgIndex' | 'material'
+    >
+    const targetAccountId = normalizeForStorage(accountId)
+    const shouldUploadImageToTarget = ({
+      cgIndex,
+      material,
+    }: ImageMaterialEntry) => {
+      if (material.type !== 'image' || !material.url) return false
+      const creativeGroup = creativeGroups[cgIndex]
+      const sourceAccountId = normalizeForStorage(creativeGroup?.accountId)
+      return (
+        !material.facebookImageHash ||
+        creativeGroup?.reusePolicy?.requiresTargetUpload === true ||
+        !sourceAccountId ||
+        sourceAccountId !== targetAccountId
+      )
+    }
+
+    const imagesToUpload = Array.from(
+      new Map(
+        allMaterials
+          .filter(shouldUploadImageToTarget)
+          .map((entry) => [entry.material.url as string, entry] as const),
+      ).values(),
+    )
+    const imageUploadResults = new Map<string, string>()
+    if (imagesToUpload.length > 0) {
+      logger.info(
+        `[BulkAd] Uploading ${imagesToUpload.length} images to target account...`,
+      )
+      const IMAGE_BATCH_SIZE = 5
+      for (let i = 0; i < imagesToUpload.length; i += IMAGE_BATCH_SIZE) {
+        const results = await Promise.all(
+          imagesToUpload
+            .slice(i, i + IMAGE_BATCH_SIZE)
+            .map(async ({ material }) => {
+              try {
+                const result = await uploadImageFromUrl({
+                  accountId,
+                  token,
+                  imageUrl: material.url,
+                  name: material.name,
+                })
+                if (result?.success && result.hash) {
+                  return { url: material.url, hash: result.hash }
+                }
+                logger.error(
+                  `[BulkAd] Image upload failed: ${result?.error?.message}`,
+                )
+                stepDiagnostics.push(
+                  diagnoseFacebookStepError(
+                    'image_upload',
+                    result?.error,
+                    `Image upload failed: ${material.name || material.url}`,
+                  ),
+                )
+                return undefined
+              } catch (err: unknown) {
+                const message = err instanceof Error ? err.message : String(err)
+                logger.error(`[BulkAd] Image upload error: ${message}`)
+                stepDiagnostics.push(
+                  diagnoseBulkAdError(err, {
+                    fallbackCode: 'CREATIVE_OR_MATERIAL_FAILED',
+                    entityType: 'material',
+                  }),
+                )
+                return undefined
+              }
+            }),
+        )
+        for (const result of results) {
+          if (result) imageUploadResults.set(result.url, result.hash)
+        }
+      }
+      logger.info(
+        `[BulkAd] Images uploaded to target account: ${imageUploadResults.size}/${imagesToUpload.length} success`,
+      )
+    }
+
+    const resolveImageHashForTarget = (
+      entry: ImageMaterialEntry,
+    ): string | undefined =>
+      shouldUploadImageToTarget(entry)
+        ? imageUploadResults.get(entry.material.url)
+        : entry.material.facebookImageHash
     
     // ===== 1) 为每个素材创建一次 Creative（可复用到多个广告组） =====
     const creativeEntries: Array<{
@@ -1951,36 +2042,10 @@ export const executeTaskForAccount = async (
     let expectedDynamicCreativeCount = 0
 
     if (dynamicCreativeEnabled) {
-      const imageUploadResults = new Map<string, string>()
-      const imagesToUpload = allMaterials.filter(({ material }) =>
-        material.type === 'image' && !material.facebookImageHash && material.url
-      )
-      const IMAGE_BATCH_SIZE = 5
-      for (let i = 0; i < imagesToUpload.length; i += IMAGE_BATCH_SIZE) {
-        const results = await Promise.all(imagesToUpload.slice(i, i + IMAGE_BATCH_SIZE).map(async ({ material }) => {
-          const result = await uploadImageFromUrl({
-            accountId,
-            token,
-            imageUrl: material.url,
-            name: material.name,
-          })
-          if (!result.success || !result.hash) {
-            stepDiagnostics.push(diagnoseFacebookStepError(
-              'image_upload',
-              result.error,
-              `Image upload failed: ${material.name || material.url}`,
-            ))
-            return undefined
-          }
-          return { url: material.url, hash: result.hash }
-        }))
-        results.filter(Boolean).forEach((result: any) => imageUploadResults.set(result.url, result.hash))
-      }
-
       const dynamicMaterials = allMaterials.map((entry) => {
         const { material } = entry
         if (material.type === 'image') {
-          const hash = material.facebookImageHash || imageUploadResults.get(material.url)
+          const hash = resolveImageHashForTarget(entry)
           return hash ? { ...entry, asset: { type: 'image', hash } } : undefined
         }
         if (material.type === 'video') {
@@ -2086,10 +2151,12 @@ export const executeTaskForAccount = async (
       // 处理素材引用
       let materialRef: any = {}
       if (material.type === 'image') {
-        if (material.facebookImageHash) {
-          materialRef.image_hash = material.facebookImageHash
-        } else if (material.url) {
-          materialRef.image_url = material.url
+        const imageHash = resolveImageHashForTarget({ cgIndex, material })
+        if (imageHash) {
+          materialRef.image_hash = imageHash
+        } else if (material.url && shouldUploadImageToTarget({ cgIndex, material })) {
+          logger.error(`[BulkAd] No target-account image hash for: ${material.name}, skipping`)
+          continue
         }
       } else if (material.type === 'video') {
         if (material.facebookVideoId) {
@@ -2115,7 +2182,7 @@ export const executeTaskForAccount = async (
       }
       
       // 检查是否有有效素材
-      if (!materialRef.image_hash && !materialRef.image_url && !materialRef.video_id) {
+      if (!materialRef.image_hash && !materialRef.video_id) {
         logger.warn(`[BulkAd] No valid material reference for material: ${material.name}, skipping`)
         continue
       }
@@ -2147,8 +2214,6 @@ export const executeTaskForAccount = async (
         
         if (materialRef.image_hash) {
           objectStorySpec.link_data.image_hash = materialRef.image_hash
-        } else if (materialRef.image_url) {
-          objectStorySpec.link_data.picture = materialRef.image_url
         } else if (materialRef.video_id) {
           // 视频广告：使用 video_data 替代 link_data
           const link = objectStorySpec.link_data.link
