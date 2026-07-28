@@ -9,6 +9,8 @@ import fbTokenRoutes from './routes/fbToken.routes'
 import userSettingsRoutes from './routes/user.settings.routes' // New: User settings routes
 import bulkAdRoutes from './routes/bulkAd.routes' // New: Bulk ad creation routes
 import materialRoutes from './routes/material.routes' // New: Material management routes
+import materialVariantRoutes from './routes/materialVariant.routes'
+import materialVariantCallbackRoutes from './routes/materialVariantCallback.routes'
 import materialMetricsRoutes from './routes/materialMetrics.routes' // New: Material metrics & recommendations
 import agentRoutes from './domain/agent/agent.controller' // New: AI Agent routes
 import summaryRoutes from './controllers/summary.controller' // New: 预聚合数据快速读取
@@ -41,6 +43,7 @@ declare global {
   namespace Express {
     interface Request {
       requestId?: string
+      rawBody?: Buffer
     }
   }
 }
@@ -72,7 +75,12 @@ app.use(cors({
   },
   credentials: true,
 }))
-app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '2mb' }))
+app.use(express.json({
+  limit: process.env.JSON_BODY_LIMIT || '2mb',
+  verify(req, _res, buffer) {
+    ;(req as Request).rawBody = Buffer.from(buffer)
+  },
+}))
 
 const authAttempts = new Map<string, { count: number; resetAt: number }>()
 const authRateLimit = (req: Request, res: Response, next: NextFunction) => {
@@ -174,6 +182,8 @@ app.use('/api/fb-token', fbTokenRoutes) // Facebook token management
 app.use('/api/user-settings', userSettingsRoutes) // New: User settings management
 app.use('/api/bulk-ad', bulkAdRoutes) // New: Bulk ad creation management
 app.use('/api/materials', materialRoutes) // New: Material management
+app.use('/api/material-variants', materialVariantRoutes)
+app.use('/api/internal/generation/material-variants', materialVariantCallbackRoutes)
 app.use('/api/material-metrics', materialMetricsRoutes) // New: Material metrics & recommendations
 app.use('/api/agent', agentRoutes) // New: AI Agent
 app.use('/api/summary', summaryRoutes) // New: 预聚合数据快速读取（加速前端页面）

@@ -17,6 +17,7 @@ export { default as AiExecutionMandate } from './AiExecutionMandate'
 
 // 素材管理
 export { default as Material } from './Material'
+export { default as MaterialVariantJob } from './MaterialVariantJob'
 export { default as Folder } from './Folder'
 export { default as MaterialMetrics } from './MaterialMetrics'
 export { default as AdMaterialMapping } from './AdMaterialMapping'

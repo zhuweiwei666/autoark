@@ -91,7 +91,7 @@ const materialSchema = new mongoose.Schema(
     
     // 素材来源
     source: {
-      type: { type: String, enum: ['upload', 'import'], default: 'upload' },
+      type: { type: String, enum: ['upload', 'import', 'ai_variant'], default: 'upload' },
       platform: { type: String },
       externalCreativeId: { type: String },
       externalAccountId: { type: String },
@@ -99,6 +99,31 @@ const materialSchema = new mongoose.Schema(
       isOriginal: { type: Boolean },
       importedAt: { type: Date },
       importedBy: { type: String },
+    },
+
+    // AI 素材变体血缘。变体只进入素材库待人工审核，不在回调链路中自动发布广告。
+    variant: {
+      parentMaterialId: { type: mongoose.Schema.Types.ObjectId, ref: 'Material' },
+      rootMaterialId: { type: mongoose.Schema.Types.ObjectId, ref: 'Material' },
+      variantJobId: { type: mongoose.Schema.Types.ObjectId, ref: 'MaterialVariantJob' },
+      generationJobId: { type: String },
+      provider: { type: String },
+      capability: { type: String },
+      prompt: { type: String },
+      negativePrompt: { type: String },
+      referenceImageUrl: { type: String },
+      strength: { type: Number },
+      seed: { type: Number },
+      durationSeconds: { type: Number },
+      frameRate: { type: Number },
+      aspectRatio: { type: String },
+      preserveAudio: { type: Boolean },
+      reviewStatus: {
+        type: String,
+        enum: ['pending', 'approved', 'rejected'],
+        default: 'pending',
+      },
+      createdAt: { type: Date },
     },
 
     // Exact-content duplicate retained during the safety window after consolidation.
@@ -162,6 +187,9 @@ materialSchema.index({ folder: 1, createdAt: -1 })
 materialSchema.index({ tags: 1 })
 materialSchema.index({ createdBy: 1, createdAt: -1 })
 materialSchema.index({ 'storage.url': 1 })
+materialSchema.index({ 'variant.parentMaterialId': 1, createdAt: -1 })
+materialSchema.index({ 'variant.rootMaterialId': 1, createdAt: -1 })
+materialSchema.index({ 'variant.variantJobId': 1 }, { unique: true, sparse: true })
 
 // 指纹索引（核心）
 materialSchema.index({ fingerprintKey: 1 }, { unique: true, sparse: true })
