@@ -34,6 +34,20 @@ atomically updates only these named entries in `/root/prod.env` and
 override is not set, the value already present in the selected environment source
 is preserved.
 
+Meta ingestion and dashboard aggregation have separate production gates:
+
+```dotenv
+FACEBOOK_SYNC_ENABLED=false
+FACEBOOK_AGGREGATION_ENABLED=false
+FACEBOOK_AGGREGATION_CONCURRENCY=2
+```
+
+Keep `FACEBOOK_SYNC_ENABLED=false` while the Facebook queue backlog is
+quarantined. `FACEBOOK_AGGREGATION_ENABLED=true` restores only today's
+read-only Insights aggregation. The aggregation cron is non-overlapping and
+caps concurrent account requests at `FACEBOOK_AGGREGATION_CONCURRENCY` (1–5,
+default 2).
+
 ## Standard Release Flow
 
 1. Merge or push the release ref to GitHub.

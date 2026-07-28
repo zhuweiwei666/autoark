@@ -24,6 +24,7 @@ import Account from '../models/Account'
 import Campaign from '../models/Campaign'
 import { fetchInsights } from '../integration/facebook/insights.api'
 import { resolveAccountOperationalAuthorization } from './metaBusinessCredential.service'
+import { getFacebookAggregationConcurrency } from '../config/facebookSync'
 
 // 国家代码到名称的映射
 const COUNTRY_NAMES: Record<string, string> = {
@@ -95,10 +96,10 @@ export async function refreshAggregation(date: string, forceRefresh = false): Pr
     const optimizerMap = new Map<string, any>()
 
     // === 并发处理逻辑 ===
-    const CONCURRENCY_LIMIT = 10
+    const concurrencyLimit = getFacebookAggregationConcurrency()
     const chunks = []
-    for (let i = 0; i < accounts.length; i += CONCURRENCY_LIMIT) {
-      chunks.push(accounts.slice(i, i + CONCURRENCY_LIMIT))
+    for (let i = 0; i < accounts.length; i += concurrencyLimit) {
+      chunks.push(accounts.slice(i, i + concurrencyLimit))
     }
 
     let processedCount = 0
