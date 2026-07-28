@@ -25,6 +25,8 @@ import automationJobRoutes from './routes/automationJob.routes' // New: 自动�
 import commercialRoutes from './routes/commercial.routes' // SaaS commercial readiness
 import agentV2Routes from './agent/agent.controller' // Agent V2: LLM-powered multi-agent system
 import optimizerLearningRoutes from './routes/optimizerLearning.routes'
+import productLinkPoolRoutes from './routes/productLinkPool.routes'
+import productLinkRedirectRoutes from './routes/productLinkRedirect.routes'
 import { handleFeishuInteraction } from './controllers/feishu.webhook.controller'
 import logger from './utils/logger'
 import { errorHandler } from './middlewares/errorHandler'
@@ -153,6 +155,9 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   next()
 })
 
+// Public weighted product-pool short links. This must stay ahead of the SPA fallback.
+app.use('/r', productLinkRedirectRoutes)
+
 // API Routes
 // 认证路由（公开）
 app.use('/api/auth', authRateLimit, authRoutes)
@@ -180,6 +185,7 @@ app.use('/api/automation-jobs', automationJobRoutes) // New: AI Planner/Executor
 app.use('/api/commercial', commercialRoutes) // SaaS readiness, plan and quota status
 app.use('/api/v2/agent', agentV2Routes) // Agent V2: LLM-powered multi-agent system
 app.use('/api/optimizer-learning', optimizerLearningRoutes)
+app.use('/api/product-link-pools', productLinkPoolRoutes)
 
 // 飞书 Webhook 交互回调
 app.post('/api/webhooks/feishu/interaction', handleFeishuInteraction)

@@ -15,6 +15,7 @@ import {
   ImageSquare,
   Key,
   Lightning,
+  LinkSimple,
   List,
   Megaphone,
   Pulse,
@@ -192,6 +193,12 @@ export default function Layout({ children }: LayoutProps) {
         { to: "/bulk-ad/review", label: "审核状态", icon: CheckSquareOffset },
         { to: "/bulk-ad/assets", label: "资产管理", icon: Database },
         { to: "/bulk-ad/materials", label: "素材库", icon: FolderOpen },
+        {
+          to: "/product-link-pools",
+          label: "产品短链",
+          icon: LinkSimple,
+          adminOnly: true,
+        },
       ],
     },
     {
