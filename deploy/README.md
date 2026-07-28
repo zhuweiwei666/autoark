@@ -58,7 +58,16 @@ AUTOARK_REF=<verified-40-character-sha> AUTOARK_SKIP_VERIFY=true bash deploy/pro
 GitHub Actions supplies `GUANGDADA_API_KEY` and
 `META_CREDENTIAL_ENCRYPTION_KEY` from repository secrets of the same names, and
 `EXTERNAL_MATERIAL_SYNC_ENABLED` from the repository variable of the same name
-only to the deploy step. The production job is protected by the
+only to the deploy step. The AI video variant contract is synchronized through
+the same guarded transaction:
+
+- production secrets: `AI_HOST_GENERATION_API_KEY`,
+  `AI_HOST_GENERATION_HMAC_SECRET`;
+- production variables: `AI_HOST_GENERATION_BASE_URL` (defaults to
+  `https://api.polarstar.work`) and `AUTOARK_PUBLIC_BASE_URL` (defaults to
+  `https://app.autoark.work`).
+
+The production job is protected by the
 GitHub `production` environment. Before any production secret is exposed, the
 workflow proves the requested commit is already contained in `origin/main` and
 passes only its immutable SHA to the deploy wrapper.

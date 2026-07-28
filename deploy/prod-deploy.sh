@@ -50,6 +50,34 @@ if [ "${META_CREDENTIAL_ENCRYPTION_KEY+x}" = 'x' ]; then
   META_CREDENTIAL_ENCRYPTION_KEY_OVERRIDE="$META_CREDENTIAL_ENCRYPTION_KEY"
 fi
 
+AI_HOST_GENERATION_BASE_URL_OVERRIDE_SET='false'
+AI_HOST_GENERATION_BASE_URL_OVERRIDE=''
+if [ "${AI_HOST_GENERATION_BASE_URL+x}" = 'x' ]; then
+  AI_HOST_GENERATION_BASE_URL_OVERRIDE_SET='true'
+  AI_HOST_GENERATION_BASE_URL_OVERRIDE="$AI_HOST_GENERATION_BASE_URL"
+fi
+
+AI_HOST_GENERATION_API_KEY_OVERRIDE_SET='false'
+AI_HOST_GENERATION_API_KEY_OVERRIDE=''
+if [ "${AI_HOST_GENERATION_API_KEY+x}" = 'x' ]; then
+  AI_HOST_GENERATION_API_KEY_OVERRIDE_SET='true'
+  AI_HOST_GENERATION_API_KEY_OVERRIDE="$AI_HOST_GENERATION_API_KEY"
+fi
+
+AI_HOST_GENERATION_HMAC_SECRET_OVERRIDE_SET='false'
+AI_HOST_GENERATION_HMAC_SECRET_OVERRIDE=''
+if [ "${AI_HOST_GENERATION_HMAC_SECRET+x}" = 'x' ]; then
+  AI_HOST_GENERATION_HMAC_SECRET_OVERRIDE_SET='true'
+  AI_HOST_GENERATION_HMAC_SECRET_OVERRIDE="$AI_HOST_GENERATION_HMAC_SECRET"
+fi
+
+AUTOARK_PUBLIC_BASE_URL_OVERRIDE_SET='false'
+AUTOARK_PUBLIC_BASE_URL_OVERRIDE=''
+if [ "${AUTOARK_PUBLIC_BASE_URL+x}" = 'x' ]; then
+  AUTOARK_PUBLIC_BASE_URL_OVERRIDE_SET='true'
+  AUTOARK_PUBLIC_BASE_URL_OVERRIDE="$AUTOARK_PUBLIC_BASE_URL"
+fi
+
 case "$EXTERNAL_MATERIAL_SYNC_ENABLED_OVERRIDE_SET:$EXTERNAL_MATERIAL_SYNC_ENABLED_OVERRIDE" in
   false: | true:true | true:false) ;;
   *)
@@ -71,9 +99,41 @@ case "$META_CREDENTIAL_ENCRYPTION_KEY_OVERRIDE" in
     exit 1
     ;;
 esac
+for value in \
+  "$AI_HOST_GENERATION_BASE_URL_OVERRIDE" \
+  "$AI_HOST_GENERATION_API_KEY_OVERRIDE" \
+  "$AI_HOST_GENERATION_HMAC_SECRET_OVERRIDE" \
+  "$AUTOARK_PUBLIC_BASE_URL_OVERRIDE"; do
+  case "$value" in
+    *$'\n'* | *$'\r'*)
+      echo "AI video variant production values must each be a single line."
+      exit 1
+      ;;
+  esac
+done
 if [ "$META_CREDENTIAL_ENCRYPTION_KEY_OVERRIDE_SET" = 'true' ] &&
   [[ ! "$META_CREDENTIAL_ENCRYPTION_KEY_OVERRIDE" =~ [^[:space:]] ]]; then
   echo "META_CREDENTIAL_ENCRYPTION_KEY must be non-empty when supplied."
+  exit 1
+fi
+if [ "$AI_HOST_GENERATION_BASE_URL_OVERRIDE_SET" = 'true' ] &&
+  [[ ! "$AI_HOST_GENERATION_BASE_URL_OVERRIDE" =~ ^https://[^[:space:]]+$ ]]; then
+  echo "AI_HOST_GENERATION_BASE_URL must be a non-empty HTTPS URL when supplied."
+  exit 1
+fi
+if [ "$AUTOARK_PUBLIC_BASE_URL_OVERRIDE_SET" = 'true' ] &&
+  [[ ! "$AUTOARK_PUBLIC_BASE_URL_OVERRIDE" =~ ^https://[^[:space:]]+$ ]]; then
+  echo "AUTOARK_PUBLIC_BASE_URL must be a non-empty HTTPS URL when supplied."
+  exit 1
+fi
+if [ "$AI_HOST_GENERATION_API_KEY_OVERRIDE_SET" = 'true' ] &&
+  [[ ! "$AI_HOST_GENERATION_API_KEY_OVERRIDE" =~ [^[:space:]] ]]; then
+  echo "AI_HOST_GENERATION_API_KEY must be non-empty when supplied."
+  exit 1
+fi
+if [ "$AI_HOST_GENERATION_HMAC_SECRET_OVERRIDE_SET" = 'true' ] &&
+  [ "${#AI_HOST_GENERATION_HMAC_SECRET_OVERRIDE}" -lt 16 ]; then
+  echo "AI_HOST_GENERATION_HMAC_SECRET must be at least 16 characters when supplied."
   exit 1
 fi
 
@@ -180,12 +240,28 @@ flag_override_set=''
 flag_override=''
 meta_key_override_set=''
 meta_key_override=''
+generation_base_url_override_set=''
+generation_base_url_override=''
+generation_api_key_override_set=''
+generation_api_key_override=''
+generation_hmac_secret_override_set=''
+generation_hmac_secret_override=''
+autoark_public_base_url_override_set=''
+autoark_public_base_url_override=''
 IFS= read -r -d '' key_override_set
 IFS= read -r -d '' key_override
 IFS= read -r -d '' flag_override_set
 IFS= read -r -d '' flag_override
 IFS= read -r -d '' meta_key_override_set
 IFS= read -r -d '' meta_key_override
+IFS= read -r -d '' generation_base_url_override_set
+IFS= read -r -d '' generation_base_url_override
+IFS= read -r -d '' generation_api_key_override_set
+IFS= read -r -d '' generation_api_key_override
+IFS= read -r -d '' generation_hmac_secret_override_set
+IFS= read -r -d '' generation_hmac_secret_override
+IFS= read -r -d '' autoark_public_base_url_override_set
+IFS= read -r -d '' autoark_public_base_url_override
 
 case "$key_override_set" in
   true | false) ;;
@@ -208,6 +284,19 @@ case "$meta_key_override_set" in
     exit 1
     ;;
 esac
+for override_state in \
+  "$generation_base_url_override_set" \
+  "$generation_api_key_override_set" \
+  "$generation_hmac_secret_override_set" \
+  "$autoark_public_base_url_override_set"; do
+  case "$override_state" in
+    true | false) ;;
+    *)
+      echo 'Invalid AI video variant override state.'
+      exit 1
+      ;;
+  esac
+done
 case "$key_override" in
   *$'\n'* | *$'\r'*)
     echo 'GUANGDADA_API_KEY must be a single line.'
@@ -220,9 +309,41 @@ case "$meta_key_override" in
     exit 1
     ;;
 esac
+for value in \
+  "$generation_base_url_override" \
+  "$generation_api_key_override" \
+  "$generation_hmac_secret_override" \
+  "$autoark_public_base_url_override"; do
+  case "$value" in
+    *$'\n'* | *$'\r'*)
+      echo 'AI video variant production values must each be a single line.'
+      exit 1
+      ;;
+  esac
+done
 if [ "$meta_key_override_set" = 'true' ] &&
   [[ ! "$meta_key_override" =~ [^[:space:]] ]]; then
   echo 'META_CREDENTIAL_ENCRYPTION_KEY must be non-empty when supplied.'
+  exit 1
+fi
+if [ "$generation_base_url_override_set" = 'true' ] &&
+  [[ ! "$generation_base_url_override" =~ ^https://[^[:space:]]+$ ]]; then
+  echo 'AI_HOST_GENERATION_BASE_URL must be a non-empty HTTPS URL when supplied.'
+  exit 1
+fi
+if [ "$autoark_public_base_url_override_set" = 'true' ] &&
+  [[ ! "$autoark_public_base_url_override" =~ ^https://[^[:space:]]+$ ]]; then
+  echo 'AUTOARK_PUBLIC_BASE_URL must be a non-empty HTTPS URL when supplied.'
+  exit 1
+fi
+if [ "$generation_api_key_override_set" = 'true' ] &&
+  [[ ! "$generation_api_key_override" =~ [^[:space:]] ]]; then
+  echo 'AI_HOST_GENERATION_API_KEY must be non-empty when supplied.'
+  exit 1
+fi
+if [ "$generation_hmac_secret_override_set" = 'true' ] &&
+  [ "${#generation_hmac_secret_override}" -lt 16 ]; then
+  echo 'AI_HOST_GENERATION_HMAC_SECRET must be at least 16 characters when supplied.'
   exit 1
 fi
 
@@ -388,6 +509,10 @@ chmod 600 "$base_payload_temp" "$payload_temp"
 source_key=''
 source_flag='false'
 source_meta_key=''
+source_generation_base_url=''
+source_generation_api_key=''
+source_generation_hmac_secret=''
+source_autoark_public_base_url=''
 while IFS= read -r line || [ -n "$line" ]; do
   case "$line" in
     GUANGDADA_API_KEY=*)
@@ -399,6 +524,18 @@ while IFS= read -r line || [ -n "$line" ]; do
     META_CREDENTIAL_ENCRYPTION_KEY=*)
       source_meta_key="${line#META_CREDENTIAL_ENCRYPTION_KEY=}"
       ;;
+    AI_HOST_GENERATION_BASE_URL=*)
+      source_generation_base_url="${line#AI_HOST_GENERATION_BASE_URL=}"
+      ;;
+    AI_HOST_GENERATION_API_KEY=*)
+      source_generation_api_key="${line#AI_HOST_GENERATION_API_KEY=}"
+      ;;
+    AI_HOST_GENERATION_HMAC_SECRET=*)
+      source_generation_hmac_secret="${line#AI_HOST_GENERATION_HMAC_SECRET=}"
+      ;;
+    AUTOARK_PUBLIC_BASE_URL=*)
+      source_autoark_public_base_url="${line#AUTOARK_PUBLIC_BASE_URL=}"
+      ;;
     AUTOARK_DEPLOY_UPLOAD_GENERATION=*) ;;
     *)
       printf '%s\n' "$line"
@@ -409,6 +546,10 @@ done < "$source_env_path" > "$base_payload_temp"
 resolved_key="$source_key"
 resolved_flag="$source_flag"
 resolved_meta_key="$source_meta_key"
+resolved_generation_base_url="$source_generation_base_url"
+resolved_generation_api_key="$source_generation_api_key"
+resolved_generation_hmac_secret="$source_generation_hmac_secret"
+resolved_autoark_public_base_url="$source_autoark_public_base_url"
 if [ "$key_override_set" = 'true' ]; then
   resolved_key="$key_override"
 fi
@@ -417,6 +558,18 @@ if [ "$flag_override_set" = 'true' ]; then
 fi
 if [ "$meta_key_override_set" = 'true' ]; then
   resolved_meta_key="$meta_key_override"
+fi
+if [ "$generation_base_url_override_set" = 'true' ]; then
+  resolved_generation_base_url="$generation_base_url_override"
+fi
+if [ "$generation_api_key_override_set" = 'true' ]; then
+  resolved_generation_api_key="$generation_api_key_override"
+fi
+if [ "$generation_hmac_secret_override_set" = 'true' ]; then
+  resolved_generation_hmac_secret="$generation_hmac_secret_override"
+fi
+if [ "$autoark_public_base_url_override_set" = 'true' ]; then
+  resolved_autoark_public_base_url="$autoark_public_base_url_override"
 fi
 
 case "$resolved_flag" in
@@ -442,11 +595,42 @@ case "$resolved_meta_key" in
     exit 1
     ;;
 esac
+for value in \
+  "$resolved_generation_base_url" \
+  "$resolved_generation_api_key" \
+  "$resolved_generation_hmac_secret" \
+  "$resolved_autoark_public_base_url"; do
+  case "$value" in
+    *$'\n'* | *$'\r'*)
+      echo 'AI video variant production values must each resolve to one line.'
+      exit 1
+      ;;
+  esac
+done
+if [ -n "$resolved_generation_base_url" ] &&
+  [[ ! "$resolved_generation_base_url" =~ ^https://[^[:space:]]+$ ]]; then
+  echo 'AI_HOST_GENERATION_BASE_URL must resolve to an HTTPS URL.'
+  exit 1
+fi
+if [ -n "$resolved_autoark_public_base_url" ] &&
+  [[ ! "$resolved_autoark_public_base_url" =~ ^https://[^[:space:]]+$ ]]; then
+  echo 'AUTOARK_PUBLIC_BASE_URL must resolve to an HTTPS URL.'
+  exit 1
+fi
+if [ -n "$resolved_generation_hmac_secret" ] &&
+  [ "${#resolved_generation_hmac_secret}" -lt 16 ]; then
+  echo 'AI_HOST_GENERATION_HMAC_SECRET must resolve to at least 16 characters.'
+  exit 1
+fi
 
 cat "$base_payload_temp" > "$payload_temp"
 printf 'GUANGDADA_API_KEY=%s\n' "$resolved_key" >> "$payload_temp"
 printf 'EXTERNAL_MATERIAL_SYNC_ENABLED=%s\n' "$resolved_flag" >> "$payload_temp"
 printf 'META_CREDENTIAL_ENCRYPTION_KEY=%s\n' "$resolved_meta_key" >> "$payload_temp"
+printf 'AI_HOST_GENERATION_BASE_URL=%s\n' "$resolved_generation_base_url" >> "$payload_temp"
+printf 'AI_HOST_GENERATION_API_KEY=%s\n' "$resolved_generation_api_key" >> "$payload_temp"
+printf 'AI_HOST_GENERATION_HMAC_SECRET=%s\n' "$resolved_generation_hmac_secret" >> "$payload_temp"
+printf 'AUTOARK_PUBLIC_BASE_URL=%s\n' "$resolved_autoark_public_base_url" >> "$payload_temp"
 chmod 600 "$payload_temp"
 mv -f -- "$payload_temp" "$payload_path"
 payload_temp=''
@@ -517,14 +701,22 @@ printf -v QUOTED_REMOTE_DEPLOY_LOCK_FILE '%q' "$REMOTE_DEPLOY_LOCK_FILE"
 REMOTE_DEPLOY_TRANSACTION_COMMAND="bash -c $QUOTED_REMOTE_DEPLOY_TRANSACTION_SCRIPT -- $QUOTED_APP_DIR $QUOTED_REPO_URL $QUOTED_AUTOARK_REF $QUOTED_REMOTE_ENV_BACKUP $QUOTED_REMOTE_ENV_UPLOAD_STAGE $QUOTED_REMOTE_ENV_UPLOAD_CANDIDATE $QUOTED_REMOTE_ENV_UPLOAD_EXPECTED_GENERATION $QUOTED_REMOTE_DEPLOY_LOCK_FILE"
 
 log "Deploying verified commit=$AUTOARK_REF"
-log "Synchronizing GUANGDADA_API_KEY, EXTERNAL_MATERIAL_SYNC_ENABLED, and META_CREDENTIAL_ENCRYPTION_KEY"
-printf '%s\0%s\0%s\0%s\0%s\0%s\0' \
+log "Synchronizing governed production variables, including the ai-host-v2 video variant contract"
+printf '%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0' \
   "$GUANGDADA_API_KEY_OVERRIDE_SET" \
   "$GUANGDADA_API_KEY_OVERRIDE" \
   "$EXTERNAL_MATERIAL_SYNC_ENABLED_OVERRIDE_SET" \
   "$EXTERNAL_MATERIAL_SYNC_ENABLED_OVERRIDE" \
   "$META_CREDENTIAL_ENCRYPTION_KEY_OVERRIDE_SET" \
-  "$META_CREDENTIAL_ENCRYPTION_KEY_OVERRIDE" |
+  "$META_CREDENTIAL_ENCRYPTION_KEY_OVERRIDE" \
+  "$AI_HOST_GENERATION_BASE_URL_OVERRIDE_SET" \
+  "$AI_HOST_GENERATION_BASE_URL_OVERRIDE" \
+  "$AI_HOST_GENERATION_API_KEY_OVERRIDE_SET" \
+  "$AI_HOST_GENERATION_API_KEY_OVERRIDE" \
+  "$AI_HOST_GENERATION_HMAC_SECRET_OVERRIDE_SET" \
+  "$AI_HOST_GENERATION_HMAC_SECRET_OVERRIDE" \
+  "$AUTOARK_PUBLIC_BASE_URL_OVERRIDE_SET" \
+  "$AUTOARK_PUBLIC_BASE_URL_OVERRIDE" |
   ssh "$PROD_HOST" "$REMOTE_DEPLOY_TRANSACTION_COMMAND"
 
 if [ "${AUTOARK_SKIP_VERIFY:-false}" != "true" ]; then

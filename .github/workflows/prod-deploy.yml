@@ -91,6 +91,10 @@ jobs:
           GUANGDADA_API_KEY: ${{ secrets.GUANGDADA_API_KEY }}
           EXTERNAL_MATERIAL_SYNC_ENABLED: ${{ vars.EXTERNAL_MATERIAL_SYNC_ENABLED || 'false' }}
           META_CREDENTIAL_ENCRYPTION_KEY: ${{ secrets.META_CREDENTIAL_ENCRYPTION_KEY }}
+          AI_HOST_GENERATION_BASE_URL: ${{ vars.AI_HOST_GENERATION_BASE_URL || 'https://api.polarstar.work' }}
+          AI_HOST_GENERATION_API_KEY: ${{ secrets.AI_HOST_GENERATION_API_KEY }}
+          AI_HOST_GENERATION_HMAC_SECRET: ${{ secrets.AI_HOST_GENERATION_HMAC_SECRET }}
+          AUTOARK_PUBLIC_BASE_URL: ${{ vars.AUTOARK_PUBLIC_BASE_URL || 'https://app.autoark.work' }}
         run: bash deploy/prod-deploy.sh
 
       - name: Dry-run exact Leyon iOS targeting repair

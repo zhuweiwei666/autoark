@@ -202,6 +202,10 @@ $root_marker
 GUANGDADA_API_KEY=old-canonical-placeholder
 EXTERNAL_MATERIAL_SYNC_ENABLED=false
 META_CREDENTIAL_ENCRYPTION_KEY=old-canonical-meta-key
+AI_HOST_GENERATION_BASE_URL=https://old-generation.example
+AI_HOST_GENERATION_API_KEY=old-canonical-generation-key
+AI_HOST_GENERATION_HMAC_SECRET=old-canonical-generation-hmac
+AUTOARK_PUBLIC_BASE_URL=https://old-autoark.example
 EOF
   cat > "$DEPLOY_ENV" <<EOF
 MONGO_URI=mongodb://runtime-example
@@ -209,6 +213,10 @@ $runtime_marker
 GUANGDADA_API_KEY=old-runtime-placeholder
 EXTERNAL_MATERIAL_SYNC_ENABLED=false
 META_CREDENTIAL_ENCRYPTION_KEY=old-runtime-meta-key
+AI_HOST_GENERATION_BASE_URL=https://stale-generation.example
+AI_HOST_GENERATION_API_KEY=old-runtime-generation-key
+AI_HOST_GENERATION_HMAC_SECRET=old-runtime-generation-hmac
+AUTOARK_PUBLIC_BASE_URL=https://stale-autoark.example
 EOF
   chmod 600 "$ROOT_ENV" "$DEPLOY_ENV"
 }
@@ -228,6 +236,10 @@ assert_consistent_pair() {
   test "$(grep -c '^GUANGDADA_API_KEY=' "$ROOT_ENV")" -eq 1
   test "$(grep -c '^EXTERNAL_MATERIAL_SYNC_ENABLED=' "$ROOT_ENV")" -eq 1
   test "$(grep -c '^META_CREDENTIAL_ENCRYPTION_KEY=' "$ROOT_ENV")" -eq 1
+  test "$(grep -c '^AI_HOST_GENERATION_BASE_URL=' "$ROOT_ENV")" -eq 1
+  test "$(grep -c '^AI_HOST_GENERATION_API_KEY=' "$ROOT_ENV")" -eq 1
+  test "$(grep -c '^AI_HOST_GENERATION_HMAC_SECRET=' "$ROOT_ENV")" -eq 1
+  test "$(grep -c '^AUTOARK_PUBLIC_BASE_URL=' "$ROOT_ENV")" -eq 1
   if grep -Fq 'AUTOARK_DEPLOY_UPLOAD_GENERATION=' "$ROOT_ENV"; then
     echo 'internal upload generation leaked into runtime configuration'
     exit 1
@@ -239,6 +251,10 @@ run_deploy() {
     -u GUANGDADA_API_KEY \
     -u EXTERNAL_MATERIAL_SYNC_ENABLED \
     -u META_CREDENTIAL_ENCRYPTION_KEY \
+    -u AI_HOST_GENERATION_BASE_URL \
+    -u AI_HOST_GENERATION_API_KEY \
+    -u AI_HOST_GENERATION_HMAC_SECRET \
+    -u AUTOARK_PUBLIC_BASE_URL \
     PATH="$FAKE_BIN:$PATH" \
     SSH_ARG_LOG="$SSH_ARG_LOG" \
     SCP_REMOTE_LOG="$SCP_REMOTE_LOG" \
@@ -270,6 +286,10 @@ $marker
 GUANGDADA_API_KEY=file-owned-placeholder
 EXTERNAL_MATERIAL_SYNC_ENABLED=true
 META_CREDENTIAL_ENCRYPTION_KEY=file-owned-meta-key
+AI_HOST_GENERATION_BASE_URL=https://generation-file.example
+AI_HOST_GENERATION_API_KEY=file-owned-generation-key
+AI_HOST_GENERATION_HMAC_SECRET=file-owned-generation-hmac
+AUTOARK_PUBLIC_BASE_URL=https://autoark-file.example
 EOF
 }
 
@@ -279,11 +299,17 @@ seed_pair 'CANONICAL_ONLY=preserved' 'STALE_RUNTIME_ONLY=must-disappear'
 reset_observation_logs
 SECRET_SENTINEL='SENSITIVE_VALUE_SHOULD_STAY_STDIN_ONLY'
 META_SECRET_SENTINEL='META_VALUE_SHOULD_STAY_STDIN_ONLY'
+GENERATION_API_SENTINEL='GENERATION_API_VALUE_SHOULD_STAY_STDIN_ONLY'
+GENERATION_HMAC_SENTINEL='GENERATION_HMAC_VALUE_SHOULD_STAY_STDIN_ONLY'
 output="$(
   run_deploy \
     GUANGDADA_API_KEY="$SECRET_SENTINEL" \
     EXTERNAL_MATERIAL_SYNC_ENABLED=true \
-    META_CREDENTIAL_ENCRYPTION_KEY="$META_SECRET_SENTINEL"
+    META_CREDENTIAL_ENCRYPTION_KEY="$META_SECRET_SENTINEL" \
+    AI_HOST_GENERATION_BASE_URL='https://api.polarstar.work' \
+    AI_HOST_GENERATION_API_KEY="$GENERATION_API_SENTINEL" \
+    AI_HOST_GENERATION_HMAC_SECRET="$GENERATION_HMAC_SENTINEL" \
+    AUTOARK_PUBLIC_BASE_URL='https://app.autoark.work'
 )"
 assert_consistent_pair
 grep -qx 'CANONICAL_ONLY=preserved' "$ROOT_ENV"
@@ -294,6 +320,10 @@ fi
 grep -qx "GUANGDADA_API_KEY=$SECRET_SENTINEL" "$ROOT_ENV"
 grep -qx 'EXTERNAL_MATERIAL_SYNC_ENABLED=true' "$ROOT_ENV"
 grep -qx "META_CREDENTIAL_ENCRYPTION_KEY=$META_SECRET_SENTINEL" "$ROOT_ENV"
+grep -qx 'AI_HOST_GENERATION_BASE_URL=https://api.polarstar.work' "$ROOT_ENV"
+grep -qx "AI_HOST_GENERATION_API_KEY=$GENERATION_API_SENTINEL" "$ROOT_ENV"
+grep -qx "AI_HOST_GENERATION_HMAC_SECRET=$GENERATION_HMAC_SENTINEL" "$ROOT_ENV"
+grep -qx 'AUTOARK_PUBLIC_BASE_URL=https://app.autoark.work' "$ROOT_ENV"
 test "$(grep -c '^commit-root$' "$REMOTE_ORDER_LOG")" -eq 1
 test "$(grep -c '^commit-runtime$' "$REMOTE_ORDER_LOG")" -eq 1
 expected_order=$'remote-session\nlock-acquired\ncheckout\ncommit-root\ncommit-runtime\nserver-deploy-executed'
@@ -306,6 +336,11 @@ if grep -Fq "$META_SECRET_SENTINEL" "$SSH_ARG_LOG"; then
   echo 'Meta credential key reached ssh command-line arguments'
   exit 1
 fi
+if grep -Fq "$GENERATION_API_SENTINEL" "$SSH_ARG_LOG" ||
+  grep -Fq "$GENERATION_HMAC_SENTINEL" "$SSH_ARG_LOG"; then
+  echo 'generation tenant credentials reached ssh command-line arguments'
+  exit 1
+fi
 if grep -Fq "$SECRET_SENTINEL" <<<"$output"; then
   echo 'provider key reached deploy logs'
   exit 1
@@ -314,9 +349,12 @@ if grep -Fq "$META_SECRET_SENTINEL" <<<"$output"; then
   echo 'Meta credential key reached deploy logs'
   exit 1
 fi
-grep -Fq 'GUANGDADA_API_KEY' <<<"$output"
-grep -Fq 'EXTERNAL_MATERIAL_SYNC_ENABLED' <<<"$output"
-grep -Fq 'META_CREDENTIAL_ENCRYPTION_KEY' <<<"$output"
+if grep -Fq "$GENERATION_API_SENTINEL" <<<"$output" ||
+  grep -Fq "$GENERATION_HMAC_SENTINEL" <<<"$output"; then
+  echo 'generation tenant credentials reached deploy logs'
+  exit 1
+fi
+grep -Fq 'governed production variables' <<<"$output"
 
 # Local validation remains strict and must not leak under tracing.
 if run_deploy \
@@ -361,12 +399,43 @@ if grep -Fq 'INJECTED_META_ENTRY' "$TEST_DIR/multiline-meta-key.log"; then
   echo 'multiline Meta key failure leaked the key'
   exit 1
 fi
+if run_deploy \
+  AI_HOST_GENERATION_API_KEY='' >"$TEST_DIR/missing-generation-key.log" 2>&1; then
+  echo 'empty generation tenant API key was accepted as an explicit override'
+  exit 1
+fi
+if run_deploy \
+  AI_HOST_GENERATION_HMAC_SECRET='too-short' >"$TEST_DIR/short-generation-hmac.log" 2>&1; then
+  echo 'short generation tenant HMAC secret was accepted'
+  exit 1
+fi
+if run_deploy \
+  AI_HOST_GENERATION_BASE_URL='http://generation.internal' >"$TEST_DIR/http-generation-url.log" 2>&1; then
+  echo 'non-HTTPS generation base URL was accepted'
+  exit 1
+fi
+GENERATION_MULTILINE_PLACEHOLDER=$'generation-placeholder\nINJECTED_GENERATION_ENTRY=must-not-appear'
+if run_deploy \
+  AI_HOST_GENERATION_API_KEY="$GENERATION_MULTILINE_PLACEHOLDER" >"$TEST_DIR/multiline-generation-key.log" 2>&1; then
+  echo 'generation tenant API key accepted a multiline value'
+  exit 1
+fi
+if grep -Fq 'INJECTED_GENERATION_ENTRY' "$TEST_DIR/multiline-generation-key.log"; then
+  echo 'multiline generation key failure leaked the key'
+  exit 1
+fi
 TRACE_SENTINEL='TRACE_MODE_MUST_NOT_PRINT_THIS_VALUE'
 META_TRACE_SENTINEL='META_TRACE_MODE_MUST_NOT_PRINT_THIS_VALUE'
+GENERATION_API_TRACE_SENTINEL='GENERATION_API_TRACE_MUST_NOT_PRINT_THIS_VALUE'
+GENERATION_HMAC_TRACE_SENTINEL='GENERATION_HMAC_TRACE_MUST_NOT_PRINT_THIS_VALUE'
 env \
   -u GUANGDADA_API_KEY \
   -u EXTERNAL_MATERIAL_SYNC_ENABLED \
   -u META_CREDENTIAL_ENCRYPTION_KEY \
+  -u AI_HOST_GENERATION_BASE_URL \
+  -u AI_HOST_GENERATION_API_KEY \
+  -u AI_HOST_GENERATION_HMAC_SECRET \
+  -u AUTOARK_PUBLIC_BASE_URL \
   PATH="$FAKE_BIN:$PATH" \
   SSH_ARG_LOG="$SSH_ARG_LOG" \
   SCP_REMOTE_LOG="$SCP_REMOTE_LOG" \
@@ -382,6 +451,10 @@ env \
   GUANGDADA_API_KEY="$TRACE_SENTINEL" \
   EXTERNAL_MATERIAL_SYNC_ENABLED=true \
   META_CREDENTIAL_ENCRYPTION_KEY="$META_TRACE_SENTINEL" \
+  AI_HOST_GENERATION_BASE_URL='https://api.polarstar.work' \
+  AI_HOST_GENERATION_API_KEY="$GENERATION_API_TRACE_SENTINEL" \
+  AI_HOST_GENERATION_HMAC_SECRET="$GENERATION_HMAC_TRACE_SENTINEL" \
+  AUTOARK_PUBLIC_BASE_URL='https://app.autoark.work' \
   bash -x "$REPO_ROOT/deploy/prod-deploy.sh" >"$TEST_DIR/trace.log" 2>&1
 if grep -Fq "$TRACE_SENTINEL" "$TEST_DIR/trace.log"; then
   echo 'provider key leaked when shell tracing was requested'
@@ -389,6 +462,11 @@ if grep -Fq "$TRACE_SENTINEL" "$TEST_DIR/trace.log"; then
 fi
 if grep -Fq "$META_TRACE_SENTINEL" "$TEST_DIR/trace.log"; then
   echo 'Meta credential key leaked when shell tracing was requested'
+  exit 1
+fi
+if grep -Fq "$GENERATION_API_TRACE_SENTINEL" "$TEST_DIR/trace.log" ||
+  grep -Fq "$GENERATION_HMAC_TRACE_SENTINEL" "$TEST_DIR/trace.log"; then
+  echo 'generation tenant credentials leaked when shell tracing was requested'
   exit 1
 fi
 
@@ -404,6 +482,10 @@ grep -qx 'UPLOAD_ONLY=preserved' "$ROOT_ENV"
 grep -qx 'GUANGDADA_API_KEY=file-owned-placeholder' "$ROOT_ENV"
 grep -qx 'EXTERNAL_MATERIAL_SYNC_ENABLED=true' "$ROOT_ENV"
 grep -qx 'META_CREDENTIAL_ENCRYPTION_KEY=file-owned-meta-key' "$ROOT_ENV"
+grep -qx 'AI_HOST_GENERATION_BASE_URL=https://generation-file.example' "$ROOT_ENV"
+grep -qx 'AI_HOST_GENERATION_API_KEY=file-owned-generation-key' "$ROOT_ENV"
+grep -qx 'AI_HOST_GENERATION_HMAC_SECRET=file-owned-generation-hmac' "$ROOT_ENV"
+grep -qx 'AUTOARK_PUBLIC_BASE_URL=https://autoark-file.example' "$ROOT_ENV"
 if grep -Eq 'OLD_CANONICAL|OLD_RUNTIME' "$ROOT_ENV"; then
   echo 'full environment rotation retained stale configuration'
   exit 1
@@ -615,6 +697,10 @@ COLD_START_ONLY=preserved
 GUANGDADA_API_KEY=cold-file-placeholder
 EXTERNAL_MATERIAL_SYNC_ENABLED=false
 META_CREDENTIAL_ENCRYPTION_KEY=cold-file-meta-key
+AI_HOST_GENERATION_BASE_URL=https://cold-generation.example
+AI_HOST_GENERATION_API_KEY=cold-generation-key
+AI_HOST_GENERATION_HMAC_SECRET=cold-generation-hmac
+AUTOARK_PUBLIC_BASE_URL=https://cold-autoark.example
 EOF
 chmod 600 "$ROOT_ENV"
 reset_observation_logs
