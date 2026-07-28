@@ -23,6 +23,7 @@ export { default as AdMaterialMapping } from './AdMaterialMapping'
 
 // 产品关系映射（自动投放核心）
 export { default as Product } from './Product'
+export { default as ProductLinkPool } from './ProductLinkPool'
 
 // Facebook 授权用户（缓存 Pixels、账户等）
 export { default as FacebookUser } from './FacebookUser'
