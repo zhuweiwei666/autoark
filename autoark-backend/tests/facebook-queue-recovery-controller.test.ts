@@ -1,8 +1,11 @@
 const mockRecover = jest.fn()
 const mockRetryFailures = jest.fn()
 const mockOriginalImageBackfill = jest.fn()
+const mockAccountMaterialBackfill = jest.fn()
 const mockMaterialDeduplication = jest.fn()
 const mockWriteAuditLog = jest.fn()
+const mockAccountFindOne = jest.fn()
+const mockResolveAccountAuthorization = jest.fn()
 
 jest.mock('../src/services/facebook.campaigns.v2.service', () => ({
   recoverFacebookAccountQueue: mockRecover,
@@ -13,8 +16,24 @@ jest.mock('../src/services/facebookMaterialBackfill.service', () => ({
   backfillFacebookOriginalImages: mockOriginalImageBackfill,
 }))
 
+jest.mock('../src/services/facebookAccountMaterialBackfill.service', () => ({
+  backfillFacebookAccountMaterialsPage: mockAccountMaterialBackfill,
+}))
+
 jest.mock('../src/services/facebookMaterialDeduplication.service', () => ({
   deduplicateFacebookMaterials: mockMaterialDeduplication,
+}))
+
+jest.mock('../src/models/Account', () => ({
+  __esModule: true,
+  default: {
+    findOne: mockAccountFindOne,
+  },
+}))
+
+jest.mock('../src/services/metaBusinessCredential.service', () => ({
+  resolvePublishingCredential: jest.fn(),
+  resolveAccountOperationalAuthorization: mockResolveAccountAuthorization,
 }))
 
 jest.mock('../src/services/auditLog.service', () => ({
@@ -23,6 +42,7 @@ jest.mock('../src/services/auditLog.service', () => ({
 
 import { UserRole } from '../src/models/User'
 import {
+  backfillAccountMaterials,
   backfillOriginalImages,
   deduplicateMaterials,
   recoverQueue,
@@ -56,6 +76,35 @@ describe('facebook queue recovery controller', () => {
       eligible: 650,
       skippedNoToken: 21,
       queued: 0,
+    })
+    mockAccountMaterialBackfill.mockResolvedValue({
+      status: 'complete',
+      accountId: '123',
+      adsProcessed: 20,
+      uniqueCreatives: 15,
+      creativesSucceeded: 15,
+      creativesFailed: 0,
+      materialsImported: 12,
+      materialsReused: 3,
+      hasMore: true,
+      nextAfter: 'NEXT_CURSOR',
+      errors: [],
+    })
+    mockAccountFindOne.mockReturnValue({
+      select: jest.fn().mockReturnValue({
+        lean: jest.fn().mockResolvedValue({
+          accountId: 'act_123',
+          organizationId: { toString: () => 'org-1' },
+          token: 'LEGACY_TOKEN',
+          tokenId: { toString: () => 'token-1' },
+          operator: 'gyh',
+        }),
+      }),
+    })
+    mockResolveAccountAuthorization.mockResolvedValue({
+      authorizationType: 'personal',
+      token: 'LEGACY_TOKEN',
+      legacyTokenId: 'token-1',
     })
     mockMaterialDeduplication.mockResolvedValue({
       dryRun: true,
@@ -157,6 +206,60 @@ describe('facebook queue recovery controller', () => {
     }))
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }))
     expect(next).not.toHaveBeenCalled()
+  })
+
+  it('runs a confirmed bounded account-material page and records an audit event', async () => {
+    const req: any = {
+      user: { role: UserRole.SUPER_ADMIN, userId: '665000000000000000000001' },
+      params: { id: 'act_123' },
+      body: {
+        confirmation: 'BACKFILL_FACEBOOK_ACCOUNT_MATERIALS',
+        after: 'START_CURSOR',
+        limit: 20,
+        concurrency: 2,
+      },
+      get: jest.fn(),
+    }
+    const res: any = response()
+    const next = jest.fn()
+
+    await backfillAccountMaterials(req, res, next)
+
+    expect(mockAccountMaterialBackfill).toHaveBeenCalledWith({
+      accountId: '123',
+      organizationId: 'org-1',
+      token: 'LEGACY_TOKEN',
+      tokenId: 'token-1',
+      optimizer: 'gyh',
+      after: 'START_CURSOR',
+      limit: 20,
+      concurrency: 2,
+    })
+    expect(mockWriteAuditLog).toHaveBeenCalledWith(req, expect.objectContaining({
+      action: 'facebook.material.account_backfill.apply',
+      status: 'success',
+      targetId: '123',
+    }))
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      success: true,
+      data: expect.objectContaining({ adsProcessed: 20, hasMore: true }),
+    }))
+    expect(next).not.toHaveBeenCalled()
+  })
+
+  it('rejects account material backfill without explicit confirmation', async () => {
+    const req: any = {
+      user: { role: UserRole.SUPER_ADMIN },
+      params: { id: '123' },
+      body: {},
+    }
+    const res: any = response()
+
+    await backfillAccountMaterials(req, res, jest.fn())
+
+    expect(res.status).toHaveBeenCalledWith(400)
+    expect(mockAccountFindOne).not.toHaveBeenCalled()
+    expect(mockAccountMaterialBackfill).not.toHaveBeenCalled()
   })
 
   it('previews Facebook material deduplication and records an audit event', async () => {
