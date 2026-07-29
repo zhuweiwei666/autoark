@@ -27,8 +27,12 @@ import {
 import logger from '../utils/logger'
 import { writeAuditLog } from '../services/auditLog.service'
 import { backfillFacebookOriginalImages } from '../services/facebookMaterialBackfill.service'
+import { backfillFacebookAccountMaterialsPage } from '../services/facebookAccountMaterialBackfill.service'
 import { deduplicateFacebookMaterials } from '../services/facebookMaterialDeduplication.service'
-import { resolvePublishingCredential } from '../services/metaBusinessCredential.service'
+import {
+  resolveAccountOperationalAuthorization,
+  resolvePublishingCredential,
+} from '../services/metaBusinessCredential.service'
 
 const FACEBOOK_LIST_MAX_LIMIT = 100
 const FACEBOOK_DIAGNOSE_DEFAULT_LIMIT = 20
@@ -425,6 +429,100 @@ export const backfillOriginalImages = async (
       targetType: 'bullmq_queue',
       targetId: 'facebook.material.sync',
       summary: 'Facebook 原图回填失败',
+      reason: error.message,
+    })
+    next(error)
+  }
+}
+
+export const backfillAccountMaterials = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
+  if (!requireSuperAdmin(req, res)) return
+
+  const confirmation = req.body?.confirmation
+  if (confirmation !== 'BACKFILL_FACEBOOK_ACCOUNT_MATERIALS') {
+    res.status(400).json({
+      success: false,
+      error: 'Account material backfill requires confirmation: BACKFILL_FACEBOOK_ACCOUNT_MATERIALS',
+    })
+    return
+  }
+
+  const requestedAccountId = Array.isArray(req.params.id)
+    ? req.params.id[0]
+    : req.params.id
+  const accountId = normalizeForStorage(requestedAccountId)
+  try {
+    const account: any = await Account.findOne({
+      channel: 'facebook',
+      accountId: { $in: accountIdVariants(accountId) },
+    })
+      .select('accountId organizationId token tokenId operator')
+      .lean()
+    if (!account) {
+      throw Object.assign(new Error(`Facebook account ${accountId} was not found`), {
+        statusCode: 404,
+      })
+    }
+
+    const organizationId = account.organizationId?.toString()
+    if (!organizationId) {
+      throw Object.assign(new Error(`Facebook account ${accountId} is not assigned to an organization`), {
+        statusCode: 409,
+      })
+    }
+
+    const authorization = await resolveAccountOperationalAuthorization({
+      accountId,
+      organizationId,
+      legacyToken: account.token,
+      legacyTokenId: account.tokenId,
+    })
+    if (!authorization) {
+      throw Object.assign(new Error(`Facebook account ${accountId} has no usable authorization`), {
+        statusCode: 403,
+      })
+    }
+
+    const after = typeof req.body?.after === 'string' && req.body.after.length <= 2000
+      ? req.body.after
+      : undefined
+    const result = await backfillFacebookAccountMaterialsPage({
+      accountId,
+      organizationId,
+      token: authorization.token,
+      tokenId: authorization.legacyTokenId || account.tokenId?.toString(),
+      optimizer: account.operator,
+      after,
+      limit: req.body?.limit,
+      concurrency: req.body?.concurrency,
+    })
+
+    await writeAuditLog(req, {
+      category: 'facebook',
+      action: 'facebook.material.account_backfill.apply',
+      status: 'success',
+      targetType: 'facebook_account',
+      targetId: accountId,
+      summary: `执行 Facebook 账户素材回填：处理 ${result.adsProcessed} 条广告，成功 ${result.creativesSucceeded} 个创意，失败 ${result.creativesFailed} 个创意`,
+      metadata: {
+        ...result,
+        nextAfter: result.hasMore ? 'present' : undefined,
+      },
+    })
+
+    res.json({ success: true, data: result })
+  } catch (error: any) {
+    await writeAuditLog(req, {
+      category: 'facebook',
+      action: 'facebook.material.account_backfill.apply',
+      status: 'failed',
+      targetType: 'facebook_account',
+      targetId: accountId,
+      summary: 'Facebook 账户素材回填失败',
       reason: error.message,
     })
     next(error)
