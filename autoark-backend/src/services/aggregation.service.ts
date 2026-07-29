@@ -15,6 +15,7 @@ import dayjs from 'dayjs'
 import { 
   AggDaily, 
   AggCountry, 
+  AggCountryAccount,
   AggAccount, 
   AggCampaign, 
   AggOptimizer, 
@@ -91,6 +92,7 @@ export async function refreshAggregation(date: string, forceRefresh = false): Pr
     // 收集所有数据（线程安全，无需锁，因为 JS 是单线程的）
     const dailyData = { spend: 0, revenue: 0, impressions: 0, clicks: 0, installs: 0 }
     const countryMap = new Map<string, any>()
+    const accountCountryOps: any[] = []
     const accountMap = new Map<string, any>()
     const campaignMap = new Map<string, any>()
     const optimizerMap = new Map<string, any>()
@@ -135,6 +137,7 @@ export async function refreshAggregation(date: string, forceRefresh = false): Pr
           let accountClicks = 0
           let accountInstalls = 0
           const accountCampaigns = new Set<string>()
+          const accountCountryMap = new Map<string, any>()
 
           for (const insight of insights) {
             const spend = parseFloat(insight.spend || '0')
@@ -224,8 +227,67 @@ export async function refreshAggregation(date: string, forceRefresh = false): Pr
               cn.clicks += clicks
               cn.installs += installs
               if (insight.campaign_id) cn.campaigns.add(insight.campaign_id)
+
+              if (!accountCountryMap.has(countryKey)) {
+                accountCountryMap.set(countryKey, {
+                  country: countryKey,
+                  countryName: COUNTRY_NAMES[countryKey] || countryKey,
+                  spend: 0, revenue: 0, impressions: 0, clicks: 0, installs: 0,
+                  campaigns: new Set(),
+                })
+              }
+              const accountCountry = accountCountryMap.get(countryKey)
+              accountCountry.spend += spend
+              accountCountry.revenue += revenue
+              accountCountry.impressions += impressions
+              accountCountry.clicks += clicks
+              accountCountry.installs += installs
+              if (insight.campaign_id) accountCountry.campaigns.add(insight.campaign_id)
             }
           }
+
+          const currentCountries = Array.from(accountCountryMap.keys())
+          for (const country of accountCountryMap.values()) {
+            accountCountryOps.push({
+              updateOne: {
+                filter: {
+                  date,
+                  accountId: account.accountId,
+                  country: country.country,
+                },
+                update: {
+                  date,
+                  accountId: account.accountId,
+                  country: country.country,
+                  countryName: country.countryName,
+                  spend: Math.round(country.spend * 100) / 100,
+                  revenue: Math.round(country.revenue * 100) / 100,
+                  roas: country.spend > 0
+                    ? Math.round((country.revenue / country.spend) * 100) / 100
+                    : 0,
+                  impressions: country.impressions,
+                  clicks: country.clicks,
+                  installs: country.installs,
+                  ctr: country.impressions > 0
+                    ? Math.round((country.clicks / country.impressions) * 10000) / 100
+                    : 0,
+                  campaigns: country.campaigns.size,
+                },
+                upsert: true,
+              },
+            })
+          }
+          accountCountryOps.push({
+            deleteMany: {
+              filter: {
+                date,
+                accountId: account.accountId,
+                ...(currentCountries.length > 0
+                  ? { country: { $nin: currentCountries } }
+                  : {}),
+              },
+            },
+          })
 
           // 保存账户数据
           accountMap.set(account.accountId, {
@@ -318,6 +380,15 @@ export async function refreshAggregation(date: string, forceRefresh = false): Pr
       }
     }))
     if (countryOps.length > 0) await AggCountry.bulkWrite(countryOps)
+
+    // 保存账户维度国家数据，供组织权限范围内查询。
+    // 分批写入，避免账户和国家较多时生成过大的 MongoDB 命令。
+    const accountCountryBatchSize = 1000
+    for (let i = 0; i < accountCountryOps.length; i += accountCountryBatchSize) {
+      await AggCountryAccount.bulkWrite(
+        accountCountryOps.slice(i, i + accountCountryBatchSize),
+      )
+    }
 
     // 3. 保存账户数据 (批量写入优化)
     const accountOps = Array.from(accountMap.values()).map(account => ({
