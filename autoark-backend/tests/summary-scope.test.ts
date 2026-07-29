@@ -39,6 +39,9 @@ jest.mock('../src/models/Aggregation', () => ({
   AggCountry: {
     aggregate: jest.fn(),
   },
+  AggCountryAccount: {
+    aggregate: jest.fn(),
+  },
   AggAccount: {
     find: jest.fn(),
     aggregate: jest.fn(),
@@ -51,7 +54,13 @@ jest.mock('../src/models/Aggregation', () => ({
 
 import summaryRouter from '../src/controllers/summary.controller'
 import { getUserAccountIds } from '../src/middlewares/auth'
-import { AggAccount, AggCampaign, AggCountry, AggDaily } from '../src/models/Aggregation'
+import {
+  AggAccount,
+  AggCampaign,
+  AggCountry,
+  AggCountryAccount,
+  AggDaily,
+} from '../src/models/Aggregation'
 import MaterialMetrics from '../src/models/MaterialMetrics'
 
 const createApp = () => {
@@ -66,21 +75,36 @@ describe('summary route data scoping', () => {
     mockAuthState.user = null
   })
 
-  it('does not expose global country summary to organization users', async () => {
+  it('returns account-scoped country summary to organization users', async () => {
     mockAuthState.user = {
       role: UserRole.ORG_ADMIN,
       organizationId: '665000000000000000000001',
       userId: '665000000000000000000002',
     }
+    ;(getUserAccountIds as jest.Mock).mockResolvedValue(['act_123'])
+    ;(AggCountryAccount.aggregate as jest.Mock).mockResolvedValue([
+      {
+        data: [{ country: 'US', spend: 10 }],
+        total: [{ count: 1 }],
+      },
+    ])
 
-    const response = await request(createApp()).get('/api/summary/countries')
+    const response = await request(createApp()).get('/api/summary/countries?limit=10')
 
     expect(response.status).toBe(200)
-    expect(response.body).toMatchObject({
-      success: true,
-      data: [],
-      pagination: { page: 1, limit: 50, total: 0, pages: 0 },
-      cached: true,
+    expect(response.body.data).toEqual([{ country: 'US', spend: 10 }])
+    expect(response.body.pagination).toMatchObject({
+      page: 1,
+      limit: 10,
+      total: 1,
+      pages: 1,
+    })
+    expect(AggCountryAccount.aggregate).toHaveBeenCalledTimes(1)
+    expect((AggCountryAccount.aggregate as jest.Mock).mock.calls[0][0][0]).toEqual({
+      $match: {
+        date: expect.any(Object),
+        accountId: { $in: ['123', 'act_123'] },
+      },
     })
     expect(AggCountry.aggregate).not.toHaveBeenCalled()
   })

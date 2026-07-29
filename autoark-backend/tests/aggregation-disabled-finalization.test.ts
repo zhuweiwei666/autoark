@@ -8,6 +8,7 @@ const mockDailyUpsert = jest.fn()
 const mockPreviouslyAggregatedAccountIds = jest.fn()
 const mockFetchInsights = jest.fn()
 const mockResolveAccountOperationalAuthorization = jest.fn()
+const mockCountryAccountBulkWrite = jest.fn()
 const originalAggregationConcurrency =
   process.env.FACEBOOK_AGGREGATION_CONCURRENCY
 
@@ -46,6 +47,9 @@ jest.mock('../src/models/Aggregation', () => ({
     findOneAndUpdate: (...args: any[]) => mockDailyUpsert(...args),
   },
   AggCountry: { bulkWrite: jest.fn() },
+  AggCountryAccount: {
+    bulkWrite: (...args: any[]) => mockCountryAccountBulkWrite(...args),
+  },
   AggAccount: {
     distinct: (...args: any[]) => mockPreviouslyAggregatedAccountIds(...args),
     bulkWrite: jest.fn(),
@@ -162,5 +166,65 @@ describe('aggregation account eligibility', () => {
 
     releases[2]()
     await refresh
+  })
+
+  it('persists country metrics by account for scoped country summaries', async () => {
+    mockPreviouslyAggregatedAccountIds.mockResolvedValue([])
+    mockAccountFind.mockReturnValue({
+      lean: jest.fn().mockResolvedValue([
+        {
+          accountId: '101',
+          organizationId: 'org-1',
+          status: 'active',
+          name: 'Account 101',
+        },
+      ]),
+    })
+    mockFetchInsights.mockResolvedValue([
+      {
+        campaign_id: 'cmp-1',
+        campaign_name: 'alice_campaign',
+        country: 'US',
+        spend: '12.34',
+        impressions: '1000',
+        clicks: '50',
+        actions: [{ action_type: 'mobile_app_install', value: '4' }],
+        action_values: [{ action_type: 'purchase', value: '24.68' }],
+      },
+    ])
+
+    await refreshAggregation('2026-07-27')
+
+    expect(mockCountryAccountBulkWrite).toHaveBeenCalledTimes(1)
+    expect(mockCountryAccountBulkWrite).toHaveBeenCalledWith([
+      expect.objectContaining({
+        updateOne: expect.objectContaining({
+          filter: {
+            date: '2026-07-27',
+            accountId: '101',
+            country: 'US',
+          },
+          update: expect.objectContaining({
+            date: '2026-07-27',
+            accountId: '101',
+            country: 'US',
+            countryName: '美国',
+            spend: 12.34,
+            revenue: 24.68,
+            campaigns: 1,
+          }),
+          upsert: true,
+        }),
+      }),
+      {
+        deleteMany: {
+          filter: {
+            date: '2026-07-27',
+            accountId: '101',
+            country: { $nin: ['US'] },
+          },
+        },
+      },
+    ])
   })
 })

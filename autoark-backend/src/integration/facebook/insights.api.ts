@@ -13,6 +13,7 @@ export const fetchInsights = async (
   // 这些数据应该从 actions 和 action_values 中获取
   const fields = [
     'campaign_id',
+    ...(level === 'campaign' ? ['campaign_name'] : []),
     'adset_id',
     'ad_id',
     'impressions',
@@ -73,4 +74,3 @@ export const fetchInsights = async (
   const res = await facebookClient.get(`/${entityId}/insights`, params)
   return res.data || []
 }
-

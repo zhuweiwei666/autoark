@@ -96,6 +96,49 @@ aggCountrySchema.index({ date: 1, country: 1 }, { unique: true })
 
 export const AggCountry = mongoose.model<IAggCountry>('AggCountry', aggCountrySchema)
 
+// 账户维度的国家快照，用于在组织权限范围内安全聚合国家数据。
+export interface IAggCountryAccount extends Document {
+  date: string
+  accountId: string
+  country: string
+  countryName: string
+  spend: number
+  revenue: number
+  roas: number
+  impressions: number
+  clicks: number
+  installs: number
+  ctr: number
+  campaigns: number
+  updatedAt: Date
+}
+
+const aggCountryAccountSchema = new Schema<IAggCountryAccount>({
+  date: { type: String, required: true, index: true },
+  accountId: { type: String, required: true, index: true },
+  country: { type: String, required: true, index: true },
+  countryName: { type: String, default: '' },
+  spend: { type: Number, default: 0 },
+  revenue: { type: Number, default: 0 },
+  roas: { type: Number, default: 0 },
+  impressions: { type: Number, default: 0 },
+  clicks: { type: Number, default: 0 },
+  installs: { type: Number, default: 0 },
+  ctr: { type: Number, default: 0 },
+  campaigns: { type: Number, default: 0 },
+}, { timestamps: true })
+
+aggCountryAccountSchema.index(
+  { date: 1, accountId: 1, country: 1 },
+  { unique: true },
+)
+aggCountryAccountSchema.index({ date: 1, country: 1 })
+
+export const AggCountryAccount = mongoose.model<IAggCountryAccount>(
+  'AggCountryAccount',
+  aggCountryAccountSchema,
+)
+
 
 // ==================== 3. 分账户表 (账户页面) ====================
 export interface IAggAccount extends Document {
@@ -223,6 +266,7 @@ export const AggOptimizer = mongoose.model<IAggOptimizer>('AggOptimizer', aggOpt
 export default {
   AggDaily,
   AggCountry,
+  AggCountryAccount,
   AggAccount,
   AggCampaign,
   AggOptimizer,

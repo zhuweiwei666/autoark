@@ -13,6 +13,7 @@ import logger from '../utils/logger'
 import {
   AggDaily,
   AggCountry,
+  AggCountryAccount,
   AggAccount,
   AggCampaign,
   AggOptimizer,
@@ -618,7 +619,12 @@ router.get('/countries', async (req: Request, res: Response) => {
     const sortOrder = (req.query.order as string) === 'asc' ? 1 : -1
     const { page, limit, skip } = parseSummaryPagination(req, 50)
 
-    if (req.user?.role !== UserRole.SUPER_ADMIN) {
+    const userAccountIds = req.user?.role === UserRole.SUPER_ADMIN
+      ? null
+      : await getUserAccountIds(req)
+    const scopedAccountIds = expandScopedAccountIds(userAccountIds)
+
+    if (scopedAccountIds !== null && scopedAccountIds.length === 0) {
       return res.json({
         success: true,
         data: [],
@@ -627,9 +633,14 @@ router.get('/countries', async (req: Request, res: Response) => {
       })
     }
 
+    const match: any = { date: { $gte: startDate, $lte: endDate } }
+    if (scopedAccountIds !== null) {
+      match.accountId = { $in: scopedAccountIds }
+    }
+
     // 多日聚合
-    const aggregated = await AggCountry.aggregate([
-      { $match: { date: { $gte: startDate, $lte: endDate } } },
+    const pipeline: any[] = [
+      { $match: match },
       {
         $group: {
           _id: '$country',
@@ -660,7 +671,10 @@ router.get('/countries', async (req: Request, res: Response) => {
           total: [{ $count: 'count' }],
         }
       }
-    ])
+    ]
+    const aggregated = scopedAccountIds === null
+      ? await AggCountry.aggregate(pipeline)
+      : await AggCountryAccount.aggregate(pipeline)
 
     const data = aggregated[0]?.data || []
     const total = aggregated[0]?.total[0]?.count || 0
