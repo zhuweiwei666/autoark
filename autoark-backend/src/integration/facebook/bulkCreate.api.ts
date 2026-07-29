@@ -1,6 +1,7 @@
 import { facebookClient } from './facebookClient'
 import logger from '../../utils/logger'
 import { createHash } from 'crypto'
+import { downloadRemoteMedia } from '../../services/remoteMediaDownload.service'
 
 /**
  * Facebook 批量创建 API 集成
@@ -431,19 +432,29 @@ export interface UploadImageParams {
 }
 
 export const uploadImageFromUrl = async (params: UploadImageParams) => {
-  const { accountId, token, imageUrl, name } = params
-
-  const requestParams: any = {
-    access_token: token,
-    url: imageUrl,
-  }
-  if (name) {
-    requestParams.name = name
-  }
+  const { accountId, token, imageUrl } = params
 
   try {
-    logger.info(`[BulkCreate] Uploading image for account ${accountId}`)
-    const res = await facebookClient.post(`/act_${accountId}/adimages`, requestParams)
+    logger.info(`[BulkCreate] Downloading image for account ${accountId}`)
+    const media = await downloadRemoteMedia(imageUrl)
+    if (!media.mimeType.startsWith('image/')) {
+      const error: any = new Error(
+        `Expected image media but received ${media.mimeType}`,
+      )
+      error.code = 'IMAGE_MEDIA_TYPE_INVALID'
+      error.userMessage = '素材链接返回的不是图片文件'
+      throw error
+    }
+
+    logger.info(`[BulkCreate] Uploading image bytes for account ${accountId}`)
+    const requestParams = {
+      access_token: token,
+      bytes: media.buffer.toString('base64'),
+    }
+    const res = await facebookClient.post(
+      `/act_${accountId}/adimages`,
+      requestParams,
+    )
     const images = res.images || {}
     const imageHash = Object.values(images)[0] as any
     logger.info('[BulkCreate] Image uploaded', {
