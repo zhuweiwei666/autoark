@@ -1,5 +1,12 @@
 import { randomBytes } from 'crypto'
 import { Request, Response } from 'express'
+import {
+  isProductLinkDomain,
+  PRODUCT_LINK_DEFAULT_DOMAIN,
+  PRODUCT_LINK_DOMAIN_OPTIONS,
+  resolveProductLinkDomain,
+  type ProductLinkDomain,
+} from '../config/productLinkDomains'
 import ProductLinkPool, {
   PRODUCT_LINK_PLATFORMS,
   PRODUCT_LINK_POOL_STATUSES,
@@ -28,6 +35,7 @@ type SanitizedDestination = WeightedDestination & { _id?: string }
 type ProductLinkPoolUpdate = Partial<{
   name: string
   description: string
+  shortLinkDomain: ProductLinkDomain
   fallbackUrl: string
   status: ProductLinkPoolStatus
   destinations: SanitizedDestination[]
@@ -91,6 +99,16 @@ const pickWeight = (value: unknown): number => {
   return weight
 }
 
+const pickShortLinkDomain = (value: unknown): ProductLinkDomain => {
+  const hostname = pickString(value, 253)?.toLowerCase()
+  if (!hostname || !isProductLinkDomain(hostname)) {
+    throw createHttpError(
+      'shortLinkDomain is not an available short-link domain',
+    )
+  }
+  return hostname
+}
+
 const sanitizeDestinations = (value: unknown): SanitizedDestination[] => {
   if (!Array.isArray(value)) {
     throw createHttpError('destinations must be an array')
@@ -135,6 +153,10 @@ const sanitizeCreate = (body: unknown) => {
   return {
     name,
     description: pickString(input.description, DESCRIPTION_MAX_LENGTH) || '',
+    shortLinkDomain:
+      input.shortLinkDomain === undefined
+        ? PRODUCT_LINK_DEFAULT_DOMAIN
+        : pickShortLinkDomain(input.shortLinkDomain),
     fallbackUrl: pickHttpUrl(input.fallbackUrl, { optional: true }) || '',
     status: 'active' as const,
     destinations:
@@ -156,6 +178,9 @@ const sanitizeUpdate = (body: unknown): ProductLinkPoolUpdate => {
   if (Object.prototype.hasOwnProperty.call(input, 'description')) {
     update.description =
       pickString(input.description, DESCRIPTION_MAX_LENGTH) || ''
+  }
+  if (Object.prototype.hasOwnProperty.call(input, 'shortLinkDomain')) {
+    update.shortLinkDomain = pickShortLinkDomain(input.shortLinkDomain)
   }
   if (Object.prototype.hasOwnProperty.call(input, 'fallbackUrl')) {
     update.fallbackUrl =
@@ -182,22 +207,16 @@ const ownerData = (req: Request) => ({
   ...(req.user?.userId && { createdBy: req.user.userId }),
 })
 
-const shortLinkBaseUrl = (req: Request): string => {
-  const configured = pickString(process.env.SHORT_LINK_BASE_URL, URL_MAX_LENGTH)
-  return (configured || `${req.protocol}://${req.get('host')}`).replace(
-    /\/+$/,
-    '',
-  )
-}
-
-const serializePool = (pool: unknown, req: Request) => {
+const serializePool = (pool: unknown) => {
   const record = asRecord(pool)
   const toObject = record.toObject
   const data =
     typeof toObject === 'function' ? asRecord(toObject.call(pool)) : record
+  const shortLinkDomain = resolveProductLinkDomain(data.shortLinkDomain)
   return {
     ...data,
-    shortUrl: `${shortLinkBaseUrl(req)}/r/${data.shortCode}`,
+    shortLinkDomain,
+    shortUrl: `https://${shortLinkDomain}/r/${data.shortCode}`,
   }
 }
 
@@ -232,11 +251,21 @@ export const listProductLinkPools = async (req: Request, res: Response) => {
       .lean()
     res.json({
       success: true,
-      data: pools.map((pool) => serializePool(pool, req)),
+      data: pools.map((pool) => serializePool(pool)),
     })
   } catch (error) {
     sendError(res, error, 'List pools failed')
   }
+}
+
+export const listProductLinkDomains = (_req: Request, res: Response) => {
+  res.json({
+    success: true,
+    data: {
+      defaultDomain: PRODUCT_LINK_DEFAULT_DOMAIN,
+      domains: PRODUCT_LINK_DOMAIN_OPTIONS,
+    },
+  })
 }
 
 export const getProductLinkPool = async (req: Request, res: Response) => {
@@ -249,7 +278,7 @@ export const getProductLinkPool = async (req: Request, res: Response) => {
         .status(404)
         .json({ success: false, error: 'Product link pool not found' })
     }
-    res.json({ success: true, data: serializePool(pool, req) })
+    res.json({ success: true, data: serializePool(pool) })
   } catch (error) {
     sendError(res, error, 'Get pool failed')
   }
@@ -263,7 +292,7 @@ export const createProductLinkPool = async (req: Request, res: Response) => {
       shortCode: await generateShortCode(),
       ...ownerData(req),
     })
-    res.status(201).json({ success: true, data: serializePool(pool, req) })
+    res.status(201).json({ success: true, data: serializePool(pool) })
   } catch (error) {
     sendError(res, error, 'Create pool failed')
   }
@@ -286,7 +315,7 @@ export const updateProductLinkPool = async (req: Request, res: Response) => {
         .status(404)
         .json({ success: false, error: 'Product link pool not found' })
     }
-    res.json({ success: true, data: serializePool(pool, req) })
+    res.json({ success: true, data: serializePool(pool) })
   } catch (error) {
     sendError(res, error, 'Update pool failed')
   }

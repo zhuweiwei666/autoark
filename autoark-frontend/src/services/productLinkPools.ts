@@ -3,6 +3,16 @@ import { authFetch } from './api'
 export type ProductLinkPlatform = 'ios' | 'android'
 export type ProductLinkPoolStatus = 'active' | 'inactive'
 
+export interface ProductLinkDomainOption {
+  hostname: string
+  label: string
+}
+
+export interface ProductLinkDomainCatalog {
+  defaultDomain: string
+  domains: ProductLinkDomainOption[]
+}
+
 export interface ProductLinkDestination {
   _id?: string
   name: string
@@ -17,6 +27,7 @@ export interface ProductLinkPool {
   name: string
   description: string
   shortCode: string
+  shortLinkDomain: string
   shortUrl: string
   fallbackUrl: string
   status: ProductLinkPoolStatus
@@ -28,6 +39,7 @@ export interface ProductLinkPool {
 export interface ProductLinkPoolInput {
   name: string
   description?: string
+  shortLinkDomain?: string
   fallbackUrl?: string
   status?: ProductLinkPoolStatus
   destinations?: ProductLinkDestination[]
@@ -44,6 +56,9 @@ const parseResponse = async <T>(response: Response): Promise<T> => {
 const sanitizeInput = (input: ProductLinkPoolInput): ProductLinkPoolInput => ({
   name: input.name.trim(),
   description: input.description?.trim() || '',
+  ...(input.shortLinkDomain && {
+    shortLinkDomain: input.shortLinkDomain.trim().toLowerCase(),
+  }),
   fallbackUrl: input.fallbackUrl?.trim() || '',
   ...(input.status && { status: input.status }),
   ...(input.destinations && {
@@ -61,6 +76,11 @@ const sanitizeInput = (input: ProductLinkPoolInput): ProductLinkPoolInput => ({
 export const listProductLinkPools = async (): Promise<ProductLinkPool[]> => {
   const response = await authFetch('/api/product-link-pools')
   return parseResponse<ProductLinkPool[]>(response)
+}
+
+export const listProductLinkDomains = async (): Promise<ProductLinkDomainCatalog> => {
+  const response = await authFetch('/api/product-link-pools/domains')
+  return parseResponse<ProductLinkDomainCatalog>(response)
 }
 
 export const createProductLinkPool = async (

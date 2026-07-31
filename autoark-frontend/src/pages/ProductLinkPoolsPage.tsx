@@ -18,6 +18,7 @@ import Loading from '../components/Loading'
 import {
   createProductLinkPool,
   deleteProductLinkPool,
+  listProductLinkDomains,
   listProductLinkPools,
   ProductLinkDestination,
   ProductLinkPlatform,
@@ -35,6 +36,12 @@ type PoolDraft = Omit<ProductLinkPool, 'destinations'> & {
 
 const inputClassName =
   'w-full rounded-lg border border-zinc-300 bg-white px-3.5 py-2.5 text-sm text-zinc-950 shadow-sm transition-all placeholder:text-zinc-400 focus:border-[#0f766e] focus:outline-none focus:ring-2 focus:ring-[#0f766e]/15'
+
+const DEFAULT_SHORT_LINK_DOMAIN = 'go.remixhub.app'
+
+const buildShortUrl = (hostname: string, shortCode: string) => (
+  `https://${hostname}/r/${shortCode}`
+)
 
 const makeClientId = () => (
   typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
@@ -60,6 +67,7 @@ const destinationCount = (pool: ProductLinkPool, platform: ProductLinkPlatform) 
 
 const validateDraft = (draft: PoolDraft): string | null => {
   if (!draft.name.trim()) return '请输入产品池名称'
+  if (!draft.shortLinkDomain.trim()) return '请选择投放域名'
 
   for (let index = 0; index < draft.destinations.length; index += 1) {
     const destination = draft.destinations[index]
@@ -91,6 +99,7 @@ export default function ProductLinkPoolsPage() {
   const [draft, setDraft] = useState<PoolDraft | null>(null)
   const [showCreate, setShowCreate] = useState(false)
   const [newPoolName, setNewPoolName] = useState('')
+  const [newPoolDomain, setNewPoolDomain] = useState(DEFAULT_SHORT_LINK_DOMAIN)
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
   const [copied, setCopied] = useState(false)
 
@@ -99,7 +108,15 @@ export default function ProductLinkPoolsPage() {
     queryFn: listProductLinkPools,
   })
 
+  const domainsQuery = useQuery({
+    queryKey: ['product-link-domains'],
+    queryFn: listProductLinkDomains,
+  })
+
   const pools = poolsQuery.data || []
+  const availableDomains = domainsQuery.data?.domains || [
+    { hostname: DEFAULT_SHORT_LINK_DOMAIN, label: 'remixhub.app（推荐）' },
+  ]
 
   useEffect(() => {
     if (pools.length === 0) {
@@ -116,7 +133,10 @@ export default function ProductLinkPoolsPage() {
   }, [pools, selectedPoolId])
 
   const createMutation = useMutation({
-    mutationFn: () => createProductLinkPool({ name: newPoolName }),
+    mutationFn: () => createProductLinkPool({
+      name: newPoolName,
+      shortLinkDomain: newPoolDomain,
+    }),
     onSuccess: pool => {
       queryClient.setQueryData<ProductLinkPool[]>(['product-link-pools'], current => [
         pool,
@@ -127,7 +147,8 @@ export default function ProductLinkPoolsPage() {
       setCopied(false)
       setShowCreate(false)
       setNewPoolName('')
-      setFeedback({ type: 'success', message: '产品池已创建，短链保持永久不变。' })
+      setNewPoolDomain(domainsQuery.data?.defaultDomain || DEFAULT_SHORT_LINK_DOMAIN)
+      setFeedback({ type: 'success', message: '产品池已创建，短码永久不变，投放域名可随时切换。' })
     },
     onError: error => {
       setFeedback({ type: 'error', message: error instanceof Error ? error.message : '创建失败' })
@@ -141,6 +162,7 @@ export default function ProductLinkPoolsPage() {
       return updateProductLinkPool(nextDraft._id, {
         name: nextDraft.name,
         description: nextDraft.description,
+        shortLinkDomain: nextDraft.shortLinkDomain,
         fallbackUrl: nextDraft.fallbackUrl,
         status: nextDraft.status,
         destinations: toApiDestinations(nextDraft.destinations),
@@ -151,7 +173,7 @@ export default function ProductLinkPoolsPage() {
         (current || []).map(item => item._id === pool._id ? pool : item),
       )
       setDraft(current => current?._id === pool._id ? toDraft(pool) : current)
-      setFeedback({ type: 'success', message: '权重和目标链接已保存并立即生效。' })
+      setFeedback({ type: 'success', message: '域名、权重和目标链接已保存并立即生效。' })
     },
     onError: error => {
       setFeedback({ type: 'error', message: error instanceof Error ? error.message : '保存失败' })
@@ -176,6 +198,7 @@ export default function ProductLinkPoolsPage() {
   const openCreateModal = () => {
     createMutation.reset()
     setNewPoolName('')
+    setNewPoolDomain(domainsQuery.data?.defaultDomain || DEFAULT_SHORT_LINK_DOMAIN)
     setFeedback(null)
     setShowCreate(true)
   }
@@ -389,9 +412,40 @@ export default function ProductLinkPoolsPage() {
                     </div>
                   </div>
 
-                  <div className="mt-6 border-t border-zinc-200 pt-5">
+                  <div className="mt-6 grid gap-4 border-t border-zinc-200 pt-5 md:grid-cols-[minmax(220px,0.7fr)_minmax(0,1.3fr)] md:items-end">
+                    <div>
+                      <label className="block text-xs font-bold text-zinc-600" htmlFor="short-link-domain">
+                        投放域名
+                      </label>
+                      <select
+                        id="short-link-domain"
+                        value={draft.shortLinkDomain}
+                        onChange={event => {
+                          const shortLinkDomain = event.target.value
+                          setDraft(current => current ? {
+                            ...current,
+                            shortLinkDomain,
+                            shortUrl: buildShortUrl(shortLinkDomain, current.shortCode),
+                          } : current)
+                          setCopied(false)
+                        }}
+                        className={`${inputClassName} mt-2`}
+                      >
+                        {availableDomains.map(domain => (
+                          <option key={domain.hostname} value={domain.hostname}>
+                            {domain.label} · {domain.hostname}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <p className="text-xs font-semibold leading-relaxed text-zinc-500">
+                      短码永久不变。切换域名后保存即可更新默认投放链接；已接入域名都能继续访问同一个产品池。
+                    </p>
+                  </div>
+
+                  <div className="mt-5">
                     <label className="block text-xs font-bold text-zinc-600" htmlFor="short-url">
-                      永久短链
+                      当前投放短链
                     </label>
                     <div className="mt-2 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
                       <input
@@ -646,6 +700,27 @@ export default function ProductLinkPoolsPage() {
                 className={`${inputClassName} mt-2`}
                 maxLength={120}
               />
+            </div>
+
+            <div className="mt-4">
+              <label className="block text-sm font-bold text-zinc-700" htmlFor="new-pool-domain">
+                投放域名
+              </label>
+              <select
+                id="new-pool-domain"
+                value={newPoolDomain}
+                onChange={event => setNewPoolDomain(event.target.value)}
+                className={`${inputClassName} mt-2`}
+              >
+                {availableDomains.map(domain => (
+                  <option key={domain.hostname} value={domain.hostname}>
+                    {domain.label} · {domain.hostname}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-2 text-xs font-semibold leading-relaxed text-zinc-500">
+                创建后仍可切换域名，短码和产品池不会变化。
+              </p>
             </div>
 
             {createMutation.isError && (
