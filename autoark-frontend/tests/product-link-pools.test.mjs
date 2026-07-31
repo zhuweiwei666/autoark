@@ -29,6 +29,10 @@ test('operators can configure platform, URL, enabled state, and manual weight', 
 
 test('the page uses the dedicated product-link-pool API and exposes the permanent short URL', () => {
   assert.match(api, /\/api\/product-link-pools/)
+  assert.match(api, /\/api\/product-link-pools\/domains/)
+  assert.match(page, /shortLinkDomain/)
+  assert.match(page, /投放域名/)
+  assert.match(page, /new-pool-domain/)
   assert.match(page, /shortUrl/)
   assert.match(page, /复制短链/)
 })

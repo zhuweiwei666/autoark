@@ -70,6 +70,7 @@ const activePool = {
   _id: '665000000000000000000401',
   name: 'Creative Studio',
   shortCode: 'aB3kP9xQ',
+  shortLinkDomain: 'go.remixhub.app',
   status: 'active',
   fallbackUrl: 'https://example.com/download',
   updatedAt: new Date('2026-07-28T00:00:00.000Z'),
@@ -140,6 +141,99 @@ describe('product link pool routes', () => {
     expect(JSON.stringify(mockFind.mock.calls[0][0])).toContain(
       '665000000000000000000001',
     )
+  })
+
+  it('returns only the verified short-link domain catalog', async () => {
+    const response = await request(createApp()).get(
+      '/api/product-link-pools/domains',
+    )
+
+    expect(response.status).toBe(200)
+    expect(response.body.data.defaultDomain).toBe('go.remixhub.app')
+    expect(response.body.data.domains).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ hostname: 'app.autoark.work' }),
+        expect.objectContaining({ hostname: 'go.remixhub.app' }),
+      ]),
+    )
+    expect(response.body.data.domains).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ hostname: 'go.paycores.cc' }),
+      ]),
+    )
+  })
+
+  it('serializes the selected domain into the canonical short URL', async () => {
+    const lean = jest.fn().mockResolvedValue([activePool])
+    const sort = jest.fn().mockReturnValue({ lean })
+    mockFind.mockReturnValue({ sort })
+
+    const response = await request(createApp()).get('/api/product-link-pools')
+
+    expect(response.status).toBe(200)
+    expect(response.body.data[0]).toMatchObject({
+      shortLinkDomain: 'go.remixhub.app',
+      shortUrl: 'https://go.remixhub.app/r/aB3kP9xQ',
+    })
+  })
+
+  it('persists a verified domain when creating a product pool', async () => {
+    mockExists.mockResolvedValue(false)
+    mockCreate.mockImplementation(async (payload) => ({
+      _id: '665000000000000000000402',
+      ...payload,
+      destinations: [],
+    }))
+
+    const response = await request(createApp())
+      .post('/api/product-link-pools')
+      .send({
+        name: 'Creative Studio',
+        shortLinkDomain: 'go.remixhub.app',
+      })
+
+    expect(response.status).toBe(201)
+    expect(mockCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ shortLinkDomain: 'go.remixhub.app' }),
+    )
+    expect(response.body.data.shortUrl).toMatch(
+      /^https:\/\/go\.remixhub\.app\/r\/[A-Za-z0-9_-]{8}$/,
+    )
+  })
+
+  it('switches the canonical domain without changing the short code', async () => {
+    mockFindOneAndUpdate.mockResolvedValue({
+      ...activePool,
+      shortLinkDomain: 'go.bigloom.net',
+    })
+
+    const response = await request(createApp())
+      .put('/api/product-link-pools/665000000000000000000401')
+      .send({ shortLinkDomain: 'go.bigloom.net' })
+
+    expect(response.status).toBe(200)
+    expect(mockFindOneAndUpdate).toHaveBeenCalledWith(
+      expect.any(Object),
+      { $set: { shortLinkDomain: 'go.bigloom.net' } },
+      { new: true, runValidators: true },
+    )
+    expect(response.body.data).toMatchObject({
+      shortCode: 'aB3kP9xQ',
+      shortLinkDomain: 'go.bigloom.net',
+      shortUrl: 'https://go.bigloom.net/r/aB3kP9xQ',
+    })
+  })
+
+  it('rejects a short-link domain outside the server allowlist', async () => {
+    const response = await request(createApp())
+      .post('/api/product-link-pools')
+      .send({ name: 'Creative Studio', shortLinkDomain: 'evil.example' })
+
+    expect(response.status).toBe(400)
+    expect(response.body.error).toBe(
+      'shortLinkDomain is not an available short-link domain',
+    )
+    expect(mockCreate).not.toHaveBeenCalled()
   })
 
   it('rejects unsafe destination URLs before writing a product pool', async () => {

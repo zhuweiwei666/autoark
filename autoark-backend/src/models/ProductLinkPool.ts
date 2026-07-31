@@ -1,4 +1,8 @@
 import mongoose from 'mongoose'
+import {
+  PRODUCT_LINK_DEFAULT_DOMAIN,
+  PRODUCT_LINK_DOMAIN_HOSTS,
+} from '../config/productLinkDomains'
 
 export const PRODUCT_LINK_PLATFORMS = ['ios', 'android'] as const
 export const PRODUCT_LINK_POOL_STATUSES = ['active', 'inactive'] as const
@@ -78,6 +82,14 @@ const productLinkPoolSchema = new mongoose.Schema(
       minlength: 6,
       maxlength: 32,
       match: /^[A-Za-z0-9_-]+$/,
+    },
+    shortLinkDomain: {
+      type: String,
+      required: true,
+      trim: true,
+      lowercase: true,
+      enum: PRODUCT_LINK_DOMAIN_HOSTS,
+      default: PRODUCT_LINK_DEFAULT_DOMAIN,
     },
     fallbackUrl: {
       type: String,
