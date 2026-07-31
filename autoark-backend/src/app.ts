@@ -27,6 +27,7 @@ import agentV2Routes from './agent/agent.controller' // Agent V2: LLM-powered mu
 import optimizerLearningRoutes from './routes/optimizerLearning.routes'
 import productLinkPoolRoutes from './routes/productLinkPool.routes'
 import productLinkRedirectRoutes from './routes/productLinkRedirect.routes'
+import aiAdsIntegrationRoutes from './routes/aiAdsIntegration.routes'
 import { handleFeishuInteraction } from './controllers/feishu.webhook.controller'
 import logger from './utils/logger'
 import { errorHandler } from './middlewares/errorHandler'
@@ -186,6 +187,7 @@ app.use('/api/commercial', commercialRoutes) // SaaS readiness, plan and quota s
 app.use('/api/v2/agent', agentV2Routes) // Agent V2: LLM-powered multi-agent system
 app.use('/api/optimizer-learning', optimizerLearningRoutes)
 app.use('/api/product-link-pools', productLinkPoolRoutes)
+app.use('/api/integrations/ai-ads', aiAdsIntegrationRoutes)
 
 // 飞书 Webhook 交互回调
 app.post('/api/webhooks/feishu/interaction', handleFeishuInteraction)

@@ -25,10 +25,18 @@ Meta System User credentials use a separate production-only encryption key:
 META_CREDENTIAL_ENCRYPTION_KEY=
 ```
 
+The read-only AI ads integration uses a machine key and a fixed organization:
+
+```dotenv
+AI_ADS_INTEGRATION_API_KEY=
+AI_ADS_INTEGRATION_ORGANIZATION_ID=
+```
+
 Keep the feature flag at `false` until a rotated provider key has been installed.
 The deploy wrapper accepts only `true` or `false`, refuses to enable sync with an
 empty key, and streams all managed production values over SSH standard input. It
-atomically updates only these named entries in `/root/prod.env` and
+atomically updates only these named entries, including the AI ads integration
+pair, in `/root/prod.env` and
 `/opt/autoark/deploy/.env`, preserving the rest of each file and enforcing mode
 `600`. The values are never placed in SSH arguments or deploy logs. When an
 override is not set, the value already present in the selected environment source

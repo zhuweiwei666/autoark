@@ -50,6 +50,20 @@ if [ "${META_CREDENTIAL_ENCRYPTION_KEY+x}" = 'x' ]; then
   META_CREDENTIAL_ENCRYPTION_KEY_OVERRIDE="$META_CREDENTIAL_ENCRYPTION_KEY"
 fi
 
+AI_ADS_INTEGRATION_API_KEY_OVERRIDE_SET='false'
+AI_ADS_INTEGRATION_API_KEY_OVERRIDE=''
+if [ "${AI_ADS_INTEGRATION_API_KEY+x}" = 'x' ]; then
+  AI_ADS_INTEGRATION_API_KEY_OVERRIDE_SET='true'
+  AI_ADS_INTEGRATION_API_KEY_OVERRIDE="$AI_ADS_INTEGRATION_API_KEY"
+fi
+
+AI_ADS_INTEGRATION_ORGANIZATION_ID_OVERRIDE_SET='false'
+AI_ADS_INTEGRATION_ORGANIZATION_ID_OVERRIDE=''
+if [ "${AI_ADS_INTEGRATION_ORGANIZATION_ID+x}" = 'x' ]; then
+  AI_ADS_INTEGRATION_ORGANIZATION_ID_OVERRIDE_SET='true'
+  AI_ADS_INTEGRATION_ORGANIZATION_ID_OVERRIDE="$AI_ADS_INTEGRATION_ORGANIZATION_ID"
+fi
+
 case "$EXTERNAL_MATERIAL_SYNC_ENABLED_OVERRIDE_SET:$EXTERNAL_MATERIAL_SYNC_ENABLED_OVERRIDE" in
   false: | true:true | true:false) ;;
   *)
@@ -74,6 +88,26 @@ esac
 if [ "$META_CREDENTIAL_ENCRYPTION_KEY_OVERRIDE_SET" = 'true' ] &&
   [[ ! "$META_CREDENTIAL_ENCRYPTION_KEY_OVERRIDE" =~ [^[:space:]] ]]; then
   echo "META_CREDENTIAL_ENCRYPTION_KEY must be non-empty when supplied."
+  exit 1
+fi
+for integration_value in \
+  "$AI_ADS_INTEGRATION_API_KEY_OVERRIDE" \
+  "$AI_ADS_INTEGRATION_ORGANIZATION_ID_OVERRIDE"; do
+  case "$integration_value" in
+    *$'\n'* | *$'\r'*)
+      echo "AI ads integration values must be single-line."
+      exit 1
+      ;;
+  esac
+done
+if [ "$AI_ADS_INTEGRATION_API_KEY_OVERRIDE_SET" = 'true' ] &&
+  [[ ! "$AI_ADS_INTEGRATION_API_KEY_OVERRIDE" =~ [^[:space:]] ]]; then
+  echo "AI_ADS_INTEGRATION_API_KEY must be non-empty when supplied."
+  exit 1
+fi
+if [ "$AI_ADS_INTEGRATION_ORGANIZATION_ID_OVERRIDE_SET" = 'true' ] &&
+  [[ ! "$AI_ADS_INTEGRATION_ORGANIZATION_ID_OVERRIDE" =~ [^[:space:]] ]]; then
+  echo "AI_ADS_INTEGRATION_ORGANIZATION_ID must be non-empty when supplied."
   exit 1
 fi
 
@@ -180,12 +214,20 @@ flag_override_set=''
 flag_override=''
 meta_key_override_set=''
 meta_key_override=''
+ai_ads_key_override_set=''
+ai_ads_key_override=''
+ai_ads_organization_override_set=''
+ai_ads_organization_override=''
 IFS= read -r -d '' key_override_set
 IFS= read -r -d '' key_override
 IFS= read -r -d '' flag_override_set
 IFS= read -r -d '' flag_override
 IFS= read -r -d '' meta_key_override_set
 IFS= read -r -d '' meta_key_override
+IFS= read -r -d '' ai_ads_key_override_set
+IFS= read -r -d '' ai_ads_key_override
+IFS= read -r -d '' ai_ads_organization_override_set
+IFS= read -r -d '' ai_ads_organization_override
 
 case "$key_override_set" in
   true | false) ;;
@@ -208,6 +250,13 @@ case "$meta_key_override_set" in
     exit 1
     ;;
 esac
+case "$ai_ads_key_override_set:$ai_ads_organization_override_set" in
+  false:false | true:true) ;;
+  *)
+    echo 'AI ads integration key and organization overrides must be supplied together.'
+    exit 1
+    ;;
+esac
 case "$key_override" in
   *$'\n'* | *$'\r'*)
     echo 'GUANGDADA_API_KEY must be a single line.'
@@ -223,6 +272,20 @@ esac
 if [ "$meta_key_override_set" = 'true' ] &&
   [[ ! "$meta_key_override" =~ [^[:space:]] ]]; then
   echo 'META_CREDENTIAL_ENCRYPTION_KEY must be non-empty when supplied.'
+  exit 1
+fi
+for integration_value in "$ai_ads_key_override" "$ai_ads_organization_override"; do
+  case "$integration_value" in
+    *$'\n'* | *$'\r'*)
+      echo 'AI ads integration values must be single-line.'
+      exit 1
+      ;;
+  esac
+done
+if [ "$ai_ads_key_override_set" = 'true' ] &&
+  { [[ ! "$ai_ads_key_override" =~ [^[:space:]] ]] ||
+    [[ ! "$ai_ads_organization_override" =~ [^[:space:]] ]]; }; then
+  echo 'AI ads integration key and organization must be non-empty when supplied.'
   exit 1
 fi
 
@@ -388,6 +451,8 @@ chmod 600 "$base_payload_temp" "$payload_temp"
 source_key=''
 source_flag='false'
 source_meta_key=''
+source_ai_ads_key=''
+source_ai_ads_organization=''
 while IFS= read -r line || [ -n "$line" ]; do
   case "$line" in
     GUANGDADA_API_KEY=*)
@@ -399,6 +464,12 @@ while IFS= read -r line || [ -n "$line" ]; do
     META_CREDENTIAL_ENCRYPTION_KEY=*)
       source_meta_key="${line#META_CREDENTIAL_ENCRYPTION_KEY=}"
       ;;
+    AI_ADS_INTEGRATION_API_KEY=*)
+      source_ai_ads_key="${line#AI_ADS_INTEGRATION_API_KEY=}"
+      ;;
+    AI_ADS_INTEGRATION_ORGANIZATION_ID=*)
+      source_ai_ads_organization="${line#AI_ADS_INTEGRATION_ORGANIZATION_ID=}"
+      ;;
     AUTOARK_DEPLOY_UPLOAD_GENERATION=*) ;;
     *)
       printf '%s\n' "$line"
@@ -409,6 +480,8 @@ done < "$source_env_path" > "$base_payload_temp"
 resolved_key="$source_key"
 resolved_flag="$source_flag"
 resolved_meta_key="$source_meta_key"
+resolved_ai_ads_key="$source_ai_ads_key"
+resolved_ai_ads_organization="$source_ai_ads_organization"
 if [ "$key_override_set" = 'true' ]; then
   resolved_key="$key_override"
 fi
@@ -417,6 +490,10 @@ if [ "$flag_override_set" = 'true' ]; then
 fi
 if [ "$meta_key_override_set" = 'true' ]; then
   resolved_meta_key="$meta_key_override"
+fi
+if [ "$ai_ads_key_override_set" = 'true' ]; then
+  resolved_ai_ads_key="$ai_ads_key_override"
+  resolved_ai_ads_organization="$ai_ads_organization_override"
 fi
 
 case "$resolved_flag" in
@@ -442,11 +519,27 @@ case "$resolved_meta_key" in
     exit 1
     ;;
 esac
+for integration_value in "$resolved_ai_ads_key" "$resolved_ai_ads_organization"; do
+  case "$integration_value" in
+    *$'\n'* | *$'\r'*)
+      echo 'AI ads integration values must resolve to one line.'
+      exit 1
+      ;;
+  esac
+done
+if { [[ -n "$resolved_ai_ads_key" ]] || [[ -n "$resolved_ai_ads_organization" ]]; } &&
+  { [[ ! "$resolved_ai_ads_key" =~ [^[:space:]] ]] ||
+    [[ ! "$resolved_ai_ads_organization" =~ [^[:space:]] ]]; }; then
+  echo 'AI ads integration key and organization must both resolve non-empty.'
+  exit 1
+fi
 
 cat "$base_payload_temp" > "$payload_temp"
 printf 'GUANGDADA_API_KEY=%s\n' "$resolved_key" >> "$payload_temp"
 printf 'EXTERNAL_MATERIAL_SYNC_ENABLED=%s\n' "$resolved_flag" >> "$payload_temp"
 printf 'META_CREDENTIAL_ENCRYPTION_KEY=%s\n' "$resolved_meta_key" >> "$payload_temp"
+printf 'AI_ADS_INTEGRATION_API_KEY=%s\n' "$resolved_ai_ads_key" >> "$payload_temp"
+printf 'AI_ADS_INTEGRATION_ORGANIZATION_ID=%s\n' "$resolved_ai_ads_organization" >> "$payload_temp"
 chmod 600 "$payload_temp"
 mv -f -- "$payload_temp" "$payload_path"
 payload_temp=''
@@ -517,14 +610,18 @@ printf -v QUOTED_REMOTE_DEPLOY_LOCK_FILE '%q' "$REMOTE_DEPLOY_LOCK_FILE"
 REMOTE_DEPLOY_TRANSACTION_COMMAND="bash -c $QUOTED_REMOTE_DEPLOY_TRANSACTION_SCRIPT -- $QUOTED_APP_DIR $QUOTED_REPO_URL $QUOTED_AUTOARK_REF $QUOTED_REMOTE_ENV_BACKUP $QUOTED_REMOTE_ENV_UPLOAD_STAGE $QUOTED_REMOTE_ENV_UPLOAD_CANDIDATE $QUOTED_REMOTE_ENV_UPLOAD_EXPECTED_GENERATION $QUOTED_REMOTE_DEPLOY_LOCK_FILE"
 
 log "Deploying verified commit=$AUTOARK_REF"
-log "Synchronizing GUANGDADA_API_KEY, EXTERNAL_MATERIAL_SYNC_ENABLED, and META_CREDENTIAL_ENCRYPTION_KEY"
-printf '%s\0%s\0%s\0%s\0%s\0%s\0' \
+log "Synchronizing GUANGDADA_API_KEY, EXTERNAL_MATERIAL_SYNC_ENABLED, META_CREDENTIAL_ENCRYPTION_KEY, and AI ads integration values"
+printf '%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0' \
   "$GUANGDADA_API_KEY_OVERRIDE_SET" \
   "$GUANGDADA_API_KEY_OVERRIDE" \
   "$EXTERNAL_MATERIAL_SYNC_ENABLED_OVERRIDE_SET" \
   "$EXTERNAL_MATERIAL_SYNC_ENABLED_OVERRIDE" \
   "$META_CREDENTIAL_ENCRYPTION_KEY_OVERRIDE_SET" \
-  "$META_CREDENTIAL_ENCRYPTION_KEY_OVERRIDE" |
+  "$META_CREDENTIAL_ENCRYPTION_KEY_OVERRIDE" \
+  "$AI_ADS_INTEGRATION_API_KEY_OVERRIDE_SET" \
+  "$AI_ADS_INTEGRATION_API_KEY_OVERRIDE" \
+  "$AI_ADS_INTEGRATION_ORGANIZATION_ID_OVERRIDE_SET" \
+  "$AI_ADS_INTEGRATION_ORGANIZATION_ID_OVERRIDE" |
   ssh "$PROD_HOST" "$REMOTE_DEPLOY_TRANSACTION_COMMAND"
 
 if [ "${AUTOARK_SKIP_VERIFY:-false}" != "true" ]; then
