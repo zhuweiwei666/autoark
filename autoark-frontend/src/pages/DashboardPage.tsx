@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+} from "react";
 import {
   ArrowClockwise,
   ChartLineUp,
@@ -71,6 +78,16 @@ const shortDate = (value: string) => {
   return `${date.getMonth() + 1}/${date.getDate()}`;
 };
 
+const longDate = (value: string) => {
+  const date = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return value || "日期未知";
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  }).format(date);
+};
+
 function MetricTile({
   label,
   value,
@@ -114,22 +131,68 @@ function MiniLineChart({
   data,
   valueKey,
   color,
+  valueLabel,
+  formatValue,
 }: {
   data: any[];
   valueKey: string;
   color: string;
+  valueLabel: string;
+  formatValue: (value: number) => string;
 }) {
+  const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const values = data.map((item) => Number(item[valueKey] ?? 0));
   const max = Math.max(...values, 1);
   const min = Math.min(...values, 0);
   const range = Math.max(max - min, 1);
-  const points = values
-    .map((value, index) => {
-      const x = values.length <= 1 ? 0 : (index / (values.length - 1)) * 100;
-      const y = 100 - ((value - min) / range) * 84 - 8;
-      return `${x},${y}`;
-    })
+  const pointCoordinates = values.map((value, index) => {
+    const x = values.length <= 1 ? 0 : (index / (values.length - 1)) * 100;
+    const y = 100 - ((value - min) / range) * 84 - 8;
+    return { x, y };
+  });
+  const points = pointCoordinates
+    .map(({ x, y }) => `${x},${y}`)
     .join(" ");
+  const activePoint =
+    activeIndex !== null && activeIndex < data.length
+      ? {
+          ...pointCoordinates[activeIndex],
+          date: String(data[activeIndex]?.date || ""),
+          value: values[activeIndex],
+        }
+      : null;
+  const tooltipX = activePoint
+    ? Math.min(Math.max(activePoint.x, 24), 76)
+    : 50;
+
+  const handlePointerMove = (event: ReactPointerEvent<SVGSVGElement>) => {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    if (bounds.width <= 0) return;
+
+    const ratio = Math.min(
+      Math.max((event.clientX - bounds.left) / bounds.width, 0),
+      1,
+    );
+    setActiveIndex(Math.round(ratio * (data.length - 1)));
+  };
+
+  const clearActivePoint = () => setActiveIndex(null);
+
+  const handleKeyDown = (event: ReactKeyboardEvent<SVGSVGElement>) => {
+    if (event.key === "Escape") {
+      clearActivePoint();
+      return;
+    }
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+
+    event.preventDefault();
+    setActiveIndex((current) => {
+      const startIndex = current ?? data.length - 1;
+      return event.key === "ArrowLeft"
+        ? Math.max(startIndex - 1, 0)
+        : Math.min(startIndex + 1, data.length - 1);
+    });
+  };
 
   if (!data.length) {
     return (
@@ -141,37 +204,92 @@ function MiniLineChart({
 
   return (
     <div className="h-64 rounded-lg border border-zinc-200 bg-[#fbfbf8] p-4">
-      <svg
-        viewBox="0 0 100 100"
-        preserveAspectRatio="none"
-        className="h-48 w-full overflow-hidden"
-      >
-        <line
-          x1="0"
-          y1="92"
-          x2="100"
-          y2="92"
-          stroke="#d4d4d0"
-          strokeWidth="0.6"
-        />
-        <line
-          x1="0"
-          y1="50"
-          x2="100"
-          y2="50"
-          stroke="#e7e5e4"
-          strokeWidth="0.4"
-        />
-        <polyline
-          points={points}
-          fill="none"
-          stroke={color}
-          strokeWidth="2.3"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          vectorEffect="non-scaling-stroke"
-        />
-      </svg>
+      <div className="relative h-48">
+        <svg
+          viewBox="0 0 100 100"
+          preserveAspectRatio="none"
+          className="h-full w-full cursor-crosshair overflow-hidden rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0f766e] focus-visible:ring-offset-2"
+          tabIndex={0}
+          aria-label={
+            activePoint
+              ? `${longDate(activePoint.date)}，${valueLabel} ${formatValue(activePoint.value)}`
+              : `${valueLabel}趋势图。悬浮或使用左右方向键查看每日数据。`
+          }
+          onPointerMove={handlePointerMove}
+          onPointerDown={handlePointerMove}
+          onPointerLeave={clearActivePoint}
+          onFocus={() =>
+            setActiveIndex((current) => current ?? data.length - 1)
+          }
+          onBlur={clearActivePoint}
+          onKeyDown={handleKeyDown}
+        >
+          <line
+            x1="0"
+            y1="92"
+            x2="100"
+            y2="92"
+            stroke="#d4d4d0"
+            strokeWidth="0.6"
+          />
+          <line
+            x1="0"
+            y1="50"
+            x2="100"
+            y2="50"
+            stroke="#e7e5e4"
+            strokeWidth="0.4"
+          />
+          <polyline
+            points={points}
+            fill="none"
+            stroke={color}
+            strokeWidth="2.3"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            vectorEffect="non-scaling-stroke"
+          />
+          {activePoint && (
+            <line
+              x1={activePoint.x}
+              y1="8"
+              x2={activePoint.x}
+              y2="92"
+              stroke={color}
+              strokeWidth="1"
+              strokeDasharray="3 3"
+              opacity="0.45"
+              vectorEffect="non-scaling-stroke"
+              aria-hidden="true"
+            />
+          )}
+        </svg>
+        {activePoint && (
+          <>
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 bg-[#fbfbf8]"
+              style={{
+                left: `${activePoint.x}%`,
+                top: `${activePoint.y}%`,
+                borderColor: color,
+              }}
+            />
+            <div
+              role="tooltip"
+              className="pointer-events-none absolute top-3 min-w-32 -translate-x-1/2 rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-left shadow-[0_14px_28px_-18px_rgba(24,24,27,0.9)]"
+              style={{ left: `${tooltipX}%` }}
+            >
+              <div className="whitespace-nowrap text-[11px] font-semibold text-zinc-300">
+                {longDate(activePoint.date)}
+              </div>
+              <div className="mt-1 whitespace-nowrap font-mono text-sm font-bold text-white">
+                {valueLabel} {formatValue(activePoint.value)}
+              </div>
+            </div>
+          </>
+        )}
+      </div>
       <div className="mt-3 flex justify-between text-xs font-semibold text-zinc-500">
         <span>{shortDate(data[0]?.date || "")}</span>
         <span>{shortDate(data[data.length - 1]?.date || "")}</span>
@@ -413,6 +531,8 @@ export default function DashboardPage() {
               data={trendData}
               valueKey="totalSpend"
               color="#18181b"
+              valueLabel="消耗"
+              formatValue={formatCurrency}
             />
           </article>
 
@@ -428,7 +548,13 @@ export default function DashboardPage() {
                 7D
               </span>
             </div>
-            <MiniLineChart data={trendData} valueKey="roas" color="#0f766e" />
+            <MiniLineChart
+              data={trendData}
+              valueKey="roas"
+              color="#0f766e"
+              valueLabel="ROAS"
+              formatValue={formatDecimal}
+            />
           </article>
         </section>
 
