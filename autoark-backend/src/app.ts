@@ -28,6 +28,7 @@ import optimizerLearningRoutes from './routes/optimizerLearning.routes'
 import productLinkPoolRoutes from './routes/productLinkPool.routes'
 import productLinkRedirectRoutes from './routes/productLinkRedirect.routes'
 import aiAdsIntegrationRoutes from './routes/aiAdsIntegration.routes'
+import creativeFactoryRoutes from './routes/creativeFactory.routes'
 import { handleFeishuInteraction } from './controllers/feishu.webhook.controller'
 import logger from './utils/logger'
 import { errorHandler } from './middlewares/errorHandler'
@@ -188,6 +189,7 @@ app.use('/api/v2/agent', agentV2Routes) // Agent V2: LLM-powered multi-agent sys
 app.use('/api/optimizer-learning', optimizerLearningRoutes)
 app.use('/api/product-link-pools', productLinkPoolRoutes)
 app.use('/api/integrations/ai-ads', aiAdsIntegrationRoutes)
+app.use('/api/creative-factory', creativeFactoryRoutes)
 
 // 飞书 Webhook 交互回调
 app.post('/api/webhooks/feishu/interaction', handleFeishuInteraction)

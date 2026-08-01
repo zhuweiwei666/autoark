@@ -64,6 +64,27 @@ if [ "${AI_ADS_INTEGRATION_ORGANIZATION_ID+x}" = 'x' ]; then
   AI_ADS_INTEGRATION_ORGANIZATION_ID_OVERRIDE="$AI_ADS_INTEGRATION_ORGANIZATION_ID"
 fi
 
+AI_HOST_CREATIVE_FACTORY_URL_OVERRIDE_SET='false'
+AI_HOST_CREATIVE_FACTORY_URL_OVERRIDE=''
+if [ "${AI_HOST_CREATIVE_FACTORY_URL+x}" = 'x' ]; then
+  AI_HOST_CREATIVE_FACTORY_URL_OVERRIDE_SET='true'
+  AI_HOST_CREATIVE_FACTORY_URL_OVERRIDE="$AI_HOST_CREATIVE_FACTORY_URL"
+fi
+
+AI_HOST_INTERNAL_API_SECRET_OVERRIDE_SET='false'
+AI_HOST_INTERNAL_API_SECRET_OVERRIDE=''
+if [ "${AI_HOST_INTERNAL_API_SECRET+x}" = 'x' ]; then
+  AI_HOST_INTERNAL_API_SECRET_OVERRIDE_SET='true'
+  AI_HOST_INTERNAL_API_SECRET_OVERRIDE="$AI_HOST_INTERNAL_API_SECRET"
+fi
+
+CREATIVE_FACTORY_CODEX_SECRET_OVERRIDE_SET='false'
+CREATIVE_FACTORY_CODEX_SECRET_OVERRIDE=''
+if [ "${CREATIVE_FACTORY_CODEX_SECRET+x}" = 'x' ]; then
+  CREATIVE_FACTORY_CODEX_SECRET_OVERRIDE_SET='true'
+  CREATIVE_FACTORY_CODEX_SECRET_OVERRIDE="$CREATIVE_FACTORY_CODEX_SECRET"
+fi
+
 case "$EXTERNAL_MATERIAL_SYNC_ENABLED_OVERRIDE_SET:$EXTERNAL_MATERIAL_SYNC_ENABLED_OVERRIDE" in
   false: | true:true | true:false) ;;
   *)
@@ -108,6 +129,37 @@ fi
 if [ "$AI_ADS_INTEGRATION_ORGANIZATION_ID_OVERRIDE_SET" = 'true' ] &&
   [[ ! "$AI_ADS_INTEGRATION_ORGANIZATION_ID_OVERRIDE" =~ [^[:space:]] ]]; then
   echo "AI_ADS_INTEGRATION_ORGANIZATION_ID must be non-empty when supplied."
+  exit 1
+fi
+case "$AI_HOST_CREATIVE_FACTORY_URL_OVERRIDE" in
+  *$'\n'* | *$'\r'*)
+    echo "AI_HOST_CREATIVE_FACTORY_URL must be a single line."
+    exit 1
+    ;;
+esac
+if [ "$AI_HOST_CREATIVE_FACTORY_URL_OVERRIDE_SET" = 'true' ] &&
+  [[ ! "$AI_HOST_CREATIVE_FACTORY_URL_OVERRIDE" =~ ^https:// ]]; then
+  echo "AI_HOST_CREATIVE_FACTORY_URL must be an HTTPS URL when supplied."
+  exit 1
+fi
+for creative_factory_secret in \
+  "$AI_HOST_INTERNAL_API_SECRET_OVERRIDE" \
+  "$CREATIVE_FACTORY_CODEX_SECRET_OVERRIDE"; do
+  case "$creative_factory_secret" in
+    *$'\n'* | *$'\r'*)
+      echo "Creative Factory secrets must be single-line."
+      exit 1
+      ;;
+  esac
+done
+if [ "$AI_HOST_INTERNAL_API_SECRET_OVERRIDE_SET" = 'true' ] &&
+  [[ ! "$AI_HOST_INTERNAL_API_SECRET_OVERRIDE" =~ [^[:space:]] ]]; then
+  echo "AI_HOST_INTERNAL_API_SECRET must be non-empty when supplied."
+  exit 1
+fi
+if [ "$CREATIVE_FACTORY_CODEX_SECRET_OVERRIDE_SET" = 'true' ] &&
+  [[ ! "$CREATIVE_FACTORY_CODEX_SECRET_OVERRIDE" =~ [^[:space:]] ]]; then
+  echo "CREATIVE_FACTORY_CODEX_SECRET must be non-empty when supplied."
   exit 1
 fi
 
@@ -218,6 +270,12 @@ ai_ads_key_override_set=''
 ai_ads_key_override=''
 ai_ads_organization_override_set=''
 ai_ads_organization_override=''
+ai_host_url_override_set=''
+ai_host_url_override=''
+ai_host_secret_override_set=''
+ai_host_secret_override=''
+codex_secret_override_set=''
+codex_secret_override=''
 IFS= read -r -d '' key_override_set
 IFS= read -r -d '' key_override
 IFS= read -r -d '' flag_override_set
@@ -228,6 +286,12 @@ IFS= read -r -d '' ai_ads_key_override_set
 IFS= read -r -d '' ai_ads_key_override
 IFS= read -r -d '' ai_ads_organization_override_set
 IFS= read -r -d '' ai_ads_organization_override
+IFS= read -r -d '' ai_host_url_override_set
+IFS= read -r -d '' ai_host_url_override
+IFS= read -r -d '' ai_host_secret_override_set
+IFS= read -r -d '' ai_host_secret_override
+IFS= read -r -d '' codex_secret_override_set
+IFS= read -r -d '' codex_secret_override
 
 case "$key_override_set" in
   true | false) ;;
@@ -286,6 +350,47 @@ if [ "$ai_ads_key_override_set" = 'true' ] &&
   { [[ ! "$ai_ads_key_override" =~ [^[:space:]] ]] ||
     [[ ! "$ai_ads_organization_override" =~ [^[:space:]] ]]; }; then
   echo 'AI ads integration key and organization must be non-empty when supplied.'
+  exit 1
+fi
+for override_state in \
+  "$ai_host_url_override_set" \
+  "$ai_host_secret_override_set" \
+  "$codex_secret_override_set"; do
+  case "$override_state" in
+    true | false) ;;
+    *)
+      echo 'Invalid Creative Factory override state.'
+      exit 1
+      ;;
+  esac
+done
+case "$ai_host_url_override" in
+  *$'\n'* | *$'\r'*)
+    echo 'AI_HOST_CREATIVE_FACTORY_URL must be a single line.'
+    exit 1
+    ;;
+esac
+if [ "$ai_host_url_override_set" = 'true' ] &&
+  [[ ! "$ai_host_url_override" =~ ^https:// ]]; then
+  echo 'AI_HOST_CREATIVE_FACTORY_URL must be an HTTPS URL when supplied.'
+  exit 1
+fi
+for secret_override in "$ai_host_secret_override" "$codex_secret_override"; do
+  case "$secret_override" in
+    *$'\n'* | *$'\r'*)
+      echo 'Creative Factory secrets must be single-line.'
+      exit 1
+      ;;
+  esac
+done
+if [ "$ai_host_secret_override_set" = 'true' ] &&
+  [[ ! "$ai_host_secret_override" =~ [^[:space:]] ]]; then
+  echo 'AI_HOST_INTERNAL_API_SECRET must be non-empty when supplied.'
+  exit 1
+fi
+if [ "$codex_secret_override_set" = 'true' ] &&
+  [[ ! "$codex_secret_override" =~ [^[:space:]] ]]; then
+  echo 'CREATIVE_FACTORY_CODEX_SECRET must be non-empty when supplied.'
   exit 1
 fi
 
@@ -453,6 +558,9 @@ source_flag='false'
 source_meta_key=''
 source_ai_ads_key=''
 source_ai_ads_organization=''
+source_ai_host_url=''
+source_ai_host_secret=''
+source_codex_secret=''
 while IFS= read -r line || [ -n "$line" ]; do
   case "$line" in
     GUANGDADA_API_KEY=*)
@@ -470,6 +578,15 @@ while IFS= read -r line || [ -n "$line" ]; do
     AI_ADS_INTEGRATION_ORGANIZATION_ID=*)
       source_ai_ads_organization="${line#AI_ADS_INTEGRATION_ORGANIZATION_ID=}"
       ;;
+    AI_HOST_CREATIVE_FACTORY_URL=*)
+      source_ai_host_url="${line#AI_HOST_CREATIVE_FACTORY_URL=}"
+      ;;
+    AI_HOST_INTERNAL_API_SECRET=*)
+      source_ai_host_secret="${line#AI_HOST_INTERNAL_API_SECRET=}"
+      ;;
+    CREATIVE_FACTORY_CODEX_SECRET=*)
+      source_codex_secret="${line#CREATIVE_FACTORY_CODEX_SECRET=}"
+      ;;
     AUTOARK_DEPLOY_UPLOAD_GENERATION=*) ;;
     *)
       printf '%s\n' "$line"
@@ -482,6 +599,9 @@ resolved_flag="$source_flag"
 resolved_meta_key="$source_meta_key"
 resolved_ai_ads_key="$source_ai_ads_key"
 resolved_ai_ads_organization="$source_ai_ads_organization"
+resolved_ai_host_url="$source_ai_host_url"
+resolved_ai_host_secret="$source_ai_host_secret"
+resolved_codex_secret="$source_codex_secret"
 if [ "$key_override_set" = 'true' ]; then
   resolved_key="$key_override"
 fi
@@ -494,6 +614,15 @@ fi
 if [ "$ai_ads_key_override_set" = 'true' ]; then
   resolved_ai_ads_key="$ai_ads_key_override"
   resolved_ai_ads_organization="$ai_ads_organization_override"
+fi
+if [ "$ai_host_url_override_set" = 'true' ]; then
+  resolved_ai_host_url="$ai_host_url_override"
+fi
+if [ "$ai_host_secret_override_set" = 'true' ]; then
+  resolved_ai_host_secret="$ai_host_secret_override"
+fi
+if [ "$codex_secret_override_set" = 'true' ]; then
+  resolved_codex_secret="$codex_secret_override"
 fi
 
 case "$resolved_flag" in
@@ -533,6 +662,18 @@ if { [[ -n "$resolved_ai_ads_key" ]] || [[ -n "$resolved_ai_ads_organization" ]]
   echo 'AI ads integration key and organization must both resolve non-empty.'
   exit 1
 fi
+if [ -n "$resolved_ai_host_url" ] && [[ ! "$resolved_ai_host_url" =~ ^https:// ]]; then
+  echo 'AI_HOST_CREATIVE_FACTORY_URL must resolve to an HTTPS URL.'
+  exit 1
+fi
+for resolved_secret in "$resolved_ai_host_secret" "$resolved_codex_secret"; do
+  case "$resolved_secret" in
+    *$'\n'* | *$'\r'*)
+      echo 'Creative Factory secrets must resolve to one line.'
+      exit 1
+      ;;
+  esac
+done
 
 cat "$base_payload_temp" > "$payload_temp"
 printf 'GUANGDADA_API_KEY=%s\n' "$resolved_key" >> "$payload_temp"
@@ -540,6 +681,9 @@ printf 'EXTERNAL_MATERIAL_SYNC_ENABLED=%s\n' "$resolved_flag" >> "$payload_temp"
 printf 'META_CREDENTIAL_ENCRYPTION_KEY=%s\n' "$resolved_meta_key" >> "$payload_temp"
 printf 'AI_ADS_INTEGRATION_API_KEY=%s\n' "$resolved_ai_ads_key" >> "$payload_temp"
 printf 'AI_ADS_INTEGRATION_ORGANIZATION_ID=%s\n' "$resolved_ai_ads_organization" >> "$payload_temp"
+printf 'AI_HOST_CREATIVE_FACTORY_URL=%s\n' "$resolved_ai_host_url" >> "$payload_temp"
+printf 'AI_HOST_INTERNAL_API_SECRET=%s\n' "$resolved_ai_host_secret" >> "$payload_temp"
+printf 'CREATIVE_FACTORY_CODEX_SECRET=%s\n' "$resolved_codex_secret" >> "$payload_temp"
 chmod 600 "$payload_temp"
 mv -f -- "$payload_temp" "$payload_path"
 payload_temp=''
@@ -610,8 +754,8 @@ printf -v QUOTED_REMOTE_DEPLOY_LOCK_FILE '%q' "$REMOTE_DEPLOY_LOCK_FILE"
 REMOTE_DEPLOY_TRANSACTION_COMMAND="bash -c $QUOTED_REMOTE_DEPLOY_TRANSACTION_SCRIPT -- $QUOTED_APP_DIR $QUOTED_REPO_URL $QUOTED_AUTOARK_REF $QUOTED_REMOTE_ENV_BACKUP $QUOTED_REMOTE_ENV_UPLOAD_STAGE $QUOTED_REMOTE_ENV_UPLOAD_CANDIDATE $QUOTED_REMOTE_ENV_UPLOAD_EXPECTED_GENERATION $QUOTED_REMOTE_DEPLOY_LOCK_FILE"
 
 log "Deploying verified commit=$AUTOARK_REF"
-log "Synchronizing GUANGDADA_API_KEY, EXTERNAL_MATERIAL_SYNC_ENABLED, META_CREDENTIAL_ENCRYPTION_KEY, and AI ads integration values"
-printf '%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0' \
+log "Synchronizing GUANGDADA_API_KEY, EXTERNAL_MATERIAL_SYNC_ENABLED, META_CREDENTIAL_ENCRYPTION_KEY, AI ads integration, and Creative Factory values"
+printf '%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0' \
   "$GUANGDADA_API_KEY_OVERRIDE_SET" \
   "$GUANGDADA_API_KEY_OVERRIDE" \
   "$EXTERNAL_MATERIAL_SYNC_ENABLED_OVERRIDE_SET" \
@@ -621,7 +765,13 @@ printf '%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0' \
   "$AI_ADS_INTEGRATION_API_KEY_OVERRIDE_SET" \
   "$AI_ADS_INTEGRATION_API_KEY_OVERRIDE" \
   "$AI_ADS_INTEGRATION_ORGANIZATION_ID_OVERRIDE_SET" \
-  "$AI_ADS_INTEGRATION_ORGANIZATION_ID_OVERRIDE" |
+  "$AI_ADS_INTEGRATION_ORGANIZATION_ID_OVERRIDE" \
+  "$AI_HOST_CREATIVE_FACTORY_URL_OVERRIDE_SET" \
+  "$AI_HOST_CREATIVE_FACTORY_URL_OVERRIDE" \
+  "$AI_HOST_INTERNAL_API_SECRET_OVERRIDE_SET" \
+  "$AI_HOST_INTERNAL_API_SECRET_OVERRIDE" \
+  "$CREATIVE_FACTORY_CODEX_SECRET_OVERRIDE_SET" \
+  "$CREATIVE_FACTORY_CODEX_SECRET_OVERRIDE" |
   ssh "$PROD_HOST" "$REMOTE_DEPLOY_TRANSACTION_COMMAND"
 
 if [ "${AUTOARK_SKIP_VERIFY:-false}" != "true" ]; then

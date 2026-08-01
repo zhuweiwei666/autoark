@@ -1,0 +1,99 @@
+import mongoose from 'mongoose'
+
+const creativeFactoryJobSchema = new mongoose.Schema(
+  {
+    organizationId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Organization',
+      index: true,
+    },
+    batchId: { type: String, required: true, index: true },
+    variantId: { type: String, required: true },
+    title: { type: String, required: true },
+    intent: { type: String, required: true },
+    brandKey: { type: String, default: 'clingai' },
+    workflow: {
+      type: String,
+      enum: ['generate_then_edit', 'edit_only'],
+      required: true,
+    },
+    status: {
+      type: String,
+      enum: [
+        'awaiting_codex',
+        'generating',
+        'codex_processing',
+        'ready',
+        'failed',
+      ],
+      default: 'awaiting_codex',
+      index: true,
+    },
+    source: {
+      materialId: { type: mongoose.Schema.Types.ObjectId, ref: 'Material' },
+      url: { type: String, required: true },
+      mediaType: { type: String, enum: ['image', 'video'], required: true },
+      name: { type: String },
+    },
+    requestedOutput: {
+      mediaType: { type: String, enum: ['image', 'video'], required: true },
+      aspectRatio: { type: String, default: '9:16' },
+    },
+    analysis: {
+      intentSummary: { type: String },
+      audience: { type: String },
+      hook: { type: String },
+      featureKey: { type: String },
+      templateId: { type: String },
+      rationale: { type: String },
+      editRecipe: { type: mongoose.Schema.Types.Mixed },
+    },
+    aiHost: {
+      status: { type: String, default: 'not_started' },
+      generationId: { type: String },
+      presetToken: { type: String },
+      genJobId: { type: String },
+      resultUrl: { type: String },
+      landingUrl: { type: String },
+      error: { type: String },
+      updatedAt: { type: Date },
+    },
+    codex: {
+      status: {
+        type: String,
+        enum: ['queued', 'claimed', 'processing', 'completed', 'failed'],
+        default: 'queued',
+        index: true,
+      },
+      workerId: { type: String },
+      leaseUntil: { type: Date },
+      claimedAt: { type: Date },
+      completedAt: { type: Date },
+      notes: { type: String },
+      outputs: [{ type: mongoose.Schema.Types.Mixed }],
+    },
+    outputMaterialId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Material',
+      index: true,
+    },
+    attribution: {
+      status: { type: String, enum: ['pending', 'linked'], default: 'pending' },
+      mappings: [{ type: mongoose.Schema.Types.Mixed }],
+      linkedAt: { type: Date },
+    },
+    error: { type: String },
+    createdBy: { type: String, required: true },
+  },
+  { timestamps: true },
+)
+
+creativeFactoryJobSchema.index({ batchId: 1, variantId: 1 }, { unique: true })
+creativeFactoryJobSchema.index({ organizationId: 1, createdAt: -1 })
+creativeFactoryJobSchema.index({
+  'codex.status': 1,
+  'codex.leaseUntil': 1,
+  createdAt: 1,
+})
+
+export default mongoose.model('CreativeFactoryJob', creativeFactoryJobSchema)

@@ -4,6 +4,7 @@ import logger from '../utils/logger'
 import Material from '../models/Material'
 import MaterialMetrics from '../models/MaterialMetrics'
 import AdMaterialMapping from '../models/AdMaterialMapping'
+import { linkCreativeFactoryAttribution } from './creativeFactory.service'
 
 /**
  * 素材追踪服务
@@ -270,6 +271,21 @@ export async function recordAdMaterialMapping(data: {
       },
       $set: { 'usage.lastUsedAt': new Date() },
     })
+
+    try {
+      await linkCreativeFactoryAttribution(data.materialId, {
+        adId: data.adId,
+        accountId: data.accountId,
+        campaignId: data.campaignId,
+        adsetId: data.adsetId,
+        creativeId: data.creativeId,
+      })
+    } catch (error: any) {
+      logger.warn('[MaterialTracking] Creative Factory attribution link failed', {
+        materialId: data.materialId,
+        message: error?.message,
+      })
+    }
     
     return true
   } catch (error: any) {

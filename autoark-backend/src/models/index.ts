@@ -20,6 +20,7 @@ export { default as Material } from './Material'
 export { default as Folder } from './Folder'
 export { default as MaterialMetrics } from './MaterialMetrics'
 export { default as AdMaterialMapping } from './AdMaterialMapping'
+export { default as CreativeFactoryJob } from './CreativeFactoryJob'
 
 // 产品关系映射（自动投放核心）
 export { default as Product } from './Product'

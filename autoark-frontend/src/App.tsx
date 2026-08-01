@@ -32,6 +32,7 @@ const AgentChatPage = lazy(() => import('./pages/AgentChatPage'))
 const AiOptimizerPage = lazy(() => import('./pages/AiOptimizerPage'))
 const MetaSystemUserPage = lazy(() => import('./pages/MetaSystemUserPage'))
 const ProductLinkPoolsPage = lazy(() => import('./pages/ProductLinkPoolsPage'))
+const CreativeFactoryPage = lazy(() => import('./pages/CreativeFactoryPage'))
 
 // 创建 QueryClient 实例，配置全局缓存策略
 // 策略：显示缓存数据的同时后台刷新（stale-while-revalidate）
@@ -115,6 +116,7 @@ function App() {
               <Route path="/bulk-ad/copywriting" element={<AssetManagementPage />} />
               <Route path="/bulk-ad/creative" element={<AssetManagementPage />} />
               <Route path="/bulk-ad/materials" element={<MaterialLibraryPage />} />
+              <Route path="/bulk-ad/creative-factory" element={<CreativeFactoryPage />} />
               {/* AI Agent Routes */}
               <Route path="/ai/chat" element={
                 <ProtectedRoute requireRole="super_admin">

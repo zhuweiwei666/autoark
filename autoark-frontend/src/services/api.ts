@@ -73,6 +73,102 @@ export const authFetch = async (url: string, options: FetchWithTimeoutOptions = 
   return fetchWithTimeout(url, { ...fetchOptions, headers, signal, timeoutMs })
 }
 
+export type CreativeFactoryJob = {
+  _id: string
+  batchId: string
+  variantId: string
+  title: string
+  intent: string
+  workflow: 'generate_then_edit' | 'edit_only'
+  status: 'awaiting_codex' | 'generating' | 'codex_processing' | 'ready' | 'failed'
+  source: { materialId?: string; url: string; mediaType: 'image' | 'video'; name?: string }
+  requestedOutput: { mediaType: 'image' | 'video'; aspectRatio: string }
+  analysis?: {
+    intentSummary?: string
+    hook?: string
+    audience?: string
+    featureKey?: string
+    templateId?: string
+    rationale?: string
+  }
+  aiHost?: { status?: string; resultUrl?: string; landingUrl?: string; error?: string }
+  codex?: { status?: string; workerId?: string; notes?: string }
+  outputMaterialId?: string | {
+    _id: string
+    name: string
+    type: 'image' | 'video'
+    status: string
+    storage?: { url?: string }
+    metrics?: { totalSpend?: number; avgRoas?: number; avgCtr?: number; qualityScore?: number }
+    usage?: { totalAds?: number }
+  }
+  attribution?: { status?: 'pending' | 'linked'; mappings?: any[]; linkedAt?: string }
+  error?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type CreativeFactoryBatchSummary = {
+  batchId: string
+  title: string
+  intent: string
+  brandKey: string
+  total: number
+  ready: number
+  failed: number
+  attributed: number
+  statuses: Record<string, number>
+  createdAt: string
+  updatedAt: string
+}
+
+const readApiError = async (response: Response, fallback: string) => {
+  const payload = await response.json().catch(() => ({}))
+  throw new Error(payload?.message || payload?.error || fallback)
+}
+
+export async function getCreativeFactoryBatches(): Promise<CreativeFactoryBatchSummary[]> {
+  const response = await authFetch(`${API_BASE_URL}/api/creative-factory/batches`)
+  if (!response.ok) return readApiError(response, '读取生产批次失败')
+  const payload = await response.json()
+  return payload.data || []
+}
+
+export async function getCreativeFactoryBatch(batchId: string): Promise<{ batchId: string; jobs: CreativeFactoryJob[] }> {
+  const response = await authFetch(`${API_BASE_URL}/api/creative-factory/batches/${encodeURIComponent(batchId)}`)
+  if (!response.ok) return readApiError(response, '读取批次详情失败')
+  const payload = await response.json()
+  return payload.data
+}
+
+export async function createCreativeFactoryBatch(input: {
+  title: string
+  intent: string
+  brandKey: string
+  outputMediaType: 'image' | 'video'
+  aspectRatio: string
+  variantsPerAsset: number
+  assets: Array<{ materialId?: string; sourceUrl?: string; mediaType?: 'image' | 'video' }>
+}) {
+  const response = await authFetch(`${API_BASE_URL}/api/creative-factory/batches`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+  if (!response.ok) return readApiError(response, '创建生产批次失败')
+  const payload = await response.json()
+  return payload.data as { batchId: string; jobCount: number; jobs: CreativeFactoryJob[] }
+}
+
+export async function refreshCreativeFactoryJob(jobId: string): Promise<CreativeFactoryJob> {
+  const response = await authFetch(`${API_BASE_URL}/api/creative-factory/jobs/${encodeURIComponent(jobId)}/refresh`, {
+    method: 'POST',
+    body: '{}',
+  })
+  if (!response.ok) return readApiError(response, '刷新生成状态失败')
+  const payload = await response.json()
+  return payload.data
+}
+
 // === 商用 SaaS 状态 ===
 
 export interface CommercialReadiness {
