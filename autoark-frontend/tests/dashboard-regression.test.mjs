@@ -78,6 +78,27 @@ test('trend chart points are separated and clipped to the SVG viewport', () => {
   assert.doesNotMatch(source, /overflow-visible/)
 })
 
+test('trend charts expose the hovered day with the correct metric formatting', () => {
+  const source = sourceBetween(
+    dashboardSource,
+    'function MiniLineChart',
+    'function BarList',
+  )
+
+  assert.match(source, /onPointerMove=\{handlePointerMove\}/)
+  assert.match(source, /onPointerLeave=\{clearActivePoint\}/)
+  assert.match(source, /role="tooltip"/)
+  assert.match(source, /valueLabel/)
+  assert.match(source, /formatValue/)
+  assert.match(source, /ArrowLeft/)
+  assert.match(source, /ArrowRight/)
+
+  assert.match(dashboardSource, /valueLabel="消耗"/)
+  assert.match(dashboardSource, /formatValue=\{formatCurrency\}/)
+  assert.match(dashboardSource, /valueLabel="ROAS"/)
+  assert.match(dashboardSource, /formatValue=\{formatDecimal\}/)
+})
+
 test('dashboard rankings use authenticated server-date requests and fail loudly', () => {
   const source = sourceBetween(
     apiSource,
