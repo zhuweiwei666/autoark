@@ -5,9 +5,10 @@ interface DatePickerProps {
   onChange: (date: string) => void
   placeholder?: string
   className?: string
+  today?: string
 }
 
-export default function DatePicker({ value, onChange, placeholder = '选择日期', className = '' }: DatePickerProps) {
+export default function DatePicker({ value, onChange, placeholder = '选择日期', className = '', today: todayValue }: DatePickerProps) {
   const [isOpen, setIsOpen] = useState(false)
   const [currentMonth, setCurrentMonth] = useState(new Date())
   const pickerRef = useRef<HTMLDivElement>(null)
@@ -55,7 +56,7 @@ export default function DatePicker({ value, onChange, placeholder = '选择日�
     startDate.setDate(startDate.getDate() - firstDay.getDay()) // 从周日开始
 
     const days: Array<{ date: Date; isCurrentMonth: boolean; isToday: boolean; isSelected: boolean }> = []
-    const today = new Date()
+    const today = parseDate(todayValue || '') || new Date()
     today.setHours(0, 0, 0, 0)
     const selectedDate = value ? parseDate(value) : null
 
@@ -189,4 +190,3 @@ export default function DatePicker({ value, onChange, placeholder = '选择日�
     </div>
   )
 }
-

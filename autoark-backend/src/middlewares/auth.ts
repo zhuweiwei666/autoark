@@ -4,6 +4,7 @@ import { UserRole } from '../models/User'
 import User from '../models/User'
 import MetaBusinessCredential from '../models/MetaBusinessCredential'
 import { normalizeForStorage } from '../utils/accountId'
+import { normalizeOrganizationTimezoneOffsetMinutes } from '../config/organizationTimezones'
 
 const normalizeOrganizationId = (organizationId: any): string | undefined => {
   if (!organizationId) return undefined
@@ -47,7 +48,13 @@ export const authenticate = async (
     const decoded = verifyToken(token)
 
     // 检查用户是否仍然存在且状态为 active
-    const user = await User.findById(decoded.userId)
+    const userQuery: any = User.findById(decoded.userId)
+    const user = typeof userQuery?.populate === 'function'
+      ? await userQuery.populate({
+          path: 'organizationId',
+          select: 'settings.timezoneOffsetMinutes',
+        })
+      : await userQuery
     if (!user || user.status !== 'active') {
       res.status(401).json({
         success: false,
@@ -63,6 +70,9 @@ export const authenticate = async (
       email: user.email,
       role: user.role,
       organizationId: normalizeOrganizationId(user.organizationId),
+      timezoneOffsetMinutes: normalizeOrganizationTimezoneOffsetMinutes(
+        (user.organizationId as any)?.settings?.timezoneOffsetMinutes,
+      ),
       permissions: user.permissions || [],
     }
 

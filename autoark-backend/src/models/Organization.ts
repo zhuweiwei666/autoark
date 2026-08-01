@@ -1,4 +1,8 @@
 import mongoose from 'mongoose'
+import {
+  DEFAULT_ORGANIZATION_TIMEZONE_OFFSET_MINUTES,
+  ORGANIZATION_TIMEZONE_OFFSET_MINUTES,
+} from '../config/organizationTimezones'
 
 export enum OrganizationStatus {
   ACTIVE = 'active',
@@ -36,6 +40,7 @@ export interface IOrganization extends mongoose.Document {
     subscriptionId?: string
   }
   settings?: {
+    timezoneOffsetMinutes?: number
     maxMembers?: number // 最大成员数限制
     maxAdAccounts?: number
     maxMaterials?: number
@@ -105,6 +110,11 @@ const organizationSchema = new mongoose.Schema(
       },
     },
     settings: {
+      timezoneOffsetMinutes: {
+        type: Number,
+        enum: ORGANIZATION_TIMEZONE_OFFSET_MINUTES,
+        default: DEFAULT_ORGANIZATION_TIMEZONE_OFFSET_MINUTES,
+      },
       maxMembers: {
         type: Number,
       },

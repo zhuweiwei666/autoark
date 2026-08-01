@@ -1,13 +1,24 @@
 import React, { createContext, useContext, useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { fetchWithTimeout } from '../services/api'
+import {
+  DEFAULT_TIMEZONE_OFFSET_MINUTES,
+  normalizeTimezoneOffsetMinutes,
+} from '../utils/timezone'
+
+interface UserOrganization {
+  _id: string
+  settings?: {
+    timezoneOffsetMinutes?: number
+  }
+}
 
 interface User {
   _id: string
   username: string
   email: string
   role: 'super_admin' | 'org_admin' | 'member'
-  organizationId?: string
+  organizationId?: string | UserOrganization
   permissions?: string[]
   status: string
 }
@@ -21,6 +32,7 @@ interface AuthContextType {
   isLoading: boolean
   isSuperAdmin: boolean
   isOrgAdmin: boolean
+  timezoneOffsetMinutes: number
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
@@ -53,6 +65,13 @@ const parseStoredUser = (storedUser: string | null): User | null => {
     return null
   }
   return null
+}
+
+const getUserTimezoneOffsetMinutes = (user: User | null): number => {
+  if (!user?.organizationId || typeof user.organizationId === 'string') {
+    return DEFAULT_TIMEZONE_OFFSET_MINUTES
+  }
+  return normalizeTimezoneOffsetMinutes(user.organizationId.settings?.timezoneOffsetMinutes)
 }
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -168,6 +187,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     isLoading,
     isSuperAdmin: user?.role === 'super_admin',
     isOrgAdmin: user?.role === 'org_admin',
+    timezoneOffsetMinutes: getUserTimezoneOffsetMinutes(user),
   }
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

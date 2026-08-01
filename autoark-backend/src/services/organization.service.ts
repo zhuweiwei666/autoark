@@ -10,6 +10,7 @@ import { JwtPayload } from '../utils/jwt'
 import logger from '../utils/logger'
 import authService from './auth.service'
 import { COMMERCIAL_FEATURE_SET } from '../config/commercialPlans'
+import { pickOrganizationTimezoneOffsetMinutes } from '../config/organizationTimezones'
 import { sanitizeUserCreateInput } from '../utils/userInput'
 
 const ORGANIZATION_NAME_MAX_LENGTH = 100
@@ -79,6 +80,11 @@ class OrganizationService {
     if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return undefined
 
     const sanitized: any = {}
+    const timezoneOffsetMinutes = pickOrganizationTimezoneOffsetMinutes(settings.timezoneOffsetMinutes)
+    if (timezoneOffsetMinutes !== undefined) {
+      sanitized.timezoneOffsetMinutes = timezoneOffsetMinutes
+    }
+
     for (const [key, max] of Object.entries(ORGANIZATION_SETTING_LIMITS)) {
       const value = settings[key]
       if (value === null && allowNullClears) {
@@ -214,6 +220,7 @@ class OrganizationService {
       adminPassword: string
       adminEmail: string
       settings?: {
+        timezoneOffsetMinutes?: number
         maxMembers?: number
         features?: string[]
       }

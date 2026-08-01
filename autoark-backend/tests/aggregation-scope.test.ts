@@ -136,6 +136,31 @@ describe('aggregation route account scoping', () => {
     })
   })
 
+  it('uses the authenticated organization timezone for default aggregation dates', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-08-01T16:30:00.000Z'))
+    try {
+      mockAuthState.user = {
+        role: UserRole.ORG_ADMIN,
+        organizationId: '665000000000000000000001',
+        userId: '665000000000000000000002',
+        timezoneOffsetMinutes: 480,
+      }
+      ;(getUserAccountIds as jest.Mock).mockResolvedValue(null)
+      ;(getDailySummary as jest.Mock).mockResolvedValue([])
+
+      const response = await request(createApp()).get('/api/agg/daily')
+
+      expect(response.status).toBe(200)
+      expect(getDailySummary).toHaveBeenCalledWith('2026-07-26', '2026-08-02')
+      expect(response.body.meta).toMatchObject({
+        startDate: '2026-07-26',
+        endDate: '2026-08-02',
+      })
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
   it('rejects invalid daily date ranges before querying aggregation data', async () => {
     mockAuthState.user = {
       role: UserRole.SUPER_ADMIN,

@@ -31,6 +31,7 @@ import {
   pickSafeQueryString,
   pickSafeRegexLiteral,
 } from '../utils/pagination'
+import { formatDateInTimezone } from '../config/organizationTimezones'
 
 const router = Router()
 
@@ -84,6 +85,10 @@ const SUMMARY_MAX_LIMIT = 100
 const SUMMARY_MAX_TREND_DAYS = 90
 const SUMMARY_MAX_RANGE_DAYS = 90
 const SUMMARY_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/
+const getRequestToday = (req: Request) => formatDateInTimezone(
+  new Date(),
+  req.user?.timezoneOffsetMinutes,
+)
 const ACCOUNT_SORT_FIELDS = [
   'accountId',
   'accountName',
@@ -188,7 +193,7 @@ const parseSummaryDateRange = (
   options: { defaultDays?: number } = {},
 ) => {
   const defaultDays = Math.max(1, options.defaultDays || 1)
-  const today = dayjs().format('YYYY-MM-DD')
+  const today = getRequestToday(req)
   const requestedDate = parseSummaryDate(req.query.date, 'date')
   const requestedStartDate = parseSummaryDate(req.query.startDate, 'startDate')
   const requestedEndDate = parseSummaryDate(req.query.endDate, 'endDate')
@@ -328,8 +333,8 @@ router.get('/dashboard/trend', async (req: Request, res: Response) => {
   try {
     const startTime = Date.now()
     const days = parseLimitedNumber(req.query.days, 7, SUMMARY_MAX_TREND_DAYS)
-    const endDate = dayjs().format('YYYY-MM-DD')
-    const startDate = dayjs().subtract(days - 1, 'day').format('YYYY-MM-DD')
+    const endDate = getRequestToday(req)
+    const startDate = dayjs(endDate).subtract(days - 1, 'day').format('YYYY-MM-DD')
 
     const userAccountIds = await getUserAccountIds(req)
     const scopedAccountIds = expandScopedAccountIds(userAccountIds)
@@ -352,7 +357,7 @@ router.get('/dashboard/trend', async (req: Request, res: Response) => {
 
     const trendData: any[] = []
     for (let i = 0; i < days; i++) {
-      const date = dayjs().subtract(days - 1 - i, 'day').format('YYYY-MM-DD')
+      const date = dayjs(endDate).subtract(days - 1 - i, 'day').format('YYYY-MM-DD')
       const data = dateMap.get(date)
       trendData.push({
         date,
@@ -917,7 +922,7 @@ router.get('/materials', async (req: Request, res: Response) => {
 router.get('/status', async (req: Request, res: Response) => {
   try {
     if (!requireSuperAdmin(req, res)) return
-    const today = dayjs().format('YYYY-MM-DD')
+    const today = getRequestToday(req)
     
     // 检查各表最新数据
     const [latestDaily, latestCampaign, latestAccount, latestCountry] = await Promise.all([

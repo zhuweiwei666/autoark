@@ -1,7 +1,7 @@
 import express from 'express'
 import request from 'supertest'
-import dayjs from 'dayjs'
 import { UserRole } from '../src/models/User'
+import { formatDateInTimezone } from '../src/config/organizationTimezones'
 
 const mockAuthState: { user: any } = { user: null }
 
@@ -288,7 +288,7 @@ describe('summary route data scoping', () => {
     const findQuery = {
       sort: jest.fn().mockReturnThis(),
       lean: jest.fn().mockResolvedValue([{
-        date: dayjs().format('YYYY-MM-DD'),
+        date: formatDateInTimezone(),
         spend: 25,
         installs: 17,
       }]),
@@ -305,6 +305,32 @@ describe('summary route data scoping', () => {
     })
   })
 
+  it('uses the authenticated organization timezone for default report dates', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-08-01T16:30:00.000Z'))
+    try {
+      mockAuthState.user = {
+        role: UserRole.SUPER_ADMIN,
+        userId: '665000000000000000000003',
+        timezoneOffsetMinutes: 480,
+      }
+      ;(getUserAccountIds as jest.Mock).mockResolvedValue(null)
+      const findQuery = {
+        lean: jest.fn().mockResolvedValue([]),
+      }
+      ;(AggDaily.find as jest.Mock).mockReturnValue(findQuery)
+
+      const response = await request(createApp()).get('/api/summary/dashboard')
+
+      expect(response.status).toBe(200)
+      expect(AggDaily.find).toHaveBeenCalledWith({
+        date: { $gte: '2026-08-02', $lte: '2026-08-02' },
+      })
+      expect(response.body.data.date).toBe('2026-08-02')
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
   it('sums installs in scoped dashboard trend rows', async () => {
     mockAuthState.user = {
       role: UserRole.ORG_ADMIN,
@@ -313,7 +339,7 @@ describe('summary route data scoping', () => {
     }
     ;(getUserAccountIds as jest.Mock).mockResolvedValue(['act_123'])
     ;(AggAccount.aggregate as jest.Mock).mockResolvedValue([{
-      date: dayjs().format('YYYY-MM-DD'),
+      date: formatDateInTimezone(),
       spend: 25,
       installs: 17,
     }])
