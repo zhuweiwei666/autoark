@@ -16,6 +16,7 @@ export interface JwtPayload {
   role: UserRole
   permissions?: UserPermission[]
   organizationId?: string
+  timezoneOffsetMinutes?: number
 }
 
 /**

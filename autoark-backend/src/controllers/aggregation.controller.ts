@@ -28,6 +28,7 @@ import { authenticate, getUserAccountIds } from '../middlewares/auth'
 import { UserRole } from '../models/User'
 import { getAccountIdsForQuery, normalizeForStorage } from '../utils/accountId'
 import { parseLimitedNumber, pickSafeQueryString } from '../utils/pagination'
+import { formatDateInTimezone } from '../config/organizationTimezones'
 
 const router = Router()
 
@@ -37,6 +38,10 @@ const AGG_MAX_RANGE_DAYS = 90
 const AGG_MAX_ROWS = 500
 const AGG_FILTER_MAX_LENGTH = 120
 const AGG_COUNTRY_MAX_LENGTH = 40
+const getRequestToday = (req: Request) => formatDateInTimezone(
+  new Date(),
+  req.user?.timezoneOffsetMinutes,
+)
 
 const parseAggLimit = (value: any, fallback = 200) => parseLimitedNumber(value, fallback, AGG_MAX_ROWS)
 const parseAggTrendLimit = (value: any) => parseLimitedNumber(value, 500, AGG_MAX_ROWS)
@@ -60,13 +65,15 @@ const getDate = (value: any, fallback: dayjs.Dayjs, fieldName: string) => {
   return parseStrictAggDate(value, fieldName)
 }
 
-const parseAggSingleDate = (value: any, fieldName = 'date') => {
-  if (value === undefined || value === null || value === '') return dayjs().format('YYYY-MM-DD')
+const parseAggSingleDate = (value: any, fieldName = 'date', fallbackDate?: string) => {
+  if (value === undefined || value === null || value === '') {
+    return fallbackDate || formatDateInTimezone()
+  }
   return parseStrictAggDate(value, fieldName).format('YYYY-MM-DD')
 }
 
 const parseAggDateRange = (req: Request, fallbackDays = 7) => {
-  const fallbackEnd = dayjs()
+  const fallbackEnd = dayjs(getRequestToday(req))
   const end = getDate(req.query.endDate, fallbackEnd, 'endDate')
   const requestedStart = getDate(req.query.startDate, end.subtract(fallbackDays, 'day'), 'startDate')
   if (requestedStart.isAfter(end)) {
@@ -174,7 +181,7 @@ router.get('/daily', async (req: Request, res: Response) => {
  */
 router.get('/today', async (req: Request, res: Response) => {
   try {
-    const today = dayjs().format('YYYY-MM-DD')
+    const today = getRequestToday(req)
     const accountIds = await getAccountScope(req)
     const data = accountIds === null
       ? await AggDaily.findOne({ date: today }).lean()
@@ -197,7 +204,7 @@ router.get('/today', async (req: Request, res: Response) => {
  */
 router.get('/countries', async (req: Request, res: Response) => {
   try {
-    const date = parseAggSingleDate(req.query.date)
+    const date = parseAggSingleDate(req.query.date, 'date', getRequestToday(req))
     const limit = parseAggLimit(req.query.limit)
     const accountIds = await getAccountScope(req)
     const data = accountIds === null ? await getCountryData(date, limit) : []
@@ -219,8 +226,8 @@ router.get('/countries', async (req: Request, res: Response) => {
 router.get('/countries/trend', async (req: Request, res: Response) => {
   try {
     const country = pickAggFilter(req.query.country, AGG_COUNTRY_MAX_LENGTH)
-    const endDate = dayjs().format('YYYY-MM-DD')
-    const startDate = dayjs().subtract(7, 'day').format('YYYY-MM-DD')
+    const endDate = getRequestToday(req)
+    const startDate = dayjs(endDate).subtract(7, 'day').format('YYYY-MM-DD')
 
     const query: any = { date: { $gte: startDate, $lte: endDate } }
     if (country) query.country = country
@@ -246,7 +253,7 @@ router.get('/countries/trend', async (req: Request, res: Response) => {
  */
 router.get('/accounts', async (req: Request, res: Response) => {
   try {
-    const date = parseAggSingleDate(req.query.date)
+    const date = parseAggSingleDate(req.query.date, 'date', getRequestToday(req))
     const limit = parseAggLimit(req.query.limit)
     const accountIds = await getAccountScope(req)
     const data = accountIds === null
@@ -271,7 +278,7 @@ router.get('/accounts', async (req: Request, res: Response) => {
  */
 router.get('/campaigns', async (req: Request, res: Response) => {
   try {
-    const date = parseAggSingleDate(req.query.date)
+    const date = parseAggSingleDate(req.query.date, 'date', getRequestToday(req))
     const limit = parseAggLimit(req.query.limit)
     const optimizerFilter = pickAggFilter(req.query.optimizer)
 
@@ -322,8 +329,8 @@ router.get('/campaigns/trend', async (req: Request, res: Response) => {
   try {
     const campaignId = pickAggFilter(req.query.campaignId)
     const limit = parseAggTrendLimit(req.query.limit)
-    const endDate = dayjs().format('YYYY-MM-DD')
-    const startDate = dayjs().subtract(7, 'day').format('YYYY-MM-DD')
+    const endDate = getRequestToday(req)
+    const startDate = dayjs(endDate).subtract(7, 'day').format('YYYY-MM-DD')
 
     const query: any = { date: { $gte: startDate, $lte: endDate } }
     if (campaignId) query.campaignId = campaignId
@@ -353,7 +360,7 @@ router.get('/campaigns/trend', async (req: Request, res: Response) => {
  */
 router.get('/optimizers', async (req: Request, res: Response) => {
   try {
-    const date = parseAggSingleDate(req.query.date)
+    const date = parseAggSingleDate(req.query.date, 'date', getRequestToday(req))
     const limit = parseAggLimit(req.query.limit)
     const accountIds = await getAccountScope(req)
     const data = accountIds === null
@@ -384,8 +391,8 @@ router.get('/optimizers/trend', async (req: Request, res: Response) => {
   try {
     const optimizer = pickAggFilter(req.query.optimizer)
     const limit = parseAggTrendLimit(req.query.limit)
-    const endDate = dayjs().format('YYYY-MM-DD')
-    const startDate = dayjs().subtract(7, 'day').format('YYYY-MM-DD')
+    const endDate = getRequestToday(req)
+    const startDate = dayjs(endDate).subtract(7, 'day').format('YYYY-MM-DD')
 
     const query: any = { date: { $gte: startDate, $lte: endDate } }
     if (optimizer) query.optimizer = optimizer
@@ -420,7 +427,7 @@ router.get('/optimizers/trend', async (req: Request, res: Response) => {
  */
 router.get('/materials', async (req: Request, res: Response) => {
   try {
-    const date = parseAggSingleDate(req.query.date)
+    const date = parseAggSingleDate(req.query.date, 'date', getRequestToday(req))
     const accountIds = await getAccountScope(req)
     const data = accountIds === null ? await getMaterialData(date) : []
 
@@ -446,7 +453,7 @@ router.post('/refresh', async (req: Request, res: Response) => {
     if (!requireSuperAdmin(req, res)) return
     
     if (date) {
-      const refreshDate = parseAggSingleDate(date)
+      const refreshDate = parseAggSingleDate(date, 'date', getRequestToday(req))
       await refreshAggregation(refreshDate, true)
       res.json({ success: true, message: `Refreshed ${refreshDate}` })
     } else {
@@ -467,10 +474,10 @@ router.post('/refresh', async (req: Request, res: Response) => {
  */
 router.get('/ai/snapshot', async (req: Request, res: Response) => {
   try {
-    const today = dayjs().format('YYYY-MM-DD')
+    const today = getRequestToday(req)
     if (!requireSuperAdmin(req, res)) return
-    const yesterday = dayjs().subtract(1, 'day').format('YYYY-MM-DD')
-    const sevenDaysAgo = dayjs().subtract(7, 'day').format('YYYY-MM-DD')
+    const yesterday = dayjs(today).subtract(1, 'day').format('YYYY-MM-DD')
+    const sevenDaysAgo = dayjs(today).subtract(7, 'day').format('YYYY-MM-DD')
 
     // 并行获取所有数据（直接从数据库读取）
     const [

@@ -2,6 +2,12 @@ import React, { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { authFetch } from '../services/api'
+import { formatTimezoneOffset } from '../utils/timezone'
+
+const timezoneOptions = [
+  { value: 0, label: 'UTC+0' },
+  { value: 480, label: 'UTC+8' },
+]
 
 interface Organization {
   _id: string
@@ -17,6 +23,7 @@ interface Organization {
     currentPeriodEndsAt?: string
   }
   settings?: {
+    timezoneOffsetMinutes?: number
     maxMembers?: number
     maxAdAccounts?: number
     maxMaterials?: number
@@ -65,6 +72,7 @@ const OrganizationManagementPage: React.FC = () => {
     adminUsername: '',
     adminPassword: '',
     adminEmail: '',
+    timezoneOffsetMinutes: 0,
   })
   const [editFormData, setEditFormData] = useState({
     name: '',
@@ -72,6 +80,7 @@ const OrganizationManagementPage: React.FC = () => {
     status: 'active',
     plan: 'trial',
     billingStatus: 'trialing',
+    timezoneOffsetMinutes: 0,
     maxMembers: '',
     maxAdAccounts: '',
     maxMaterials: '',
@@ -140,7 +149,10 @@ const OrganizationManagementPage: React.FC = () => {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`,
         },
-        body: JSON.stringify(formData),
+        body: JSON.stringify({
+          ...formData,
+          settings: { timezoneOffsetMinutes: formData.timezoneOffsetMinutes },
+        }),
       })
       const data = await response.json()
       if (data.success) {
@@ -152,6 +164,7 @@ const OrganizationManagementPage: React.FC = () => {
           adminUsername: '',
           adminPassword: '',
           adminEmail: '',
+          timezoneOffsetMinutes: 0,
         })
         fetchOrganizations()
       } else {
@@ -194,6 +207,7 @@ const OrganizationManagementPage: React.FC = () => {
       status: org.status,
       plan: org.billing?.plan || 'trial',
       billingStatus: org.billing?.status || 'trialing',
+      timezoneOffsetMinutes: org.settings?.timezoneOffsetMinutes ?? 0,
       maxMembers: org.settings?.maxMembers?.toString() || '',
       maxAdAccounts: org.settings?.maxAdAccounts?.toString() || '',
       maxMaterials: org.settings?.maxMaterials?.toString() || '',
@@ -223,6 +237,7 @@ const OrganizationManagementPage: React.FC = () => {
         status: editFormData.billingStatus,
       },
       settings: {
+        timezoneOffsetMinutes: editFormData.timezoneOffsetMinutes,
         maxMembers: optionalNumber(editFormData.maxMembers),
         maxAdAccounts: optionalNumber(editFormData.maxAdAccounts),
         maxMaterials: optionalNumber(editFormData.maxMaterials),
@@ -342,6 +357,9 @@ const OrganizationManagementPage: React.FC = () => {
                   状态
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  时区
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   套餐/额度
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -374,6 +392,9 @@ const OrganizationManagementPage: React.FC = () => {
                     >
                       {org.status === 'active' ? '激活' : '停用'}
                     </span>
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-700">
+                    {formatTimezoneOffset(org.settings?.timezoneOffsetMinutes)}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                     <div className="font-medium text-gray-900">{org.billing?.plan || 'trial'} · {org.billing?.status || 'trialing'}</div>
@@ -445,6 +466,21 @@ const OrganizationManagementPage: React.FC = () => {
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg"
                     rows={3}
                   />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    业务时区
+                  </label>
+                  <select
+                    value={formData.timezoneOffsetMinutes}
+                    onChange={(e) => setFormData({ ...formData, timezoneOffsetMinutes: Number(e.target.value) })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                  >
+                    {timezoneOptions.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                  <p className="mt-1 text-xs text-gray-500">决定“今天”和默认报表日期。</p>
                 </div>
                 <div className="border-t pt-4 mt-4">
                   <h3 className="text-sm font-medium text-gray-700 mb-3">
@@ -568,6 +604,21 @@ const OrganizationManagementPage: React.FC = () => {
                     <option value="active">激活</option>
                     <option value="inactive">停用</option>
                   </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    业务时区
+                  </label>
+                  <select
+                    value={editFormData.timezoneOffsetMinutes}
+                    onChange={(e) => setEditFormData({ ...editFormData, timezoneOffsetMinutes: Number(e.target.value) })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                  >
+                    {timezoneOptions.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                  <p className="mt-1 text-xs text-gray-500">组织内“今天”、趋势结束日和默认日期筛选均按此时区计算。</p>
                 </div>
                 <div className="border-t pt-4">
                   <h3 className="text-sm font-semibold text-gray-800 mb-3">套餐与账单</h3>

@@ -2,12 +2,8 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import DatePicker from '../components/DatePicker'
 import PurchaseValueTooltip from '../components/PurchaseValueTooltip'
 import Loading from '../components/Loading'
-
-// 获取今天的日期字符串 (YYYY-MM-DD)
-const getToday = () => {
-  const today = new Date()
-  return today.toISOString().split('T')[0]
-}
+import { useAuth } from '../contexts/AuthContext'
+import { getDateInTimezone } from '../utils/timezone'
 import {
   getCampaigns,
   getCampaignColumnSettings,
@@ -168,6 +164,7 @@ const ALL_CAMPAIGN_COLUMNS = [
 ]
 
 export default function FacebookCampaignsPage() {
+  const { timezoneOffsetMinutes } = useAuth()
   const [loading, setLoading] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string; errors?: Array<{ accountId?: string; tokenId?: string; optimizer?: string; error: string }> } | null>(null)
@@ -250,7 +247,7 @@ export default function FacebookCampaignsPage() {
   }, [campaigns, sortConfig?.key, sortConfig?.direction, metricFilter])
 
   // 筛选条件 - 默认显示今天的数据
-  const today = getToday()
+  const today = getDateInTimezone(timezoneOffsetMinutes)
   const [filters, setFilters] = useState({
     name: '',
     accountId: '',
@@ -755,6 +752,7 @@ export default function FacebookCampaignsPage() {
               <label className="block text-xs font-medium text-slate-400 mb-2 group-focus-within:text-indigo-400 transition-colors">开始日期</label>
               <DatePicker
                 value={filters.startDate}
+                today={today}
                 onChange={(date) => setFilters({...filters, startDate: date})}
                 placeholder="选择开始日期"
                 className="w-full"
@@ -764,6 +762,7 @@ export default function FacebookCampaignsPage() {
               <label className="block text-xs font-medium text-slate-400 mb-2 group-focus-within:text-indigo-400 transition-colors">结束日期</label>
               <DatePicker
                 value={filters.endDate}
+                today={today}
                 onChange={(date) => setFilters({...filters, endDate: date})}
                 placeholder="选择结束日期"
                 className="w-full"

@@ -93,6 +93,40 @@ describe('organization service', () => {
     expect(organization.save).toHaveBeenCalled()
   })
 
+  it('stores only supported organization timezone offsets', async () => {
+    const organization: any = {
+      _id: '665000000000000000000001',
+      name: 'Acme Team',
+      status: OrganizationStatus.ACTIVE,
+      settings: { timezoneOffsetMinutes: 0 },
+      set: jest.fn(function setPath(path: string, value: unknown) {
+        const [, key] = path.split('.')
+        this.settings[key] = value
+      }),
+      save: jest.fn().mockResolvedValue(undefined),
+    }
+    jest.spyOn(Organization, 'findById').mockResolvedValue(organization)
+
+    await organizationService.updateOrganization(
+      '665000000000000000000001',
+      { settings: { timezoneOffsetMinutes: 480 } } as any,
+      { userId: 'admin', role: UserRole.SUPER_ADMIN } as any,
+    )
+
+    expect(organization.set).toHaveBeenCalledWith('settings.timezoneOffsetMinutes', 480)
+    expect(organization.settings.timezoneOffsetMinutes).toBe(480)
+
+    organization.set.mockClear()
+    await organizationService.updateOrganization(
+      '665000000000000000000001',
+      { settings: { timezoneOffsetMinutes: 60 } } as any,
+      { userId: 'admin', role: UserRole.SUPER_ADMIN } as any,
+    )
+
+    expect(organization.set).not.toHaveBeenCalledWith('settings.timezoneOffsetMinutes', expect.anything())
+    expect(organization.settings.timezoneOffsetMinutes).toBe(480)
+  })
+
   it('bounds commercial billing and quota updates', async () => {
     const organization: any = {
       _id: '665000000000000000000001',
