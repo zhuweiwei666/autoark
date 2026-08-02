@@ -167,27 +167,18 @@ export async function getMaterialLibraryFolders(): Promise<{
   }
 }
 
-export async function getMaterialLibrarySources(input: {
-  folder?: string
-  type?: '' | 'image' | 'video'
-  search?: string
-  page?: number
-  pageSize?: number
-}): Promise<{
+export async function getMaterialLibrarySources(
+  params: URLSearchParams,
+  signal?: AbortSignal,
+): Promise<{
   list: MaterialLibrarySource[]
   total: number
   page: number
   totalPages: number
 }> {
-  const params = new URLSearchParams({
-    page: String(input.page || 1),
-    pageSize: String(input.pageSize || 24),
+  const response = await authFetch(`${API_BASE_URL}/api/materials?${params}`, {
+    signal,
   })
-  if (input.folder) params.set('folder', input.folder)
-  if (input.type) params.set('type', input.type)
-  if (input.search?.trim()) params.set('search', input.search.trim())
-
-  const response = await authFetch(`${API_BASE_URL}/api/materials?${params}`)
   if (!response.ok) return readApiError(response, '读取素材失败')
   const payload = await response.json()
   return {
