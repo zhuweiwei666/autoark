@@ -41,6 +41,42 @@ const jsonResponse = (data, status = 200) => new Response(
 )
 
 describe('material smart groups runtime behavior', () => {
+  it('builds the same folder and smart-group filters for every material picker', () => {
+    const folderQuery = service.buildMaterialQuery({
+      selection: { kind: 'folder', path: '产品图/Banner' },
+      page: 2,
+      pageSize: 24,
+      type: 'image',
+      search: 'summer',
+    })
+    assert.deepEqual(Object.fromEntries(folderQuery), {
+      page: '2',
+      pageSize: '24',
+      type: 'image',
+      search: 'summer',
+      folder: '产品图/Banner',
+    })
+
+    const smartGroupQuery = service.buildMaterialQuery({
+      selection: {
+        kind: 'smart',
+        type: 'facebook-account',
+        key: 'act_123',
+        label: '测试账户',
+      },
+      page: 1,
+      pageSize: 24,
+      type: 'video',
+    })
+    assert.deepEqual(Object.fromEntries(smartGroupQuery), {
+      page: '1',
+      pageSize: '24',
+      type: 'video',
+      smartGroupType: 'facebook-account',
+      smartGroupKey: 'act_123',
+    })
+  })
+
   it('toggles optimizer folders without mutating the existing expansion set', () => {
     const initial = new Set(['facebook-root:facebook'])
     const expanded = service.toggleSmartGroupExpansion(

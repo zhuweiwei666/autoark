@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import {
   ArrowLeft,
   ArrowRight,
+  CaretRight,
   Check,
   FilmStrip,
   Folder,
@@ -17,6 +18,13 @@ import {
   getMaterialLibrarySources,
   type MaterialLibrarySource,
 } from '../services/api'
+import {
+  buildMaterialQuery,
+  loadMaterialSmartGroups,
+  toggleSmartGroupExpansion,
+  type MaterialSelection,
+  type MaterialSmartGroupNode,
+} from '../services/materialSmartGroups'
 
 const MAX_SELECTED_MATERIALS = 20
 
@@ -73,7 +81,10 @@ export default function CreativeFactoryMaterialPicker({
   onConfirm: (materials: MaterialLibrarySource[]) => void
 }) {
   const [draftSelection, setDraftSelection] = useState<MaterialLibrarySource[]>(selected)
-  const [folder, setFolder] = useState('')
+  const [scope, setScope] = useState<MaterialSelection>({ kind: 'all' })
+  const [expandedSmartGroups, setExpandedSmartGroups] = useState<Set<string>>(
+    () => new Set(['facebook-root:facebook', 'external-root:external']),
+  )
   const [type, setType] = useState<'' | 'image' | 'video'>('')
   const [searchDraft, setSearchDraft] = useState('')
   const [search, setSearch] = useState('')
@@ -106,9 +117,21 @@ export default function CreativeFactoryMaterialPicker({
     enabled: open,
   })
 
+  const smartGroupsQuery = useQuery({
+    queryKey: ['material-library-smart-groups'],
+    queryFn: ({ signal }) => loadMaterialSmartGroups(signal),
+    enabled: open,
+  })
+
   const materialsQuery = useQuery({
-    queryKey: ['creative-factory-materials', folder, type, search, page],
-    queryFn: () => getMaterialLibrarySources({ folder, type, search, page, pageSize: 24 }),
+    queryKey: ['creative-factory-materials', scope, type, search, page],
+    queryFn: ({ signal }) => getMaterialLibrarySources(buildMaterialQuery({
+      selection: scope,
+      page,
+      pageSize: 24,
+      type,
+      search,
+    }), signal),
     enabled: open,
   })
 
@@ -120,7 +143,18 @@ export default function CreativeFactoryMaterialPicker({
   if (!open) return null
 
   const chooseFolder = (nextFolder: string) => {
-    setFolder(nextFolder)
+    setScope(nextFolder ? { kind: 'folder', path: nextFolder } : { kind: 'all' })
+    setPage(1)
+  }
+
+  const chooseSmartGroup = (group: MaterialSmartGroupNode) => {
+    if (group.type !== 'facebook-account' && group.type !== 'external-package') return
+    setScope({
+      kind: 'smart',
+      type: group.type,
+      key: group.key,
+      label: group.label,
+    })
     setPage(1)
   }
 
@@ -150,7 +184,94 @@ export default function CreativeFactoryMaterialPicker({
   }
 
   const materials = materialsQuery.data?.list || []
-  const activeFolderName = folder || '全部素材'
+  const activeScopeName = scope.kind === 'smart'
+    ? scope.label
+    : scope.kind === 'folder'
+      ? scope.path
+      : '全部素材'
+
+  const smartGroupStatusLabel = (group: MaterialSmartGroupNode) => {
+    if (group.status === 'disabled') return '已停用'
+    if (group.status === 'unavailable') return '不可用'
+    if (group.status === 'paused' || group.paused) return '已暂停'
+    return null
+  }
+
+  const renderSmartGroupNode = (group: MaterialSmartGroupNode, depth = 0) => {
+    const selectable = group.type === 'facebook-account' || group.type === 'external-package'
+    const isExpandable = Boolean(group.children?.length)
+    const nodeId = `${group.type}:${group.key}`
+    const isExpanded = expandedSmartGroups.has(nodeId)
+    const isSelected = scope.kind === 'smart' &&
+      scope.type === group.type &&
+      scope.key === group.key
+    const label = group.type === 'facebook-root'
+      ? 'Facebook'
+      : group.type === 'external-root'
+        ? '外部优质素材'
+        : group.label
+    const statusLabel = smartGroupStatusLabel(group)
+
+    return (
+      <div key={nodeId}>
+        <button
+          type="button"
+          disabled={!selectable && !isExpandable}
+          aria-expanded={isExpandable ? isExpanded : undefined}
+          onClick={() => {
+            if (isExpandable) {
+              setExpandedSmartGroups((current) => toggleSmartGroupExpansion(current, nodeId))
+              return
+            }
+            chooseSmartGroup(group)
+          }}
+          className={`flex w-full items-center gap-1.5 rounded-lg py-2 pr-2 text-left text-sm transition ${
+            isSelected
+              ? 'bg-[#0f766e] font-bold text-white'
+              : selectable || isExpandable
+                ? 'text-zinc-700 hover:bg-zinc-200/70'
+                : 'cursor-default text-zinc-500'
+          }`}
+          style={{ paddingLeft: `${8 + Math.min(depth, 4) * 12}px` }}
+          title={label}
+        >
+          <span className="flex h-4 w-4 shrink-0 items-center justify-center">
+            {isExpandable && (
+              <CaretRight
+                size={13}
+                weight="bold"
+                className={`transition-transform ${isExpanded ? 'rotate-90' : ''}`}
+              />
+            )}
+          </span>
+          <span
+            aria-hidden="true"
+            className={`flex h-5 w-5 shrink-0 items-center justify-center rounded text-[10px] font-black ${
+              isSelected
+                ? 'bg-white/20 text-white'
+                : group.type.startsWith('external')
+                  ? 'bg-violet-100 text-violet-700'
+                  : 'bg-blue-100 text-blue-700'
+            }`}
+          >
+            {group.type.startsWith('external')
+              ? '◆'
+              : group.type === 'facebook-optimizer'
+                ? '人'
+                : 'f'}
+          </span>
+          <span className="min-w-0 flex-1 truncate">{label}</span>
+          {statusLabel && (
+            <span className={`rounded px-1 py-0.5 text-[9px] ${isSelected ? 'bg-white/15 text-white' : 'bg-zinc-200 text-zinc-500'}`}>
+              {statusLabel}
+            </span>
+          )}
+          <span className={isSelected ? 'text-emerald-100' : 'text-zinc-500'}>{group.count}</span>
+        </button>
+        {isExpanded && group.children?.map((child) => renderSmartGroupNode(child, depth + 1))}
+      </div>
+    )
+  }
 
   return (
     <div
@@ -174,7 +295,7 @@ export default function CreativeFactoryMaterialPicker({
             <h2 id="creative-factory-material-picker-title" className="mt-1 text-xl font-black tracking-tight text-zinc-950">
               选择来源素材
             </h2>
-            <p className="mt-1 text-sm text-zinc-500">先按文件夹定位，再多选要进入 ClingAI 生产线的图片或视频。</p>
+            <p className="mt-1 text-sm text-zinc-500">按 AutoArk 素材库现有分组或文件夹定位，再多选要进入 ClingAI 生产线的图片或视频。</p>
           </div>
           <button type="button" onClick={onClose} className="rounded-lg p-2 text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-900 active:scale-[0.98]" aria-label="关闭素材选择器">
             <X size={20} />
@@ -183,41 +304,65 @@ export default function CreativeFactoryMaterialPicker({
 
         <div className="grid min-h-0 flex-1 md:grid-cols-[240px_minmax(0,1fr)]">
           <aside className="min-h-0 overflow-y-auto border-b border-zinc-200 bg-zinc-50/80 p-3 md:border-b-0 md:border-r">
-            <div className="mb-2 px-2 text-[11px] font-extrabold uppercase tracking-[0.12em] text-zinc-500">文件夹</div>
+            <div className="mb-2 px-2 text-[11px] font-extrabold uppercase tracking-[0.12em] text-zinc-500">素材范围</div>
             <button
               type="button"
               onClick={() => chooseFolder('')}
-              className={`flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-left text-sm font-bold transition ${folder === '' ? 'bg-zinc-950 text-white' : 'text-zinc-700 hover:bg-zinc-200/70'}`}
+              className={`flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-left text-sm font-bold transition ${scope.kind === 'all' ? 'bg-zinc-950 text-white' : 'text-zinc-700 hover:bg-zinc-200/70'}`}
             >
               <span className="flex items-center gap-2"><FolderOpen size={17} />全部素材</span>
-              <span className={folder === '' ? 'text-zinc-300' : 'text-zinc-500'}>{foldersQuery.data?.totalCount || 0}</span>
+              <span className={scope.kind === 'all' ? 'text-zinc-300' : 'text-zinc-500'}>{foldersQuery.data?.totalCount || 0}</span>
             </button>
 
-            {foldersQuery.isLoading && (
-              <div className="mt-3 space-y-2 px-2" aria-label="正在加载文件夹">
-                {Array.from({ length: 5 }).map((_, index) => <div key={index} className="h-9 animate-pulse rounded-lg bg-zinc-200/70" />)}
+            <div className="mt-3 border-t border-zinc-200 pt-3">
+              <div className="mb-1 flex items-center justify-between px-2 text-[11px] font-extrabold uppercase tracking-[0.1em] text-zinc-500">
+                <span>智能分组</span>
+                <span className="normal-case tracking-normal text-zinc-400">与素材库同步</span>
               </div>
-            )}
-            {foldersQuery.isError && (
-              <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs font-semibold text-rose-800">
-                文件夹加载失败
-                <button type="button" onClick={() => foldersQuery.refetch()} className="mt-2 block font-extrabold underline">重新加载</button>
-              </div>
-            )}
-            <div className="mt-1 space-y-1">
-              {(foldersQuery.data?.folders || []).map((item) => (
-                <button
-                  key={item._id}
-                  type="button"
-                  onClick={() => chooseFolder(item.path)}
-                  className={`flex w-full items-center justify-between rounded-lg py-2.5 pr-3 text-left text-sm transition ${folder === item.path ? 'bg-[#0f766e] font-bold text-white' : 'text-zinc-700 hover:bg-zinc-200/70'}`}
-                  style={{ paddingLeft: `${12 + Math.min(item.level || 0, 4) * 12}px` }}
-                  title={item.path}
-                >
-                  <span className="flex min-w-0 items-center gap-2"><Folder size={16} weight={folder === item.path ? 'fill' : 'regular'} /><span className="truncate">{item.name}</span></span>
-                  <span className={folder === item.path ? 'text-emerald-100' : 'text-zinc-500'}>{item.count}</span>
-                </button>
-              ))}
+              {smartGroupsQuery.isLoading ? (
+                <div className="space-y-2 px-2 py-2" aria-label="正在加载素材分组">
+                  {Array.from({ length: 4 }).map((_, index) => <div key={index} className="h-8 animate-pulse rounded-lg bg-zinc-200/70" />)}
+                </div>
+              ) : smartGroupsQuery.isError ? (
+                <div className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs font-semibold text-rose-800">
+                  素材分组加载失败
+                  <button type="button" onClick={() => smartGroupsQuery.refetch()} className="mt-2 block font-extrabold underline">重新加载</button>
+                </div>
+              ) : (
+                <div className="space-y-0.5">{(smartGroupsQuery.data || []).map((group) => renderSmartGroupNode(group))}</div>
+              )}
+            </div>
+
+            <div className="mt-3 border-t border-zinc-200 pt-3">
+              <div className="mb-1 px-2 text-[11px] font-extrabold uppercase tracking-[0.1em] text-zinc-500">自建文件夹</div>
+              {foldersQuery.isLoading ? (
+                <div className="space-y-2 px-2 py-2" aria-label="正在加载文件夹">
+                  {Array.from({ length: 3 }).map((_, index) => <div key={index} className="h-8 animate-pulse rounded-lg bg-zinc-200/70" />)}
+                </div>
+              ) : foldersQuery.isError ? (
+                <div className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs font-semibold text-rose-800">
+                  文件夹加载失败
+                  <button type="button" onClick={() => foldersQuery.refetch()} className="mt-2 block font-extrabold underline">重新加载</button>
+                </div>
+              ) : (foldersQuery.data?.folders || []).length === 0 ? (
+                <div className="px-2 py-2 text-xs text-zinc-400">暂无自建文件夹</div>
+              ) : (
+                <div className="space-y-1">
+                  {(foldersQuery.data?.folders || []).map((item) => (
+                    <button
+                      key={item._id}
+                      type="button"
+                      onClick={() => chooseFolder(item.path)}
+                      className={`flex w-full items-center justify-between rounded-lg py-2.5 pr-3 text-left text-sm transition ${scope.kind === 'folder' && scope.path === item.path ? 'bg-[#0f766e] font-bold text-white' : 'text-zinc-700 hover:bg-zinc-200/70'}`}
+                      style={{ paddingLeft: `${12 + Math.min(item.level || 0, 4) * 12}px` }}
+                      title={item.path}
+                    >
+                      <span className="flex min-w-0 items-center gap-2"><Folder size={16} weight={scope.kind === 'folder' && scope.path === item.path ? 'fill' : 'regular'} /><span className="truncate">{item.name}</span></span>
+                      <span className={scope.kind === 'folder' && scope.path === item.path ? 'text-emerald-100' : 'text-zinc-500'}>{item.count}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           </aside>
 
@@ -245,7 +390,7 @@ export default function CreativeFactoryMaterialPicker({
                 </form>
               </div>
               <div className="mt-3 flex items-center justify-between gap-3 text-xs text-zinc-500">
-                <span className="truncate">{activeFolderName} · {materialsQuery.data?.total || 0} 个素材</span>
+                <span className="truncate">{activeScopeName} · {materialsQuery.data?.total || 0} 个素材</span>
                 <span className="shrink-0 font-bold text-[#0f766e]">已选 {draftSelection.length}/{MAX_SELECTED_MATERIALS}</span>
               </div>
             </div>
@@ -269,7 +414,7 @@ export default function CreativeFactoryMaterialPicker({
                 <div className="flex min-h-64 flex-col items-center justify-center rounded-xl border border-dashed border-zinc-300 bg-zinc-50 px-6 text-center">
                   <ImageSquare size={30} className="text-zinc-400" />
                   <div className="mt-3 text-sm font-extrabold text-zinc-900">这个范围内没有素材</div>
-                  <div className="mt-1 text-xs text-zinc-500">切换文件夹或清除搜索条件后再试。</div>
+                  <div className="mt-1 text-xs text-zinc-500">切换素材分组、文件夹或清除搜索条件后再试。</div>
                   {(search || type) && <button type="button" onClick={() => { setSearch(''); setSearchDraft(''); setType(''); setPage(1) }} className="mt-4 text-xs font-extrabold text-[#0f766e] underline">清除筛选</button>}
                 </div>
               ) : (
