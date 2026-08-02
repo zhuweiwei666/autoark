@@ -122,9 +122,80 @@ export type CreativeFactoryBatchSummary = {
   updatedAt: string
 }
 
+export type MaterialLibrarySource = {
+  _id: string
+  name: string
+  type: 'image' | 'video'
+  status: string
+  folder: string
+  storage: { url: string; key?: string }
+  file?: {
+    originalName?: string
+    mimeType?: string
+    size?: number
+    width?: number
+    height?: number
+    duration?: number
+  }
+  createdAt?: string
+}
+
+export type MaterialLibraryFolder = {
+  _id: string
+  name: string
+  parentId: string | null
+  path: string
+  level: number
+  count: number
+}
+
 const readApiError = async (response: Response, fallback: string) => {
   const payload = await response.json().catch(() => ({}))
   throw new Error(payload?.message || payload?.error || fallback)
+}
+
+export async function getMaterialLibraryFolders(): Promise<{
+  folders: MaterialLibraryFolder[]
+  totalCount: number
+}> {
+  const response = await authFetch(`${API_BASE_URL}/api/materials/folder-tree`)
+  if (!response.ok) return readApiError(response, '读取素材文件夹失败')
+  const payload = await response.json()
+  return {
+    folders: payload.data?.folders || [],
+    totalCount: Number(payload.data?.totalCount) || 0,
+  }
+}
+
+export async function getMaterialLibrarySources(input: {
+  folder?: string
+  type?: '' | 'image' | 'video'
+  search?: string
+  page?: number
+  pageSize?: number
+}): Promise<{
+  list: MaterialLibrarySource[]
+  total: number
+  page: number
+  totalPages: number
+}> {
+  const params = new URLSearchParams({
+    page: String(input.page || 1),
+    pageSize: String(input.pageSize || 24),
+  })
+  if (input.folder) params.set('folder', input.folder)
+  if (input.type) params.set('type', input.type)
+  if (input.search?.trim()) params.set('search', input.search.trim())
+
+  const response = await authFetch(`${API_BASE_URL}/api/materials?${params}`)
+  if (!response.ok) return readApiError(response, '读取素材失败')
+  const payload = await response.json()
+  return {
+    list: payload.data?.list || [],
+    total: Number(payload.data?.total) || 0,
+    page: Number(payload.data?.page) || 1,
+    totalPages: Number(payload.data?.totalPages) || 1,
+  }
 }
 
 export async function getCreativeFactoryBatches(): Promise<CreativeFactoryBatchSummary[]> {
@@ -148,7 +219,7 @@ export async function createCreativeFactoryBatch(input: {
   outputMediaType: 'image' | 'video'
   aspectRatio: string
   variantsPerAsset: number
-  assets: Array<{ materialId?: string; sourceUrl?: string; mediaType?: 'image' | 'video' }>
+  assets: Array<{ materialId: string }>
 }) {
   const response = await authFetch(`${API_BASE_URL}/api/creative-factory/batches`, {
     method: 'POST',

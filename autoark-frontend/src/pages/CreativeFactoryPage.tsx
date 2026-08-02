@@ -4,18 +4,22 @@ import {
   ArrowClockwise,
   CheckCircle,
   FilmStrip,
+  FolderOpen,
   ImageSquare,
   MagicWand,
   Plus,
   Robot,
   WarningCircle,
+  X,
 } from '@phosphor-icons/react'
+import CreativeFactoryMaterialPicker from '../components/CreativeFactoryMaterialPicker'
 import {
   createCreativeFactoryBatch,
   getCreativeFactoryBatch,
   getCreativeFactoryBatches,
   refreshCreativeFactoryJob,
   type CreativeFactoryJob,
+  type MaterialLibrarySource,
 } from '../services/api'
 
 const statusMeta: Record<string, { label: string; className: string }> = {
@@ -39,8 +43,8 @@ export default function CreativeFactoryPage() {
   const queryClient = useQueryClient()
   const [title, setTitle] = useState('ClingAI 素材批次')
   const [intent, setIntent] = useState('为 Meta 冷启动投放制作高停留率 9:16 素材，前三秒给出清晰钩子，完整替换原品牌元素。')
-  const [sourceLines, setSourceLines] = useState('')
-  const [sourceMediaType, setSourceMediaType] = useState<'image' | 'video'>('image')
+  const [selectedMaterials, setSelectedMaterials] = useState<MaterialLibrarySource[]>([])
+  const [materialPickerOpen, setMaterialPickerOpen] = useState(false)
   const [outputMediaType, setOutputMediaType] = useState<'image' | 'video'>('video')
   const [variants, setVariants] = useState(2)
   const [selectedBatchId, setSelectedBatchId] = useState('')
@@ -67,7 +71,7 @@ export default function CreativeFactoryPage() {
     mutationFn: createCreativeFactoryBatch,
     onSuccess: (data) => {
       setSelectedBatchId(data.batchId)
-      setSourceLines('')
+      setSelectedMaterials([])
       setFormError('')
       queryClient.invalidateQueries({ queryKey: ['creative-factory-batches'] })
       queryClient.setQueryData(['creative-factory-batch', data.batchId], { batchId: data.batchId, jobs: data.jobs })
@@ -83,17 +87,14 @@ export default function CreativeFactoryPage() {
     },
   })
 
-  const assets = useMemo(() => sourceLines
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((value) => (/^[a-f\d]{24}$/i.test(value)
-      ? { materialId: value }
-      : { sourceUrl: value, mediaType: sourceMediaType })), [sourceLines, sourceMediaType])
+  const assets = useMemo(
+    () => selectedMaterials.map((material) => ({ materialId: material._id })),
+    [selectedMaterials],
+  )
 
   const submit = () => {
     if (assets.length === 0) {
-      setFormError('请粘贴至少一个 AutoArk 素材 ID 或 HTTPS 素材 URL')
+      setFormError('请从 AutoArk 素材库选择至少一个来源素材')
       return
     }
     createMutation.mutate({
@@ -132,7 +133,7 @@ export default function CreativeFactoryPage() {
           <div className="mb-5 flex items-center justify-between">
             <div>
               <h2 className="text-base font-extrabold text-zinc-950">新建生产批次</h2>
-              <p className="mt-1 text-xs text-zinc-500">每行一个素材 ID 或公开 URL，最多 20 个。</p>
+              <p className="mt-1 text-xs text-zinc-500">从素材库文件夹多选，单批最多 20 个。</p>
             </div>
             <Plus size={20} className="text-zinc-400" />
           </div>
@@ -146,18 +147,44 @@ export default function CreativeFactoryPage() {
               投放意图
               <textarea value={intent} onChange={(event) => setIntent(event.target.value)} rows={5} className="mt-1.5 w-full resize-none rounded-lg border border-zinc-300 px-3 py-2.5 text-sm leading-6 outline-none focus:border-[#0f766e] focus:ring-2 focus:ring-[#0f766e]/10" />
             </label>
-            <label className="block text-xs font-bold text-zinc-700">
-              来源素材
-              <textarea value={sourceLines} onChange={(event) => setSourceLines(event.target.value)} rows={6} placeholder={'AutoArk Material ID\n或 https://.../source.jpg'} className="mt-1.5 w-full resize-none rounded-lg border border-zinc-300 px-3 py-2.5 font-mono text-xs leading-5 outline-none focus:border-[#0f766e] focus:ring-2 focus:ring-[#0f766e]/10" />
-            </label>
+            <div>
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-xs font-bold text-zinc-700">来源素材</div>
+                  <div className="mt-1 text-[11px] text-zinc-500">素材库是生产线唯一来源</div>
+                </div>
+                {selectedMaterials.length > 0 && <span className="text-xs font-extrabold text-[#0f766e]">已选 {selectedMaterials.length}/20</span>}
+              </div>
+              {selectedMaterials.length === 0 ? (
+                <button type="button" onClick={() => setMaterialPickerOpen(true)} className="mt-2 flex w-full flex-col items-center justify-center rounded-xl border border-dashed border-zinc-300 bg-zinc-50 px-4 py-7 text-center transition hover:border-[#0f766e] hover:bg-emerald-50/40 active:scale-[0.99]">
+                  <span className="flex h-10 w-10 items-center justify-center rounded-full bg-white text-[#0f766e] shadow-sm ring-1 ring-zinc-200"><FolderOpen size={20} weight="fill" /></span>
+                  <span className="mt-3 text-sm font-extrabold text-zinc-900">从素材库选择</span>
+                  <span className="mt-1 text-xs text-zinc-500">按文件夹浏览并多选图片或视频</span>
+                </button>
+              ) : (
+                <div className="mt-2">
+                  <div className="max-h-56 space-y-2 overflow-y-auto rounded-xl border border-zinc-200 bg-zinc-50 p-2">
+                    {selectedMaterials.map((material) => (
+                      <div key={material._id} className="flex items-center gap-3 rounded-lg border border-zinc-200 bg-white p-2">
+                        <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-md bg-zinc-100">
+                          {material.type === 'image' ? <img src={material.storage.url} alt="" className="h-full w-full object-cover" /> : <FilmStrip size={20} className="text-zinc-500" />}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-xs font-extrabold text-zinc-900">{material.name}</div>
+                          <div className="mt-0.5 truncate text-[11px] font-semibold text-zinc-500">{material.folder || '默认'} · {material.type === 'image' ? '图片' : '视频'}</div>
+                        </div>
+                        <button type="button" onClick={() => setSelectedMaterials((current) => current.filter((item) => item._id !== material._id))} className="rounded-md p-1.5 text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-800" aria-label={`移除 ${material.name}`}><X size={15} /></button>
+                      </div>
+                    ))}
+                  </div>
+                  <button type="button" onClick={() => setMaterialPickerOpen(true)} className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-zinc-300 px-3 py-2 text-xs font-extrabold text-zinc-700 transition hover:bg-zinc-50 active:scale-[0.99]">
+                    <FolderOpen size={16} />继续选择或更换
+                  </button>
+                </div>
+              )}
+            </div>
 
-            <div className="grid grid-cols-2 gap-3">
-              <label className="text-xs font-bold text-zinc-700">
-                URL 来源类型
-                <select value={sourceMediaType} onChange={(event) => setSourceMediaType(event.target.value as 'image' | 'video')} className="mt-1.5 w-full rounded-lg border border-zinc-300 bg-white px-3 py-2.5 text-sm">
-                  <option value="image">图片</option><option value="video">视频</option>
-                </select>
-              </label>
+            <div>
               <label className="text-xs font-bold text-zinc-700">
                 目标成品
                 <select value={outputMediaType} onChange={(event) => setOutputMediaType(event.target.value as 'image' | 'video')} className="mt-1.5 w-full rounded-lg border border-zinc-300 bg-white px-3 py-2.5 text-sm">
@@ -234,6 +261,16 @@ export default function CreativeFactoryPage() {
           </div>
         </section>
       </div>
+      <CreativeFactoryMaterialPicker
+        open={materialPickerOpen}
+        selected={selectedMaterials}
+        onClose={() => setMaterialPickerOpen(false)}
+        onConfirm={(materials) => {
+          setSelectedMaterials(materials)
+          setMaterialPickerOpen(false)
+          setFormError('')
+        }}
+      />
     </main>
   )
 }
