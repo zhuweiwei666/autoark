@@ -18,6 +18,7 @@ import {
   LinkSimple,
   List,
   Megaphone,
+  MagicWand,
   Pulse,
   Robot,
   ShieldCheck,
@@ -193,6 +194,7 @@ export default function Layout({ children }: LayoutProps) {
         { to: "/bulk-ad/review", label: "审核状态", icon: CheckSquareOffset },
         { to: "/bulk-ad/assets", label: "资产管理", icon: Database },
         { to: "/bulk-ad/materials", label: "素材库", icon: FolderOpen },
+        { to: "/bulk-ad/creative-factory", label: "素材生产线", icon: MagicWand },
         {
           to: "/product-link-pools",
           label: "产品短链",

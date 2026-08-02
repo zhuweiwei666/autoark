@@ -204,6 +204,9 @@ EXTERNAL_MATERIAL_SYNC_ENABLED=false
 META_CREDENTIAL_ENCRYPTION_KEY=old-canonical-meta-key
 AI_ADS_INTEGRATION_API_KEY=old-canonical-ai-ads-key
 AI_ADS_INTEGRATION_ORGANIZATION_ID=old-canonical-ai-ads-org
+AI_HOST_CREATIVE_FACTORY_URL=https://old-canonical.example/api/v1/internal/creative-factory
+AI_HOST_INTERNAL_API_SECRET=old-canonical-ai-host-secret
+CREATIVE_FACTORY_CODEX_SECRET=old-canonical-codex-secret
 EOF
   cat > "$DEPLOY_ENV" <<EOF
 MONGO_URI=mongodb://runtime-example
@@ -213,6 +216,9 @@ EXTERNAL_MATERIAL_SYNC_ENABLED=false
 META_CREDENTIAL_ENCRYPTION_KEY=old-runtime-meta-key
 AI_ADS_INTEGRATION_API_KEY=old-runtime-ai-ads-key
 AI_ADS_INTEGRATION_ORGANIZATION_ID=old-runtime-ai-ads-org
+AI_HOST_CREATIVE_FACTORY_URL=https://old-runtime.example/api/v1/internal/creative-factory
+AI_HOST_INTERNAL_API_SECRET=old-runtime-ai-host-secret
+CREATIVE_FACTORY_CODEX_SECRET=old-runtime-codex-secret
 EOF
   chmod 600 "$ROOT_ENV" "$DEPLOY_ENV"
 }
@@ -234,6 +240,9 @@ assert_consistent_pair() {
   test "$(grep -c '^META_CREDENTIAL_ENCRYPTION_KEY=' "$ROOT_ENV")" -eq 1
   test "$(grep -c '^AI_ADS_INTEGRATION_API_KEY=' "$ROOT_ENV")" -eq 1
   test "$(grep -c '^AI_ADS_INTEGRATION_ORGANIZATION_ID=' "$ROOT_ENV")" -eq 1
+  test "$(grep -c '^AI_HOST_CREATIVE_FACTORY_URL=' "$ROOT_ENV")" -eq 1
+  test "$(grep -c '^AI_HOST_INTERNAL_API_SECRET=' "$ROOT_ENV")" -eq 1
+  test "$(grep -c '^CREATIVE_FACTORY_CODEX_SECRET=' "$ROOT_ENV")" -eq 1
   if grep -Fq 'AUTOARK_DEPLOY_UPLOAD_GENERATION=' "$ROOT_ENV"; then
     echo 'internal upload generation leaked into runtime configuration'
     exit 1
@@ -247,6 +256,9 @@ run_deploy() {
     -u META_CREDENTIAL_ENCRYPTION_KEY \
     -u AI_ADS_INTEGRATION_API_KEY \
     -u AI_ADS_INTEGRATION_ORGANIZATION_ID \
+    -u AI_HOST_CREATIVE_FACTORY_URL \
+    -u AI_HOST_INTERNAL_API_SECRET \
+    -u CREATIVE_FACTORY_CODEX_SECRET \
     PATH="$FAKE_BIN:$PATH" \
     SSH_ARG_LOG="$SSH_ARG_LOG" \
     SCP_REMOTE_LOG="$SCP_REMOTE_LOG" \
@@ -280,6 +292,9 @@ EXTERNAL_MATERIAL_SYNC_ENABLED=true
 META_CREDENTIAL_ENCRYPTION_KEY=file-owned-meta-key
 AI_ADS_INTEGRATION_API_KEY=file-owned-ai-ads-key
 AI_ADS_INTEGRATION_ORGANIZATION_ID=file-owned-ai-ads-org
+AI_HOST_CREATIVE_FACTORY_URL=https://file-owned.example/api/v1/internal/creative-factory
+AI_HOST_INTERNAL_API_SECRET=file-owned-ai-host-secret
+CREATIVE_FACTORY_CODEX_SECRET=file-owned-codex-secret
 EOF
 }
 
@@ -291,13 +306,19 @@ SECRET_SENTINEL='SENSITIVE_VALUE_SHOULD_STAY_STDIN_ONLY'
 META_SECRET_SENTINEL='META_VALUE_SHOULD_STAY_STDIN_ONLY'
 AI_ADS_SECRET_SENTINEL='AI_ADS_VALUE_SHOULD_STAY_STDIN_ONLY'
 AI_ADS_ORGANIZATION_SENTINEL='AI_ADS_ORGANIZATION_SHOULD_STAY_STDIN_ONLY'
+AI_HOST_URL_SENTINEL='https://cling-ai.example/api/v1/internal/creative-factory'
+AI_HOST_SECRET_SENTINEL='AI_HOST_VALUE_SHOULD_STAY_STDIN_ONLY'
+CODEX_SECRET_SENTINEL='CODEX_VALUE_SHOULD_STAY_STDIN_ONLY'
 output="$(
   run_deploy \
     GUANGDADA_API_KEY="$SECRET_SENTINEL" \
     EXTERNAL_MATERIAL_SYNC_ENABLED=true \
     META_CREDENTIAL_ENCRYPTION_KEY="$META_SECRET_SENTINEL" \
     AI_ADS_INTEGRATION_API_KEY="$AI_ADS_SECRET_SENTINEL" \
-    AI_ADS_INTEGRATION_ORGANIZATION_ID="$AI_ADS_ORGANIZATION_SENTINEL"
+    AI_ADS_INTEGRATION_ORGANIZATION_ID="$AI_ADS_ORGANIZATION_SENTINEL" \
+    AI_HOST_CREATIVE_FACTORY_URL="$AI_HOST_URL_SENTINEL" \
+    AI_HOST_INTERNAL_API_SECRET="$AI_HOST_SECRET_SENTINEL" \
+    CREATIVE_FACTORY_CODEX_SECRET="$CODEX_SECRET_SENTINEL"
 )"
 assert_consistent_pair
 grep -qx 'CANONICAL_ONLY=preserved' "$ROOT_ENV"
@@ -310,6 +331,9 @@ grep -qx 'EXTERNAL_MATERIAL_SYNC_ENABLED=true' "$ROOT_ENV"
 grep -qx "META_CREDENTIAL_ENCRYPTION_KEY=$META_SECRET_SENTINEL" "$ROOT_ENV"
 grep -qx "AI_ADS_INTEGRATION_API_KEY=$AI_ADS_SECRET_SENTINEL" "$ROOT_ENV"
 grep -qx "AI_ADS_INTEGRATION_ORGANIZATION_ID=$AI_ADS_ORGANIZATION_SENTINEL" "$ROOT_ENV"
+grep -qx "AI_HOST_CREATIVE_FACTORY_URL=$AI_HOST_URL_SENTINEL" "$ROOT_ENV"
+grep -qx "AI_HOST_INTERNAL_API_SECRET=$AI_HOST_SECRET_SENTINEL" "$ROOT_ENV"
+grep -qx "CREATIVE_FACTORY_CODEX_SECRET=$CODEX_SECRET_SENTINEL" "$ROOT_ENV"
 test "$(grep -c '^commit-root$' "$REMOTE_ORDER_LOG")" -eq 1
 test "$(grep -c '^commit-runtime$' "$REMOTE_ORDER_LOG")" -eq 1
 expected_order=$'remote-session\nlock-acquired\ncheckout\ncommit-root\ncommit-runtime\nserver-deploy-executed'
@@ -326,6 +350,14 @@ if grep -Fq "$AI_ADS_SECRET_SENTINEL" "$SSH_ARG_LOG"; then
   echo 'AI ads integration key reached ssh command-line arguments'
   exit 1
 fi
+if grep -Fq "$AI_HOST_SECRET_SENTINEL" "$SSH_ARG_LOG"; then
+  echo 'ai-host Creative Factory key reached ssh command-line arguments'
+  exit 1
+fi
+if grep -Fq "$CODEX_SECRET_SENTINEL" "$SSH_ARG_LOG"; then
+  echo 'Codex Creative Factory key reached ssh command-line arguments'
+  exit 1
+fi
 if grep -Fq "$SECRET_SENTINEL" <<<"$output"; then
   echo 'provider key reached deploy logs'
   exit 1
@@ -338,10 +370,19 @@ if grep -Fq "$AI_ADS_SECRET_SENTINEL" <<<"$output"; then
   echo 'AI ads integration key reached deploy logs'
   exit 1
 fi
+if grep -Fq "$AI_HOST_SECRET_SENTINEL" <<<"$output"; then
+  echo 'ai-host Creative Factory key reached deploy logs'
+  exit 1
+fi
+if grep -Fq "$CODEX_SECRET_SENTINEL" <<<"$output"; then
+  echo 'Codex Creative Factory key reached deploy logs'
+  exit 1
+fi
 grep -Fq 'GUANGDADA_API_KEY' <<<"$output"
 grep -Fq 'EXTERNAL_MATERIAL_SYNC_ENABLED' <<<"$output"
 grep -Fq 'META_CREDENTIAL_ENCRYPTION_KEY' <<<"$output"
 grep -Fq 'AI ads integration' <<<"$output"
+grep -Fq 'Creative Factory' <<<"$output"
 
 # Local validation remains strict and must not leak under tracing.
 if run_deploy \
@@ -364,6 +405,16 @@ fi
 if run_deploy \
   AI_ADS_INTEGRATION_API_KEY='key-without-org' >"$TEST_DIR/missing-ai-ads-org.log" 2>&1; then
   echo 'AI ads integration accepted an incomplete override pair'
+  exit 1
+fi
+if run_deploy \
+  AI_HOST_INTERNAL_API_SECRET='' >"$TEST_DIR/missing-ai-host-secret.log" 2>&1; then
+  echo 'empty ai-host Creative Factory key was accepted as an explicit override'
+  exit 1
+fi
+if run_deploy \
+  CREATIVE_FACTORY_CODEX_SECRET='' >"$TEST_DIR/missing-codex-secret.log" 2>&1; then
+  echo 'empty Codex Creative Factory key was accepted as an explicit override'
   exit 1
 fi
 if grep -Fq 'invalid-flag-placeholder' "$TEST_DIR/invalid-flag.log"; then
@@ -391,16 +442,31 @@ if grep -Fq 'INJECTED_META_ENTRY' "$TEST_DIR/multiline-meta-key.log"; then
   echo 'multiline Meta key failure leaked the key'
   exit 1
 fi
+CREATIVE_FACTORY_MULTILINE_PLACEHOLDER=$'creative-placeholder-line\nINJECTED_CREATIVE_ENTRY=must-not-appear'
+if run_deploy \
+  AI_HOST_INTERNAL_API_SECRET="$CREATIVE_FACTORY_MULTILINE_PLACEHOLDER" >"$TEST_DIR/multiline-creative-key.log" 2>&1; then
+  echo 'Creative Factory accepted a multiline key'
+  exit 1
+fi
+if grep -Fq 'INJECTED_CREATIVE_ENTRY' "$TEST_DIR/multiline-creative-key.log"; then
+  echo 'multiline Creative Factory failure leaked the key'
+  exit 1
+fi
 TRACE_SENTINEL='TRACE_MODE_MUST_NOT_PRINT_THIS_VALUE'
 META_TRACE_SENTINEL='META_TRACE_MODE_MUST_NOT_PRINT_THIS_VALUE'
 AI_ADS_TRACE_SENTINEL='AI_ADS_TRACE_MODE_MUST_NOT_PRINT_THIS_VALUE'
 AI_ADS_TRACE_ORG_SENTINEL='AI_ADS_TRACE_ORG_MUST_NOT_PRINT_THIS_VALUE'
+AI_HOST_TRACE_SENTINEL='AI_HOST_TRACE_MODE_MUST_NOT_PRINT_THIS_VALUE'
+CODEX_TRACE_SENTINEL='CODEX_TRACE_MODE_MUST_NOT_PRINT_THIS_VALUE'
 env \
   -u GUANGDADA_API_KEY \
   -u EXTERNAL_MATERIAL_SYNC_ENABLED \
-    -u META_CREDENTIAL_ENCRYPTION_KEY \
-    -u AI_ADS_INTEGRATION_API_KEY \
-    -u AI_ADS_INTEGRATION_ORGANIZATION_ID \
+  -u META_CREDENTIAL_ENCRYPTION_KEY \
+  -u AI_ADS_INTEGRATION_API_KEY \
+  -u AI_ADS_INTEGRATION_ORGANIZATION_ID \
+  -u AI_HOST_CREATIVE_FACTORY_URL \
+  -u AI_HOST_INTERNAL_API_SECRET \
+  -u CREATIVE_FACTORY_CODEX_SECRET \
   PATH="$FAKE_BIN:$PATH" \
   SSH_ARG_LOG="$SSH_ARG_LOG" \
   SCP_REMOTE_LOG="$SCP_REMOTE_LOG" \
@@ -418,6 +484,9 @@ env \
   META_CREDENTIAL_ENCRYPTION_KEY="$META_TRACE_SENTINEL" \
   AI_ADS_INTEGRATION_API_KEY="$AI_ADS_TRACE_SENTINEL" \
   AI_ADS_INTEGRATION_ORGANIZATION_ID="$AI_ADS_TRACE_ORG_SENTINEL" \
+  AI_HOST_CREATIVE_FACTORY_URL='https://trace.example/api/v1/internal/creative-factory' \
+  AI_HOST_INTERNAL_API_SECRET="$AI_HOST_TRACE_SENTINEL" \
+  CREATIVE_FACTORY_CODEX_SECRET="$CODEX_TRACE_SENTINEL" \
   bash -x "$REPO_ROOT/deploy/prod-deploy.sh" >"$TEST_DIR/trace.log" 2>&1
 if grep -Fq "$TRACE_SENTINEL" "$TEST_DIR/trace.log"; then
   echo 'provider key leaked when shell tracing was requested'
@@ -429,6 +498,14 @@ if grep -Fq "$META_TRACE_SENTINEL" "$TEST_DIR/trace.log"; then
 fi
 if grep -Fq "$AI_ADS_TRACE_SENTINEL" "$TEST_DIR/trace.log"; then
   echo 'AI ads integration key leaked when shell tracing was requested'
+  exit 1
+fi
+if grep -Fq "$AI_HOST_TRACE_SENTINEL" "$TEST_DIR/trace.log"; then
+  echo 'ai-host Creative Factory key leaked when shell tracing was requested'
+  exit 1
+fi
+if grep -Fq "$CODEX_TRACE_SENTINEL" "$TEST_DIR/trace.log"; then
+  echo 'Codex Creative Factory key leaked when shell tracing was requested'
   exit 1
 fi
 
@@ -446,6 +523,9 @@ grep -qx 'EXTERNAL_MATERIAL_SYNC_ENABLED=true' "$ROOT_ENV"
 grep -qx 'META_CREDENTIAL_ENCRYPTION_KEY=file-owned-meta-key' "$ROOT_ENV"
 grep -qx 'AI_ADS_INTEGRATION_API_KEY=file-owned-ai-ads-key' "$ROOT_ENV"
 grep -qx 'AI_ADS_INTEGRATION_ORGANIZATION_ID=file-owned-ai-ads-org' "$ROOT_ENV"
+grep -qx 'AI_HOST_CREATIVE_FACTORY_URL=https://file-owned.example/api/v1/internal/creative-factory' "$ROOT_ENV"
+grep -qx 'AI_HOST_INTERNAL_API_SECRET=file-owned-ai-host-secret' "$ROOT_ENV"
+grep -qx 'CREATIVE_FACTORY_CODEX_SECRET=file-owned-codex-secret' "$ROOT_ENV"
 if grep -Eq 'OLD_CANONICAL|OLD_RUNTIME' "$ROOT_ENV"; then
   echo 'full environment rotation retained stale configuration'
   exit 1
