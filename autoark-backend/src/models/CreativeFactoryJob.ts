@@ -14,7 +14,7 @@ const creativeFactoryJobSchema = new mongoose.Schema(
     brandKey: { type: String, default: 'clingai' },
     workflow: {
       type: String,
-      enum: ['generate_then_edit', 'edit_only'],
+      enum: ['generate_then_edit', 'edit_only', 'extract_frame_then_edit'],
       required: true,
     },
     status: {
@@ -34,6 +34,33 @@ const creativeFactoryJobSchema = new mongoose.Schema(
       url: { type: String, required: true },
       mediaType: { type: String, enum: ['image', 'video'], required: true },
       name: { type: String },
+    },
+    styleReference: {
+      materialId: { type: mongoose.Schema.Types.ObjectId, ref: 'Material' },
+      url: { type: String },
+      mediaType: { type: String, enum: ['image', 'video'] },
+      name: { type: String },
+      analysis: {
+        status: {
+          type: String,
+          enum: ['pending', 'completed', 'failed'],
+          default: 'pending',
+        },
+        summary: { type: String },
+        visualLanguage: { type: String },
+        palette: [{ type: String }],
+        typography: { type: String },
+        layout: { type: String },
+        hookPattern: { type: String },
+        pacing: { type: String },
+        transitions: { type: String },
+        overlays: { type: String },
+        callToAction: { type: String },
+        audio: { type: String },
+        generationPrompt: { type: String },
+        avoid: [{ type: String }],
+        extractedAt: { type: Date },
+      },
     },
     requestedOutput: {
       mediaType: { type: String, enum: ['image', 'video'], required: true },

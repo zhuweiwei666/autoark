@@ -1,5 +1,7 @@
 import CreativeFactoryJob from '../src/models/CreativeFactoryJob'
+import Material from '../src/models/Material'
 import {
+  claimCreativeFactoryJob,
   createCreativeFactoryBatch,
   getCreativeFactoryStorageRoot,
   linkCreativeFactoryAttribution,
@@ -61,6 +63,80 @@ describe('creative factory orchestration', () => {
 
     const docs: any[] = insert.mock.calls[0][0] as any
     expect(docs[0].workflow).toBe('edit_only')
+  })
+
+  it.each([
+    ['image', 'image', 'edit_only', 'image'],
+    ['video', 'image', 'extract_frame_then_edit', 'image'],
+    ['image', 'video', 'generate_then_edit', 'video'],
+    ['video', 'video', 'edit_only', 'video'],
+  ] as const)(
+    'routes %s source with %s example through %s',
+    async (sourceType, referenceType, expectedWorkflow, expectedOutput) => {
+      jest.spyOn(Material, 'findOne').mockReturnValue({
+        lean: jest.fn().mockResolvedValue({
+          _id: '64b000000000000000000099',
+          type: referenceType,
+          name: `${referenceType} example`,
+          storage: {
+            url: `https://cdn.example/reference.${referenceType === 'video' ? 'mp4' : 'jpg'}`,
+          },
+        }),
+      } as any)
+      const insert = jest
+        .spyOn(CreativeFactoryJob, 'insertMany')
+        .mockImplementation(async (docs: any) => docs as any)
+
+      await createCreativeFactoryBatch(
+        {
+          title: 'Reference matrix',
+          intent: 'Apply the example advertising language',
+          outputMediaType: expectedOutput === 'video' ? 'image' : 'video',
+          assets: [
+            {
+              sourceUrl: `https://cdn.example/source.${sourceType === 'video' ? 'mp4' : 'jpg'}`,
+              mediaType: sourceType,
+            },
+          ],
+          styleReference: { materialId: '64b000000000000000000099' },
+        },
+        {
+          userId: 'user-1',
+          organizationId: '64b000000000000000000001',
+          isSuperAdmin: false,
+        },
+      )
+
+      const docs: any[] = insert.mock.calls[0][0] as any
+      expect(docs[0]).toMatchObject({
+        workflow: expectedWorkflow,
+        requestedOutput: { mediaType: expectedOutput },
+        styleReference: {
+          mediaType: referenceType,
+          analysis: { status: 'pending' },
+        },
+      })
+    },
+  )
+
+  it('only releases the first variant until the shared example analysis exists', async () => {
+    const lean = jest.fn().mockResolvedValue(null)
+    const claim = jest
+      .spyOn(CreativeFactoryJob, 'findOneAndUpdate')
+      .mockReturnValue({ lean } as any)
+    await claimCreativeFactoryJob('codex-test')
+    expect(claim.mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        $and: expect.arrayContaining([
+          expect.objectContaining({
+            $or: expect.arrayContaining([
+              expect.objectContaining({ variantId: 'v001' }),
+              { 'styleReference.analysis.status': 'completed' },
+            ]),
+          }),
+        ]),
+      }),
+    )
   })
 
   it('links published ad mappings back to the producing job', async () => {

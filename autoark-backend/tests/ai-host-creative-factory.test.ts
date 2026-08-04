@@ -24,6 +24,12 @@ describe('ai-host creative factory client', () => {
       externalVariantId: 'v001',
       sourceImageUrl: 'https://cdn.example/source.jpg',
       featureKey: 'video',
+      creativeDirection: 'Fast cuts and a result-first hook.',
+      styleReference: {
+        materialId: 'reference-1',
+        url: 'https://cdn.example/reference.mp4',
+        mediaType: 'video' as const,
+      },
     }
     const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue(
       new Response(

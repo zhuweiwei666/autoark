@@ -36,6 +36,13 @@ type CreateAssetInput = {
   name?: string
 }
 
+type ResolvedCreativeAsset = {
+  materialId?: mongoose.Types.ObjectId
+  url: string
+  mediaType: 'image' | 'video'
+  name: string
+}
+
 type CreateBatchInput = {
   title?: string
   intent?: string
@@ -44,6 +51,7 @@ type CreateBatchInput = {
   aspectRatio?: string
   variantsPerAsset?: number
   assets?: CreateAssetInput[]
+  styleReference?: { materialId?: string }
 }
 
 const clean = (value: unknown, max = 500) =>
@@ -111,7 +119,7 @@ const assertCodexJobOwner = (job: any, workerId: string) => {
 async function resolveSource(
   asset: CreateAssetInput,
   scope: CreativeFactoryScope,
-) {
+): Promise<ResolvedCreativeAsset> {
   const materialId = clean(asset.materialId, 100)
   if (materialId) {
     if (!mongoose.Types.ObjectId.isValid(materialId)) {
@@ -123,6 +131,11 @@ async function resolveSource(
     }).lean()
     if (!material)
       throw new CreativeFactoryError(`素材不存在或无权限: ${materialId}`, 404)
+    if (!['image', 'video'].includes(String(material.type))) {
+      throw new CreativeFactoryError(
+        `素材不是可处理的图片或视频: ${materialId}`,
+      )
+    }
     return {
       materialId: material._id,
       url: assertPublicUrl(String(material.storage?.url || '')),
@@ -138,6 +151,80 @@ async function resolveSource(
     mediaType,
     name: clean(asset.name, 160) || sourceUrl.split('/').pop() || '外部素材',
   }
+}
+
+async function resolveStyleReference(
+  input: CreateBatchInput['styleReference'],
+  scope: CreativeFactoryScope,
+) {
+  if (!input) return null
+  const materialId = clean(input.materialId, 100)
+  if (!materialId) {
+    throw new CreativeFactoryError('素材示例必须来自 AutoArk 素材库')
+  }
+  const reference = await resolveSource({ materialId }, scope)
+  return {
+    ...reference,
+    analysis: { status: 'pending' as const },
+  }
+}
+
+const resolveWorkflow = (
+  sourceMediaType: 'image' | 'video',
+  referenceMediaType?: 'image' | 'video',
+) => {
+  if (referenceMediaType === 'image' && sourceMediaType === 'video') {
+    return 'extract_frame_then_edit' as const
+  }
+  if (referenceMediaType === 'video' && sourceMediaType === 'image') {
+    return 'generate_then_edit' as const
+  }
+  if (referenceMediaType) return 'edit_only' as const
+  return sourceMediaType === 'video'
+    ? ('edit_only' as const)
+    : ('generate_then_edit' as const)
+}
+
+const REFERENCE_ANALYSIS_FIELDS = [
+  'summary',
+  'visualLanguage',
+  'typography',
+  'layout',
+  'hookPattern',
+  'pacing',
+  'transitions',
+  'overlays',
+  'callToAction',
+  'audio',
+  'generationPrompt',
+] as const
+
+const sanitizeReferenceAnalysis = (input: unknown) => {
+  if (!input || typeof input !== 'object') return null
+  const value = input as Record<string, unknown>
+  const result: Record<string, unknown> = {
+    status: 'completed',
+    extractedAt: new Date(),
+  }
+  for (const field of REFERENCE_ANALYSIS_FIELDS) {
+    result[field] = clean(
+      value[field],
+      field === 'generationPrompt' ? 1600 : 1000,
+    )
+  }
+  result.palette = Array.isArray(value.palette)
+    ? value.palette
+        .map((item) => clean(item, 40))
+        .filter(Boolean)
+        .slice(0, 8)
+    : []
+  result.avoid = Array.isArray(value.avoid)
+    ? value.avoid
+        .map((item) => clean(item, 160))
+        .filter(Boolean)
+        .slice(0, 12)
+    : []
+  return clean(result.summary, 1000) ? result : null
 }
 
 const mapAiHostFields = (result: AiHostGeneration) => ({
@@ -162,7 +249,6 @@ export async function createCreativeFactoryBatch(
     Math.max(Number(input.variantsPerAsset) || 1, 1),
     4,
   )
-  const outputMediaType = input.outputMediaType === 'video' ? 'video' : 'image'
 
   if (!title) throw new CreativeFactoryError('请输入批次名称')
   if (!intent) throw new CreativeFactoryError('请输入投放意图')
@@ -172,6 +258,15 @@ export async function createCreativeFactoryBatch(
   const resolvedAssets = []
   for (const asset of assets)
     resolvedAssets.push(await resolveSource(asset, scope))
+  const styleReference = await resolveStyleReference(
+    input.styleReference,
+    scope,
+  )
+  const outputMediaType = styleReference
+    ? styleReference.mediaType
+    : input.outputMediaType === 'video'
+      ? 'video'
+      : 'image'
 
   const batchId = randomUUID()
   const docs = []
@@ -187,10 +282,10 @@ export async function createCreativeFactoryBatch(
         title,
         intent,
         brandKey: clean(input.brandKey, 80) || 'clingai',
-        workflow:
-          source.mediaType === 'video' ? 'edit_only' : 'generate_then_edit',
+        workflow: resolveWorkflow(source.mediaType, styleReference?.mediaType),
         status: 'awaiting_codex',
         source,
+        styleReference: styleReference || undefined,
         requestedOutput: {
           mediaType: outputMediaType,
           aspectRatio: clean(input.aspectRatio, 20) || '9:16',
@@ -220,6 +315,7 @@ export async function listCreativeFactoryBatches(scope: CreativeFactoryScope) {
         title: job.title,
         intent: job.intent,
         brandKey: job.brandKey,
+        styleReference: job.styleReference,
         createdAt: job.createdAt,
         updatedAt: job.updatedAt,
         total: 0,
@@ -312,12 +408,28 @@ export async function claimCreativeFactoryJob(workerIdInput: unknown) {
   const leaseUntil = new Date(now.getTime() + 20 * 60_000)
   const job = await CreativeFactoryJob.findOneAndUpdate(
     {
-      $or: [
-        { status: 'awaiting_codex', 'codex.status': 'queued' },
+      $and: [
         {
-          status: { $in: ['awaiting_codex', 'generating', 'codex_processing'] },
-          'codex.status': { $in: ['claimed', 'processing'] },
-          'codex.leaseUntil': { $lt: now },
+          $or: [
+            { status: 'awaiting_codex', 'codex.status': 'queued' },
+            {
+              status: {
+                $in: ['awaiting_codex', 'generating', 'codex_processing'],
+              },
+              'codex.status': { $in: ['claimed', 'processing'] },
+              'codex.leaseUntil': { $lt: now },
+            },
+          ],
+        },
+        {
+          $or: [
+            { 'styleReference.materialId': { $exists: false } },
+            { 'styleReference.analysis.status': 'completed' },
+            {
+              variantId: 'v001',
+              'styleReference.analysis.status': { $in: ['pending', 'failed'] },
+            },
+          ],
         },
       ],
     },
@@ -363,12 +475,43 @@ export async function planCreativeFactoryJob(
   if (job.workflow === 'generate_then_edit' && !analysis.featureKey) {
     throw new CreativeFactoryError('生成型任务必须选择 ai-host featureKey')
   }
+  if (
+    job.styleReference?.mediaType === 'video' &&
+    job.source?.mediaType === 'image' &&
+    analysis.featureKey !== 'video'
+  ) {
+    throw new CreativeFactoryError(
+      '图片来源搭配视频示例时必须先走 ai-host 图生视频',
+    )
+  }
+
+  if (job.styleReference?.materialId) {
+    const existingReferenceAnalysis = job.styleReference?.analysis?.toObject
+      ? job.styleReference.analysis.toObject()
+      : job.styleReference?.analysis
+    const referenceAnalysis =
+      existingReferenceAnalysis?.status === 'completed'
+        ? existingReferenceAnalysis
+        : sanitizeReferenceAnalysis(input?.referenceAnalysis)
+    if (!referenceAnalysis) {
+      throw new CreativeFactoryError('首个变体必须完成素材示例广告元素分析')
+    }
+    job.styleReference.analysis = referenceAnalysis
+    await CreativeFactoryJob.updateMany(
+      {
+        batchId: job.batchId,
+        'styleReference.materialId': job.styleReference.materialId,
+        _id: { $ne: job._id },
+      },
+      { $set: { 'styleReference.analysis': referenceAnalysis } },
+    )
+  }
 
   job.analysis = analysis
   job.codex.status = 'processing'
   job.codex.leaseUntil = new Date(Date.now() + 60 * 60_000)
 
-  if (job.workflow === 'edit_only') {
+  if (job.workflow !== 'generate_then_edit') {
     job.status = 'codex_processing'
     await job.save()
     return job.toObject()
@@ -385,6 +528,19 @@ export async function planCreativeFactoryJob(
       sourceImageUrl: job.source.url,
       featureKey: analysis.featureKey,
       templateId: analysis.templateId || undefined,
+      creativeDirection: clean(
+        job.styleReference?.analysis?.generationPrompt ||
+          job.styleReference?.analysis?.summary,
+        1600,
+      ),
+      styleReference: job.styleReference?.materialId
+        ? {
+            materialId: String(job.styleReference.materialId),
+            url: job.styleReference.url,
+            mediaType: job.styleReference.mediaType,
+            name: job.styleReference.name,
+          }
+        : undefined,
     })
     job.aiHost = mapAiHostFields(result)
     if (result.status === 'succeeded') job.status = 'codex_processing'
@@ -420,7 +576,11 @@ export async function refreshCreativeFactoryJob(
     assertCodexJobOwner(job, clean(workerIdInput, 120))
     job.codex.leaseUntil = new Date(Date.now() + 60 * 60_000)
   }
-  if (job.workflow === 'edit_only' || !job.analysis?.featureKey) {
+  if (
+    job.workflow === 'edit_only' ||
+    job.workflow === 'extract_frame_then_edit' ||
+    !job.analysis?.featureKey
+  ) {
     if (workerIdInput !== undefined) await job.save()
     return job.toObject()
   }
