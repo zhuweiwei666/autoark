@@ -26,7 +26,6 @@ const escapeFfmpeg = (value) =>
     .replace(/\\/g, "\\\\")
     .replace(/:/g, "\\:")
     .replace(/'/g, "\\'");
-
 function run(command, args) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
@@ -43,6 +42,8 @@ function run(command, args) {
 
 const number = (value, fallback = 0) =>
   Number.isFinite(Number(value)) ? Number(value) : fallback;
+const clamp = (value, min, max, fallback) =>
+  Math.min(Math.max(number(value, fallback), min), max);
 const boxPosition = (box, width, height) => {
   const ratio = box.unit !== "px";
   return {
@@ -60,17 +61,52 @@ const boxPosition = (box, width, height) => {
 };
 
 async function editImage(recipe) {
-  const image = sharp(recipe.input).rotate();
+  let image = sharp(recipe.input).rotate();
   const metadata = await image.metadata();
   const width = metadata.width || 1080;
   const height = metadata.height || 1920;
   const composites = [];
+
+  if (recipe.style) {
+    image = image.modulate({
+      brightness: clamp(recipe.style.brightness, 0.5, 1.5, 1),
+      saturation: clamp(recipe.style.saturation, 0, 2.5, 1),
+      hue: clamp(recipe.style.hue, -180, 180, 0),
+    });
+    const contrast = clamp(recipe.style.contrast, 0.5, 1.8, 1);
+    if (contrast !== 1) image = image.linear(contrast, 128 * (1 - contrast));
+  }
 
   for (const mask of recipe.masks || []) {
     const box = boxPosition(mask, width, height);
     const opacity = Math.min(Math.max(number(mask.opacity, 1), 0), 1);
     const fill = mask.color || recipe.brand?.background || "#111111";
     const svg = `<svg width="${box.width}" height="${box.height}"><rect width="100%" height="100%" rx="${number(mask.radius, 0)}" fill="${escapeXml(fill)}" fill-opacity="${opacity}"/></svg>`;
+    composites.push({ input: Buffer.from(svg), left: box.x, top: box.y });
+  }
+
+  for (const overlay of recipe.textOverlays || []) {
+    const box = boxPosition(overlay, width, height);
+    const padding = Math.max(8, Math.round(box.width * 0.04));
+    const fontSize = Math.max(
+      18,
+      Math.round(width * clamp(overlay.fontSizeRatio, 0.018, 0.12, 0.045)),
+    );
+    const lines = String(overlay.text || "")
+      .split(/\n/)
+      .map((line) => escapeXml(line))
+      .slice(0, 4);
+    if (!lines.some(Boolean)) continue;
+    const text = lines
+      .map(
+        (line, index) =>
+          `<text x="${padding}" y="${padding + fontSize * (index + 1)}" fill="${escapeXml(overlay.color || "#ffffff")}" font-family="Arial,sans-serif" font-size="${fontSize}" font-weight="${number(overlay.fontWeight, 700)}">${line}</text>`,
+      )
+      .join("");
+    const svg = `<svg width="${box.width}" height="${box.height}">
+      <rect width="100%" height="100%" rx="${number(overlay.radius, 8)}" fill="${escapeXml(overlay.background || "#111111")}" fill-opacity="${clamp(overlay.backgroundOpacity, 0, 1, 0.82)}"/>
+      ${text}
+    </svg>`;
     composites.push({ input: Buffer.from(svg), left: box.x, top: box.y });
   }
 
@@ -147,6 +183,19 @@ async function probeVideo(input) {
 async function editVideo(recipe) {
   const meta = await probeVideo(recipe.input);
   const filters = [];
+  if (recipe.style) {
+    const brightness = clamp(
+      number(recipe.style.brightness, 1) - 1,
+      -0.5,
+      0.5,
+      0,
+    );
+    filters.push(
+      `eq=brightness=${brightness}:contrast=${clamp(recipe.style.contrast, 0.5, 1.8, 1)}:saturation=${clamp(recipe.style.saturation, 0, 2.5, 1)}`,
+    );
+    const hue = clamp(recipe.style.hue, -180, 180, 0);
+    if (hue) filters.push(`hue=h=${hue}`);
+  }
   for (const mask of recipe.masks || []) {
     const box = boxPosition(mask, meta.width, meta.height);
     const start = Number(mask.start);
@@ -167,11 +216,46 @@ async function editVideo(recipe) {
     const crop = boxPosition(recipe.crop, meta.width, meta.height);
     filters.push(`crop=${crop.width}:${crop.height}:${crop.x}:${crop.y}`);
   }
-
   const args = ["-y"];
   if (recipe.trim?.start) args.push("-ss", String(number(recipe.trim.start)));
   args.push("-i", recipe.input);
-  let brandOverlayPath = "";
+  const overlayInputs = [];
+  for (const [index, overlay] of (recipe.textOverlays || []).entries()) {
+    const box = boxPosition(overlay, meta.width, meta.height);
+    const lines = String(overlay.text || "")
+      .split(/\n/)
+      .map((line) => escapeXml(line))
+      .slice(0, 4);
+    if (!lines.some(Boolean)) continue;
+    const padding = Math.max(8, Math.round(box.width * 0.04));
+    const fontSize = Math.max(
+      18,
+      Math.round(meta.width * clamp(overlay.fontSizeRatio, 0.018, 0.12, 0.045)),
+    );
+    const text = lines
+      .map(
+        (line, lineIndex) =>
+          `<text x="${padding}" y="${padding + fontSize * (lineIndex + 1)}" fill="${escapeXml(overlay.color || "#ffffff")}" font-family="Arial,sans-serif" font-size="${fontSize}" font-weight="${number(overlay.fontWeight, 700)}">${line}</text>`,
+      )
+      .join("");
+    const svg = `<svg width="${box.width}" height="${box.height}">
+      <rect width="100%" height="100%" rx="${number(overlay.radius, 8)}" fill="${escapeXml(overlay.background || "#111111")}" fill-opacity="${clamp(overlay.backgroundOpacity, 0, 1, 0.82)}"/>
+      ${text}
+    </svg>`;
+    const overlayPath = `${recipe.output}.text-overlay-${index}.png`;
+    await sharp(Buffer.from(svg)).png().toFile(overlayPath);
+    const start = Number(overlay.start);
+    const end = Number(overlay.end);
+    const enable =
+      Number.isFinite(start) && Number.isFinite(end)
+        ? `:enable='between(t,${start},${end})'`
+        : Number.isFinite(start)
+          ? `:enable='gte(t,${start})'`
+          : Number.isFinite(end)
+            ? `:enable='lte(t,${end})'`
+            : "";
+    overlayInputs.push({ path: overlayPath, x: box.x, y: box.y, enable });
+  }
   if (recipe.brand?.label || recipe.brand?.logoPath) {
     const overlayHeight = Math.max(80, Math.round(meta.height * 0.1));
     const fontSize = Math.max(28, Math.round(meta.width * 0.04));
@@ -188,7 +272,7 @@ async function editVideo(recipe) {
       <rect width="100%" height="100%" fill="${escapeXml(recipe.brand.background || "#111111")}" fill-opacity="0.92"/>
       <text x="${textX}" y="${Math.round(overlayHeight * 0.62)}" fill="${escapeXml(recipe.brand.color || "#ffffff")}" font-family="Arial,sans-serif" font-size="${fontSize}" font-weight="700">${escapeXml(recipe.brand.label || "")}</text>
     </svg>`;
-    brandOverlayPath = `${recipe.output}.brand-overlay.png`;
+    const brandOverlayPath = `${recipe.output}.brand-overlay.png`;
     const overlay = sharp(Buffer.from(brandSvg));
     if (recipe.brand?.logoPath) {
       const logo = await sharp(recipe.brand.logoPath)
@@ -213,15 +297,24 @@ async function editVideo(recipe) {
     } else {
       await overlay.png().toFile(brandOverlayPath);
     }
-    args.push("-i", brandOverlayPath);
+    overlayInputs.push({ path: brandOverlayPath, x: 0, y: "H-h", enable: "" });
   }
+  for (const overlay of overlayInputs) args.push("-i", overlay.path);
   if (recipe.trim?.duration)
     args.push("-t", String(number(recipe.trim.duration)));
-  if (brandOverlayPath) {
+  if (overlayInputs.length) {
     const baseFilters = filters.length ? filters.join(",") : "null";
+    let filterComplex = `[0:v]${baseFilters}[base]`;
+    let previousLabel = "base";
+    overlayInputs.forEach((overlay, index) => {
+      const outputLabel =
+        index === overlayInputs.length - 1 ? "outv" : `overlay${index}`;
+      filterComplex += `;[${previousLabel}][${index + 1}:v]overlay=${overlay.x}:${overlay.y}${overlay.enable}[${outputLabel}]`;
+      previousLabel = outputLabel;
+    });
     args.push(
       "-filter_complex",
-      `[0:v]${baseFilters}[base];[base][1:v]overlay=0:H-h[outv]`,
+      filterComplex,
       "-map",
       "[outv]",
       "-map",
@@ -250,7 +343,9 @@ async function editVideo(recipe) {
   try {
     await run("ffmpeg", args);
   } finally {
-    if (brandOverlayPath) await fs.unlink(brandOverlayPath).catch(() => {});
+    await Promise.all(
+      overlayInputs.map((overlay) => fs.unlink(overlay.path).catch(() => {})),
+    );
   }
   const outputMeta = await probeVideo(recipe.output);
   return {
@@ -258,6 +353,29 @@ async function editVideo(recipe) {
     ...outputMeta,
     output: path.resolve(recipe.output),
   };
+}
+
+async function extractVideoFrame(recipe) {
+  const meta = await probeVideo(recipe.input);
+  const ratio = clamp(recipe.extractFrame?.position, 0, 1, 0.15);
+  const requested = number(recipe.extractFrame?.at, Number.NaN);
+  const timestamp = Number.isFinite(requested)
+    ? Math.min(Math.max(requested, 0), Math.max(meta.duration - 0.05, 0))
+    : Math.max(meta.duration * ratio, 0);
+  const output = `${recipe.output}.source-frame.png`;
+  await run("ffmpeg", [
+    "-y",
+    "-ss",
+    timestamp.toFixed(3),
+    "-i",
+    recipe.input,
+    "-frames:v",
+    "1",
+    "-compression_level",
+    "3",
+    output,
+  ]);
+  return output;
 }
 
 async function main() {
@@ -278,11 +396,20 @@ async function main() {
   await fs.mkdir(path.dirname(path.resolve(recipe.output)), {
     recursive: true,
   });
-  const result =
-    recipe.mediaType === "video"
-      ? await editVideo(recipe)
-      : await editImage(recipe);
-  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  let extractedFrame = "";
+  try {
+    if (recipe.mediaType === "image" && recipe.sourceMediaType === "video") {
+      extractedFrame = await extractVideoFrame(recipe);
+      recipe.input = extractedFrame;
+    }
+    const result =
+      recipe.mediaType === "video"
+        ? await editVideo(recipe)
+        : await editImage(recipe);
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  } finally {
+    if (extractedFrame) await fs.unlink(extractedFrame).catch(() => {});
+  }
 }
 
 main().catch((error) => {

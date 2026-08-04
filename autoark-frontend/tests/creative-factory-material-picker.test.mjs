@@ -15,8 +15,19 @@ test('Creative Factory only accepts sources selected from the AutoArk material l
   assert.doesNotMatch(pageSource, /sourceLines|URL 来源类型|HTTPS 素材 URL/)
 })
 
+test('Creative Factory accepts one library or uploaded example and locks output to its media type', () => {
+  assert.match(pageSource, /素材示例/)
+  assert.match(pageSource, /uploadCreativeFactoryStyleReference/)
+  assert.match(pageSource, /styleReference:\s*selectedReference/)
+  assert.match(pageSource, /maxSelected=\{1\}/)
+  assert.match(pageSource, /disabled=\{Boolean\(selectedReference\)\}/)
+  assert.match(apiSource, /\/api\/materials\/presigned-url/)
+  assert.match(apiSource, /\/api\/materials\/confirm-upload/)
+})
+
 test('material picker supports the existing smart-group tree, folders, media filtering, pagination, and a hard batch limit', () => {
   assert.match(pickerSource, /MAX_SELECTED_MATERIALS = 20/)
+  assert.match(pickerSource, /maxSelected = MAX_SELECTED_MATERIALS/)
   assert.match(pickerSource, /getMaterialLibraryFolders/)
   assert.match(pickerSource, /loadMaterialSmartGroups/)
   assert.match(pickerSource, /buildMaterialQuery/)

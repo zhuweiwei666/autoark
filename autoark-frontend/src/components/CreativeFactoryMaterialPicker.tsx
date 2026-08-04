@@ -74,11 +74,17 @@ export default function CreativeFactoryMaterialPicker({
   selected,
   onClose,
   onConfirm,
+  title = '选择来源素材',
+  description = '按 AutoArk 素材库现有分组或文件夹定位，再多选要进入 ClingAI 生产线的图片或视频。',
+  maxSelected = MAX_SELECTED_MATERIALS,
 }: {
   open: boolean
   selected: MaterialLibrarySource[]
   onClose: () => void
   onConfirm: (materials: MaterialLibrarySource[]) => void
+  title?: string
+  description?: string
+  maxSelected?: number
 }) {
   const [draftSelection, setDraftSelection] = useState<MaterialLibrarySource[]>(selected)
   const [scope, setScope] = useState<MaterialSelection>({ kind: 'all' })
@@ -175,8 +181,12 @@ export default function CreativeFactoryMaterialPicker({
       if (current.some((item) => item._id === material._id)) {
         return current.filter((item) => item._id !== material._id)
       }
-      if (current.length >= MAX_SELECTED_MATERIALS) {
-        setSelectionError(`每个生产批次最多选择 ${MAX_SELECTED_MATERIALS} 个来源素材`)
+      if (current.length >= maxSelected) {
+        setSelectionError(
+          maxSelected === 1
+            ? '素材示例只能选择 1 个'
+            : `每个生产批次最多选择 ${maxSelected} 个来源素材`,
+        )
         return current
       }
       return [...current, material]
@@ -293,9 +303,9 @@ export default function CreativeFactoryMaterialPicker({
               <FolderOpen size={16} weight="fill" /> AutoArk 素材库
             </div>
             <h2 id="creative-factory-material-picker-title" className="mt-1 text-xl font-black tracking-tight text-zinc-950">
-              选择来源素材
+              {title}
             </h2>
-            <p className="mt-1 text-sm text-zinc-500">按 AutoArk 素材库现有分组或文件夹定位，再多选要进入 ClingAI 生产线的图片或视频。</p>
+            <p className="mt-1 text-sm text-zinc-500">{description}</p>
           </div>
           <button type="button" onClick={onClose} className="rounded-lg p-2 text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-900 active:scale-[0.98]" aria-label="关闭素材选择器">
             <X size={20} />
@@ -391,7 +401,7 @@ export default function CreativeFactoryMaterialPicker({
               </div>
               <div className="mt-3 flex items-center justify-between gap-3 text-xs text-zinc-500">
                 <span className="truncate">{activeScopeName} · {materialsQuery.data?.total || 0} 个素材</span>
-                <span className="shrink-0 font-bold text-[#0f766e]">已选 {draftSelection.length}/{MAX_SELECTED_MATERIALS}</span>
+                <span className="shrink-0 font-bold text-[#0f766e]">已选 {draftSelection.length}/{maxSelected}</span>
               </div>
             </div>
 

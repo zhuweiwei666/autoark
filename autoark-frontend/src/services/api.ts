@@ -79,9 +79,20 @@ export type CreativeFactoryJob = {
   variantId: string
   title: string
   intent: string
-  workflow: 'generate_then_edit' | 'edit_only'
+  workflow: 'generate_then_edit' | 'edit_only' | 'extract_frame_then_edit'
   status: 'awaiting_codex' | 'generating' | 'codex_processing' | 'ready' | 'failed'
   source: { materialId?: string; url: string; mediaType: 'image' | 'video'; name?: string }
+  styleReference?: {
+    materialId: string
+    url: string
+    mediaType: 'image' | 'video'
+    name?: string
+    analysis?: {
+      status?: 'pending' | 'completed' | 'failed'
+      summary?: string
+      generationPrompt?: string
+    }
+  }
   requestedOutput: { mediaType: 'image' | 'video'; aspectRatio: string }
   analysis?: {
     intentSummary?: string
@@ -113,6 +124,7 @@ export type CreativeFactoryBatchSummary = {
   title: string
   intent: string
   brandKey: string
+  styleReference?: CreativeFactoryJob['styleReference']
   total: number
   ready: number
   failed: number
@@ -211,6 +223,7 @@ export async function createCreativeFactoryBatch(input: {
   aspectRatio: string
   variantsPerAsset: number
   assets: Array<{ materialId: string }>
+  styleReference?: { materialId: string }
 }) {
   const response = await authFetch(`${API_BASE_URL}/api/creative-factory/batches`, {
     method: 'POST',
@@ -219,6 +232,48 @@ export async function createCreativeFactoryBatch(input: {
   if (!response.ok) return readApiError(response, '创建生产批次失败')
   const payload = await response.json()
   return payload.data as { batchId: string; jobCount: number; jobs: CreativeFactoryJob[] }
+}
+
+export async function uploadCreativeFactoryStyleReference(file: File): Promise<MaterialLibrarySource> {
+  const mimeType = file.type || 'application/octet-stream'
+  if (!mimeType.startsWith('image/') && !mimeType.startsWith('video/')) {
+    throw new Error('素材示例必须是图片或视频')
+  }
+  const presignedResponse = await authFetch(`${API_BASE_URL}/api/materials/presigned-url`, {
+    method: 'POST',
+    body: JSON.stringify({
+      fileName: file.name,
+      mimeType,
+      size: file.size,
+      folder: 'Creative Factory/素材示例',
+    }),
+  })
+  if (!presignedResponse.ok) return readApiError(presignedResponse, '创建素材示例上传地址失败')
+  const presignedPayload = await presignedResponse.json()
+  const target = presignedPayload.data
+  const uploadResponse = await fetchWithTimeout(target.uploadUrl, {
+    method: 'PUT',
+    headers: { 'Content-Type': mimeType },
+    body: file,
+    timeoutMs: 180_000,
+  })
+  if (!uploadResponse.ok) throw new Error(`上传素材示例失败 (${uploadResponse.status})`)
+
+  const confirmResponse = await authFetch(`${API_BASE_URL}/api/materials/confirm-upload`, {
+    method: 'POST',
+    body: JSON.stringify({
+      key: target.key,
+      fileName: file.name,
+      mimeType,
+      size: file.size,
+      folder: 'Creative Factory/素材示例',
+      tags: ['creative-factory-reference'],
+      notes: 'Creative Factory 素材示例',
+    }),
+  })
+  if (!confirmResponse.ok) return readApiError(confirmResponse, '登记素材示例失败')
+  const confirmPayload = await confirmResponse.json()
+  return confirmPayload.data as MaterialLibrarySource
 }
 
 export async function refreshCreativeFactoryJob(jobId: string): Promise<CreativeFactoryJob> {

@@ -15,8 +15,8 @@ export CODEX_WORKER_ID=codex-mac-studio-01
 ## 单任务流程
 
 1. `node scripts/creative-factory-codex-client.mjs claim` 认领一个任务。
-2. 检查来源素材，判断受众、钩子、节奏、要移除的原品牌区域；用 `catalog [featureKey]` 读取 ai-host 当前真实模板，再生成 plan JSON。
-3. `node scripts/creative-factory-codex-client.mjs plan <jobId> plan.json`。图片源可选择 ai-host 的 `featureKey/templateId`；视频源默认 `edit_only`。
+2. 检查来源素材和 `localInspection`。若存在素材示例且 `styleReference.analysis.status` 不是 `completed`，逐张检查示例抽帧并提取广告元素；同批后续任务直接复用已持久化的分析，不重复分析示例。
+3. `node scripts/creative-factory-codex-client.mjs plan <jobId> plan.json`。按“来源 × 示例”矩阵执行：图片+图片直接图片处理；视频+图片截帧后处理；图片+视频先用 ai-host `featureKey=video` 图生视频；视频+视频直接剪辑。
 4. 生成任务用 `refresh <jobId>` 等待 ai-host 返回 `succeeded`，把 `aiHost.resultUrl` 下载到本地。
 5. 按 `editRecipe` 生成 recipe JSON，运行 `node scripts/creative-factory-media.mjs recipe.json`。
 6. `upload <jobId> <成品文件>` 上传任务所属组织的专属 R2 路径，把输出 JSON 保存为 `output.json`。
@@ -45,6 +45,25 @@ worker 每个任务启动一个隔离的非交互 Codex 会话，工作文件放
   "featureKey": "video",
   "templateId": "模板 ID，可留空使用默认模板",
   "rationale": "图片源先由 ai-host 保持人物一致性，再做品牌和节奏层剪辑",
+  "referenceAnalysis": {
+    "summary": "高对比冷色竖版广告，首秒大字钩子，快速切镜，末尾单一 CTA",
+    "visualLanguage": "cool editorial, high contrast, product-first",
+    "palette": ["#0B0F14", "#FFFFFF", "#22D3EE"],
+    "typography": "粗体无衬线，短句，居中偏上",
+    "layout": "主体居中，标题位于上三分之一，CTA 靠下",
+    "hookPattern": "0-1 秒先给结果，再解释过程",
+    "pacing": "每 0.8-1.2 秒一个视觉变化",
+    "transitions": "硬切为主，轻微推近",
+    "overlays": "高对比字幕块，避免遮挡人脸和产品",
+    "callToAction": "Create with ClingAI",
+    "audio": "短促节拍，切点跟随鼓点",
+    "generationPrompt": "Preserve the source subject. Use energetic forward camera motion, cool high-contrast lighting and a result-first advertising rhythm.",
+    "avoid": [
+      "复制示例中的原品牌名称",
+      "复制原 logo",
+      "逐像素复刻受版权保护的版式"
+    ]
+  },
   "editRecipe": {
     "masks": [
       {
@@ -54,6 +73,28 @@ worker 每个任务启动一个隔离的非交互 Codex 会话，工作文件放
         "height": 0.08,
         "unit": "ratio",
         "color": "#111111"
+      }
+    ],
+    "style": {
+      "brightness": 1.0,
+      "contrast": 1.15,
+      "saturation": 0.92,
+      "hue": 0
+    },
+    "textOverlays": [
+      {
+        "text": "Create it your way",
+        "x": 0.08,
+        "y": 0.12,
+        "width": 0.84,
+        "height": 0.16,
+        "unit": "ratio",
+        "color": "#ffffff",
+        "background": "#111111",
+        "backgroundOpacity": 0.82,
+        "fontSizeRatio": 0.05,
+        "start": 0,
+        "end": 2.5
       }
     ],
     "brand": {
@@ -67,3 +108,5 @@ worker 每个任务启动一个隔离的非交互 Codex 会话，工作文件放
 ```
 
 `masks` 由 Codex 根据实际画面逐项确定，不能仅靠 OCR 文本命中；动态水印可在每个 mask 上增加 `start`/`end` 秒数并按位置拆段。图片和视频都支持 `brand.logoPath` 叠加 ClingAI 标识。验收至少检查首帧、中段、尾帧、音轨和导出尺寸。
+
+图片成品如果来源是视频，recipe 必须同时声明 `"mediaType":"image"`、`"sourceMediaType":"video"`，并可用 `extractFrame.position`（0-1）或 `extractFrame.at`（秒）选择最有信息量的画面。`style.brightness` 对图片和视频都使用 1.0 为原值；`contrast`、`saturation` 同理。素材示例只用于提取可迁移的广告语言，任何示例中的商标、品牌名、人物身份和受版权保护的独特素材都不得复制到成品。

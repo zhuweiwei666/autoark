@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowClockwise,
@@ -9,6 +9,7 @@ import {
   MagicWand,
   Plus,
   Robot,
+  UploadSimple,
   WarningCircle,
   X,
 } from '@phosphor-icons/react'
@@ -18,6 +19,7 @@ import {
   getCreativeFactoryBatch,
   getCreativeFactoryBatches,
   refreshCreativeFactoryJob,
+  uploadCreativeFactoryStyleReference,
   type CreativeFactoryJob,
   type MaterialLibrarySource,
 } from '../services/api'
@@ -45,12 +47,19 @@ export default function CreativeFactoryPage() {
   const [intent, setIntent] = useState('为 Meta 冷启动投放制作高停留率 9:16 素材，前三秒给出清晰钩子，完整替换原品牌元素。')
   const [selectedMaterials, setSelectedMaterials] = useState<MaterialLibrarySource[]>([])
   const [materialPickerOpen, setMaterialPickerOpen] = useState(false)
+  const [selectedReference, setSelectedReference] = useState<MaterialLibrarySource | null>(null)
+  const [referencePickerOpen, setReferencePickerOpen] = useState(false)
+  const referenceUploadRef = useRef<HTMLInputElement>(null)
   const [outputMediaType, setOutputMediaType] = useState<'image' | 'video'>('video')
   const [variants, setVariants] = useState(2)
   const [selectedBatchId, setSelectedBatchId] = useState('')
   const [formError, setFormError] = useState('')
 
-  const batchesQuery = useQuery({ queryKey: ['creative-factory-batches'], queryFn: getCreativeFactoryBatches })
+  const batchesQuery = useQuery({
+    queryKey: ['creative-factory-batches'],
+    queryFn: getCreativeFactoryBatches,
+    refetchInterval: 15_000,
+  })
   const batches = batchesQuery.data || []
 
   useEffect(() => {
@@ -63,7 +72,7 @@ export default function CreativeFactoryPage() {
     enabled: Boolean(selectedBatchId),
     refetchInterval: (query) => {
       const jobs = query.state.data?.jobs || []
-      return jobs.some((job) => job.status === 'generating') ? 12_000 : false
+      return jobs.some((job) => !['ready', 'failed'].includes(job.status)) ? 8_000 : false
     },
   })
 
@@ -72,6 +81,7 @@ export default function CreativeFactoryPage() {
     onSuccess: (data) => {
       setSelectedBatchId(data.batchId)
       setSelectedMaterials([])
+      setSelectedReference(null)
       setFormError('')
       queryClient.invalidateQueries({ queryKey: ['creative-factory-batches'] })
       queryClient.setQueryData(['creative-factory-batch', data.batchId], { batchId: data.batchId, jobs: data.jobs })
@@ -85,6 +95,17 @@ export default function CreativeFactoryPage() {
       queryClient.invalidateQueries({ queryKey: ['creative-factory-batches'] })
       queryClient.invalidateQueries({ queryKey: ['creative-factory-batch', selectedBatchId] })
     },
+  })
+
+  const referenceUploadMutation = useMutation({
+    mutationFn: uploadCreativeFactoryStyleReference,
+    onSuccess: (material) => {
+      setSelectedReference(material)
+      setOutputMediaType(material.type)
+      setFormError('')
+      if (referenceUploadRef.current) referenceUploadRef.current.value = ''
+    },
+    onError: (error: Error) => setFormError(error.message),
   })
 
   const assets = useMemo(
@@ -105,6 +126,7 @@ export default function CreativeFactoryPage() {
       aspectRatio: '9:16',
       variantsPerAsset: variants,
       assets,
+      styleReference: selectedReference ? { materialId: selectedReference._id } : undefined,
     })
   }
 
@@ -185,11 +207,85 @@ export default function CreativeFactoryPage() {
             </div>
 
             <div>
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-xs font-bold text-zinc-700">
+                    素材示例 <span className="font-medium text-zinc-400">（可选）</span>
+                  </div>
+                  <div className="mt-1 text-[11px] text-zinc-500">
+                    Codex 提取广告语言；示例类型自动决定成品类型
+                  </div>
+                </div>
+                {selectedReference && (
+                  <span className="rounded-md bg-cyan-50 px-2 py-1 text-[11px] font-extrabold text-cyan-800 ring-1 ring-inset ring-cyan-200">
+                    {selectedReference.type === 'image' ? '图片样式' : '视频样式'}
+                  </span>
+                )}
+              </div>
+              {selectedReference ? (
+                <div className="mt-2 overflow-hidden rounded-xl border border-cyan-200 bg-cyan-50/40">
+                  <div className="flex items-center gap-3 p-2.5">
+                    <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-zinc-900">
+                      {selectedReference.type === 'image' ? (
+                        <img src={selectedReference.storage.url} alt="" className="h-full w-full object-cover" />
+                      ) : (
+                        <video src={selectedReference.storage.url} muted playsInline preload="metadata" className="h-full w-full object-cover" />
+                      )}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-xs font-extrabold text-zinc-950">{selectedReference.name}</div>
+                      <div className="mt-1 text-[11px] leading-4 text-zinc-600">
+                        {selectedReference.type === 'image'
+                          ? '图片来源直接处理；视频来源先截取有效画面'
+                          : '图片来源先图生视频；视频来源直接按节奏剪辑'}
+                      </div>
+                    </div>
+                    <button type="button" onClick={() => setSelectedReference(null)} className="rounded-md p-1.5 text-zinc-400 hover:bg-white hover:text-zinc-800" aria-label="移除素材示例">
+                      <X size={15} />
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-2 border-t border-cyan-100">
+                    <button type="button" onClick={() => setReferencePickerOpen(true)} className="flex items-center justify-center gap-1.5 border-r border-cyan-100 px-3 py-2 text-[11px] font-extrabold text-cyan-900 hover:bg-white/70">
+                      <FolderOpen size={14} />从素材库更换
+                    </button>
+                    <button type="button" onClick={() => referenceUploadRef.current?.click()} className="flex items-center justify-center gap-1.5 px-3 py-2 text-[11px] font-extrabold text-cyan-900 hover:bg-white/70">
+                      <UploadSimple size={14} />上传新示例
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  <button type="button" onClick={() => setReferencePickerOpen(true)} className="flex min-h-20 flex-col items-center justify-center rounded-xl border border-dashed border-zinc-300 bg-zinc-50 px-3 text-center transition hover:border-[#0f766e] hover:bg-emerald-50/40">
+                    <FolderOpen size={19} className="text-[#0f766e]" weight="fill" />
+                    <span className="mt-1.5 text-xs font-extrabold text-zinc-900">从素材库选择</span>
+                  </button>
+                  <button type="button" onClick={() => referenceUploadRef.current?.click()} disabled={referenceUploadMutation.isPending} className="flex min-h-20 flex-col items-center justify-center rounded-xl border border-dashed border-zinc-300 bg-zinc-50 px-3 text-center transition hover:border-[#0f766e] hover:bg-emerald-50/40 disabled:opacity-50">
+                    <UploadSimple size={19} className="text-[#0f766e]" weight="bold" />
+                    <span className="mt-1.5 text-xs font-extrabold text-zinc-900">
+                      {referenceUploadMutation.isPending ? '正在上传…' : '上传图片或视频'}
+                    </span>
+                  </button>
+                </div>
+              )}
+              <input
+                ref={referenceUploadRef}
+                type="file"
+                accept="image/*,video/*"
+                className="hidden"
+                onChange={(event) => {
+                  const file = event.target.files?.[0]
+                  if (file) referenceUploadMutation.mutate(file)
+                }}
+              />
+            </div>
+
+            <div>
               <label className="text-xs font-bold text-zinc-700">
                 目标成品
-                <select value={outputMediaType} onChange={(event) => setOutputMediaType(event.target.value as 'image' | 'video')} className="mt-1.5 w-full rounded-lg border border-zinc-300 bg-white px-3 py-2.5 text-sm">
+                <select value={selectedReference?.type || outputMediaType} disabled={Boolean(selectedReference)} onChange={(event) => setOutputMediaType(event.target.value as 'image' | 'video')} className="mt-1.5 w-full rounded-lg border border-zinc-300 bg-white px-3 py-2.5 text-sm disabled:bg-zinc-100 disabled:text-zinc-600">
                   <option value="image">图片</option><option value="video">视频</option>
                 </select>
+                {selectedReference && <span className="mt-1 block text-[11px] font-medium text-zinc-500">已跟随素材示例自动锁定</span>}
               </label>
             </div>
             <label className="block text-xs font-bold text-zinc-700">
@@ -245,7 +341,7 @@ export default function CreativeFactoryPage() {
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2"><span className="text-sm font-extrabold text-zinc-950">{job.variantId}</span><StatusBadge status={job.status} />{job.attribution?.status === 'linked' && <span className="flex items-center gap-1 text-xs font-bold text-emerald-700"><CheckCircle size={15} weight="fill" />广告已归因</span>}</div>
                       <div className="mt-2 line-clamp-2 text-xs leading-5 text-zinc-600">{job.analysis?.hook || job.intent}</div>
-                      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] font-semibold text-zinc-500"><span>{job.workflow === 'edit_only' ? '原片剪辑' : 'ai-host 生成 + 剪辑'}</span><span>{job.analysis?.featureKey || '待 Codex 选模板'}</span>{material?.metrics && <span>ROAS {Number(material.metrics.avgRoas || 0).toFixed(2)}</span>}</div>
+                      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] font-semibold text-zinc-500"><span>{job.workflow === 'extract_frame_then_edit' ? '视频截帧 + 样式处理' : job.workflow === 'edit_only' ? '直接样式处理' : 'ai-host 生成 + 剪辑'}</span><span>{job.analysis?.featureKey || '待 Codex 选模板'}</span>{material?.metrics && <span>ROAS {Number(material.metrics.avgRoas || 0).toFixed(2)}</span>}</div>
                       {job.error && <div className="mt-2 text-xs font-semibold text-rose-700">{job.error}</div>}
                     </div>
                     <div className="flex items-center gap-2">
@@ -268,6 +364,21 @@ export default function CreativeFactoryPage() {
         onConfirm={(materials) => {
           setSelectedMaterials(materials)
           setMaterialPickerOpen(false)
+          setFormError('')
+        }}
+      />
+      <CreativeFactoryMaterialPicker
+        open={referencePickerOpen}
+        selected={selectedReference ? [selectedReference] : []}
+        maxSelected={1}
+        title="选择素材示例"
+        description="只选一张图片或一个视频。Codex 会提取可迁移的广告结构与视觉语言，不复制示例中的品牌。"
+        onClose={() => setReferencePickerOpen(false)}
+        onConfirm={(materials) => {
+          const reference = materials[0] || null
+          setSelectedReference(reference)
+          if (reference) setOutputMediaType(reference.type)
+          setReferencePickerOpen(false)
           setFormError('')
         }}
       />

@@ -77,6 +77,13 @@ export const createAiHostGeneration = (body: {
   sourceImageUrl: string
   featureKey: string
   templateId?: string
+  creativeDirection?: string
+  styleReference?: {
+    materialId: string
+    url: string
+    mediaType: 'image' | 'video'
+    name?: string
+  }
 }) => post<AiHostGeneration>('generate', body)
 
 export const getAiHostGenerationStatus = (body: {
