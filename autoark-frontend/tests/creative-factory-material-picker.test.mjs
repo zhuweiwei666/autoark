@@ -25,6 +25,15 @@ test('Creative Factory accepts one library or uploaded example and locks output 
   assert.match(apiSource, /\/api\/materials\/confirm-upload/)
 })
 
+test('Creative Factory selects historical batches from one accessible dropdown', () => {
+  assert.match(pageSource, /id="creative-factory-batch-history"/)
+  assert.match(pageSource, /aria-describedby="creative-factory-batch-history-help"/)
+  assert.match(pageSource, /value=\{selectedBatchId\}/)
+  assert.match(pageSource, /setSelectedBatchId\(event\.target\.value\)/)
+  assert.match(pageSource, /\{batch\.ready\}\/\{batch\.total\} 成品 · \{batch\.attributed\} 已归因/)
+  assert.doesNotMatch(pageSource, /overflow-x-auto pb-1/)
+})
+
 test('material picker supports the existing smart-group tree, folders, media filtering, pagination, and a hard batch limit', () => {
   assert.match(pickerSource, /MAX_SELECTED_MATERIALS = 20/)
   assert.match(pickerSource, /maxSelected = MAX_SELECTED_MATERIALS/)

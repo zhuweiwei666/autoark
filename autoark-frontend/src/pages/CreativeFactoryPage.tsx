@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowClockwise,
+  CaretDown,
   CheckCircle,
   FilmStrip,
   FolderOpen,
@@ -63,7 +64,9 @@ export default function CreativeFactoryPage() {
   const batches = batchesQuery.data || []
 
   useEffect(() => {
-    if (!selectedBatchId && batches[0]?.batchId) setSelectedBatchId(batches[0].batchId)
+    if (batches[0]?.batchId && !batches.some((batch) => batch.batchId === selectedBatchId)) {
+      setSelectedBatchId(batches[0].batchId)
+    }
   }, [batches, selectedBatchId])
 
   const batchQuery = useQuery({
@@ -303,14 +306,41 @@ export default function CreativeFactoryPage() {
         </section>
 
         <section className="min-w-0 space-y-4">
-          <div className="flex gap-2 overflow-x-auto pb-1">
-            {batches.map((batch) => (
-              <button key={batch.batchId} type="button" onClick={() => setSelectedBatchId(batch.batchId)} className={`min-w-[220px] rounded-lg border p-3 text-left ${selectedBatchId === batch.batchId ? 'border-zinc-900 bg-zinc-950 text-white' : 'border-zinc-200 bg-white text-zinc-900 hover:border-zinc-400'}`}>
-                <div className="truncate text-sm font-extrabold">{batch.title}</div>
-                <div className={`mt-2 flex gap-3 text-xs ${selectedBatchId === batch.batchId ? 'text-zinc-300' : 'text-zinc-500'}`}><span>{batch.ready}/{batch.total} 成品</span><span>{batch.attributed} 已归因</span></div>
-              </button>
-            ))}
-            {!batchesQuery.isLoading && batches.length === 0 && <div className="w-full rounded-lg border border-dashed border-zinc-300 bg-white p-8 text-center text-sm text-zinc-500">还没有批次，从左侧创建第一批素材。</div>}
+          <div className="rounded-xl border border-zinc-200 bg-white p-4 shadow-[0_18px_40px_-34px_rgba(24,24,27,0.4)]">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+              <div className="shrink-0">
+                <label htmlFor="creative-factory-batch-history" className="text-sm font-extrabold text-zinc-950">
+                  历史生产批次
+                </label>
+                <p id="creative-factory-batch-history-help" className="mt-1 text-xs text-zinc-500">
+                  {batchesQuery.isLoading
+                    ? '正在读取历史批次…'
+                    : batches.length === 0
+                      ? '还没有批次，从左侧创建第一批素材。'
+                      : `共 ${batches.length} 个批次，默认显示最近一批。`}
+                </p>
+              </div>
+              <div className="relative w-full sm:max-w-2xl">
+                <select
+                  id="creative-factory-batch-history"
+                  aria-describedby="creative-factory-batch-history-help"
+                  value={selectedBatchId}
+                  disabled={batchesQuery.isLoading || batches.length === 0}
+                  onChange={(event) => setSelectedBatchId(event.target.value)}
+                  className="h-12 w-full appearance-none rounded-lg border border-zinc-300 bg-white pl-3.5 pr-11 text-sm font-bold text-zinc-900 outline-none transition hover:border-zinc-400 focus:border-[#0f766e] focus:ring-2 focus:ring-[#0f766e]/10 disabled:cursor-not-allowed disabled:bg-zinc-100 disabled:text-zinc-500"
+                >
+                  {batchesQuery.isLoading && <option value="">正在读取历史批次…</option>}
+                  {!batchesQuery.isLoading && batches.length === 0 && <option value="">还没有历史批次</option>}
+                  {!batchesQuery.isLoading && batches.length > 0 && !selectedBatchId && <option value="">请选择历史批次</option>}
+                  {batches.map((batch) => (
+                    <option key={batch.batchId} value={batch.batchId}>
+                      {batch.title} · {batch.ready}/{batch.total} 成品 · {batch.attributed} 已归因
+                    </option>
+                  ))}
+                </select>
+                <CaretDown aria-hidden="true" size={18} weight="bold" className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 text-zinc-500" />
+              </div>
+            </div>
           </div>
 
           {selectedSummary && (
