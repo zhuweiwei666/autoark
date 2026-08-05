@@ -1,6 +1,21 @@
 import cron from 'node-cron'
 import logger from '../utils/logger'
 import { syncAccountsFromTokens } from '../services/facebook.accounts.service'
+import { runPendingAccountInsightsBackfill } from '../services/accountInsightsBackfill.service'
+
+const syncAccountsAndBackfill = async (label: string) => {
+  const result = await syncAccountsFromTokens()
+  logger.info(
+    `[AccountSyncCron] ${label} sync completed. `
+      + `Synced: ${result.syncedCount}, Errors: ${result.errorCount}`,
+  )
+  const backfill = await runPendingAccountInsightsBackfill()
+  logger.info(
+    `[AccountSyncCron] ${label} finalization backfill completed. `
+      + `Attempted: ${backfill.attemptedAccounts}, `
+      + `Completed: ${backfill.completedAccounts}, Pending: ${backfill.pendingAccounts}`,
+  )
+}
 
 /**
  * 📊 账户同步定时任务
@@ -14,8 +29,7 @@ export function initAccountSyncCron() {
   cron.schedule('0 * * * *', async () => {
     logger.info('[AccountSyncCron] Starting scheduled account sync...')
     try {
-      const result = await syncAccountsFromTokens()
-      logger.info(`[AccountSyncCron] Sync completed. Synced: ${result.syncedCount}, Errors: ${result.errorCount}`)
+      await syncAccountsAndBackfill('Scheduled')
     } catch (error: any) {
       logger.error('[AccountSyncCron] Sync failed:', error.message)
     }
@@ -25,8 +39,7 @@ export function initAccountSyncCron() {
   setTimeout(async () => {
     logger.info('[AccountSyncCron] Running initial account sync...')
     try {
-      const result = await syncAccountsFromTokens()
-      logger.info(`[AccountSyncCron] Initial sync completed. Synced: ${result.syncedCount}, Errors: ${result.errorCount}`)
+      await syncAccountsAndBackfill('Initial')
     } catch (error: any) {
       logger.error('[AccountSyncCron] Initial sync failed:', error.message)
     }

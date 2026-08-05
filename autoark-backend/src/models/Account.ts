@@ -14,6 +14,9 @@ export interface IAccount extends mongoose.Document {
   lastActiveAt?: Date
   statusChangedAt?: Date
   insightsFinalizationUntil?: Date
+  insightsBackfillPendingSince?: Date
+  insightsBackfillLastAttemptAt?: Date
+  insightsBackfillCompletedAt?: Date
   balance?: number
   spendCap?: string
   amountSpent?: string
@@ -46,6 +49,9 @@ const accountSchema = new mongoose.Schema(
     lastActiveAt: Date,
     statusChangedAt: Date,
     insightsFinalizationUntil: Date,
+    insightsBackfillPendingSince: { type: Date, index: true },
+    insightsBackfillLastAttemptAt: Date,
+    insightsBackfillCompletedAt: Date,
     balance: Number,
     spendCap: String,
     amountSpent: String,
@@ -120,5 +126,6 @@ accountSchema.index({ groupId: 1 })
 accountSchema.index({ createdBy: 1 })
 accountSchema.index({ organizationId: 1, operator: 1, status: 1 })
 accountSchema.index({ insightsFinalizationUntil: 1 })
+accountSchema.index({ insightsBackfillPendingSince: 1, insightsBackfillLastAttemptAt: 1 })
 
 export default mongoose.model<IAccount>('Account', accountSchema)

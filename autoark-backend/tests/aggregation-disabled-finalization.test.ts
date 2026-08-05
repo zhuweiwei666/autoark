@@ -12,6 +12,11 @@ const mockCountryAccountBulkWrite = jest.fn()
 const mockCachedAccountLean = jest.fn()
 const mockCachedCountryLean = jest.fn()
 const mockCachedCampaignLean = jest.fn()
+const mockAccountAggregate = jest.fn()
+const mockCountryAccountAggregate = jest.fn()
+const mockCampaignAggregate = jest.fn()
+const mockCampaignCountDocuments = jest.fn()
+const mockExistingDailyLean = jest.fn()
 const originalAggregationConcurrency =
   process.env.FACEBOOK_AGGREGATION_CONCURRENCY
 
@@ -48,20 +53,26 @@ jest.mock('../src/models/FbToken', () => ({
 jest.mock('../src/models/Aggregation', () => ({
   AggDaily: {
     findOneAndUpdate: (...args: any[]) => mockDailyUpsert(...args),
+    findOne: jest.fn(() => ({ lean: mockExistingDailyLean })),
   },
   AggCountry: { bulkWrite: jest.fn() },
   AggCountryAccount: {
     bulkWrite: (...args: any[]) => mockCountryAccountBulkWrite(...args),
     find: jest.fn(() => ({ lean: mockCachedCountryLean })),
+    aggregate: (...args: any[]) => mockCountryAccountAggregate(...args),
   },
   AggAccount: {
     distinct: (...args: any[]) => mockPreviouslyAggregatedAccountIds(...args),
     bulkWrite: jest.fn(),
     findOne: jest.fn(() => ({ lean: mockCachedAccountLean })),
+    aggregate: (...args: any[]) => mockAccountAggregate(...args),
   },
   AggCampaign: {
     bulkWrite: jest.fn(),
     find: jest.fn(() => ({ lean: mockCachedCampaignLean })),
+    deleteMany: jest.fn(),
+    aggregate: (...args: any[]) => mockCampaignAggregate(...args),
+    countDocuments: (...args: any[]) => mockCampaignCountDocuments(...args),
   },
   AggOptimizer: { bulkWrite: jest.fn() },
   isRecentDate: jest.fn(() => true),
@@ -94,6 +105,22 @@ describe('aggregation account eligibility', () => {
     mockCachedAccountLean.mockResolvedValue(null)
     mockCachedCountryLean.mockResolvedValue([])
     mockCachedCampaignLean.mockResolvedValue([])
+    mockAccountAggregate.mockResolvedValue([{
+      spend: 0,
+      revenue: 0,
+      impressions: 0,
+      clicks: 0,
+      installs: 0,
+      activeAccounts: 0,
+    }])
+    mockCountryAccountAggregate.mockResolvedValue([])
+    mockCampaignAggregate.mockResolvedValue([])
+    mockCampaignCountDocuments.mockResolvedValue(0)
+    mockExistingDailyLean.mockResolvedValue({
+      dataStatus: 'fresh',
+      failedAccounts: 0,
+      cachedAccounts: 0,
+    })
   })
 
   afterEach(() => {
@@ -309,5 +336,30 @@ describe('aggregation account eligibility', () => {
       }),
       { upsert: true },
     )
+  })
+
+  it('refreshes only requested accounts for a historical finalization backfill', async () => {
+    mockAccountFind.mockReturnValue({
+      lean: jest.fn().mockResolvedValue([{
+        accountId: '101',
+        organizationId: 'org-1',
+        status: 'disabled',
+      }]),
+    })
+
+    const result = await refreshAggregation('2026-07-25', true, {
+      accountIds: ['101'],
+    })
+
+    expect(mockPreviouslyAggregatedAccountIds).not.toHaveBeenCalled()
+    expect(mockAccountFind).toHaveBeenCalledWith({
+      channel: 'facebook',
+      accountId: { $in: ['101', 'act_101'] },
+    })
+    expect(result).toMatchObject({
+      processedAccountIds: ['101'],
+      cachedAccountIds: [],
+      unavailableAccountIds: [],
+    })
   })
 })

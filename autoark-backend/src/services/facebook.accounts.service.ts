@@ -37,6 +37,7 @@ const buildAccountLifecycleUpdate = (
   existingStatus: string | undefined,
   nextStatus: string | undefined,
   syncedAt: Date,
+  existingFinalizationUntil?: Date,
 ) => {
   const set: Record<string, Date> = {}
   const unset: Record<string, 1> = {}
@@ -49,12 +50,19 @@ const buildAccountLifecycleUpdate = (
     }
   } else if (
     nextStatus
-    && (existingStatus === 'active' || existingStatus === undefined)
+    && (
+      existingStatus === 'active'
+      || existingStatus === undefined
+      || !existingFinalizationUntil
+    )
   ) {
     set.statusChangedAt = syncedAt
     set.insightsFinalizationUntil = new Date(
       syncedAt.getTime() + INSIGHTS_FINALIZATION_WINDOW_MS,
     )
+    set.insightsBackfillPendingSince = syncedAt
+    unset.insightsBackfillLastAttemptAt = 1
+    unset.insightsBackfillCompletedAt = 1
   } else if (existingStatus && nextStatus && existingStatus !== nextStatus) {
     set.statusChangedAt = syncedAt
   }
@@ -109,7 +117,7 @@ export const syncCachedAccountsForToken = async (
   const existingAccounts = await Account.find({
     channel: 'facebook',
     accountId: { $in: accountData.map(account => account.accountId) },
-  }).select('accountId organizationId status').lean()
+  }).select('accountId organizationId status insightsFinalizationUntil').lean()
   const existingById = new Map(existingAccounts.map((account: any) => [account.accountId, account]))
   const tokenOrgId = tokenDoc.organizationId?.toString?.()
   const errors: Array<{ tokenId: string; optimizer?: string; error: string }> = []
@@ -149,6 +157,7 @@ export const syncCachedAccountsForToken = async (
       existingAccount?.status,
       data.status,
       syncedAt,
+      existingAccount?.insightsFinalizationUntil,
     )
     const update: {
       $set: Record<string, unknown>
