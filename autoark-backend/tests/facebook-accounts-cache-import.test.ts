@@ -155,7 +155,7 @@ describe('facebook account cache import', () => {
     expect(update.$set).not.toHaveProperty('insightsFinalizationUntil')
   })
 
-  it('does not open a finalization window for an account first discovered as disabled', async () => {
+  it('opens a bounded finalization window for an account first discovered as disabled', async () => {
     ;(FacebookUser.findOne as jest.Mock).mockReturnValue(queryResult({
       adAccounts: [{ accountId: '123', status: 2 }],
     }))
@@ -163,8 +163,11 @@ describe('facebook account cache import', () => {
     await syncAccountsFromTokens()
 
     const update = (Account.bulkWrite as jest.Mock).mock.calls[0][0][0].updateOne.update
-    expect(update.$set).not.toHaveProperty('statusChangedAt')
-    expect(update.$set).not.toHaveProperty('insightsFinalizationUntil')
+    expect(update.$set).toMatchObject({
+      status: 'disabled',
+      statusChangedAt: new Date('2026-07-27T08:00:00.000Z'),
+      insightsFinalizationUntil: new Date('2026-07-30T08:00:00.000Z'),
+    })
   })
 
   it('clears the finalization window when a disabled account becomes active again', async () => {

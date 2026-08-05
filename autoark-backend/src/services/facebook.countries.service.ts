@@ -195,7 +195,7 @@ async function getCountriesFromFacebookAPI(
     accessScope: CountryAccessScope,
 ) {
     // 获取所有账户
-    let accountQuery: any = {}
+    const accountQuery: any = {}
     const scopedAccountIds = Array.isArray(accessScope.accountIds)
         ? getAccountIdsForQuery(accessScope.accountIds)
         : null
@@ -346,7 +346,10 @@ async function getCountriesFromFacebookAPI(
         }
     }
     
-    if (accessScope.allowCacheWrite !== false) {
+    const canWriteSharedCache = accessScope.allowCacheWrite !== false
+        && requestedAccountIds.length === 0
+        && scopedAccountIds === null
+    if (canWriteSharedCache) {
         // ========== 缓存到 CountrySummary（下次请求将使用缓存）==========
         try {
             const bulkOps = countriesWithMetrics.map((data: any) => ({

@@ -861,6 +861,9 @@ export interface FbAccount {
   createdAt: string
   updatedAt: string
   periodSpend?: number // 日期范围内的消耗
+  periodSpendSource?: 'live' | 'cached' | 'unavailable'
+  periodSpendStatus?: 'fresh' | 'stale' | 'unavailable'
+  periodSpendLastSyncedAt?: string
   calculatedBalance?: number // 计算后的余额（账户总余额 - 历史总消耗）
   totalSpend?: number // 历史总消耗（用于调试）
 }

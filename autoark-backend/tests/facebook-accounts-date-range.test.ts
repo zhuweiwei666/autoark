@@ -1,5 +1,6 @@
 const mockAccountFind = jest.fn()
 const mockFetchInsights = jest.fn()
+const mockAggAccountAggregate = jest.fn()
 
 jest.mock('../src/models/Account', () => ({
   __esModule: true,
@@ -21,6 +22,12 @@ jest.mock('../src/models/FbToken', () => ({
 jest.mock('../src/models/MetricsDaily', () => ({
   __esModule: true,
   default: {},
+}))
+
+jest.mock('../src/models/Aggregation', () => ({
+  AggAccount: {
+    aggregate: (...args: any[]) => mockAggAccountAggregate(...args),
+  },
 }))
 
 jest.mock('../src/services/facebook.api', () => ({
@@ -48,6 +55,7 @@ describe('facebook account insights date ranges', () => {
       },
     ]))
     mockFetchInsights.mockResolvedValue([{ spend: '42' }])
+    mockAggAccountAggregate.mockResolvedValue([])
   })
 
   it('caps endDate-only account spend ranges before calling Facebook Insights', async () => {
@@ -106,5 +114,41 @@ describe('facebook account insights date ranges', () => {
     })
 
     expect(mockFetchInsights).not.toHaveBeenCalled()
+  })
+
+  it('uses the last confirmed aggregate instead of zero when live Insights fails', async () => {
+    mockFetchInsights.mockRejectedValue(new Error('account disabled'))
+    mockAggAccountAggregate.mockResolvedValue([{
+      _id: '123',
+      spend: 37.5,
+      lastSyncedAt: new Date('2026-06-03T00:00:00.000Z'),
+    }])
+
+    const result = await getAccounts(
+      { startDate: '2026-06-02', endDate: '2026-06-02' },
+      { page: 1, limit: 20, sortBy: 'periodSpend', sortOrder: 'desc' },
+    )
+
+    expect(result.data[0]).toMatchObject({
+      periodSpend: 37.5,
+      periodSpendSource: 'cached',
+      periodSpendStatus: 'stale',
+      periodSpendLastSyncedAt: new Date('2026-06-03T00:00:00.000Z'),
+    })
+  })
+
+  it('returns unavailable instead of a false zero when live and cached Insights are missing', async () => {
+    mockFetchInsights.mockRejectedValue(new Error('account disabled'))
+
+    const result = await getAccounts(
+      { startDate: '2026-06-02', endDate: '2026-06-02' },
+      { page: 1, limit: 20, sortBy: 'periodSpend', sortOrder: 'desc' },
+    )
+
+    expect(result.data[0]).toMatchObject({
+      periodSpendSource: 'unavailable',
+      periodSpendStatus: 'unavailable',
+    })
+    expect(result.data[0].periodSpend).toBeUndefined()
   })
 })

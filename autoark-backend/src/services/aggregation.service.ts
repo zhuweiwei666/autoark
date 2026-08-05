@@ -24,8 +24,10 @@ import {
 import Account from '../models/Account'
 import Campaign from '../models/Campaign'
 import { fetchInsights } from '../integration/facebook/insights.api'
-import { resolveAccountOperationalAuthorization } from './metaBusinessCredential.service'
+import { resolveAccountOperationalAuthorizations } from './metaBusinessCredential.service'
 import { getFacebookAggregationConcurrency } from '../config/facebookSync'
+
+const INSIGHTS_FINALIZATION_WINDOW_MS = 3 * 24 * 60 * 60 * 1000
 
 // 国家代码到名称的映射
 const COUNTRY_NAMES: Record<string, string> = {
@@ -63,6 +65,13 @@ export async function refreshAggregation(date: string, forceRefresh = false): Pr
     const accountEligibility: Array<Record<string, unknown>> = [
       { status: 'active' },
       { insightsFinalizationUntil: { $gte: new Date() } },
+      {
+        status: { $in: ['disabled', 'unsettled', 'review', 'closed'] },
+        insightsFinalizationUntil: { $exists: false },
+        sourceSyncedAt: {
+          $gte: new Date(Date.now() - INSIGHTS_FINALIZATION_WINDOW_MS),
+        },
+      },
     ]
     if (previouslyAggregatedAccountIds.length > 0) {
       accountEligibility.push({
@@ -106,30 +115,104 @@ export async function refreshAggregation(date: string, forceRefresh = false): Pr
 
     let processedCount = 0
     let errorCount = 0
+    let cachedFallbackCount = 0
+    let cachedActiveAccountCount = 0
+    let unavailableCount = 0
+    const successfulAccountIds = new Set<string>()
+
+    const restoreCachedContribution = async (account: any) => {
+      const [cachedAccount, cachedCountries, cachedCampaigns] = await Promise.all([
+        AggAccount.findOne({ date, accountId: account.accountId }).lean(),
+        AggCountryAccount.find({ date, accountId: account.accountId }).lean(),
+        AggCampaign.find({ date, accountId: account.accountId }).lean(),
+      ])
+      if (!cachedAccount) return false
+
+      dailyData.spend += Number(cachedAccount.spend || 0)
+      dailyData.revenue += Number(cachedAccount.revenue || 0)
+      dailyData.impressions += Number(cachedAccount.impressions || 0)
+      dailyData.clicks += Number(cachedAccount.clicks || 0)
+      dailyData.installs += Number(cachedAccount.installs || 0)
+      if (Number(cachedAccount.spend || 0) > 0) {
+        cachedActiveAccountCount++
+      }
+
+      for (const cachedCountry of cachedCountries) {
+        const countryKey = cachedCountry.country
+        if (!countryMap.has(countryKey)) {
+          countryMap.set(countryKey, {
+            country: countryKey,
+            countryName: cachedCountry.countryName || COUNTRY_NAMES[countryKey] || countryKey,
+            spend: 0,
+            revenue: 0,
+            impressions: 0,
+            clicks: 0,
+            installs: 0,
+            campaigns: new Set(),
+          })
+        }
+        const country = countryMap.get(countryKey)
+        country.spend += Number(cachedCountry.spend || 0)
+        country.revenue += Number(cachedCountry.revenue || 0)
+        country.impressions += Number(cachedCountry.impressions || 0)
+        country.clicks += Number(cachedCountry.clicks || 0)
+        country.installs += Number(cachedCountry.installs || 0)
+      }
+
+      for (const cachedCampaign of cachedCampaigns) {
+        campaignMap.set(cachedCampaign.campaignId, {
+          campaignId: cachedCampaign.campaignId,
+          campaignName: cachedCampaign.campaignName || '',
+          accountId: cachedCampaign.accountId,
+          accountName: cachedCampaign.accountName || account.name || '',
+          optimizer: cachedCampaign.optimizer || 'unknown',
+          spend: Number(cachedCampaign.spend || 0),
+          revenue: Number(cachedCampaign.revenue || 0),
+          impressions: Number(cachedCampaign.impressions || 0),
+          clicks: Number(cachedCampaign.clicks || 0),
+          installs: Number(cachedCampaign.installs || 0),
+          status: cachedCampaign.status || 'ACTIVE',
+          objective: cachedCampaign.objective || '',
+        })
+      }
+
+      return true
+    }
 
     for (const chunk of chunks) {
       await Promise.all(chunk.map(async (account) => {
         try {
-          const authorization = await resolveAccountOperationalAuthorization({
+          const authorizations = await resolveAccountOperationalAuthorizations({
             accountId: account.accountId,
             organizationId: (account as any).organizationId,
             legacyToken: (account as any).token,
             legacyTokenId: (account as any).tokenId,
           })
-          if (!authorization) {
-            logger.warn(`[Aggregation] No operational authorization for account ${account.accountId}, skipping`)
-            return
+          if (authorizations.length === 0) {
+            throw new Error('No operational authorization')
           }
           
           // 获取 campaign 级别数据（含国家维度）
-          const insights = await fetchInsights(
-            `act_${account.accountId}`,
-            'campaign',
-            undefined,
-            authorization.token,
-            ['country'],
-            { since: date, until: date }
-          )
+          let insights: any[] | undefined
+          let lastAuthorizationError: unknown
+          for (const authorization of authorizations) {
+            try {
+              insights = await fetchInsights(
+                `act_${account.accountId}`,
+                'campaign',
+                undefined,
+                authorization.token,
+                ['country'],
+                { since: date, until: date }
+              )
+              break
+            } catch (error) {
+              lastAuthorizationError = error
+            }
+          }
+          if (!insights) {
+            throw lastAuthorizationError || new Error('Insights request failed')
+          }
 
           let accountSpend = 0
           let accountRevenue = 0
@@ -301,13 +384,23 @@ export async function refreshAggregation(date: string, forceRefresh = false): Pr
             campaigns: accountCampaigns.size,
             status: account.status || 'active',
           })
+          successfulAccountIds.add(account.accountId)
           
           processedCount++
 
         } catch (error: any) {
           errorCount++
-          // 仅记录警告，不中断整体流程
-          // logger.warn(`[Aggregation] Failed to fetch account ${account.accountId}: ${error.message}`)
+          const restored = await restoreCachedContribution(account)
+          if (restored) {
+            cachedFallbackCount++
+          } else {
+            unavailableCount++
+          }
+          logger.warn(
+            `[Aggregation] Failed to fetch account ${account.accountId}; `
+            + `${restored ? 'kept cached snapshot' : 'no cached snapshot available'}: `
+            + String(error?.message || error).slice(0, 300),
+          )
         }
       }))
     }
@@ -337,7 +430,13 @@ export async function refreshAggregation(date: string, forceRefresh = false): Pr
 
     // 1. 保存日汇总
     const activeAccounts = [...accountMap.values()].filter(a => a.spend > 0).length
+      + cachedActiveAccountCount
     const activeCampaigns = [...campaignMap.values()].filter(c => c.spend > 0).length
+    const dataStatus = unavailableCount > 0
+      ? 'partial'
+      : cachedFallbackCount > 0
+        ? 'stale'
+        : 'fresh'
     
     await AggDaily.findOneAndUpdate(
       { date },
@@ -355,6 +454,9 @@ export async function refreshAggregation(date: string, forceRefresh = false): Pr
         cpi: dailyData.installs > 0 ? Math.round((dailyData.spend / dailyData.installs) * 100) / 100 : 0,
         activeCampaigns,
         activeAccounts,
+        dataStatus,
+        failedAccounts: errorCount,
+        cachedAccounts: cachedFallbackCount,
       },
       { upsert: true }
     )
@@ -414,7 +516,9 @@ export async function refreshAggregation(date: string, forceRefresh = false): Pr
     if (accountOps.length > 0) await AggAccount.bulkWrite(accountOps)
 
     // 4. 保存广告系列数据 (批量写入优化)
-    const campaignOps = Array.from(campaignMap.values()).map(campaign => ({
+    const campaignOps = Array.from(campaignMap.values())
+      .filter(campaign => successfulAccountIds.has(campaign.accountId))
+      .map(campaign => ({
       updateOne: {
         filter: { date, campaignId: campaign.campaignId },
         update: {
@@ -464,7 +568,11 @@ export async function refreshAggregation(date: string, forceRefresh = false): Pr
     if (optimizerOps.length > 0) await AggOptimizer.bulkWrite(optimizerOps)
 
     const duration = Date.now() - startTime
-    logger.info(`[Aggregation] Refreshed ${date} in ${duration}ms: ${processedCount} accounts processed, ${activeCampaigns} campaigns, ${errorCount} errors`)
+    logger.info(
+      `[Aggregation] Refreshed ${date} in ${duration}ms: ${processedCount} accounts processed, `
+      + `${activeCampaigns} campaigns, ${errorCount} errors, `
+      + `${cachedFallbackCount} cached, ${unavailableCount} unavailable`,
+    )
 
   } catch (error: any) {
     logger.error(`[Aggregation] Failed to refresh ${date}:`, error.message)

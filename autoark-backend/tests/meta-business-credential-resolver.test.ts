@@ -10,6 +10,7 @@ jest.mock('../src/models/MetaBusinessCredential', () => ({
 import {
   credentialCoversAssets,
   resolveAccountOperationalAuthorization,
+  resolveAccountOperationalAuthorizations,
   resolveAgentOperationalAuthorization,
   resolvePublishingCredential,
 } from '../src/services/metaBusinessCredential.service'
@@ -120,6 +121,38 @@ describe('organization-scoped Meta publishing credential resolution', () => {
       token: 'SYSTEM_TOKEN',
       metaCredentialId: '665000000000000000000099',
     })
+  })
+
+  it('returns the covering System User and personal fallback as ordered retry candidates', async () => {
+    mockCredentialFind.mockReturnValue(queryResult([{
+      _id: '665000000000000000000099',
+      tokenCiphertext: encryptMetaToken('SYSTEM_TOKEN'),
+      assetGrants: {
+        adAccounts: [{ assetId: '123' }],
+        pages: [],
+        pixels: [],
+      },
+    }]))
+
+    const resolved = await resolveAccountOperationalAuthorizations({
+      organizationId: '665000000000000000000001',
+      accountId: 'act_123',
+      legacyToken: 'PERSONAL_TOKEN',
+      legacyTokenId: '665000000000000000000088',
+    })
+
+    expect(resolved).toEqual([
+      {
+        authorizationType: 'system_user',
+        token: 'SYSTEM_TOKEN',
+        metaCredentialId: '665000000000000000000099',
+      },
+      {
+        authorizationType: 'personal',
+        token: 'PERSONAL_TOKEN',
+        legacyTokenId: '665000000000000000000088',
+      },
+    ])
   })
 
   it('uses the explicitly supplied personal token only when no System User is available', async () => {

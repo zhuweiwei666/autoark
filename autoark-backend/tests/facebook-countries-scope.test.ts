@@ -135,4 +135,16 @@ describe('facebook countries tenant scope', () => {
       { since: '2026-03-05', until: '2026-06-02' },
     )
   })
+
+  it('does not overwrite the global country cache from an account-filtered super-admin read', async () => {
+    await getCountries(
+      { accountId: '123', startDate: '2026-06-02', endDate: '2026-06-02' },
+      pagination,
+    )
+
+    expect(mockAccountFind).toHaveBeenCalledWith({
+      accountId: { $in: ['123', 'act_123'] },
+    })
+    expect(mockCountrySummaryBulkWrite).not.toHaveBeenCalled()
+  })
 })
