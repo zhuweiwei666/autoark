@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express'
 import * as facebookService from '../services/facebook.service'
 import * as facebookAccountsService from '../services/facebook.accounts.service'
+import { runPendingAccountInsightsBackfill } from '../services/accountInsightsBackfill.service'
 import * as facebookCampaignsService from '../services/facebook.campaigns.service'
 import * as facebookCampaignsV2Service from '../services/facebook.campaigns.v2.service'
 import * as facebookPermissionsService from '../services/facebook.permissions.service'
@@ -715,10 +716,16 @@ export const syncAccounts = async (
   try {
     if (!requireSuperAdmin(req, res)) return
     const result = await facebookAccountsService.syncAccountsFromTokens()
+    void runPendingAccountInsightsBackfill().catch((error) => {
+      logger.error(
+        '[AccountInsightsBackfill] Manual account-sync trigger failed:',
+        error instanceof Error ? error.message : String(error),
+      )
+    })
     res.json({
       success: true,
       message: 'Accounts sync completed',
-      data: result,
+      data: { ...result, insightsBackfillScheduled: true },
     })
   } catch (error) {
     next(error)

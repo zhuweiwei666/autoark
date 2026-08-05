@@ -129,12 +129,15 @@ describe('facebook account cache import', () => {
 
     await syncAccountsFromTokens()
 
-    expect(existingAccountQuery.select).toHaveBeenCalledWith('accountId organizationId status')
+    expect(existingAccountQuery.select).toHaveBeenCalledWith(
+      'accountId organizationId status insightsFinalizationUntil',
+    )
     const update = (Account.bulkWrite as jest.Mock).mock.calls[0][0][0].updateOne.update
     expect(update.$set).toMatchObject({
       status: 'disabled',
       statusChangedAt: new Date('2026-07-27T08:00:00.000Z'),
       insightsFinalizationUntil: new Date('2026-07-30T08:00:00.000Z'),
+      insightsBackfillPendingSince: new Date('2026-07-27T08:00:00.000Z'),
     })
   })
 
@@ -146,6 +149,7 @@ describe('facebook account cache import', () => {
       accountId: '123',
       organizationId: { toString: () => '665000000000000000000001' },
       status: 'disabled',
+      insightsFinalizationUntil: new Date('2026-07-29T08:00:00.000Z'),
     }]))
 
     await syncAccountsFromTokens()
@@ -153,6 +157,7 @@ describe('facebook account cache import', () => {
     const update = (Account.bulkWrite as jest.Mock).mock.calls[0][0][0].updateOne.update
     expect(update.$set).not.toHaveProperty('statusChangedAt')
     expect(update.$set).not.toHaveProperty('insightsFinalizationUntil')
+    expect(update.$set).not.toHaveProperty('insightsBackfillPendingSince')
   })
 
   it('opens a bounded finalization window for an account first discovered as disabled', async () => {
@@ -167,6 +172,27 @@ describe('facebook account cache import', () => {
       status: 'disabled',
       statusChangedAt: new Date('2026-07-27T08:00:00.000Z'),
       insightsFinalizationUntil: new Date('2026-07-30T08:00:00.000Z'),
+      insightsBackfillPendingSince: new Date('2026-07-27T08:00:00.000Z'),
+    })
+  })
+
+  it('self-heals an already-disabled account that predates finalization tracking', async () => {
+    ;(FacebookUser.findOne as jest.Mock).mockReturnValue(queryResult({
+      adAccounts: [{ accountId: '123', status: 2 }],
+    }))
+    ;(Account.find as jest.Mock).mockReturnValue(queryResult([{
+      accountId: '123',
+      organizationId: { toString: () => '665000000000000000000001' },
+      status: 'disabled',
+    }]))
+
+    await syncAccountsFromTokens()
+
+    const update = (Account.bulkWrite as jest.Mock).mock.calls[0][0][0].updateOne.update
+    expect(update.$set).toMatchObject({
+      status: 'disabled',
+      insightsFinalizationUntil: new Date('2026-07-30T08:00:00.000Z'),
+      insightsBackfillPendingSince: new Date('2026-07-27T08:00:00.000Z'),
     })
   })
 

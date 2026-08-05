@@ -26,6 +26,7 @@ import Campaign from '../models/Campaign'
 import { fetchInsights } from '../integration/facebook/insights.api'
 import { resolveAccountOperationalAuthorizations } from './metaBusinessCredential.service'
 import { getFacebookAggregationConcurrency } from '../config/facebookSync'
+import { getAccountIdsForQuery, normalizeForStorage } from '../utils/accountId'
 
 const INSIGHTS_FINALIZATION_WINDOW_MS = 3 * 24 * 60 * 60 * 1000
 
@@ -40,16 +41,217 @@ const COUNTRY_NAMES: Record<string, string> = {
   'RU': '俄罗斯', 'TR': '土耳其', 'SA': '沙特', 'AE': '阿联酋', 'EG': '埃及',
 }
 
+export interface AggregationRefreshOptions {
+  accountIds?: string[]
+}
+
+export interface AggregationRefreshResult {
+  processedAccountIds: string[]
+  cachedAccountIds: string[]
+  unavailableAccountIds: string[]
+  skipped?: boolean
+}
+
+const emptyRefreshResult = (skipped = false): AggregationRefreshResult => ({
+  processedAccountIds: [],
+  cachedAccountIds: [],
+  unavailableAccountIds: [],
+  ...(skipped ? { skipped: true } : {}),
+})
+
+const rebuildDerivedAggregationFromSnapshots = async (date: string) => {
+  const [dailyRows, countryRows, optimizerRows, activeCampaigns, existingDaily] = await Promise.all([
+    AggAccount.aggregate([
+      { $match: { date } },
+      {
+        $group: {
+          _id: null,
+          spend: { $sum: '$spend' },
+          revenue: { $sum: '$revenue' },
+          impressions: { $sum: '$impressions' },
+          clicks: { $sum: '$clicks' },
+          installs: { $sum: '$installs' },
+          activeAccounts: {
+            $sum: { $cond: [{ $gt: ['$spend', 0] }, 1, 0] },
+          },
+        },
+      },
+    ]),
+    AggCountryAccount.aggregate([
+      { $match: { date } },
+      {
+        $group: {
+          _id: '$country',
+          countryName: { $first: '$countryName' },
+          spend: { $sum: '$spend' },
+          revenue: { $sum: '$revenue' },
+          impressions: { $sum: '$impressions' },
+          clicks: { $sum: '$clicks' },
+          installs: { $sum: '$installs' },
+          campaigns: { $sum: '$campaigns' },
+        },
+      },
+    ]),
+    AggCampaign.aggregate([
+      { $match: { date } },
+      {
+        $group: {
+          _id: '$optimizer',
+          spend: { $sum: '$spend' },
+          revenue: { $sum: '$revenue' },
+          impressions: { $sum: '$impressions' },
+          clicks: { $sum: '$clicks' },
+          installs: { $sum: '$installs' },
+          campaigns: { $sum: { $cond: [{ $gt: ['$spend', 0] }, 1, 0] } },
+          accounts: { $addToSet: '$accountId' },
+        },
+      },
+    ]),
+    AggCampaign.countDocuments({ date, spend: { $gt: 0 } }),
+    AggDaily.findOne({ date }).lean(),
+  ])
+
+  const daily = dailyRows[0] || {
+    spend: 0,
+    revenue: 0,
+    impressions: 0,
+    clicks: 0,
+    installs: 0,
+    activeAccounts: 0,
+  }
+  const spend = Number(daily.spend || 0)
+  const revenue = Number(daily.revenue || 0)
+  const impressions = Number(daily.impressions || 0)
+  const clicks = Number(daily.clicks || 0)
+  const installs = Number(daily.installs || 0)
+
+  await AggDaily.findOneAndUpdate(
+    { date },
+    {
+      date,
+      spend: Math.round(spend * 100) / 100,
+      revenue: Math.round(revenue * 100) / 100,
+      roas: spend > 0 ? Math.round((revenue / spend) * 100) / 100 : 0,
+      impressions,
+      clicks,
+      installs,
+      ctr: impressions > 0 ? Math.round((clicks / impressions) * 10000) / 100 : 0,
+      cpm: impressions > 0 ? Math.round((spend / impressions) * 1000 * 100) / 100 : 0,
+      cpc: clicks > 0 ? Math.round((spend / clicks) * 100) / 100 : 0,
+      cpi: installs > 0 ? Math.round((spend / installs) * 100) / 100 : 0,
+      activeCampaigns,
+      activeAccounts: Number(daily.activeAccounts || 0),
+      // A targeted repair cannot prove that every account for a previously
+      // unseen date was covered, so a new rollup must start as partial.
+      dataStatus: existingDaily?.dataStatus || 'partial',
+      failedAccounts: Number(existingDaily?.failedAccounts || 0),
+      cachedAccounts: Number(existingDaily?.cachedAccounts || 0),
+    },
+    { upsert: true },
+  )
+
+  const countryKeys = countryRows.map((row: any) => row._id)
+  await AggCountry.bulkWrite([
+    ...countryRows.map((row: any) => {
+      const countrySpend = Number(row.spend || 0)
+      const countryRevenue = Number(row.revenue || 0)
+      const countryImpressions = Number(row.impressions || 0)
+      const countryClicks = Number(row.clicks || 0)
+      return {
+        updateOne: {
+          filter: { date, country: row._id },
+          update: {
+            date,
+            country: row._id,
+            countryName: row.countryName || COUNTRY_NAMES[row._id] || row._id,
+            spend: Math.round(countrySpend * 100) / 100,
+            revenue: Math.round(countryRevenue * 100) / 100,
+            roas: countrySpend > 0
+              ? Math.round((countryRevenue / countrySpend) * 100) / 100
+              : 0,
+            impressions: countryImpressions,
+            clicks: countryClicks,
+            installs: Number(row.installs || 0),
+            ctr: countryImpressions > 0
+              ? Math.round((countryClicks / countryImpressions) * 10000) / 100
+              : 0,
+            campaigns: Number(row.campaigns || 0),
+          },
+          upsert: true,
+        },
+      }
+    }),
+    {
+      deleteMany: {
+        filter: {
+          date,
+          ...(countryKeys.length > 0 ? { country: { $nin: countryKeys } } : {}),
+        },
+      },
+    },
+  ])
+
+  const optimizerKeys = optimizerRows.map((row: any) => row._id || 'unknown')
+  await AggOptimizer.bulkWrite([
+    ...optimizerRows.map((row: any) => {
+      const optimizerSpend = Number(row.spend || 0)
+      const optimizerRevenue = Number(row.revenue || 0)
+      const optimizerImpressions = Number(row.impressions || 0)
+      const optimizerClicks = Number(row.clicks || 0)
+      return {
+        updateOne: {
+          filter: { date, optimizer: row._id || 'unknown' },
+          update: {
+            date,
+            optimizer: row._id || 'unknown',
+            spend: Math.round(optimizerSpend * 100) / 100,
+            revenue: Math.round(optimizerRevenue * 100) / 100,
+            roas: optimizerSpend > 0
+              ? Math.round((optimizerRevenue / optimizerSpend) * 100) / 100
+              : 0,
+            impressions: optimizerImpressions,
+            clicks: optimizerClicks,
+            installs: Number(row.installs || 0),
+            ctr: optimizerImpressions > 0
+              ? Math.round((optimizerClicks / optimizerImpressions) * 10000) / 100
+              : 0,
+            campaigns: Number(row.campaigns || 0),
+            accounts: Array.isArray(row.accounts) ? row.accounts.length : 0,
+          },
+          upsert: true,
+        },
+      }
+    }),
+    {
+      deleteMany: {
+        filter: {
+          date,
+          ...(optimizerKeys.length > 0 ? { optimizer: { $nin: optimizerKeys } } : {}),
+        },
+      },
+    },
+  ])
+}
+
 /**
  * 🔄 刷新指定日期的所有聚合数据
  * @param date YYYY-MM-DD 格式
  * @param forceRefresh 是否强制刷新（即使不在最近3天内）
  */
-export async function refreshAggregation(date: string, forceRefresh = false): Promise<void> {
+export async function refreshAggregation(
+  date: string,
+  forceRefresh = false,
+  options: AggregationRefreshOptions = {},
+): Promise<AggregationRefreshResult> {
+  const requestedAccountIds = Array.from(new Set(
+    (options.accountIds || []).map(normalizeForStorage).filter(Boolean),
+  ))
+  const isTargetedRefresh = requestedAccountIds.length > 0
+
   // 如果不是最近3天且不强制刷新，跳过
   if (!isRecentDate(date) && !forceRefresh) {
     logger.info(`[Aggregation] Skipping ${date} - not in recent 3 days`)
-    return
+    return emptyRefreshResult(true)
   }
 
   logger.info(`[Aggregation] Refreshing aggregation for ${date}...`)
@@ -58,10 +260,9 @@ export async function refreshAggregation(date: string, forceRefresh = false): Pr
   try {
     // 已经写入当天聚合的账户也必须继续参与当天重算，否则账户封禁后
     // 下一轮全量覆盖会把它此前已计入的花费从日汇总中抹掉。
-    const previouslyAggregatedAccountIds = await AggAccount.distinct(
-      'accountId',
-      { date },
-    )
+    const previouslyAggregatedAccountIds = isTargetedRefresh
+      ? []
+      : await AggAccount.distinct('accountId', { date })
     const accountEligibility: Array<Record<string, unknown>> = [
       { status: 'active' },
       { insightsFinalizationUntil: { $gte: new Date() } },
@@ -81,10 +282,15 @@ export async function refreshAggregation(date: string, forceRefresh = false): Pr
 
     // 活跃账户持续刷新；刚转为非活跃的账户在有限窗口内继续刷新，
     // 当天已有聚合行的账户则在该日期停止滚动刷新前保持可重算。
-    const accounts = await Account.find({
-      channel: 'facebook',
-      $or: accountEligibility,
-    }).lean()
+    const accounts = await Account.find(isTargetedRefresh
+      ? {
+          channel: 'facebook',
+          accountId: { $in: getAccountIdsForQuery(requestedAccountIds) },
+        }
+      : {
+          channel: 'facebook',
+          $or: accountEligibility,
+        }).lean()
     logger.info(
       `[Aggregation] Found ${accounts.length} insights-eligible accounts ` +
         `(${previouslyAggregatedAccountIds.length} already aggregated for ${date})`,
@@ -119,6 +325,8 @@ export async function refreshAggregation(date: string, forceRefresh = false): Pr
     let cachedActiveAccountCount = 0
     let unavailableCount = 0
     const successfulAccountIds = new Set<string>()
+    const cachedAccountIds = new Set<string>()
+    const unavailableAccountIds = new Set<string>()
 
     const restoreCachedContribution = async (account: any) => {
       const [cachedAccount, cachedCountries, cachedCampaigns] = await Promise.all([
@@ -384,7 +592,7 @@ export async function refreshAggregation(date: string, forceRefresh = false): Pr
             campaigns: accountCampaigns.size,
             status: account.status || 'active',
           })
-          successfulAccountIds.add(account.accountId)
+          successfulAccountIds.add(normalizeForStorage(account.accountId))
           
           processedCount++
 
@@ -393,8 +601,10 @@ export async function refreshAggregation(date: string, forceRefresh = false): Pr
           const restored = await restoreCachedContribution(account)
           if (restored) {
             cachedFallbackCount++
+            cachedAccountIds.add(normalizeForStorage(account.accountId))
           } else {
             unavailableCount++
+            unavailableAccountIds.add(normalizeForStorage(account.accountId))
           }
           logger.warn(
             `[Aggregation] Failed to fetch account ${account.accountId}; `
@@ -438,7 +648,7 @@ export async function refreshAggregation(date: string, forceRefresh = false): Pr
         ? 'stale'
         : 'fresh'
     
-    await AggDaily.findOneAndUpdate(
+    if (!isTargetedRefresh) await AggDaily.findOneAndUpdate(
       { date },
       {
         date,
@@ -481,7 +691,7 @@ export async function refreshAggregation(date: string, forceRefresh = false): Pr
         upsert: true
       }
     }))
-    if (countryOps.length > 0) await AggCountry.bulkWrite(countryOps)
+    if (!isTargetedRefresh && countryOps.length > 0) await AggCountry.bulkWrite(countryOps)
 
     // 保存账户维度国家数据，供组织权限范围内查询。
     // 分批写入，避免账户和国家较多时生成过大的 MongoDB 命令。
@@ -517,7 +727,7 @@ export async function refreshAggregation(date: string, forceRefresh = false): Pr
 
     // 4. 保存广告系列数据 (批量写入优化)
     const campaignOps = Array.from(campaignMap.values())
-      .filter(campaign => successfulAccountIds.has(campaign.accountId))
+      .filter(campaign => successfulAccountIds.has(normalizeForStorage(campaign.accountId)))
       .map(campaign => ({
       updateOne: {
         filter: { date, campaignId: campaign.campaignId },
@@ -543,6 +753,12 @@ export async function refreshAggregation(date: string, forceRefresh = false): Pr
         upsert: true
       }
     }))
+    if (isTargetedRefresh && successfulAccountIds.size > 0) {
+      await AggCampaign.deleteMany({
+        date,
+        accountId: { $in: getAccountIdsForQuery([...successfulAccountIds]) },
+      })
+    }
     if (campaignOps.length > 0) await AggCampaign.bulkWrite(campaignOps)
 
     // 5. 保存投手数据 (批量写入优化)
@@ -565,7 +781,11 @@ export async function refreshAggregation(date: string, forceRefresh = false): Pr
         upsert: true
       }
     }))
-    if (optimizerOps.length > 0) await AggOptimizer.bulkWrite(optimizerOps)
+    if (!isTargetedRefresh && optimizerOps.length > 0) await AggOptimizer.bulkWrite(optimizerOps)
+
+    if (isTargetedRefresh) {
+      await rebuildDerivedAggregationFromSnapshots(date)
+    }
 
     const duration = Date.now() - startTime
     logger.info(
@@ -574,8 +794,19 @@ export async function refreshAggregation(date: string, forceRefresh = false): Pr
       + `${cachedFallbackCount} cached, ${unavailableCount} unavailable`,
     )
 
+    return {
+      processedAccountIds: [...successfulAccountIds],
+      cachedAccountIds: [...cachedAccountIds],
+      unavailableAccountIds: [...unavailableAccountIds],
+    }
+
   } catch (error: any) {
     logger.error(`[Aggregation] Failed to refresh ${date}:`, error.message)
+    return {
+      processedAccountIds: [],
+      cachedAccountIds: [],
+      unavailableAccountIds: requestedAccountIds,
+    }
   }
 }
 
