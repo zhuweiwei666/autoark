@@ -85,6 +85,13 @@ if [ "${CREATIVE_FACTORY_CODEX_SECRET+x}" = 'x' ]; then
   CREATIVE_FACTORY_CODEX_SECRET_OVERRIDE="$CREATIVE_FACTORY_CODEX_SECRET"
 fi
 
+CREATIVE_FACTORY_DUAL_SCENE_AUDIO_URL_OVERRIDE_SET='false'
+CREATIVE_FACTORY_DUAL_SCENE_AUDIO_URL_OVERRIDE=''
+if [ "${CREATIVE_FACTORY_DUAL_SCENE_AUDIO_URL+x}" = 'x' ]; then
+  CREATIVE_FACTORY_DUAL_SCENE_AUDIO_URL_OVERRIDE_SET='true'
+  CREATIVE_FACTORY_DUAL_SCENE_AUDIO_URL_OVERRIDE="$CREATIVE_FACTORY_DUAL_SCENE_AUDIO_URL"
+fi
+
 case "$EXTERNAL_MATERIAL_SYNC_ENABLED_OVERRIDE_SET:$EXTERNAL_MATERIAL_SYNC_ENABLED_OVERRIDE" in
   false: | true:true | true:false) ;;
   *)
@@ -160,6 +167,17 @@ fi
 if [ "$CREATIVE_FACTORY_CODEX_SECRET_OVERRIDE_SET" = 'true' ] &&
   [[ ! "$CREATIVE_FACTORY_CODEX_SECRET_OVERRIDE" =~ [^[:space:]] ]]; then
   echo "CREATIVE_FACTORY_CODEX_SECRET must be non-empty when supplied."
+  exit 1
+fi
+case "$CREATIVE_FACTORY_DUAL_SCENE_AUDIO_URL_OVERRIDE" in
+  *$'\n'* | *$'\r'*)
+    echo "CREATIVE_FACTORY_DUAL_SCENE_AUDIO_URL must be a single line."
+    exit 1
+    ;;
+esac
+if [ "$CREATIVE_FACTORY_DUAL_SCENE_AUDIO_URL_OVERRIDE_SET" = 'true' ] &&
+  [[ ! "$CREATIVE_FACTORY_DUAL_SCENE_AUDIO_URL_OVERRIDE" =~ ^https:// ]]; then
+  echo "CREATIVE_FACTORY_DUAL_SCENE_AUDIO_URL must be an HTTPS URL when supplied."
   exit 1
 fi
 
@@ -276,6 +294,8 @@ ai_host_secret_override_set=''
 ai_host_secret_override=''
 codex_secret_override_set=''
 codex_secret_override=''
+dual_scene_audio_url_override_set=''
+dual_scene_audio_url_override=''
 IFS= read -r -d '' key_override_set
 IFS= read -r -d '' key_override
 IFS= read -r -d '' flag_override_set
@@ -292,6 +312,8 @@ IFS= read -r -d '' ai_host_secret_override_set
 IFS= read -r -d '' ai_host_secret_override
 IFS= read -r -d '' codex_secret_override_set
 IFS= read -r -d '' codex_secret_override
+IFS= read -r -d '' dual_scene_audio_url_override_set
+IFS= read -r -d '' dual_scene_audio_url_override
 
 case "$key_override_set" in
   true | false) ;;
@@ -355,7 +377,8 @@ fi
 for override_state in \
   "$ai_host_url_override_set" \
   "$ai_host_secret_override_set" \
-  "$codex_secret_override_set"; do
+  "$codex_secret_override_set" \
+  "$dual_scene_audio_url_override_set"; do
   case "$override_state" in
     true | false) ;;
     *)
@@ -391,6 +414,17 @@ fi
 if [ "$codex_secret_override_set" = 'true' ] &&
   [[ ! "$codex_secret_override" =~ [^[:space:]] ]]; then
   echo 'CREATIVE_FACTORY_CODEX_SECRET must be non-empty when supplied.'
+  exit 1
+fi
+case "$dual_scene_audio_url_override" in
+  *$'\n'* | *$'\r'*)
+    echo 'CREATIVE_FACTORY_DUAL_SCENE_AUDIO_URL must be a single line.'
+    exit 1
+    ;;
+esac
+if [ "$dual_scene_audio_url_override_set" = 'true' ] &&
+  [[ ! "$dual_scene_audio_url_override" =~ ^https:// ]]; then
+  echo 'CREATIVE_FACTORY_DUAL_SCENE_AUDIO_URL must be an HTTPS URL when supplied.'
   exit 1
 fi
 
@@ -561,6 +595,7 @@ source_ai_ads_organization=''
 source_ai_host_url=''
 source_ai_host_secret=''
 source_codex_secret=''
+source_dual_scene_audio_url=''
 while IFS= read -r line || [ -n "$line" ]; do
   case "$line" in
     GUANGDADA_API_KEY=*)
@@ -587,6 +622,9 @@ while IFS= read -r line || [ -n "$line" ]; do
     CREATIVE_FACTORY_CODEX_SECRET=*)
       source_codex_secret="${line#CREATIVE_FACTORY_CODEX_SECRET=}"
       ;;
+    CREATIVE_FACTORY_DUAL_SCENE_AUDIO_URL=*)
+      source_dual_scene_audio_url="${line#CREATIVE_FACTORY_DUAL_SCENE_AUDIO_URL=}"
+      ;;
     AUTOARK_DEPLOY_UPLOAD_GENERATION=*) ;;
     *)
       printf '%s\n' "$line"
@@ -602,6 +640,7 @@ resolved_ai_ads_organization="$source_ai_ads_organization"
 resolved_ai_host_url="$source_ai_host_url"
 resolved_ai_host_secret="$source_ai_host_secret"
 resolved_codex_secret="$source_codex_secret"
+resolved_dual_scene_audio_url="$source_dual_scene_audio_url"
 if [ "$key_override_set" = 'true' ]; then
   resolved_key="$key_override"
 fi
@@ -623,6 +662,9 @@ if [ "$ai_host_secret_override_set" = 'true' ]; then
 fi
 if [ "$codex_secret_override_set" = 'true' ]; then
   resolved_codex_secret="$codex_secret_override"
+fi
+if [ "$dual_scene_audio_url_override_set" = 'true' ]; then
+  resolved_dual_scene_audio_url="$dual_scene_audio_url_override"
 fi
 
 case "$resolved_flag" in
@@ -666,6 +708,11 @@ if [ -n "$resolved_ai_host_url" ] && [[ ! "$resolved_ai_host_url" =~ ^https:// ]
   echo 'AI_HOST_CREATIVE_FACTORY_URL must resolve to an HTTPS URL.'
   exit 1
 fi
+if [ -n "$resolved_dual_scene_audio_url" ] &&
+  [[ ! "$resolved_dual_scene_audio_url" =~ ^https:// ]]; then
+  echo 'CREATIVE_FACTORY_DUAL_SCENE_AUDIO_URL must resolve to an HTTPS URL.'
+  exit 1
+fi
 for resolved_secret in "$resolved_ai_host_secret" "$resolved_codex_secret"; do
   case "$resolved_secret" in
     *$'\n'* | *$'\r'*)
@@ -684,6 +731,7 @@ printf 'AI_ADS_INTEGRATION_ORGANIZATION_ID=%s\n' "$resolved_ai_ads_organization"
 printf 'AI_HOST_CREATIVE_FACTORY_URL=%s\n' "$resolved_ai_host_url" >> "$payload_temp"
 printf 'AI_HOST_INTERNAL_API_SECRET=%s\n' "$resolved_ai_host_secret" >> "$payload_temp"
 printf 'CREATIVE_FACTORY_CODEX_SECRET=%s\n' "$resolved_codex_secret" >> "$payload_temp"
+printf 'CREATIVE_FACTORY_DUAL_SCENE_AUDIO_URL=%s\n' "$resolved_dual_scene_audio_url" >> "$payload_temp"
 chmod 600 "$payload_temp"
 mv -f -- "$payload_temp" "$payload_path"
 payload_temp=''
@@ -755,7 +803,7 @@ REMOTE_DEPLOY_TRANSACTION_COMMAND="bash -c $QUOTED_REMOTE_DEPLOY_TRANSACTION_SCR
 
 log "Deploying verified commit=$AUTOARK_REF"
 log "Synchronizing GUANGDADA_API_KEY, EXTERNAL_MATERIAL_SYNC_ENABLED, META_CREDENTIAL_ENCRYPTION_KEY, AI ads integration, and Creative Factory values"
-printf '%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0' \
+printf '%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0' \
   "$GUANGDADA_API_KEY_OVERRIDE_SET" \
   "$GUANGDADA_API_KEY_OVERRIDE" \
   "$EXTERNAL_MATERIAL_SYNC_ENABLED_OVERRIDE_SET" \
@@ -771,7 +819,9 @@ printf '%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0' \
   "$AI_HOST_INTERNAL_API_SECRET_OVERRIDE_SET" \
   "$AI_HOST_INTERNAL_API_SECRET_OVERRIDE" \
   "$CREATIVE_FACTORY_CODEX_SECRET_OVERRIDE_SET" \
-  "$CREATIVE_FACTORY_CODEX_SECRET_OVERRIDE" |
+  "$CREATIVE_FACTORY_CODEX_SECRET_OVERRIDE" \
+  "$CREATIVE_FACTORY_DUAL_SCENE_AUDIO_URL_OVERRIDE_SET" \
+  "$CREATIVE_FACTORY_DUAL_SCENE_AUDIO_URL_OVERRIDE" |
   ssh "$PROD_HOST" "$REMOTE_DEPLOY_TRANSACTION_COMMAND"
 
 if [ "${AUTOARK_SKIP_VERIFY:-false}" != "true" ]; then

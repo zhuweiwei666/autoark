@@ -33,6 +33,26 @@ services:
     depends_on:
       - redis
 
+  creative-factory-worker:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: backend-runtime
+    restart: unless-stopped
+    command: ["node", "dist/creativeFactoryWorker.js"]
+    cpus: "1.0"
+    env_file:
+      - ./.env
+    environment:
+      NODE_ENV: production
+      REDIS_URL: redis://redis:6379
+      CREATIVE_FACTORY_TEMPLATE_POLL_MS: ${CREATIVE_FACTORY_TEMPLATE_POLL_MS:-15000}
+      AUTOARK_DEPLOY_REF: ${AUTOARK_DEPLOY_REF:-unknown}
+      AUTOARK_DEPLOY_COMMIT: ${AUTOARK_DEPLOY_COMMIT:-unknown}
+      AUTOARK_DEPLOYED_AT: ${AUTOARK_DEPLOYED_AT:-unknown}
+    depends_on:
+      - redis
+
   agent:
     build:
       context: ..

@@ -41,6 +41,7 @@ router.post('/codex/jobs/:jobId/complete', codexAuth, controller.codexComplete)
 router.post('/codex/jobs/:jobId/fail', codexAuth, controller.codexFail)
 
 router.use(authenticate)
+router.get('/templates', controller.templates)
 router.get('/catalog', controller.catalog)
 router.get('/batches', controller.listBatches)
 router.post('/batches', controller.createBatch)

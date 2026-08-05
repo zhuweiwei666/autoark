@@ -27,6 +27,8 @@ FROM node:20-bookworm-slim AS backend-runtime
 ENV NODE_ENV=production \
     PORT=3001
 WORKDIR /app/autoark-backend
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core && \
+    rm -rf /var/lib/apt/lists/*
 COPY autoark-backend/package*.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=backend-build /build/autoark-backend/dist ./dist
