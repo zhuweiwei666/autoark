@@ -1332,14 +1332,16 @@ export type MetaOperationalAuthorization = {
  * ad account. A personal credential is accepted only as an explicit legacy
  * fallback so unmigrated organizations keep working during rollout.
  */
-export const resolveAccountOperationalAuthorization = async (input: {
+export const resolveAccountOperationalAuthorizations = async (input: {
   accountId: string
   organizationId?: any
   legacyToken?: string
   legacyTokenId?: any
-}): Promise<MetaOperationalAuthorization | null> => {
+}): Promise<MetaOperationalAuthorization[]> => {
   const accountId = normalizeForStorage(input.accountId)
-  if (!accountId) return null
+  if (!accountId) return []
+
+  const authorizations: MetaOperationalAuthorization[] = []
 
   if (
     input.organizationId
@@ -1350,22 +1352,38 @@ export const resolveAccountOperationalAuthorization = async (input: {
       adAccountIds: [accountId],
     })
     if (resolved) {
-      return {
+      authorizations.push({
         authorizationType: 'system_user',
         token: resolved.token,
         metaCredentialId: String(resolved.credential._id),
-      }
+      })
     }
   }
 
-  if (!input.legacyToken) return null
-  return {
-    authorizationType: 'personal',
-    token: input.legacyToken,
-    legacyTokenId: input.legacyTokenId
-      ? String(input.legacyTokenId)
-      : undefined,
+  if (
+    input.legacyToken
+    && !authorizations.some(candidate => candidate.token === input.legacyToken)
+  ) {
+    authorizations.push({
+      authorizationType: 'personal',
+      token: input.legacyToken,
+      legacyTokenId: input.legacyTokenId
+        ? String(input.legacyTokenId)
+        : undefined,
+    })
   }
+
+  return authorizations
+}
+
+export const resolveAccountOperationalAuthorization = async (input: {
+  accountId: string
+  organizationId?: any
+  legacyToken?: string
+  legacyTokenId?: any
+}): Promise<MetaOperationalAuthorization | null> => {
+  const authorizations = await resolveAccountOperationalAuthorizations(input)
+  return authorizations[0] || null
 }
 
 export const resolveAgentOperationalAuthorization = async (input: {

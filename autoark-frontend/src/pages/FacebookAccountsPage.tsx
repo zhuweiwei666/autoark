@@ -393,12 +393,26 @@ export default function FacebookAccountsPage() {
                         </span>
                       </td>
                       <td className="px-6 py-4">
-                        <span className="text-slate-900 font-mono">
-                          {account.periodSpend !== undefined && account.periodSpend > 0 
-                            ? `$${account.periodSpend.toFixed(2)}`
-                            : '$0.00'
-                          }
-                        </span>
+                        <div className="flex items-center justify-start gap-2">
+                          <span className={`font-mono ${account.periodSpendStatus === 'unavailable' ? 'text-slate-400' : 'text-slate-900'}`}>
+                            {account.periodSpendStatus === 'unavailable'
+                              ? '--'
+                              : `$${(account.periodSpend || 0).toFixed(2)}`}
+                          </span>
+                          {account.periodSpendStatus === 'stale' && (
+                            <span
+                              className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700"
+                              title={account.periodSpendLastSyncedAt
+                                ? `Meta 暂不可读，显示最后确认值；最后同步 ${new Date(account.periodSpendLastSyncedAt).toLocaleString()}`
+                                : 'Meta 暂不可读，显示最后确认值'}
+                            >
+                              缓存
+                            </span>
+                          )}
+                          {account.periodSpendStatus === 'unavailable' && (
+                            <span className="text-[10px] font-medium text-slate-400">待补拉</span>
+                          )}
+                        </div>
                       </td>
                       <td className="px-6 py-4">
                         <span className={`font-mono ${account.calculatedBalance !== undefined ? 'text-emerald-600' : 'text-slate-400'}`}>

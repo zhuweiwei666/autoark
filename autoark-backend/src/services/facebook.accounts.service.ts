@@ -1,12 +1,12 @@
 import Account from '../models/Account'
 import FbToken from '../models/FbToken'
 import FacebookUser from '../models/FacebookUser'
-import MetricsDaily from '../models/MetricsDaily'
+import { AggAccount } from '../models/Aggregation'
 import { fetchUserAdAccounts, fetchInsights } from './facebook.api'
 import logger from '../utils/logger'
 import { normalizeForStorage, getAccountIdsForQuery, normalizeFromQuery, normalizeForApi } from '../utils/accountId'
 import { buildInsightsDateRequest } from '../utils/insightsDateRange'
-import { resolveAccountOperationalAuthorization } from './metaBusinessCredential.service'
+import { resolveAccountOperationalAuthorizations } from './metaBusinessCredential.service'
 
 type FacebookAccountSource = {
   id?: string
@@ -47,7 +47,10 @@ const buildAccountLifecycleUpdate = (
       set.statusChangedAt = syncedAt
       unset.insightsFinalizationUntil = 1
     }
-  } else if (existingStatus === 'active' && nextStatus) {
+  } else if (
+    nextStatus
+    && (existingStatus === 'active' || existingStatus === undefined)
+  ) {
     set.statusChangedAt = syncedAt
     set.insightsFinalizationUntil = new Date(
       syncedAt.getTime() + INSIGHTS_FINALIZATION_WINDOW_MS,
@@ -343,25 +346,68 @@ export const getAccounts = async (filters: any = {}, pagination: { page: number,
     // 获取所有账户ID
     const accountIds = allAccounts.map(acc => acc.accountId)
     
-    // 直接从 Facebook Insights API 获取消耗数据（更准确）
-    let periodSpendMap: Record<string, number> = {}
-    
-    const { datePreset, timeRange } = buildInsightsDateRequest(filters)
+    const {
+        datePreset,
+        timeRange,
+        startDate,
+        endDate,
+    } = buildInsightsDateRequest(filters)
+
+    const today = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Shanghai',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+    }).format(new Date())
+    const cacheStartDate = startDate || today
+    const cacheEndDate = endDate || cacheStartDate
+    const cachedRows = accountIds.length > 0
+        ? await AggAccount.aggregate([
+            {
+                $match: {
+                    accountId: { $in: getAccountIdsForQuery(accountIds) },
+                    date: { $gte: cacheStartDate, $lte: cacheEndDate },
+                },
+            },
+            {
+                $group: {
+                    _id: '$accountId',
+                    spend: { $sum: '$spend' },
+                    lastSyncedAt: { $max: '$updatedAt' },
+                },
+            },
+        ])
+        : []
+    const cachedSpendMap = new Map<string, { spend: number; lastSyncedAt?: Date }>()
+    for (const row of cachedRows) {
+        const accountId = normalizeForStorage(row._id)
+        if (!accountId) continue
+        cachedSpendMap.set(accountId, {
+            spend: Number(row.spend || 0),
+            lastSyncedAt: row.lastSyncedAt,
+        })
+    }
     
     // 为每个账户使用其关联的 token（更准确，避免用“任意一个 active token”导致无权限/数据不更新）
-    const accountTokenMap: Record<string, string> = {}
+    const accountAuthorizationMap = new Map<string, Awaited<ReturnType<typeof resolveAccountOperationalAuthorizations>>>()
     await Promise.all((allAccounts as any[]).map(async (acc) => {
         if (!acc?.accountId) return
-        const authorization = await resolveAccountOperationalAuthorization({
+        const authorizations = await resolveAccountOperationalAuthorizations({
             accountId: acc.accountId,
             organizationId: acc.organizationId,
             legacyToken: acc.token,
             legacyTokenId: acc.tokenId,
         })
-        if (authorization) {
-            accountTokenMap[acc.accountId] = authorization.token
-        }
+        accountAuthorizationMap.set(acc.accountId, authorizations)
     }))
+
+    type PeriodSpendResult = {
+        spend?: number
+        source: 'live' | 'cached' | 'unavailable'
+        status: 'fresh' | 'stale' | 'unavailable'
+        lastSyncedAt?: Date
+    }
+    const periodSpendMap = new Map<string, PeriodSpendResult>()
     
     if (accountIds.length > 0) {
         // 并发获取所有账户的 insights（限制并发数）
@@ -369,34 +415,68 @@ export const getAccounts = async (filters: any = {}, pagination: { page: number,
         for (let i = 0; i < accountIds.length; i += batchSize) {
             const batch = accountIds.slice(i, i + batchSize)
             const promises = batch.map(async (accountId) => {
+                const normalizedAccountId = normalizeForStorage(accountId)
+                const cached = cachedSpendMap.get(normalizedAccountId)
                 try {
-                    const token = accountTokenMap[accountId]
-                    if (!token) {
-                        return { accountId, spend: 0 }
+                    const authorizations = accountAuthorizationMap.get(accountId) || []
+                    if (authorizations.length === 0) {
+                        throw new Error('No operational authorization')
                     }
                     const accountIdForApi = normalizeForApi(accountId)
-                    const insights = await fetchInsights(
-                        accountIdForApi,
-                        'account',
-                        datePreset || undefined,
-                        token,
-                        undefined,
-                        timeRange
-                    )
-                    if (insights && insights.length > 0) {
-                        const spend = parseFloat(insights[0].spend || '0')
-                        return { accountId, spend }
+                    let lastError: unknown
+                    for (const authorization of authorizations) {
+                        try {
+                            const insights = await fetchInsights(
+                                accountIdForApi,
+                                'account',
+                                datePreset || undefined,
+                                authorization.token,
+                                undefined,
+                                timeRange
+                            )
+                            const spend = insights && insights.length > 0
+                                ? parseFloat(insights[0].spend || '0')
+                                : 0
+                            return {
+                                accountId,
+                                result: {
+                                    spend,
+                                    source: 'live',
+                                    status: 'fresh',
+                                    lastSyncedAt: new Date(),
+                                } as PeriodSpendResult,
+                            }
+                        } catch (error) {
+                            lastError = error
+                        }
                     }
-                    return { accountId, spend: 0 }
-                } catch (error) {
-                    logger.warn(`Failed to fetch insights for account ${accountId}`)
-                    return { accountId, spend: 0 }
+                    throw lastError || new Error('Insights request failed')
+                } catch (error: any) {
+                    logger.warn(
+                        `Failed to fetch insights for account ${accountId}; `
+                        + `${cached ? 'using cached snapshot' : 'no cached snapshot available'}: `
+                        + String(error?.message || error).slice(0, 300),
+                    )
+                    return {
+                        accountId,
+                        result: cached
+                            ? {
+                                spend: cached.spend,
+                                source: 'cached',
+                                status: 'stale',
+                                lastSyncedAt: cached.lastSyncedAt,
+                            }
+                            : {
+                                source: 'unavailable',
+                                status: 'unavailable',
+                            },
+                    } as { accountId: string; result: PeriodSpendResult }
                 }
             })
             
             const results = await Promise.all(promises)
-            results.forEach(({ accountId, spend }) => {
-                periodSpendMap[accountId] = spend
+            results.forEach(({ accountId, result }) => {
+                periodSpendMap.set(accountId, result)
             })
         }
     }
@@ -406,7 +486,10 @@ export const getAccounts = async (filters: any = {}, pagination: { page: number,
         const accountId = account.accountId
         
         // periodSpend: 来自 Facebook Insights API 的消耗（日期范围内或今天）
-        const periodSpend = periodSpendMap[accountId] || 0
+        const periodSpendResult = periodSpendMap.get(accountId) || {
+            source: 'unavailable' as const,
+            status: 'unavailable' as const,
+        }
         
         // Facebook API 返回的 amount_spent 是以账户货币的最小单位（分）返回的
         const amountSpentRaw = account.amountSpent ? 
@@ -423,7 +506,14 @@ export const getAccounts = async (filters: any = {}, pagination: { page: number,
         
         return {
             ...publicAccount,
-            periodSpend: periodSpend, // 日期范围/当日消耗（来自 Facebook Insights API）
+            ...(periodSpendResult.spend !== undefined
+                ? { periodSpend: periodSpendResult.spend }
+                : {}),
+            periodSpendSource: periodSpendResult.source,
+            periodSpendStatus: periodSpendResult.status,
+            ...(periodSpendResult.lastSyncedAt
+                ? { periodSpendLastSyncedAt: periodSpendResult.lastSyncedAt }
+                : {}),
             calculatedBalance: balanceUsd, // 账户余额（美元）
             totalSpend: amountSpentUsd, // 账户历史总消耗（来自 Facebook API amount_spent）
         }

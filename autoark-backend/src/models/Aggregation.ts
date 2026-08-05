@@ -40,6 +40,9 @@ export interface IAggDaily extends Document {
   cpi: number                     // 单次安装成本
   activeCampaigns: number         // 活跃广告系列数
   activeAccounts: number          // 活跃账户数
+  dataStatus: 'fresh' | 'stale' | 'partial'
+  failedAccounts: number
+  cachedAccounts: number
   updatedAt: Date
 }
 
@@ -57,6 +60,13 @@ const aggDailySchema = new Schema<IAggDaily>({
   cpi: { type: Number, default: 0 },
   activeCampaigns: { type: Number, default: 0 },
   activeAccounts: { type: Number, default: 0 },
+  dataStatus: {
+    type: String,
+    enum: ['fresh', 'stale', 'partial'],
+    default: 'fresh',
+  },
+  failedAccounts: { type: Number, default: 0 },
+  cachedAccounts: { type: Number, default: 0 },
 }, { timestamps: true })
 
 export const AggDaily = mongoose.model<IAggDaily>('AggDaily', aggDailySchema)

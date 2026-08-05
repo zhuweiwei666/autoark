@@ -9,6 +9,9 @@ const mockPreviouslyAggregatedAccountIds = jest.fn()
 const mockFetchInsights = jest.fn()
 const mockResolveAccountOperationalAuthorization = jest.fn()
 const mockCountryAccountBulkWrite = jest.fn()
+const mockCachedAccountLean = jest.fn()
+const mockCachedCountryLean = jest.fn()
+const mockCachedCampaignLean = jest.fn()
 const originalAggregationConcurrency =
   process.env.FACEBOOK_AGGREGATION_CONCURRENCY
 
@@ -49,12 +52,17 @@ jest.mock('../src/models/Aggregation', () => ({
   AggCountry: { bulkWrite: jest.fn() },
   AggCountryAccount: {
     bulkWrite: (...args: any[]) => mockCountryAccountBulkWrite(...args),
+    find: jest.fn(() => ({ lean: mockCachedCountryLean })),
   },
   AggAccount: {
     distinct: (...args: any[]) => mockPreviouslyAggregatedAccountIds(...args),
     bulkWrite: jest.fn(),
+    findOne: jest.fn(() => ({ lean: mockCachedAccountLean })),
   },
-  AggCampaign: { bulkWrite: jest.fn() },
+  AggCampaign: {
+    bulkWrite: jest.fn(),
+    find: jest.fn(() => ({ lean: mockCachedCampaignLean })),
+  },
   AggOptimizer: { bulkWrite: jest.fn() },
   isRecentDate: jest.fn(() => true),
 }))
@@ -64,7 +72,7 @@ jest.mock('../src/integration/facebook/insights.api', () => ({
 }))
 
 jest.mock('../src/services/metaBusinessCredential.service', () => ({
-  resolveAccountOperationalAuthorization: (...args: any[]) =>
+  resolveAccountOperationalAuthorizations: (...args: any[]) =>
     mockResolveAccountOperationalAuthorization(...args),
 }))
 
@@ -80,9 +88,12 @@ describe('aggregation account eligibility', () => {
     mockDailyUpsert.mockResolvedValue({})
     mockPreviouslyAggregatedAccountIds.mockResolvedValue(['123'])
     mockFetchInsights.mockResolvedValue([])
-    mockResolveAccountOperationalAuthorization.mockResolvedValue({
+    mockResolveAccountOperationalAuthorization.mockResolvedValue([{
       token: 'TOKEN_A',
-    })
+    }])
+    mockCachedAccountLean.mockResolvedValue(null)
+    mockCachedCountryLean.mockResolvedValue([])
+    mockCachedCampaignLean.mockResolvedValue([])
   })
 
   afterEach(() => {
@@ -111,6 +122,13 @@ describe('aggregation account eligibility', () => {
         {
           insightsFinalizationUntil: {
             $gte: new Date('2026-07-27T08:00:00.000Z'),
+          },
+        },
+        {
+          status: { $in: ['disabled', 'unsettled', 'review', 'closed'] },
+          insightsFinalizationUntil: { $exists: false },
+          sourceSyncedAt: {
+            $gte: new Date('2026-07-24T08:00:00.000Z'),
           },
         },
         {
@@ -226,5 +244,70 @@ describe('aggregation account eligibility', () => {
         },
       },
     ])
+  })
+
+  it('tries the personal fallback and keeps the cached snapshot when both authorizations fail', async () => {
+    mockPreviouslyAggregatedAccountIds.mockResolvedValue(['101'])
+    mockAccountFind.mockReturnValue({
+      lean: jest.fn().mockResolvedValue([{
+        accountId: '101',
+        organizationId: 'org-1',
+        status: 'disabled',
+      }]),
+    })
+    mockResolveAccountOperationalAuthorization.mockResolvedValue([
+      { authorizationType: 'system_user', token: 'SYSTEM_TOKEN' },
+      { authorizationType: 'personal', token: 'PERSONAL_TOKEN' },
+    ])
+    mockFetchInsights.mockRejectedValue(new Error('account disabled'))
+    mockCachedAccountLean.mockResolvedValue({
+      accountId: '101',
+      spend: 12.34,
+      revenue: 24.68,
+      impressions: 1000,
+      clicks: 50,
+      installs: 4,
+      campaigns: 1,
+    })
+    mockCachedCountryLean.mockResolvedValue([{
+      country: 'US',
+      countryName: '美国',
+      spend: 12.34,
+      revenue: 24.68,
+      impressions: 1000,
+      clicks: 50,
+      installs: 4,
+      campaigns: 1,
+    }])
+    mockCachedCampaignLean.mockResolvedValue([{
+      campaignId: 'cmp-1',
+      campaignName: 'alice_campaign',
+      accountId: '101',
+      accountName: 'Account 101',
+      optimizer: 'alice',
+      spend: 12.34,
+      revenue: 24.68,
+      impressions: 1000,
+      clicks: 50,
+      installs: 4,
+      status: 'ACTIVE',
+    }])
+
+    await refreshAggregation('2026-07-27')
+
+    expect(mockFetchInsights).toHaveBeenCalledTimes(2)
+    expect(mockDailyUpsert).toHaveBeenCalledWith(
+      { date: '2026-07-27' },
+      expect.objectContaining({
+        spend: 12.34,
+        revenue: 24.68,
+        activeAccounts: 1,
+        activeCampaigns: 1,
+        dataStatus: 'stale',
+        failedAccounts: 1,
+        cachedAccounts: 1,
+      }),
+      { upsert: true },
+    )
   })
 })
