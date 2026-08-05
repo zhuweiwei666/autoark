@@ -179,6 +179,64 @@ describe('bulk ad execution diagnostics', () => {
     expect(storedErrors[0].operatorMessage).toContain('Invalid image hash')
   })
 
+  it('does not count a successful-looking ad result without an id', async () => {
+    const task = buildTask()
+    jest.spyOn(AdTask, 'findById')
+      .mockResolvedValueOnce(task as any)
+      .mockResolvedValueOnce(task as any)
+    jest.spyOn(AdTask, 'findOneAndUpdate').mockResolvedValue(task as any)
+    jest.spyOn(AdTask, 'findByIdAndUpdate').mockResolvedValue(task as any)
+    jest.spyOn(FbToken, 'findOne').mockResolvedValue({ token: 'fb_token' } as any)
+    jest.spyOn(CreativeGroup, 'find').mockResolvedValue([{
+      _id: '665000000000000000000711',
+      name: 'Creative Group',
+      materials: [{
+        _id: '665000000000000000000713',
+        type: 'image',
+        name: 'Image 1',
+        facebookImageHash: 'hash_1',
+        status: 'uploaded',
+      }],
+    }] as any)
+    jest.spyOn(CopywritingPackage, 'find').mockResolvedValue([{
+      _id: '665000000000000000000712',
+      name: 'Copy Package',
+      links: { websiteUrl: 'https://example.com' },
+      content: {
+        primaryTexts: ['Primary'],
+        headlines: ['Headline'],
+        descriptions: ['Description'],
+      },
+      callToAction: 'SHOP_NOW',
+    }] as any)
+    jest.spyOn(Ad, 'findOneAndUpdate').mockResolvedValue(null as any)
+    jest.spyOn(AdMaterialMapping as any, 'recordMapping').mockResolvedValue({} as any)
+    ;(createCampaign as jest.Mock).mockResolvedValue({ success: true, id: 'camp_1' })
+    ;(createAdSet as jest.Mock).mockResolvedValue({ success: true, id: 'adset_1' })
+    ;(createAdCreative as jest.Mock).mockResolvedValue({ success: true, id: 'creative_1' })
+    ;(createAd as jest.Mock).mockResolvedValue({ success: true, id: undefined })
+
+    await executeTaskForAccount(taskId, '123')
+
+    const finalUpdate = (AdTask.findOneAndUpdate as jest.Mock).mock.calls.find((call: any[]) => (
+      call[1]?.$set?.['items.$.errors']
+    ))
+    const storedErrors = finalUpdate?.[1]?.$set?.['items.$.errors'] || []
+
+    expect(finalUpdate?.[1]?.$set).toMatchObject({
+      'items.$.status': 'failed',
+      'items.$.result.adIds': [],
+      'items.$.result.createdCount': 0,
+      'items.$.result.failedCount': 1,
+    })
+    expect(storedErrors.map((error: any) => error.errorCode)).toEqual([
+      'AD_CREATE_MISSING_ID',
+      'NO_ADS_CREATED',
+    ])
+    expect(Ad.findOneAndUpdate).not.toHaveBeenCalled()
+    expect(AdMaterialMapping.recordMapping).not.toHaveBeenCalled()
+  })
+
   it('uploads images into the target ad account instead of reusing a stored hash', async () => {
     const task = buildTask()
     jest.spyOn(AdTask, 'findById')

@@ -239,6 +239,17 @@ const DIAGNOSIS_TEMPLATES: Record<string, DiagnosisTemplate> = {
       '修复配置后重新发布或重跑任务。',
     ],
   },
+  AD_CREATE_MISSING_ID: {
+    entityType: 'ad',
+    customerMessage: 'Meta 未返回有效广告 ID，本次广告未创建成功。',
+    retryable: false,
+    source: 'meta',
+    nextActions: [
+      '检查 Meta 中对应 Campaign、AdSet 和 Creative 的实际对象。',
+      '不要直接重试已创建 Campaign 或 AdSet 的旧任务。',
+      '确认 Meta 接口恢复后，从新任务发布或执行受控恢复。',
+    ],
+  },
   BULK_MATERIALS_INCOMPLETE: {
     entityType: 'material',
     customerMessage: '本账户只创建了部分素材广告，仍有素材未发布。',
@@ -288,6 +299,7 @@ const DIAGNOSIS_TEMPLATES: Record<string, DiagnosisTemplate> = {
 const KNOWN_EXPLICIT_CODES = new Set([
   'WORKER_TIMEOUT',
   'NO_ADS_CREATED',
+  'AD_CREATE_MISSING_ID',
   'BULK_MATERIALS_INCOMPLETE',
   'BULK_ASSET_NOT_FOUND',
   'META_RATE_LIMIT',
@@ -462,9 +474,18 @@ export const diagnoseBulkAdError = (
   const message = extractMessage(errorLike, candidates)
   const rawCode = extractRawCode(candidates)
   const rawSubcode = extractRawSubcode(candidates)
-  const explicitCode = firstDefined(root?.errorCode, options.fallbackCode)
-  const legacyBulkAssetError = explicitCode === 'EXECUTION_ERROR'
-    && includesAny(message.toLowerCase(), [
+  const knownRawCode =
+    typeof rawCode === 'string' && KNOWN_EXPLICIT_CODES.has(rawCode)
+      ? rawCode
+      : undefined
+  const explicitCode = firstDefined(
+    root?.errorCode,
+    knownRawCode,
+    options.fallbackCode,
+  )
+  const legacyBulkAssetError =
+    explicitCode === 'EXECUTION_ERROR' &&
+    includesAny(message.toLowerCase(), [
       'no copywriting packages found',
       'no creative groups found',
       'targeting package not found',
