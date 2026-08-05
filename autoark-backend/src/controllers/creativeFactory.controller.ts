@@ -8,6 +8,7 @@ import {
   failCreativeFactoryJob,
   getCreativeFactoryBatch,
   getCreativeFactoryCatalog,
+  getCreativeFactoryTemplates,
   listCreativeFactoryBatches,
   planCreativeFactoryJob,
   refreshCreativeFactoryJob,
@@ -80,6 +81,14 @@ export const catalog = async (req: Request, res: Response) => {
       success: true,
       data: await getCreativeFactoryCatalog(String(featureKey || '')),
     })
+  } catch (error) {
+    sendError(res, error)
+  }
+}
+
+export const templates = async (_req: Request, res: Response) => {
+  try {
+    res.json({ success: true, data: getCreativeFactoryTemplates() })
   } catch (error) {
     sendError(res, error)
   }

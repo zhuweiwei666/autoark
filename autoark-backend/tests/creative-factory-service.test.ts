@@ -7,6 +7,11 @@ import {
   linkCreativeFactoryAttribution,
   validateCreativeFactoryStorageKey,
 } from '../src/services/creativeFactory.service'
+import {
+  DUAL_SCENE_TEMPLATE_KEY,
+  listCreativeFactoryTemplates,
+} from '../src/config/creativeFactoryTemplates.config'
+import { buildDualSceneFilter } from '../src/services/creativeFactoryTemplateWorker.service'
 
 describe('creative factory orchestration', () => {
   afterEach(() => jest.restoreAllMocks())
@@ -63,6 +68,115 @@ describe('creative factory orchestration', () => {
 
     const docs: any[] = insert.mock.calls[0][0] as any
     expect(docs[0].workflow).toBe('edit_only')
+  })
+
+  it('standardizes one image into the fixed dual-scene pipeline', async () => {
+    const insert = jest
+      .spyOn(CreativeFactoryJob, 'insertMany')
+      .mockImplementation(async (docs: any) => docs as any)
+
+    const result = await createCreativeFactoryBatch(
+      {
+        title: 'Dual scene template',
+        intent: 'Create the approved ClingAI reveal ad',
+        templateKey: DUAL_SCENE_TEMPLATE_KEY,
+        outputMediaType: 'image',
+        variantsPerAsset: 4,
+        assets: [
+          {
+            sourceUrl: 'https://cdn.example/adult-source.jpg',
+            mediaType: 'image',
+          },
+        ],
+      },
+      {
+        userId: 'user-1',
+        organizationId: '64b000000000000000000001',
+        isSuperAdmin: false,
+      },
+    )
+
+    expect(result.jobCount).toBe(1)
+    const docs: any[] = insert.mock.calls[0][0] as any
+    expect(docs[0]).toMatchObject({
+      templateKey: DUAL_SCENE_TEMPLATE_KEY,
+      templateVersion: 1,
+      status: 'generating',
+      requestedOutput: { mediaType: 'video', aspectRatio: '9:16' },
+      pipeline: {
+        status: 'queued',
+        currentStep: 'closeup_image',
+        attempts: 0,
+      },
+      codex: { status: 'completed' },
+    })
+  })
+
+  it('rejects video inputs and style overrides for the fixed template', async () => {
+    const scope = {
+      userId: 'user-1',
+      organizationId: '64b000000000000000000001',
+      isSuperAdmin: false,
+    }
+    await expect(
+      createCreativeFactoryBatch(
+        {
+          title: 'Wrong source type',
+          intent: 'Create the approved ClingAI reveal ad',
+          templateKey: DUAL_SCENE_TEMPLATE_KEY,
+          assets: [
+            {
+              sourceUrl: 'https://cdn.example/source.mp4',
+              mediaType: 'video',
+            },
+          ],
+        },
+        scope,
+      ),
+    ).rejects.toThrow('只接受图片来源素材')
+
+    await expect(
+      createCreativeFactoryBatch(
+        {
+          title: 'Wrong style override',
+          intent: 'Create the approved ClingAI reveal ad',
+          templateKey: DUAL_SCENE_TEMPLATE_KEY,
+          assets: [
+            {
+              sourceUrl: 'https://cdn.example/source.jpg',
+              mediaType: 'image',
+            },
+          ],
+          styleReference: { materialId: '64b000000000000000000000099' },
+        },
+        scope,
+      ),
+    ).rejects.toThrow('已经固化广告结构')
+  })
+
+  it('publishes only the safe template contract and locks the reveal timing', () => {
+    expect(listCreativeFactoryTemplates()).toEqual([
+      expect.objectContaining({
+        key: DUAL_SCENE_TEMPLATE_KEY,
+        inputMediaType: 'image',
+        outputMediaType: 'video',
+        variantsPerAsset: 1,
+      }),
+    ])
+    expect(listCreativeFactoryTemplates()[0]).not.toHaveProperty('generation')
+    expect(listCreativeFactoryTemplates()[0]).not.toHaveProperty('composition')
+
+    const filter = buildDualSceneFilter({
+      width: 1080,
+      height: 1920,
+      fps: 30,
+      durationSeconds: 5,
+      revealStartSeconds: 0.233333,
+      revealEndSeconds: 2.8,
+      revealOpacity: 0.56,
+    })
+    expect(filter).toContain('between(T,0.233333,2.799999)')
+    expect(filter).toContain('A*0.44+B*0.56')
   })
 
   it.each([

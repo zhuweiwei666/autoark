@@ -18,11 +18,22 @@ test('Creative Factory only accepts sources selected from the AutoArk material l
 test('Creative Factory accepts one library or uploaded example and locks output to its media type', () => {
   assert.match(pageSource, /素材示例/)
   assert.match(pageSource, /uploadCreativeFactoryStyleReference/)
-  assert.match(pageSource, /styleReference:\s*selectedReference/)
+  assert.match(pageSource, /styleReference:\s*!usesFixedTemplate && selectedReference/)
   assert.match(pageSource, /maxSelected=\{1\}/)
   assert.match(pageSource, /disabled=\{Boolean\(selectedReference\)\}/)
   assert.match(apiSource, /\/api\/materials\/presigned-url/)
   assert.match(apiSource, /\/api\/materials\/confirm-upload/)
+})
+
+test('Creative Factory defaults to the fixed single-image dual-scene template', () => {
+  assert.match(pageSource, /clingai_dual_scene_reveal_v1/)
+  assert.match(pageSource, /getCreativeFactoryTemplates/)
+  assert.match(pageSource, /生产模板/)
+  assert.match(pageSource, /单图双场景转化视频/)
+  assert.match(pageSource, /allowedMediaType=\{usesFixedTemplate \? 'image' : undefined\}/)
+  assert.match(pageSource, /templateKey: templateKey \|\| undefined/)
+  assert.match(pageSource, /usesFixedTemplate \? 1 : variants/)
+  assert.match(apiSource, /\/api\/creative-factory\/templates/)
 })
 
 test('Creative Factory selects historical batches from one accessible dropdown', () => {

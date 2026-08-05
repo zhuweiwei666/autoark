@@ -12,6 +12,8 @@ const creativeFactoryJobSchema = new mongoose.Schema(
     title: { type: String, required: true },
     intent: { type: String, required: true },
     brandKey: { type: String, default: 'clingai' },
+    templateKey: { type: String, index: true },
+    templateVersion: { type: Number },
     workflow: {
       type: String,
       enum: ['generate_then_edit', 'edit_only', 'extract_frame_then_edit'],
@@ -84,6 +86,22 @@ const creativeFactoryJobSchema = new mongoose.Schema(
       landingUrl: { type: String },
       error: { type: String },
       updatedAt: { type: Date },
+    },
+    pipeline: {
+      status: {
+        type: String,
+        enum: ['queued', 'processing', 'completed', 'failed'],
+      },
+      currentStep: { type: String },
+      progressLabel: { type: String },
+      steps: { type: mongoose.Schema.Types.Mixed, default: {} },
+      attempts: { type: Number, default: 0 },
+      nextAttemptAt: { type: Date },
+      leaseOwner: { type: String },
+      leaseUntil: { type: Date },
+      lastError: { type: String },
+      startedAt: { type: Date },
+      completedAt: { type: Date },
     },
     codex: {
       status: {

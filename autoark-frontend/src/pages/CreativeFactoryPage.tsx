@@ -19,11 +19,14 @@ import {
   createCreativeFactoryBatch,
   getCreativeFactoryBatch,
   getCreativeFactoryBatches,
+  getCreativeFactoryTemplates,
   refreshCreativeFactoryJob,
   uploadCreativeFactoryStyleReference,
   type CreativeFactoryJob,
   type MaterialLibrarySource,
 } from '../services/api'
+
+const DEFAULT_TEMPLATE_KEY = 'clingai_dual_scene_reveal_v1'
 
 const statusMeta: Record<string, { label: string; className: string }> = {
   awaiting_codex: { label: '等待 Codex', className: 'bg-amber-50 text-amber-800 ring-amber-200' },
@@ -51,6 +54,7 @@ export default function CreativeFactoryPage() {
   const [selectedReference, setSelectedReference] = useState<MaterialLibrarySource | null>(null)
   const [referencePickerOpen, setReferencePickerOpen] = useState(false)
   const referenceUploadRef = useRef<HTMLInputElement>(null)
+  const [templateKey, setTemplateKey] = useState(DEFAULT_TEMPLATE_KEY)
   const [outputMediaType, setOutputMediaType] = useState<'image' | 'video'>('video')
   const [variants, setVariants] = useState(2)
   const [selectedBatchId, setSelectedBatchId] = useState('')
@@ -62,6 +66,21 @@ export default function CreativeFactoryPage() {
     refetchInterval: 15_000,
   })
   const batches = batchesQuery.data || []
+  const templatesQuery = useQuery({
+    queryKey: ['creative-factory-templates'],
+    queryFn: getCreativeFactoryTemplates,
+  })
+  const templates = templatesQuery.data || []
+  const selectedTemplate = templates.find((template) => template.key === templateKey)
+  const usesFixedTemplate = Boolean(templateKey)
+
+  useEffect(() => {
+    if (!usesFixedTemplate) return
+    setSelectedMaterials((current) => current.filter((material) => material.type === 'image'))
+    setSelectedReference(null)
+    setOutputMediaType('video')
+    setVariants(1)
+  }, [usesFixedTemplate])
 
   useEffect(() => {
     if (batches[0]?.batchId && !batches.some((batch) => batch.batchId === selectedBatchId)) {
@@ -125,11 +144,12 @@ export default function CreativeFactoryPage() {
       title,
       intent,
       brandKey: 'clingai',
-      outputMediaType,
+      outputMediaType: usesFixedTemplate ? 'video' : outputMediaType,
       aspectRatio: '9:16',
-      variantsPerAsset: variants,
+      variantsPerAsset: usesFixedTemplate ? 1 : variants,
       assets,
-      styleReference: selectedReference ? { materialId: selectedReference._id } : undefined,
+      styleReference: !usesFixedTemplate && selectedReference ? { materialId: selectedReference._id } : undefined,
+      templateKey: templateKey || undefined,
     })
   }
 
@@ -145,11 +165,11 @@ export default function CreativeFactoryPage() {
           </div>
           <h1 className="text-3xl font-black tracking-tight text-zinc-950">ClingAI 素材生产线</h1>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-zinc-600">
-            AutoArk 收集投放意图与素材，Codex 拆解创意并完成去品牌剪辑，ai-host 复用现有图片/视频模板生成，成品自动回到素材库等待发布与归因。
+            选择人物图后，固定模板自动完成双场景生成、叠化剪辑与 ClingAI 品牌包装，成品回到素材库等待发布与归因。
           </p>
         </div>
         <div className="flex items-center gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-semibold text-zinc-600">
-          <Robot size={17} className="text-[#0f766e]" /> Codex 队列 → ai-host → 素材归因
+          <Robot size={17} className="text-[#0f766e]" /> AutoArk 模板队列 → ai-host → 素材归因
         </div>
       </div>
 
@@ -164,6 +184,31 @@ export default function CreativeFactoryPage() {
           </div>
 
           <div className="space-y-4">
+            <label className="block text-xs font-bold text-zinc-700">
+              生产模板
+              <select value={templateKey} onChange={(event) => setTemplateKey(event.target.value)} className="mt-1.5 w-full rounded-lg border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-[#0f766e] focus:ring-2 focus:ring-[#0f766e]/10">
+                {templatesQuery.isLoading && <option value={DEFAULT_TEMPLATE_KEY}>正在读取模板…</option>}
+                {!templatesQuery.isLoading && templates.length === 0 && <option value={DEFAULT_TEMPLATE_KEY}>单图双场景转化视频</option>}
+                {!templatesQuery.isLoading && templates.map((template) => <option key={template.key} value={template.key}>{template.name}</option>)}
+                <option value="">自定义生产流程</option>
+              </select>
+            </label>
+            {usesFixedTemplate && (
+              <div className="rounded-xl border border-rose-200 bg-gradient-to-br from-rose-50 to-fuchsia-50 p-4">
+                <div className="flex items-start gap-3">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-rose-500 text-white"><FilmStrip size={18} weight="fill" /></span>
+                  <div className="min-w-0">
+                    <div className="text-sm font-extrabold text-zinc-950">{selectedTemplate?.name || '单图双场景转化视频'}</div>
+                    <p className="mt-1 text-xs leading-5 text-zinc-600">{selectedTemplate?.description || '一张人物图自动生成 SFW/NSFW 双场景并剪成 5 秒 ClingAI 转化广告。'}</p>
+                  </div>
+                </div>
+                <div className="mt-3 grid gap-1.5 text-[11px] font-semibold text-zinc-600">
+                  {(selectedTemplate?.steps || ['SFW 私聊近景', 'SFW 泳池场景', 'NSFW 泳池场景', '双路图生视频', '固定叠化、ClingAI 文案与音轨']).map((step, index) => (
+                    <div key={step} className="flex items-center gap-2"><span className="flex h-5 w-5 items-center justify-center rounded-full bg-white text-[10px] font-black text-rose-600 ring-1 ring-rose-200">{index + 1}</span>{step}</div>
+                  ))}
+                </div>
+              </div>
+            )}
             <label className="block text-xs font-bold text-zinc-700">
               批次名称
               <input value={title} onChange={(event) => setTitle(event.target.value)} className="mt-1.5 w-full rounded-lg border border-zinc-300 px-3 py-2.5 text-sm outline-none focus:border-[#0f766e] focus:ring-2 focus:ring-[#0f766e]/10" />
@@ -184,7 +229,7 @@ export default function CreativeFactoryPage() {
                 <button type="button" onClick={() => setMaterialPickerOpen(true)} className="mt-2 flex w-full flex-col items-center justify-center rounded-xl border border-dashed border-zinc-300 bg-zinc-50 px-4 py-7 text-center transition hover:border-[#0f766e] hover:bg-emerald-50/40 active:scale-[0.99]">
                   <span className="flex h-10 w-10 items-center justify-center rounded-full bg-white text-[#0f766e] shadow-sm ring-1 ring-zinc-200"><FolderOpen size={20} weight="fill" /></span>
                   <span className="mt-3 text-sm font-extrabold text-zinc-900">从素材库选择</span>
-                  <span className="mt-1 text-xs text-zinc-500">按文件夹浏览并多选图片或视频</span>
+                  <span className="mt-1 text-xs text-zinc-500">{usesFixedTemplate ? '按文件夹浏览并选择人物图片' : '按文件夹浏览并多选图片或视频'}</span>
                 </button>
               ) : (
                 <div className="mt-2">
@@ -209,7 +254,7 @@ export default function CreativeFactoryPage() {
               )}
             </div>
 
-            <div>
+            {!usesFixedTemplate && <div>
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <div className="text-xs font-bold text-zinc-700">
@@ -280,9 +325,9 @@ export default function CreativeFactoryPage() {
                   if (file) referenceUploadMutation.mutate(file)
                 }}
               />
-            </div>
+            </div>}
 
-            <div>
+            {!usesFixedTemplate && <div>
               <label className="text-xs font-bold text-zinc-700">
                 目标成品
                 <select value={selectedReference?.type || outputMediaType} disabled={Boolean(selectedReference)} onChange={(event) => setOutputMediaType(event.target.value as 'image' | 'video')} className="mt-1.5 w-full rounded-lg border border-zinc-300 bg-white px-3 py-2.5 text-sm disabled:bg-zinc-100 disabled:text-zinc-600">
@@ -290,17 +335,17 @@ export default function CreativeFactoryPage() {
                 </select>
                 {selectedReference && <span className="mt-1 block text-[11px] font-medium text-zinc-500">已跟随素材示例自动锁定</span>}
               </label>
-            </div>
-            <label className="block text-xs font-bold text-zinc-700">
+            </div>}
+            {!usesFixedTemplate && <label className="block text-xs font-bold text-zinc-700">
               每个来源生成 {variants} 个变体
               <input type="range" min={1} max={4} value={variants} onChange={(event) => setVariants(Number(event.target.value))} className="mt-2 w-full accent-[#0f766e]" />
-            </label>
+            </label>}
 
             {(formError || createMutation.error) && (
               <div className="flex gap-2 rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs font-semibold text-rose-800"><WarningCircle size={17} />{formError}</div>
             )}
             <button type="button" onClick={submit} disabled={createMutation.isPending} className="flex w-full items-center justify-center gap-2 rounded-lg bg-zinc-950 px-4 py-3 text-sm font-extrabold text-white hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50">
-              <MagicWand size={18} weight="fill" /> {createMutation.isPending ? '正在创建任务…' : `送入生产线（${assets.length * variants || 0} 个）`}
+              <MagicWand size={18} weight="fill" /> {createMutation.isPending ? '正在创建任务…' : `送入生产线（${assets.length * (usesFixedTemplate ? 1 : variants) || 0} 个）`}
             </button>
           </div>
         </section>
@@ -371,7 +416,7 @@ export default function CreativeFactoryPage() {
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2"><span className="text-sm font-extrabold text-zinc-950">{job.variantId}</span><StatusBadge status={job.status} />{job.attribution?.status === 'linked' && <span className="flex items-center gap-1 text-xs font-bold text-emerald-700"><CheckCircle size={15} weight="fill" />广告已归因</span>}</div>
                       <div className="mt-2 line-clamp-2 text-xs leading-5 text-zinc-600">{job.analysis?.hook || job.intent}</div>
-                      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] font-semibold text-zinc-500"><span>{job.workflow === 'extract_frame_then_edit' ? '视频截帧 + 样式处理' : job.workflow === 'edit_only' ? '直接样式处理' : 'ai-host 生成 + 剪辑'}</span><span>{job.analysis?.featureKey || '待 Codex 选模板'}</span>{material?.metrics && <span>ROAS {Number(material.metrics.avgRoas || 0).toFixed(2)}</span>}</div>
+                      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] font-semibold text-zinc-500"><span>{job.pipeline?.progressLabel || (job.workflow === 'extract_frame_then_edit' ? '视频截帧 + 样式处理' : job.workflow === 'edit_only' ? '直接样式处理' : 'ai-host 生成 + 剪辑')}</span><span>{job.templateKey ? `固定模板 v${job.templateVersion}` : (job.analysis?.featureKey || '待 Codex 选模板')}</span>{material?.metrics && <span>ROAS {Number(material.metrics.avgRoas || 0).toFixed(2)}</span>}</div>
                       {job.error && <div className="mt-2 text-xs font-semibold text-rose-700">{job.error}</div>}
                     </div>
                     <div className="flex items-center gap-2">
@@ -390,6 +435,7 @@ export default function CreativeFactoryPage() {
       <CreativeFactoryMaterialPicker
         open={materialPickerOpen}
         selected={selectedMaterials}
+        allowedMediaType={usesFixedTemplate ? 'image' : undefined}
         onClose={() => setMaterialPickerOpen(false)}
         onConfirm={(materials) => {
           setSelectedMaterials(materials)

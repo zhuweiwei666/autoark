@@ -77,6 +77,7 @@ export default function CreativeFactoryMaterialPicker({
   title = '选择来源素材',
   description = '按 AutoArk 素材库现有分组或文件夹定位，再多选要进入 ClingAI 生产线的图片或视频。',
   maxSelected = MAX_SELECTED_MATERIALS,
+  allowedMediaType,
 }: {
   open: boolean
   selected: MaterialLibrarySource[]
@@ -85,13 +86,14 @@ export default function CreativeFactoryMaterialPicker({
   title?: string
   description?: string
   maxSelected?: number
+  allowedMediaType?: 'image' | 'video'
 }) {
   const [draftSelection, setDraftSelection] = useState<MaterialLibrarySource[]>(selected)
   const [scope, setScope] = useState<MaterialSelection>({ kind: 'all' })
   const [expandedSmartGroups, setExpandedSmartGroups] = useState<Set<string>>(
     () => new Set(['facebook-root:facebook', 'external-root:external']),
   )
-  const [type, setType] = useState<'' | 'image' | 'video'>('')
+  const [type, setType] = useState<'' | 'image' | 'video'>(allowedMediaType || '')
   const [searchDraft, setSearchDraft] = useState('')
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
@@ -100,8 +102,9 @@ export default function CreativeFactoryMaterialPicker({
   useEffect(() => {
     if (!open) return
     setDraftSelection(selected)
+    setType(allowedMediaType || '')
     setSelectionError('')
-  }, [open, selected])
+  }, [allowedMediaType, open, selected])
 
   useEffect(() => {
     if (!open) return
@@ -165,6 +168,7 @@ export default function CreativeFactoryMaterialPicker({
   }
 
   const chooseType = (nextType: '' | 'image' | 'video') => {
+    if (allowedMediaType) return
     setType(nextType)
     setPage(1)
   }
@@ -384,7 +388,7 @@ export default function CreativeFactoryMaterialPicker({
                     ['', '全部'],
                     ['image', '图片'],
                     ['video', '视频'],
-                  ] as const).map(([value, label]) => (
+                  ] as const).filter(([value]) => !allowedMediaType || value === allowedMediaType).map(([value, label]) => (
                     <button key={value} type="button" onClick={() => chooseType(value)} className={`rounded-md px-3 py-1.5 text-xs font-bold transition active:scale-[0.98] ${type === value ? 'bg-white text-zinc-950 shadow-sm' : 'text-zinc-500 hover:text-zinc-900'}`}>
                       {label}
                     </button>

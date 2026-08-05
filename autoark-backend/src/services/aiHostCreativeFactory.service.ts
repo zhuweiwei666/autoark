@@ -23,7 +23,10 @@ async function post<T>(
     .update(serialized)
     .digest('hex')
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 180_000)
+  const timeout = setTimeout(
+    () => controller.abort(),
+    action === 'generate' ? 12 * 60_000 : 180_000,
+  )
 
   try {
     const response = await fetch(`${baseUrl()}/${action}`, {
@@ -78,6 +81,7 @@ export const createAiHostGeneration = (body: {
   featureKey: string
   templateId?: string
   creativeDirection?: string
+  imageOperation?: 'sfw' | 'undress'
   styleReference?: {
     materialId: string
     url: string

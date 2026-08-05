@@ -207,6 +207,7 @@ AI_ADS_INTEGRATION_ORGANIZATION_ID=old-canonical-ai-ads-org
 AI_HOST_CREATIVE_FACTORY_URL=https://old-canonical.example/api/v1/internal/creative-factory
 AI_HOST_INTERNAL_API_SECRET=old-canonical-ai-host-secret
 CREATIVE_FACTORY_CODEX_SECRET=old-canonical-codex-secret
+CREATIVE_FACTORY_DUAL_SCENE_AUDIO_URL=https://old-canonical.example/audio.m4a
 EOF
   cat > "$DEPLOY_ENV" <<EOF
 MONGO_URI=mongodb://runtime-example
@@ -219,6 +220,7 @@ AI_ADS_INTEGRATION_ORGANIZATION_ID=old-runtime-ai-ads-org
 AI_HOST_CREATIVE_FACTORY_URL=https://old-runtime.example/api/v1/internal/creative-factory
 AI_HOST_INTERNAL_API_SECRET=old-runtime-ai-host-secret
 CREATIVE_FACTORY_CODEX_SECRET=old-runtime-codex-secret
+CREATIVE_FACTORY_DUAL_SCENE_AUDIO_URL=https://old-runtime.example/audio.m4a
 EOF
   chmod 600 "$ROOT_ENV" "$DEPLOY_ENV"
 }
@@ -243,6 +245,7 @@ assert_consistent_pair() {
   test "$(grep -c '^AI_HOST_CREATIVE_FACTORY_URL=' "$ROOT_ENV")" -eq 1
   test "$(grep -c '^AI_HOST_INTERNAL_API_SECRET=' "$ROOT_ENV")" -eq 1
   test "$(grep -c '^CREATIVE_FACTORY_CODEX_SECRET=' "$ROOT_ENV")" -eq 1
+  test "$(grep -c '^CREATIVE_FACTORY_DUAL_SCENE_AUDIO_URL=' "$ROOT_ENV")" -eq 1
   if grep -Fq 'AUTOARK_DEPLOY_UPLOAD_GENERATION=' "$ROOT_ENV"; then
     echo 'internal upload generation leaked into runtime configuration'
     exit 1
@@ -259,6 +262,7 @@ run_deploy() {
     -u AI_HOST_CREATIVE_FACTORY_URL \
     -u AI_HOST_INTERNAL_API_SECRET \
     -u CREATIVE_FACTORY_CODEX_SECRET \
+    -u CREATIVE_FACTORY_DUAL_SCENE_AUDIO_URL \
     PATH="$FAKE_BIN:$PATH" \
     SSH_ARG_LOG="$SSH_ARG_LOG" \
     SCP_REMOTE_LOG="$SCP_REMOTE_LOG" \
@@ -295,6 +299,7 @@ AI_ADS_INTEGRATION_ORGANIZATION_ID=file-owned-ai-ads-org
 AI_HOST_CREATIVE_FACTORY_URL=https://file-owned.example/api/v1/internal/creative-factory
 AI_HOST_INTERNAL_API_SECRET=file-owned-ai-host-secret
 CREATIVE_FACTORY_CODEX_SECRET=file-owned-codex-secret
+CREATIVE_FACTORY_DUAL_SCENE_AUDIO_URL=https://file-owned.example/audio.m4a
 EOF
 }
 
@@ -309,6 +314,7 @@ AI_ADS_ORGANIZATION_SENTINEL='AI_ADS_ORGANIZATION_SHOULD_STAY_STDIN_ONLY'
 AI_HOST_URL_SENTINEL='https://cling-ai.example/api/v1/internal/creative-factory'
 AI_HOST_SECRET_SENTINEL='AI_HOST_VALUE_SHOULD_STAY_STDIN_ONLY'
 CODEX_SECRET_SENTINEL='CODEX_VALUE_SHOULD_STAY_STDIN_ONLY'
+DUAL_SCENE_AUDIO_SENTINEL='https://media.example/dual-scene-audio.m4a'
 output="$(
   run_deploy \
     GUANGDADA_API_KEY="$SECRET_SENTINEL" \
@@ -318,7 +324,8 @@ output="$(
     AI_ADS_INTEGRATION_ORGANIZATION_ID="$AI_ADS_ORGANIZATION_SENTINEL" \
     AI_HOST_CREATIVE_FACTORY_URL="$AI_HOST_URL_SENTINEL" \
     AI_HOST_INTERNAL_API_SECRET="$AI_HOST_SECRET_SENTINEL" \
-    CREATIVE_FACTORY_CODEX_SECRET="$CODEX_SECRET_SENTINEL"
+    CREATIVE_FACTORY_CODEX_SECRET="$CODEX_SECRET_SENTINEL" \
+    CREATIVE_FACTORY_DUAL_SCENE_AUDIO_URL="$DUAL_SCENE_AUDIO_SENTINEL"
 )"
 assert_consistent_pair
 grep -qx 'CANONICAL_ONLY=preserved' "$ROOT_ENV"
@@ -334,6 +341,7 @@ grep -qx "AI_ADS_INTEGRATION_ORGANIZATION_ID=$AI_ADS_ORGANIZATION_SENTINEL" "$RO
 grep -qx "AI_HOST_CREATIVE_FACTORY_URL=$AI_HOST_URL_SENTINEL" "$ROOT_ENV"
 grep -qx "AI_HOST_INTERNAL_API_SECRET=$AI_HOST_SECRET_SENTINEL" "$ROOT_ENV"
 grep -qx "CREATIVE_FACTORY_CODEX_SECRET=$CODEX_SECRET_SENTINEL" "$ROOT_ENV"
+grep -qx "CREATIVE_FACTORY_DUAL_SCENE_AUDIO_URL=$DUAL_SCENE_AUDIO_SENTINEL" "$ROOT_ENV"
 test "$(grep -c '^commit-root$' "$REMOTE_ORDER_LOG")" -eq 1
 test "$(grep -c '^commit-runtime$' "$REMOTE_ORDER_LOG")" -eq 1
 expected_order=$'remote-session\nlock-acquired\ncheckout\ncommit-root\ncommit-runtime\nserver-deploy-executed'
@@ -417,6 +425,11 @@ if run_deploy \
   echo 'empty Codex Creative Factory key was accepted as an explicit override'
   exit 1
 fi
+if run_deploy \
+  CREATIVE_FACTORY_DUAL_SCENE_AUDIO_URL='http://unsafe.example/audio.m4a' >"$TEST_DIR/invalid-audio-url.log" 2>&1; then
+  echo 'Creative Factory accepted a non-HTTPS template audio URL'
+  exit 1
+fi
 if grep -Fq 'invalid-flag-placeholder' "$TEST_DIR/invalid-flag.log"; then
   echo 'invalid-flag failure leaked the provider key'
   exit 1
@@ -467,6 +480,7 @@ env \
   -u AI_HOST_CREATIVE_FACTORY_URL \
   -u AI_HOST_INTERNAL_API_SECRET \
   -u CREATIVE_FACTORY_CODEX_SECRET \
+  -u CREATIVE_FACTORY_DUAL_SCENE_AUDIO_URL \
   PATH="$FAKE_BIN:$PATH" \
   SSH_ARG_LOG="$SSH_ARG_LOG" \
   SCP_REMOTE_LOG="$SCP_REMOTE_LOG" \
@@ -487,6 +501,7 @@ env \
   AI_HOST_CREATIVE_FACTORY_URL='https://trace.example/api/v1/internal/creative-factory' \
   AI_HOST_INTERNAL_API_SECRET="$AI_HOST_TRACE_SENTINEL" \
   CREATIVE_FACTORY_CODEX_SECRET="$CODEX_TRACE_SENTINEL" \
+  CREATIVE_FACTORY_DUAL_SCENE_AUDIO_URL='https://trace.example/audio.m4a' \
   bash -x "$REPO_ROOT/deploy/prod-deploy.sh" >"$TEST_DIR/trace.log" 2>&1
 if grep -Fq "$TRACE_SENTINEL" "$TEST_DIR/trace.log"; then
   echo 'provider key leaked when shell tracing was requested'
@@ -526,6 +541,7 @@ grep -qx 'AI_ADS_INTEGRATION_ORGANIZATION_ID=file-owned-ai-ads-org' "$ROOT_ENV"
 grep -qx 'AI_HOST_CREATIVE_FACTORY_URL=https://file-owned.example/api/v1/internal/creative-factory' "$ROOT_ENV"
 grep -qx 'AI_HOST_INTERNAL_API_SECRET=file-owned-ai-host-secret' "$ROOT_ENV"
 grep -qx 'CREATIVE_FACTORY_CODEX_SECRET=file-owned-codex-secret' "$ROOT_ENV"
+grep -qx 'CREATIVE_FACTORY_DUAL_SCENE_AUDIO_URL=https://file-owned.example/audio.m4a' "$ROOT_ENV"
 if grep -Eq 'OLD_CANONICAL|OLD_RUNTIME' "$ROOT_ENV"; then
   echo 'full environment rotation retained stale configuration'
   exit 1

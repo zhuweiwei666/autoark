@@ -13,6 +13,10 @@ import {
   getAiHostGenerationStatus,
   type AiHostGeneration,
 } from './aiHostCreativeFactory.service'
+import {
+  getCreativeFactoryTemplate,
+  listCreativeFactoryTemplates,
+} from '../config/creativeFactoryTemplates.config'
 
 export class CreativeFactoryError extends Error {
   statusCode: number
@@ -52,6 +56,7 @@ type CreateBatchInput = {
   variantsPerAsset?: number
   assets?: CreateAssetInput[]
   styleReference?: { materialId?: string }
+  templateKey?: string
 }
 
 const clean = (value: unknown, max = 500) =>
@@ -249,30 +254,48 @@ export async function createCreativeFactoryBatch(
     Math.max(Number(input.variantsPerAsset) || 1, 1),
     4,
   )
+  const templateKey = clean(input.templateKey, 120)
+  const template = templateKey ? getCreativeFactoryTemplate(templateKey) : null
 
   if (!title) throw new CreativeFactoryError('请输入批次名称')
   if (!intent) throw new CreativeFactoryError('请输入投放意图')
   if (assets.length === 0)
     throw new CreativeFactoryError('至少提供一个素材 ID 或 URL')
+  if (templateKey && !template)
+    throw new CreativeFactoryError('生产模板不存在或已停用')
 
   const resolvedAssets = []
   for (const asset of assets)
     resolvedAssets.push(await resolveSource(asset, scope))
+  if (
+    template &&
+    resolvedAssets.some((asset) => asset.mediaType !== template.inputMediaType)
+  ) {
+    throw new CreativeFactoryError(`${template.name}只接受图片来源素材`)
+  }
+  if (template && input.styleReference) {
+    throw new CreativeFactoryError(
+      `${template.name}已经固化广告结构，无需素材示例`,
+    )
+  }
   const styleReference = await resolveStyleReference(
     input.styleReference,
     scope,
   )
-  const outputMediaType = styleReference
-    ? styleReference.mediaType
-    : input.outputMediaType === 'video'
-      ? 'video'
-      : 'image'
+  const outputMediaType = template
+    ? template.outputMediaType
+    : styleReference
+      ? styleReference.mediaType
+      : input.outputMediaType === 'video'
+        ? 'video'
+        : 'image'
 
   const batchId = randomUUID()
   const docs = []
   let variantIndex = 0
   for (const source of resolvedAssets) {
-    for (let index = 0; index < variantsPerAsset; index += 1) {
+    const variantCount = template ? template.variantsPerAsset : variantsPerAsset
+    for (let index = 0; index < variantCount; index += 1) {
       variantIndex += 1
       const variantId = `v${String(variantIndex).padStart(3, '0')}`
       docs.push({
@@ -282,15 +305,37 @@ export async function createCreativeFactoryBatch(
         title,
         intent,
         brandKey: clean(input.brandKey, 80) || 'clingai',
+        templateKey: template?.key,
+        templateVersion: template?.version,
         workflow: resolveWorkflow(source.mediaType, styleReference?.mediaType),
-        status: 'awaiting_codex',
+        status: template ? 'generating' : 'awaiting_codex',
         source,
         styleReference: styleReference || undefined,
         requestedOutput: {
           mediaType: outputMediaType,
           aspectRatio: clean(input.aspectRatio, 20) || '9:16',
         },
-        codex: { status: 'queued' },
+        analysis: template
+          ? {
+              intentSummary: intent,
+              hook: template.composition.title,
+              featureKey: 'pipeline',
+              templateId: template.key,
+              rationale: `固定执行 ${template.name} v${template.version}`,
+              editRecipe: template.composition,
+            }
+          : undefined,
+        pipeline: template
+          ? {
+              status: 'queued',
+              currentStep: 'closeup_image',
+              progressLabel: template.steps[0],
+              steps: {},
+              attempts: 0,
+              nextAttemptAt: new Date(),
+            }
+          : undefined,
+        codex: { status: template ? 'completed' : 'queued' },
         attribution: { status: 'pending', mappings: [] },
         createdBy: scope.userId,
       })
@@ -315,6 +360,8 @@ export async function listCreativeFactoryBatches(scope: CreativeFactoryScope) {
         title: job.title,
         intent: job.intent,
         brandKey: job.brandKey,
+        templateKey: job.templateKey,
+        templateVersion: job.templateVersion,
         styleReference: job.styleReference,
         createdAt: job.createdAt,
         updatedAt: job.updatedAt,
@@ -357,6 +404,10 @@ export async function getCreativeFactoryBatch(
 
 export async function getCreativeFactoryCatalog(featureKey?: string) {
   return getAiHostCreativeCatalog(clean(featureKey, 100) || undefined)
+}
+
+export function getCreativeFactoryTemplates() {
+  return listCreativeFactoryTemplates()
 }
 
 export async function createCreativeFactoryUploadUrl(

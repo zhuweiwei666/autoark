@@ -79,6 +79,8 @@ export type CreativeFactoryJob = {
   variantId: string
   title: string
   intent: string
+  templateKey?: string
+  templateVersion?: number
   workflow: 'generate_then_edit' | 'edit_only' | 'extract_frame_then_edit'
   status: 'awaiting_codex' | 'generating' | 'codex_processing' | 'ready' | 'failed'
   source: { materialId?: string; url: string; mediaType: 'image' | 'video'; name?: string }
@@ -103,6 +105,12 @@ export type CreativeFactoryJob = {
     rationale?: string
   }
   aiHost?: { status?: string; resultUrl?: string; landingUrl?: string; error?: string }
+  pipeline?: {
+    status?: 'queued' | 'processing' | 'completed' | 'failed'
+    currentStep?: string
+    progressLabel?: string
+    lastError?: string
+  }
   codex?: { status?: string; workerId?: string; notes?: string }
   outputMaterialId?: string | {
     _id: string
@@ -124,6 +132,8 @@ export type CreativeFactoryBatchSummary = {
   title: string
   intent: string
   brandKey: string
+  templateKey?: string
+  templateVersion?: number
   styleReference?: CreativeFactoryJob['styleReference']
   total: number
   ready: number
@@ -159,6 +169,18 @@ export type MaterialLibraryFolder = {
   path: string
   level: number
   count: number
+}
+
+export type CreativeFactoryTemplate = {
+  key: string
+  version: number
+  name: string
+  description: string
+  inputMediaType: 'image' | 'video'
+  outputMediaType: 'image' | 'video'
+  aspectRatio: string
+  variantsPerAsset: number
+  steps: string[]
 }
 
 const readApiError = async (response: Response, fallback: string) => {
@@ -208,6 +230,13 @@ export async function getCreativeFactoryBatches(): Promise<CreativeFactoryBatchS
   return payload.data || []
 }
 
+export async function getCreativeFactoryTemplates(): Promise<CreativeFactoryTemplate[]> {
+  const response = await authFetch(`${API_BASE_URL}/api/creative-factory/templates`)
+  if (!response.ok) return readApiError(response, '读取生产模板失败')
+  const payload = await response.json()
+  return payload.data || []
+}
+
 export async function getCreativeFactoryBatch(batchId: string): Promise<{ batchId: string; jobs: CreativeFactoryJob[] }> {
   const response = await authFetch(`${API_BASE_URL}/api/creative-factory/batches/${encodeURIComponent(batchId)}`)
   if (!response.ok) return readApiError(response, '读取批次详情失败')
@@ -224,6 +253,7 @@ export async function createCreativeFactoryBatch(input: {
   variantsPerAsset: number
   assets: Array<{ materialId: string }>
   styleReference?: { materialId: string }
+  templateKey?: string
 }) {
   const response = await authFetch(`${API_BASE_URL}/api/creative-factory/batches`, {
     method: 'POST',
