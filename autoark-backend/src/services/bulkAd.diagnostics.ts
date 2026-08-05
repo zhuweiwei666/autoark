@@ -118,6 +118,17 @@ const DIAGNOSIS_TEMPLATES: Record<string, DiagnosisTemplate> = {
       '重新同步主页后重试失败项。',
     ],
   },
+  PAGE_ACCOUNT_MISMATCH: {
+    entityType: 'page',
+    customerMessage: '所选 Facebook 主页不属于该广告账户的可推广主页，Meta 已拒绝创建广告。',
+    retryable: false,
+    source: 'meta',
+    nextActions: [
+      '重新同步主页并选择该广告账户明确可推广的主页。',
+      '在 Business Manager 检查主页是否已分配给该广告账户。',
+      '修正主页后新建任务发布，不要直接重试已产生 Campaign 或 AdSet 的旧任务。',
+    ],
+  },
   PIXEL_ACCESS_REQUIRED: {
     entityType: 'pixel',
     customerMessage: '广告账户缺少可用 Pixel，或当前授权无法访问所选 Pixel。',
@@ -308,6 +319,7 @@ const KNOWN_EXPLICIT_CODES = new Set([
   'AD_ACCOUNT_ACCESS_DENIED',
   'AD_ACCOUNT_UNAVAILABLE',
   'PAGE_ACCESS_REQUIRED',
+  'PAGE_ACCOUNT_MISMATCH',
   'PIXEL_ACCESS_REQUIRED',
   'INSTAGRAM_ACCESS_REQUIRED',
   'CATALOG_ACCESS_REQUIRED',
@@ -393,12 +405,22 @@ const classifyErrorCode = (
   message: string,
   rawCode?: number | string,
   explicitCode?: string,
+  rawSubcode?: number | string,
 ): string => {
+  const text = message.toLowerCase()
+  const subcode = Number(rawSubcode)
+
+  if (
+    subcode === 1815645 ||
+    text.includes('the page or app this ad is promoting mismatches')
+  ) {
+    return 'PAGE_ACCOUNT_MISMATCH'
+  }
+
   if (explicitCode && KNOWN_EXPLICIT_CODES.has(explicitCode)) {
     return explicitCode
   }
 
-  const text = message.toLowerCase()
   const code = Number(rawCode)
 
   if (includesAny(text, ['timeout', 'timed out', 'worker crashed', '执行超时', '中断'])) {
@@ -492,7 +514,7 @@ export const diagnoseBulkAdError = (
     ])
   const errorCode = legacyBulkAssetError
     ? 'BULK_ASSET_NOT_FOUND'
-    : classifyErrorCode(message, rawCode, explicitCode)
+    : classifyErrorCode(message, rawCode, explicitCode, rawSubcode)
   const template = DIAGNOSIS_TEMPLATES[errorCode] || DIAGNOSIS_TEMPLATES.EXECUTION_ERROR
 
   const codeSuffix = [rawCode ? `Meta code ${rawCode}` : '', rawSubcode ? `subcode ${rawSubcode}` : '']

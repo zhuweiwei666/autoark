@@ -56,6 +56,17 @@ test('manual Campaign name edits are not overwritten by the auto-template effect
   assert.match(pageSource, /campaignNameTemplateEditedRef\.current = true/)
 })
 
+test('Page ID and name updates compose without restoring a stale selection', () => {
+  const updateSource = sourceBetween(
+    pageSource,
+    'const updateAccountConfig',
+    '// 发布',
+  )
+
+  assert.match(updateSource, /setSelectedAccounts\(accounts => accounts\.map\(/)
+  assert.doesNotMatch(updateSource, /setSelectedAccounts\(selectedAccounts\.map\(/)
+})
+
 test('account controls expose loading state and prevent duplicate selection requests', () => {
   assert.match(pageSource, /const \[selectingAccounts, setSelectingAccounts\] = useState\(false\)/)
   assert.match(pageSource, /disabled=\{selectingAccounts\}/)

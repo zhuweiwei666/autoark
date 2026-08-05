@@ -551,15 +551,24 @@ export const getCachedPages = async (fbUserId: string, accountId?: string, scope
     const belongsToSnapshot = (user.adAccounts || []).some(
       (account: any) => normalizeForStorage(account.accountId) === scopedAccountId,
     )
-    // 显式分配给账户的 Page，或当前 Token 直接管理且带访问令牌的 Page。
-    return sanitizeFacebookPages(user.pages.filter((p: any) =>
-      p.accounts?.some(
+    const explicitlyAssignedPages = user.pages.filter((page: any) =>
+      page.accounts?.some(
         (account: any) => normalizeForStorage(account.accountId) === scopedAccountId,
-      ) || (
-        belongsToSnapshot &&
-        typeof p.accessToken === 'string' &&
-        p.accessToken.trim().length > 0
       )
+    )
+
+    // promote_pages is authoritative when Meta returned an explicit Page ↔
+    // ad-account relation. Fall back to unscoped /me/accounts Pages only when
+    // Meta returned no explicit Page for this account.
+    if (explicitlyAssignedPages.length > 0) {
+      return sanitizeFacebookPages(explicitlyAssignedPages)
+    }
+
+    return sanitizeFacebookPages(user.pages.filter((page: any) =>
+      belongsToSnapshot &&
+      (!Array.isArray(page.accounts) || page.accounts.length === 0) &&
+      typeof page.accessToken === 'string' &&
+      page.accessToken.trim().length > 0
     ))
   }
   
