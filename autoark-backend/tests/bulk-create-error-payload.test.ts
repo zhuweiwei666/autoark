@@ -1,5 +1,6 @@
 import {
   buildFacebookBulkCreateErrorPayload,
+  createAd,
   createAdCreative,
 } from '../src/integration/facebook/bulkCreate.api'
 import { facebookClient } from '../src/integration/facebook/facebookClient'
@@ -84,5 +85,25 @@ describe('facebook bulk create error payload', () => {
     expect(post).toHaveBeenCalledWith('/act_123/adcreatives', expect.objectContaining({
       degrees_of_freedom_spec: JSON.stringify(degreesOfFreedomSpec),
     }))
+  })
+
+  it('rejects a successful-looking Meta ad response without an id', async () => {
+    jest.spyOn(facebookClient, 'post').mockResolvedValue({ success: true } as any)
+
+    const result = await createAd({
+      accountId: '123',
+      token: 'secret-token',
+      adsetId: 'adset_1',
+      creativeId: 'creative_1',
+      name: 'Ad without an id',
+      status: 'PAUSED',
+    })
+
+    expect(result).toMatchObject({
+      success: false,
+      error: {
+        code: 'AD_CREATE_MISSING_ID',
+      },
+    })
   })
 })

@@ -31,6 +31,27 @@ const redactSensitive = (value: any): any => {
 
 const safeJson = (value: any): string => JSON.stringify(redactSensitive(value), null, 2)
 
+const requireCreatedAdId = (response: unknown): string => {
+  const rawId =
+    response && typeof response === 'object' && 'id' in response
+      ? (response as { id?: unknown }).id
+      : undefined
+  const adId =
+    typeof rawId === 'string' || typeof rawId === 'number'
+      ? String(rawId).trim()
+      : ''
+
+  if (adId) return adId
+
+  const error = new Error(
+    'Meta returned a successful ad creation response without an Ad ID',
+  ) as Error & { code: string; userMessage: string; response: unknown }
+  error.code = 'AD_CREATE_MISSING_ID'
+  error.userMessage = 'Meta 未返回有效广告 ID，本次广告未创建成功'
+  error.response = response
+  throw error
+}
+
 const hashForLog = (value: unknown): string | undefined => {
   if (!value) return undefined
   return createHash('sha256').update(String(value)).digest('hex').slice(0, 12)
@@ -410,8 +431,9 @@ export const createAd = async (params: CreateAdParams) => {
   try {
     logger.info(`[BulkCreate] Creating ad for adset ${adsetId}: ${name}`)
     const res = await facebookClient.post(`/act_${accountId}/ads`, requestParams)
-    logger.info(`[BulkCreate] Ad created: ${res.id}`)
-    return { success: true, id: res.id, data: res }
+    const adId = requireCreatedAdId(res)
+    logger.info(`[BulkCreate] Ad created: ${adId}`)
+    return { success: true, id: adId, data: res }
   } catch (error: any) {
     const errorPayload = buildFacebookBulkCreateErrorPayload(error)
     logger.error(`[BulkCreate] Failed to create ad:`, safeJson(errorPayload))

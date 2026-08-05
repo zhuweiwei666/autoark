@@ -2301,18 +2301,42 @@ export const executeTaskForAccount = async (
           status: config.ad.status || 'PAUSED',
           urlTags: config.ad.tracking?.urlTags,
         })
-        
-        if (!adResult.success) {
-          logger.error(`[BulkAd] Failed to create ad for material ${entry.matIndex + 1}:`, adResult.error)
-          stepDiagnostics.push(diagnoseFacebookStepError('ad', adResult.error, `Ad creation failed for material ${material.name || entry.matIndex + 1}`))
+
+        const rawAdId = 'id' in adResult ? adResult.id : undefined
+        const adId =
+          adResult.success &&
+          (typeof rawAdId === 'string' || typeof rawAdId === 'number')
+            ? String(rawAdId).trim()
+            : ''
+
+        if (!adResult.success || !adId) {
+          const adError = adResult.success
+            ? {
+                code: 'AD_CREATE_MISSING_ID',
+                message:
+                  'Meta returned a successful ad creation response without an Ad ID',
+                userMsg: 'Meta 未返回有效广告 ID，本次广告未创建成功',
+              }
+            : adResult.error
+          logger.error(
+            `[BulkAd] Failed to create ad for material ${entry.matIndex + 1}:`,
+            adError,
+          )
+          stepDiagnostics.push(
+            diagnoseFacebookStepError(
+              'ad',
+              adError,
+              `Ad creation failed for material ${material.name || entry.matIndex + 1}`,
+            ),
+          )
           continue
         }
-        
-        adIds.push(adResult.id)
-        
+
+        adIds.push(adId)
+
         // 记录广告详情（用于审核状态追踪）
         adsDetails.push({
-          adId: adResult.id,
+          adId,
           adName,
           adsetId,
           adsetName,
