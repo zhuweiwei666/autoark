@@ -484,26 +484,35 @@ const buildFacebookAssetSnapshot = async (draft: any) => {
       }
     }
 
+    const accountIdsWithExplicitPages = new Set<string>()
+
     for (const page of user.pages || []) {
       for (const account of page.accounts || []) {
         const accountId = normalizeForStorage(account.accountId)
         if (page.pageId && accountId) {
           snapshot.pageAccountPairs.add(`${page.pageId}:${accountId}`)
+          accountIdsWithExplicitPages.add(accountId)
         }
       }
+    }
 
+    for (const page of user.pages || []) {
       // /me/accounts returns user-managed Pages with a Page access token but no
-      // ad-account relation. Treat them as usable only with accounts from the
-      // same completed Facebook authorization snapshot.
+      // ad-account relation. Use that fallback only when promote_pages returned
+      // no explicit Page for the requested account.
       if (
         page.pageId &&
+        (!Array.isArray(page.accounts) || page.accounts.length === 0) &&
         typeof page.accessToken === 'string' &&
         page.accessToken.trim().length > 0
       ) {
         for (const accountId of requestedPageAccounts.get(
           String(page.pageId),
         ) || []) {
-          if (userAccountIds.has(accountId)) {
+          if (
+            userAccountIds.has(accountId) &&
+            !accountIdsWithExplicitPages.has(accountId)
+          ) {
             snapshot.pageAccountPairs.add(`${page.pageId}:${accountId}`)
           }
         }

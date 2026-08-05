@@ -408,6 +408,53 @@ describe('bulk ad draft validation preflight', () => {
     expect(validation.errors).toHaveLength(0)
   })
 
+  it('rejects a token-managed Page when promote_pages assigns different Pages to the account', async () => {
+    const draft = baseDraft({
+      accounts: [{
+        accountId: '123',
+        accountName: 'Account 123',
+        pageId: 'wrong_page',
+        pixelId: 'pixel_1',
+        conversionEvent: 'PURCHASE',
+      }],
+    })
+    jest.spyOn(AdDraft, 'findOne').mockResolvedValue(draft as any)
+    jest.spyOn(FbToken, 'find').mockReturnValue(
+      tokenQuery([{ _id: tokenId, fbUserId: 'fb_1' }]) as any,
+    )
+    jest.spyOn(FacebookUser, 'find').mockReturnValue(
+      queryWithLean([{
+        fbUserId: 'fb_1',
+        tokenId,
+        syncStatus: 'completed',
+        adAccounts: [{ accountId: 'act_123', status: 1 }],
+        pages: [
+          {
+            pageId: 'eligible_page',
+            accessToken: 'ELIGIBLE_TOKEN',
+            accounts: [{ accountId: 'act_123' }],
+          },
+          {
+            pageId: 'wrong_page',
+            accessToken: 'WRONG_TOKEN',
+            accounts: [],
+          },
+        ],
+        pixels: [
+          { pixelId: 'pixel_1', accounts: [{ accountId: 'act_123' }] },
+        ],
+      }]) as any,
+    )
+    mockValidPackages()
+
+    const validation = await validateDraft(draftId, {})
+
+    expect(validation.isValid).toBe(false)
+    expect(validation.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({ field: 'accounts.123.pageId' }),
+    ]))
+  })
+
   it('does not combine a user-managed page from one token with an account from another token', async () => {
     const draft = baseDraft()
     jest.spyOn(AdDraft, 'findOne').mockResolvedValue(draft as any)

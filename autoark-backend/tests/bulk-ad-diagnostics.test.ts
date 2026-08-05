@@ -113,6 +113,23 @@ describe('bulk ad diagnostics', () => {
     expect(diagnosis.nextActions.join(' ')).toContain('账单')
   })
 
+  it('classifies Meta Page/account mismatch subcode without blaming account access', () => {
+    const diagnosis = diagnoseBulkAdError({
+      response: {
+        error: {
+          code: 100,
+          error_subcode: 1815645,
+          message: 'The page or app this ad is promoting mismatches with the ones specified during ad account creation.',
+        },
+      },
+    })
+
+    expect(diagnosis.errorCode).toBe('PAGE_ACCOUNT_MISMATCH')
+    expect(diagnosis.entityType).toBe('page')
+    expect(diagnosis.rawSubcode).toBe(1815645)
+    expect(diagnosis.customerMessage).toContain('主页')
+  })
+
   it('preserves explicit no-ad-created errors and enriches them', () => {
     const diagnosis = diagnoseBulkAdError({
       entityType: 'ad',

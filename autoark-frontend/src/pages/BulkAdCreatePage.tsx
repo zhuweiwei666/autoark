@@ -1326,7 +1326,7 @@ export default function BulkAdCreatePage() {
   
   // 更新账户配置
   const updateAccountConfig = (accountId: string, field: string, value: string) => {
-    setSelectedAccounts(selectedAccounts.map(a => 
+    setSelectedAccounts(accounts => accounts.map(a =>
       a.accountId === accountId ? { ...a, [field]: value } : a
     ))
   }

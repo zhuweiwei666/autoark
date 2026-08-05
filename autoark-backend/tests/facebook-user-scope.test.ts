@@ -71,6 +71,40 @@ describe('facebook user asset cache scoping', () => {
     expect(foreignAccountPages).toEqual([])
   })
 
+  it('uses explicit promote-pages assignments instead of every Page managed by the token', async () => {
+    const lean = jest.fn().mockResolvedValue({
+      adAccounts: [{ accountId: '100' }, { accountId: '200' }],
+      pages: [
+        {
+          pageId: 'eligible_page',
+          name: 'Eligible Page',
+          accessToken: 'ELIGIBLE_TOKEN',
+          accounts: [{ accountId: 'act_100' }],
+        },
+        {
+          pageId: 'other_account_page',
+          name: 'Other Account Page',
+          accessToken: 'OTHER_TOKEN',
+          accounts: [{ accountId: 'act_200' }],
+        },
+        {
+          pageId: 'unscoped_page',
+          name: 'Unscoped Page',
+          accessToken: 'UNSCOPED_TOKEN',
+          accounts: [],
+        },
+      ],
+    })
+    const select = jest.fn().mockReturnValue({ lean })
+    jest.spyOn(FacebookUser, 'findOne').mockReturnValue({ select } as any)
+
+    const pages = await getCachedPages('fb_1', 'act_100', { tokenId: 'token_1' })
+
+    expect(pages).toEqual([
+      expect.objectContaining({ pageId: 'eligible_page', name: 'Eligible Page' }),
+    ])
+  })
+
   it('makes an expired persisted sync lease retryable after a process interruption', async () => {
     jest.spyOn(FacebookUser, 'findOne').mockResolvedValue({
       syncStatus: 'syncing',
