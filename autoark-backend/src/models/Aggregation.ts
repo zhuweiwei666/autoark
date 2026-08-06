@@ -164,6 +164,8 @@ export interface IAggAccount extends Document {
   ctr: number
   campaigns: number               // 广告系列数
   status: string                  // 账户状态
+  dataStatus: 'fresh' | 'stale'   // 最近一次指标拉取是否成功
+  lastSyncedAt?: Date             // 最近一次成功从 Meta 拉取的时间
   updatedAt: Date
 }
 
@@ -180,6 +182,12 @@ const aggAccountSchema = new Schema<IAggAccount>({
   ctr: { type: Number, default: 0 },
   campaigns: { type: Number, default: 0 },
   status: { type: String, default: 'active' },
+  dataStatus: {
+    type: String,
+    enum: ['fresh', 'stale'],
+    default: 'fresh',
+  },
+  lastSyncedAt: { type: Date },
 }, { timestamps: true })
 
 aggAccountSchema.index({ date: 1, accountId: 1 }, { unique: true })

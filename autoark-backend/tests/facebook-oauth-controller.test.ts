@@ -14,7 +14,26 @@ jest.mock('../src/utils/logger', () => ({
   },
 }))
 
+jest.mock('../src/models/FbToken', () => ({
+  __esModule: true,
+  default: {
+    findById: jest.fn(),
+  },
+}))
+
+jest.mock('../src/services/facebookUser.service', () => ({
+  syncFacebookTokenAssets: jest.fn(),
+}))
+
+jest.mock('../src/services/tokenInsightsBackfill.service', () => ({
+  markTokenInsightsBackfillPending: jest.fn(),
+  runPendingTokenInsightsBackfill: jest.fn(),
+}))
+
 import * as oauthService from '../src/services/facebook.oauth.service'
+import FbToken from '../src/models/FbToken'
+import { syncFacebookTokenAssets } from '../src/services/facebookUser.service'
+import * as tokenInsightsBackfillService from '../src/services/tokenInsightsBackfill.service'
 import { getLoginUrl, getOAuthConfig, handleCallback } from '../src/controllers/facebook.oauth.controller'
 
 const mockOAuthService = oauthService as jest.Mocked<typeof oauthService>
@@ -41,6 +60,14 @@ describe('Facebook OAuth controller', () => {
       envConfigured: false,
       activeDbConfiguredAppCount: 0,
     })
+    ;(tokenInsightsBackfillService.markTokenInsightsBackfillPending as jest.Mock).mockResolvedValue({})
+    ;(tokenInsightsBackfillService.runPendingTokenInsightsBackfill as jest.Mock).mockResolvedValue({})
+    ;(FbToken.findById as jest.Mock).mockResolvedValue({
+      _id: 'token_1',
+      fbUserId: 'fb_1',
+      token: 'access_token',
+    })
+    ;(syncFacebookTokenAssets as jest.Mock).mockResolvedValue({})
   })
 
   it('sanitizes login URL query parameters before calling the OAuth service', async () => {
@@ -115,8 +142,18 @@ describe('Facebook OAuth controller', () => {
         state: '  bulk-ad|user_1|org_1  ',
       },
     } as any, res as any, nextMock as any)
+    await Promise.resolve()
+    await Promise.resolve()
 
     expect(mockOAuthService.handleOAuthCallback).toHaveBeenCalledWith('auth_code', 'bulk-ad|user_1|org_1')
+    expect(tokenInsightsBackfillService.markTokenInsightsBackfillPending).toHaveBeenCalledWith('token_1')
+    expect(syncFacebookTokenAssets).toHaveBeenCalledWith(
+      expect.objectContaining({ _id: 'token_1' }),
+      { force: true },
+    )
+    expect(tokenInsightsBackfillService.runPendingTokenInsightsBackfill).toHaveBeenCalledWith({
+      tokenIds: ['token_1'],
+    })
     const redirectUrl = new URL(`https://app.autoark.work${res.redirect.mock.calls[0][0]}`)
     expect(redirectUrl.pathname).toBe('/oauth/callback')
     expect(redirectUrl.searchParams.get('oauth_success')).toBe('true')

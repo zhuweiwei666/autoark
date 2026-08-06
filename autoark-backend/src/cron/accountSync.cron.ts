@@ -2,6 +2,7 @@ import cron from 'node-cron'
 import logger from '../utils/logger'
 import { syncAccountsFromTokens } from '../services/facebook.accounts.service'
 import { runPendingAccountInsightsBackfill } from '../services/accountInsightsBackfill.service'
+import { runPendingTokenInsightsBackfill } from '../services/tokenInsightsBackfill.service'
 
 const syncAccountsAndBackfill = async (label: string) => {
   const result = await syncAccountsFromTokens()
@@ -14,6 +15,13 @@ const syncAccountsAndBackfill = async (label: string) => {
     `[AccountSyncCron] ${label} finalization backfill completed. `
       + `Attempted: ${backfill.attemptedAccounts}, `
       + `Completed: ${backfill.completedAccounts}, Pending: ${backfill.pendingAccounts}`,
+  )
+  const tokenBackfill = await runPendingTokenInsightsBackfill()
+  logger.info(
+    `[AccountSyncCron] ${label} authorization backfill completed. `
+      + `Attempted tokens: ${tokenBackfill.attemptedTokens}, `
+      + `accounts: ${tokenBackfill.attemptedAccounts}, `
+      + `completed: ${tokenBackfill.completedTokens}, pending: ${tokenBackfill.pendingTokens}`,
   )
 }
 

@@ -16,6 +16,8 @@ const mockAccountAggregate = jest.fn()
 const mockCountryAccountAggregate = jest.fn()
 const mockCampaignAggregate = jest.fn()
 const mockCampaignCountDocuments = jest.fn()
+const mockAccountBulkWrite = jest.fn()
+const mockAccountUpdateMany = jest.fn()
 const mockExistingDailyLean = jest.fn()
 const originalAggregationConcurrency =
   process.env.FACEBOOK_AGGREGATION_CONCURRENCY
@@ -63,7 +65,8 @@ jest.mock('../src/models/Aggregation', () => ({
   },
   AggAccount: {
     distinct: (...args: any[]) => mockPreviouslyAggregatedAccountIds(...args),
-    bulkWrite: jest.fn(),
+    bulkWrite: (...args: any[]) => mockAccountBulkWrite(...args),
+    updateMany: (...args: any[]) => mockAccountUpdateMany(...args),
     findOne: jest.fn(() => ({ lean: mockCachedAccountLean })),
     aggregate: (...args: any[]) => mockAccountAggregate(...args),
   },
@@ -97,6 +100,8 @@ describe('aggregation account eligibility', () => {
     mockAccountFind.mockReturnValue({ lean: jest.fn().mockResolvedValue([]) })
     mockCampaignLean.mockResolvedValue([])
     mockDailyUpsert.mockResolvedValue({})
+    mockAccountBulkWrite.mockResolvedValue({})
+    mockAccountUpdateMany.mockResolvedValue({})
     mockPreviouslyAggregatedAccountIds.mockResolvedValue(['123'])
     mockFetchInsights.mockResolvedValue([])
     mockResolveAccountOperationalAuthorization.mockResolvedValue([{
@@ -271,6 +276,18 @@ describe('aggregation account eligibility', () => {
         },
       },
     ])
+    expect(mockAccountBulkWrite).toHaveBeenCalledWith([
+      expect.objectContaining({
+        updateOne: expect.objectContaining({
+          filter: { date: '2026-07-27', accountId: '101' },
+          update: expect.objectContaining({
+            dataStatus: 'fresh',
+            lastSyncedAt: new Date('2026-07-27T08:00:00.000Z'),
+          }),
+          upsert: true,
+        }),
+      }),
+    ])
   })
 
   it('tries the personal fallback and keeps the cached snapshot when both authorizations fail', async () => {
@@ -335,6 +352,13 @@ describe('aggregation account eligibility', () => {
         cachedAccounts: 1,
       }),
       { upsert: true },
+    )
+    expect(mockAccountUpdateMany).toHaveBeenCalledWith(
+      {
+        date: '2026-07-27',
+        accountId: { $in: ['101', 'act_101'] },
+      },
+      { $set: { dataStatus: 'stale' } },
     )
   })
 
