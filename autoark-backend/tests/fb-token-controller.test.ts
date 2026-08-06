@@ -2,6 +2,8 @@ const mockFbTokenFind = jest.fn()
 const mockFbTokenFindOneAndUpdate = jest.fn()
 const mockValidateToken = jest.fn()
 const mockSyncFacebookTokenAssets = jest.fn()
+const mockMarkTokenInsightsBackfillPending = jest.fn()
+const mockRunPendingTokenInsightsBackfill = jest.fn()
 
 jest.mock('../src/models/FbToken', () => ({
   __esModule: true,
@@ -20,6 +22,11 @@ jest.mock('../src/services/facebookUser.service', () => ({
   syncFacebookTokenAssets: mockSyncFacebookTokenAssets,
 }))
 
+jest.mock('../src/services/tokenInsightsBackfill.service', () => ({
+  markTokenInsightsBackfillPending: mockMarkTokenInsightsBackfillPending,
+  runPendingTokenInsightsBackfill: mockRunPendingTokenInsightsBackfill,
+}))
+
 import { bindToken, getTokens, updateToken } from '../src/controllers/fbToken.controller'
 import { UserRole } from '../src/models/User'
 
@@ -27,6 +34,8 @@ describe('fb token controller', () => {
   beforeEach(() => {
     jest.clearAllMocks()
     mockSyncFacebookTokenAssets.mockResolvedValue({})
+    mockMarkTokenInsightsBackfillPending.mockResolvedValue({})
+    mockRunPendingTokenInsightsBackfill.mockResolvedValue({})
   })
 
   it('caps token list pagination and never returns raw token values', async () => {
@@ -267,6 +276,10 @@ describe('fb token controller', () => {
       }),
       { force: true },
     )
+    expect(mockMarkTokenInsightsBackfillPending).toHaveBeenCalledWith('665000000000000000000201')
+    expect(mockRunPendingTokenInsightsBackfill).toHaveBeenCalledWith({
+      tokenIds: ['665000000000000000000201'],
+    })
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
       success: true,
       message: 'Facebook token saved successfully',

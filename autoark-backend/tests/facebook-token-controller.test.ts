@@ -1,6 +1,8 @@
 const mockAxiosGet = jest.fn()
 const mockFbTokenFindOneAndUpdate = jest.fn()
 const mockSyncFacebookTokenAssets = jest.fn()
+const mockMarkTokenInsightsBackfillPending = jest.fn()
+const mockRunPendingTokenInsightsBackfill = jest.fn()
 
 jest.mock('axios', () => ({
   __esModule: true,
@@ -18,6 +20,11 @@ jest.mock('../src/models/FbToken', () => ({
 
 jest.mock('../src/services/facebookUser.service', () => ({
   syncFacebookTokenAssets: mockSyncFacebookTokenAssets,
+}))
+
+jest.mock('../src/services/tokenInsightsBackfill.service', () => ({
+  markTokenInsightsBackfillPending: mockMarkTokenInsightsBackfillPending,
+  runPendingTokenInsightsBackfill: mockRunPendingTokenInsightsBackfill,
 }))
 
 import { saveFacebookToken } from '../src/controllers/facebookToken.controller'
@@ -39,6 +46,8 @@ describe('legacy facebook token controller', () => {
       token: 'E'.repeat(4096),
     })
     mockSyncFacebookTokenAssets.mockResolvedValue({})
+    mockMarkTokenInsightsBackfillPending.mockResolvedValue({})
+    mockRunPendingTokenInsightsBackfill.mockResolvedValue({})
     const req: any = {
       user: {
         role: UserRole.ORG_ADMIN,
@@ -77,6 +86,10 @@ describe('legacy facebook token controller', () => {
       }),
       { force: true },
     )
+    expect(mockMarkTokenInsightsBackfillPending).toHaveBeenCalledWith('665000000000000000000201')
+    expect(mockRunPendingTokenInsightsBackfill).toHaveBeenCalledWith({
+      tokenIds: ['665000000000000000000201'],
+    })
     expect(res.json).toHaveBeenCalledWith({
       message: 'Facebook token saved successfully',
       fbUser: { id: 'fb_1', name: 'Alice FB' },

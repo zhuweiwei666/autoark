@@ -176,6 +176,14 @@ describe('summary route data scoping', () => {
         $unionWith: expect.objectContaining({ coll: 'accounts' }),
       }),
     ]))
+    const qualityStage = pipeline.find((stage: any) => stage.$addFields?.periodSpendStatus)
+    expect(qualityStage).toEqual({
+      $addFields: expect.objectContaining({
+        periodSpendStatus: expect.any(Object),
+        periodSpendSource: expect.any(Object),
+        periodSpendLastSyncedAt: expect.any(Object),
+      }),
+    })
   })
 
   it('filters account metadata after catalog and metrics are merged', async () => {

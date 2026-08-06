@@ -11,6 +11,9 @@ export interface IFbToken extends mongoose.Document {
   lastValidationError?: string // 最近一次瞬态验证失败
   lastValidationErrorCode?: number // 最近一次 Meta 错误码
   lastAccountSyncedAt?: Date // 最后一次账户目录同步完成时间
+  insightsBackfillPendingSince?: Date // 授权恢复后等待补拉消耗
+  insightsBackfillLastAttemptAt?: Date // 最近一次授权恢复补拉尝试
+  insightsBackfillCompletedAt?: Date // 最近一次授权恢复补拉完成
   expiresAt?: Date // token 过期时间（如果 Facebook API 返回）
   fbUserId?: string // Facebook 用户 ID
   fbUserName?: string // Facebook 用户名称
@@ -36,6 +39,9 @@ const FbTokenSchema = new mongoose.Schema(
     lastValidationError: { type: String },
     lastValidationErrorCode: { type: Number },
     lastAccountSyncedAt: { type: Date },
+    insightsBackfillPendingSince: { type: Date },
+    insightsBackfillLastAttemptAt: { type: Date },
+    insightsBackfillCompletedAt: { type: Date },
     expiresAt: { type: Date }, // token 过期时间
     fbUserId: { type: String }, // Facebook 用户 ID
     fbUserName: { type: String }, // Facebook 用户名称
@@ -70,6 +76,7 @@ FbTokenSchema.index({ userId: 1, createdAt: -1 })
 // 索引：状态 + 最后检查时间
 FbTokenSchema.index({ status: 1, lastCheckedAt: -1 })
 FbTokenSchema.index({ status: 1, lastValidationAttemptAt: 1 })
+FbTokenSchema.index({ status: 1, insightsBackfillPendingSince: 1, insightsBackfillLastAttemptAt: 1 })
 // 同一组织内同一个 Facebook 用户只保留一个活跃授权，避免并发 OAuth 产生重复记录
 FbTokenSchema.index(
   { fbUserId: 1, organizationId: 1 },

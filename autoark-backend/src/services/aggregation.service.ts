@@ -327,6 +327,7 @@ export async function refreshAggregation(
     const successfulAccountIds = new Set<string>()
     const cachedAccountIds = new Set<string>()
     const unavailableAccountIds = new Set<string>()
+    const staleAccountIds = new Set<string>()
 
     const restoreCachedContribution = async (account: any) => {
       const [cachedAccount, cachedCountries, cachedCampaigns] = await Promise.all([
@@ -601,7 +602,9 @@ export async function refreshAggregation(
           const restored = await restoreCachedContribution(account)
           if (restored) {
             cachedFallbackCount++
-            cachedAccountIds.add(normalizeForStorage(account.accountId))
+            const normalizedAccountId = normalizeForStorage(account.accountId)
+            cachedAccountIds.add(normalizedAccountId)
+            staleAccountIds.add(normalizedAccountId)
           } else {
             unavailableCount++
             unavailableAccountIds.add(normalizeForStorage(account.accountId))
@@ -719,11 +722,22 @@ export async function refreshAggregation(
           ctr: account.impressions > 0 ? Math.round((account.clicks / account.impressions) * 10000) / 100 : 0,
           campaigns: account.campaigns,
           status: account.status,
+          dataStatus: 'fresh',
+          lastSyncedAt: new Date(),
         },
         upsert: true
       }
     }))
     if (accountOps.length > 0) await AggAccount.bulkWrite(accountOps)
+    if (staleAccountIds.size > 0) {
+      await AggAccount.updateMany(
+        {
+          date,
+          accountId: { $in: getAccountIdsForQuery([...staleAccountIds]) },
+        },
+        { $set: { dataStatus: 'stale' } },
+      )
+    }
 
     // 4. 保存广告系列数据 (批量写入优化)
     const campaignOps = Array.from(campaignMap.values())

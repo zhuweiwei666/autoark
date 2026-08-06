@@ -3,6 +3,12 @@ import * as oauthService from '../services/facebook.oauth.service'
 import logger from '../utils/logger'
 import { pickSafeQueryString } from '../utils/pagination'
 import { UserRole } from '../models/User'
+import FbToken from '../models/FbToken'
+import { syncFacebookTokenAssets } from '../services/facebookUser.service'
+import {
+  markTokenInsightsBackfillPending,
+  runPendingTokenInsightsBackfill,
+} from '../services/tokenInsightsBackfill.service'
 
 const OAUTH_STATE_MAX_LENGTH = 4096
 const OAUTH_CODE_MAX_LENGTH = 4096
@@ -112,6 +118,18 @@ export const handleCallback = async (req: Request, res: Response, next: NextFunc
 
     // 处理 OAuth 回调
     const result = await oauthService.handleOAuthCallback(code, state)
+    await markTokenInsightsBackfillPending(result.tokenId)
+    void (async () => {
+      const tokenDoc = await FbToken.findById(result.tokenId)
+      if (!tokenDoc) {
+        logger.warn(`[OAuth] Token ${result.tokenId} missing after callback; recovery remains pending`)
+        return
+      }
+      await syncFacebookTokenAssets(tokenDoc as any, { force: true })
+      await runPendingTokenInsightsBackfill({ tokenIds: [result.tokenId] })
+    })().catch((syncError: any) => {
+      logger.error(`[OAuth] Immediate asset sync/backfill failed for token ${result.tokenId}:`, syncError)
+    })
 
     // 重定向到目标页面，显示成功消息和用户信息
     const params = new URLSearchParams({

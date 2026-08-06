@@ -7,6 +7,10 @@ import {
 } from '../services/fbToken.validation.service'
 import logger from '../utils/logger'
 import { syncFacebookTokenAssets } from '../services/facebookUser.service'
+import {
+  markTokenInsightsBackfillPending,
+  runPendingTokenInsightsBackfill,
+} from '../services/tokenInsightsBackfill.service'
 import { combineFilters, scopedIdFilter, scopedTokenFilter } from '../utils/accessControl'
 import { parsePagination, pickAllowedString, pickSafeQueryString } from '../utils/pagination'
 
@@ -123,9 +127,13 @@ export const bindToken = async (
 
     logger.info(`[Token Bind] Token saved successfully for user: ${userId}`)
 
-    void syncFacebookTokenAssets(savedToken as any, { force: true }).catch((error: any) => {
-      logger.error(`[Token Bind] Immediate asset sync failed for token ${savedToken._id}:`, error)
-    })
+    const savedTokenId = String(savedToken._id)
+    await markTokenInsightsBackfillPending(savedTokenId)
+    void syncFacebookTokenAssets(savedToken as any, { force: true })
+      .then(() => runPendingTokenInsightsBackfill({ tokenIds: [savedTokenId] }))
+      .catch((error: any) => {
+        logger.error(`[Token Bind] Immediate asset sync/backfill failed for token ${savedToken._id}:`, error)
+      })
 
     return res.json({
       success: true,

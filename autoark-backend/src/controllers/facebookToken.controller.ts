@@ -6,6 +6,10 @@ import { combineFilters, scopedTokenFilter } from '../utils/accessControl'
 import { pickSafeQueryString } from '../utils/pagination'
 import { syncFacebookTokenAssets } from '../services/facebookUser.service'
 import logger from '../utils/logger'
+import {
+  markTokenInsightsBackfillPending,
+  runPendingTokenInsightsBackfill,
+} from '../services/tokenInsightsBackfill.service'
 
 const FB_TOKEN_MAX_LENGTH = 4096
 
@@ -53,9 +57,13 @@ export const saveFacebookToken = async (req: Request, res: Response) => {
         { new: true, upsert: true },
       )
 
-      void syncFacebookTokenAssets(savedToken as any, { force: true }).catch((error: any) => {
-        logger.error(`[Legacy Token] Immediate asset sync failed for token ${savedToken._id}:`, error)
-      })
+      const savedTokenId = String(savedToken._id)
+      await markTokenInsightsBackfillPending(savedTokenId)
+      void syncFacebookTokenAssets(savedToken as any, { force: true })
+        .then(() => runPendingTokenInsightsBackfill({ tokenIds: [savedTokenId] }))
+        .catch((error: any) => {
+          logger.error(`[Legacy Token] Immediate asset sync/backfill failed for token ${savedToken._id}:`, error)
+        })
 
       return res.json({
         message: 'Facebook token saved successfully',

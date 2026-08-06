@@ -23,6 +23,10 @@ import Account from '../models/Account'
 import FacebookUser from '../models/FacebookUser'
 import * as facebookUserService from '../services/facebookUser.service'
 import * as facebookAccountsService from '../services/facebook.accounts.service'
+import {
+  markTokenInsightsBackfillPending,
+  runPendingTokenInsightsBackfill,
+} from '../services/tokenInsightsBackfill.service'
 import { buildFacebookAssetDiagnostics } from '../services/facebookAssets.diagnostics.service'
 import { writeAuditLog } from '../services/auditLog.service'
 import { buildPublicOAuthReadiness } from '../utils/facebookAppReadiness'
@@ -2359,6 +2363,10 @@ export const handleAuthCallback = async (req: Request, res: Response) => {
       logger.info(`[BulkAd OAuth] Token ${result.tokenId} bound to user ${autoarkUserId}`)
     }
 
+    // 先持久化补拉意图，再启动任何异步资产同步。即使进程重启或 Meta
+    // 短暂失败，定时任务仍会继续完成这次授权恢复所需的指标补拉。
+    await markTokenInsightsBackfillPending(result.tokenId)
+
     await writeAuditLog(req, {
       category: 'bulk_ad',
       action: 'bulk_ad.facebook_oauth_callback',
@@ -2408,6 +2416,13 @@ export const handleAuthCallback = async (req: Request, res: Response) => {
               fbUserId: result.fbUserId,
             },
           })
+          return
+        }
+
+        try {
+          await runPendingTokenInsightsBackfill({ tokenIds: [result.tokenId] })
+        } catch (err: any) {
+          logger.error('[BulkAd OAuth] Immediate insights backfill failed; recovery remains pending:', err)
         }
       },
       { force: true },

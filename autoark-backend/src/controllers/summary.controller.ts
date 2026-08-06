@@ -485,6 +485,13 @@ router.get('/accounts', async (req: Request, res: Response) => {
           clicks: { $sum: '$clicks' },
           installs: { $sum: '$installs' },
           campaigns: { $max: '$campaigns' },
+          metricSnapshotCount: { $sum: 1 },
+          staleSnapshotCount: {
+            $sum: { $cond: [{ $eq: ['$dataStatus', 'stale'] }, 1, 0] },
+          },
+          periodSpendLastSyncedAt: {
+            $max: { $ifNull: ['$lastSyncedAt', '$updatedAt'] },
+          },
         }
       },
       {
@@ -528,6 +535,9 @@ router.get('/accounts', async (req: Request, res: Response) => {
                 clicks: { $literal: 0 },
                 installs: { $literal: 0 },
                 campaigns: { $literal: 0 },
+                metricSnapshotCount: { $literal: 0 },
+                staleSnapshotCount: { $literal: 0 },
+                periodSpendLastSyncedAt: { $literal: null },
               },
             },
           ],
@@ -556,6 +566,9 @@ router.get('/accounts', async (req: Request, res: Response) => {
           clicks: { $sum: '$clicks' },
           installs: { $sum: '$installs' },
           campaigns: { $max: '$campaigns' },
+          metricSnapshotCount: { $sum: '$metricSnapshotCount' },
+          staleSnapshotCount: { $sum: '$staleSnapshotCount' },
+          periodSpendLastSyncedAt: { $max: '$periodSpendLastSyncedAt' },
         },
       },
       {
@@ -565,6 +578,31 @@ router.get('/accounts', async (req: Request, res: Response) => {
           accountName: { $ifNull: ['$catalogName', '$metricAccountName'] },
           status: { $ifNull: ['$catalogStatus', '$metricStatus'] },
           periodSpend: '$spend',
+          periodSpendStatus: {
+            $switch: {
+              branches: [
+                {
+                  case: { $eq: ['$metricSnapshotCount', 0] },
+                  then: 'unavailable',
+                },
+                {
+                  case: { $gt: ['$staleSnapshotCount', 0] },
+                  then: 'stale',
+                },
+              ],
+              default: 'fresh',
+            },
+          },
+          periodSpendSource: {
+            $cond: [
+              { $gt: ['$metricSnapshotCount', 0] },
+              'cached',
+              'unavailable',
+            ],
+          },
+          periodSpendLastSyncedAt: {
+            $ifNull: ['$periodSpendLastSyncedAt', null],
+          },
           purchase_value: '$revenue',
           calculatedBalance: {
             $divide: [{ $ifNull: ['$balance', 0] }, 100],

@@ -36,6 +36,11 @@ jest.mock('../src/services/facebook.accounts.service', () => ({
   syncCachedAccountsForToken: jest.fn(),
 }))
 
+jest.mock('../src/services/tokenInsightsBackfill.service', () => ({
+  markTokenInsightsBackfillPending: jest.fn(),
+  runPendingTokenInsightsBackfill: jest.fn(),
+}))
+
 jest.mock('../src/services/metaBusinessCredential.service', () => ({
   getOrganizationAuthorization: jest.fn().mockResolvedValue(null),
   refreshCredential: jest.fn(),
@@ -59,6 +64,7 @@ import { writeAuditLog } from '../src/services/auditLog.service'
 import * as oauthService from '../src/services/facebook.oauth.service'
 import * as facebookUserService from '../src/services/facebookUser.service'
 import * as facebookAccountsService from '../src/services/facebook.accounts.service'
+import * as tokenInsightsBackfillService from '../src/services/tokenInsightsBackfill.service'
 import * as metaBusinessCredentialService from '../src/services/metaBusinessCredential.service'
 import FacebookApp from '../src/models/FacebookApp'
 import FacebookUser from '../src/models/FacebookUser'
@@ -111,6 +117,7 @@ const mockWriteAuditLog = writeAuditLog as jest.Mock
 const mockOauthService = oauthService as jest.Mocked<typeof oauthService>
 const mockFacebookUserService = facebookUserService as jest.Mocked<typeof facebookUserService>
 const mockFacebookAccountsService = facebookAccountsService as jest.Mocked<typeof facebookAccountsService>
+const mockTokenInsightsBackfillService = tokenInsightsBackfillService as jest.Mocked<typeof tokenInsightsBackfillService>
 const mockMetaBusinessCredentialService = metaBusinessCredentialService as jest.Mocked<typeof metaBusinessCredentialService>
 const mockFacebookApp = FacebookApp as jest.Mocked<typeof FacebookApp>
 const mockFacebookClient = facebookClient as jest.Mocked<typeof facebookClient>
@@ -805,6 +812,8 @@ describe('bulk ad controller', () => {
       syncedCount: 1,
       skippedCount: 0,
     } as any)
+    mockTokenInsightsBackfillService.markTokenInsightsBackfillPending.mockResolvedValue({} as any)
+    mockTokenInsightsBackfillService.runPendingTokenInsightsBackfill.mockResolvedValue({} as any)
 
     const req: any = {
       query: { code: 'oauth-code', state: 'signed-state' },
@@ -828,6 +837,12 @@ describe('bulk ad controller', () => {
       '665000000000000000000901',
       { lastAccountSyncedAt: expect.any(Date) },
     )
+    expect(mockTokenInsightsBackfillService.markTokenInsightsBackfillPending).toHaveBeenCalledWith(
+      '665000000000000000000901',
+    )
+    expect(mockTokenInsightsBackfillService.runPendingTokenInsightsBackfill).toHaveBeenCalledWith({
+      tokenIds: ['665000000000000000000901'],
+    })
   })
 
   it('paginates and deduplicates authorized ad accounts across Meta pages', async () => {
