@@ -29,6 +29,21 @@ Supported dimensions:
 - `account`
 - `campaign`
 - `country`
+- `delivery` — daily spend grouped by parsed campaign delivery dimensions
+
+`delivery` is the stable contract for ROI consumers. AutoArk owns campaign-name
+parsing using this versioned convention:
+
+```text
+<optimizer>_<channel>_<product>_<platform>_*
+```
+
+For example, `gyh_fb_clingai_web_launch_01` is returned as optimizer `gyh`,
+channel `facebook_ads`, product `clingai`, and platform `web`. Supported aliases
+currently include `fb|facebook|meta`, `gg|google`, `tt|tiktok`, `kwai`, and
+`web|android|apk|ios`. Names that do not satisfy the contract are retained as
+`channel=other`, `product=unknown`, `platform=all`, `namingMatched=false`; their
+spend is never silently discarded.
 
 List dimensions accept `page` and `limit`. `limit` and page numbers are capped
 at 100, and date ranges are capped at 90 days. The endpoint is rate-limited to
@@ -52,6 +67,11 @@ status, objective, and account identity. `meta.freshness` identifies the newest
 pre-aggregated row used by the requested dimension. `meta.coverage` reports the
 number of scoped, covered, and missing accounts so partial Meta authorization
 or aggregation gaps remain visible.
+
+Delivery responses additionally contain `date`, `optimizer`, `channel`,
+`product`, `platform`, `campaigns`, and `namingMatched`, plus
+`meta.namingContract`. AutoArk performs this parsing and grouping; downstream
+consumers must not independently reinterpret campaign names.
 
 `revenue` is Meta-attributed purchase value, not payment-provider settlement or
 audited entitlement revenue. Spend and purchase value retain the selected
