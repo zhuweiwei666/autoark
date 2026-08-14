@@ -377,6 +377,13 @@ describe('AI ads read integration', () => {
       platform: 'android',
       matched: true,
     })
+    expect(parseCampaignDeliveryName('gyh_fb_vibin_and_launch')).toEqual({
+      optimizer: 'gyh',
+      channel: 'facebook_ads',
+      product: 'vibin',
+      platform: 'android',
+      matched: true,
+    })
     expect(parseCampaignDeliveryName('legacy-campaign-name')).toEqual({
       optimizer: 'unknown',
       channel: 'other',
