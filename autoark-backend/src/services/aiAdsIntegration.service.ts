@@ -41,6 +41,7 @@ const CHANNEL_ALIASES: Record<string, string> = {
 
 const PLATFORM_ALIASES: Record<string, string> = {
   web: 'web',
+  and: 'android',
   android: 'android',
   apk: 'android',
   ios: 'ios',
