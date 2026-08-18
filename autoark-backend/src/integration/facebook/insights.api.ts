@@ -1,5 +1,7 @@
 import { facebookClient } from './facebookClient'
 
+const MAX_INSIGHTS_PAGES = 100
+
 export const fetchInsights = async (
   entityId: string, // 可以是 accountId, campaignId, adsetId, adId
   level: 'account' | 'campaign' | 'adset' | 'ad',
@@ -71,6 +73,30 @@ export const fetchInsights = async (
     params.access_token = token
   }
 
-  const res = await facebookClient.get(`/${entityId}/insights`, params)
-  return res.data || []
+  const insights: any[] = []
+  let after: string | undefined
+  const seenCursors = new Set<string>()
+
+  for (let page = 0; page < MAX_INSIGHTS_PAGES; page += 1) {
+    const res = await facebookClient.get(`/${entityId}/insights`, {
+      ...params,
+      ...(after ? { after } : {}),
+    })
+    if (!Array.isArray(res?.data)) {
+      throw new Error('Facebook Insights response data is not an array')
+    }
+    insights.push(...res.data)
+
+    const nextAfter = res?.paging?.cursors?.after
+    if (!res?.paging?.next) return insights
+    if (!nextAfter || seenCursors.has(nextAfter)) {
+      throw new Error('Facebook Insights pagination cursor is missing or repeated')
+    }
+    seenCursors.add(nextAfter)
+    after = nextAfter
+  }
+
+  // Never persist a silently truncated snapshot. The next retry can resume with
+  // a larger scoped query instead of treating partial Meta data as complete.
+  throw new Error(`Facebook Insights exceeded ${MAX_INSIGHTS_PAGES} pages`)
 }

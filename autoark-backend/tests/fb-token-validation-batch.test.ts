@@ -145,7 +145,10 @@ describe('facebook token validation batch', () => {
     expect(status).toBe('invalid')
     expect(FbToken.findByIdAndUpdate).toHaveBeenCalledWith(
       'token_1',
-      expect.objectContaining({ status: 'invalid' }),
+      expect.objectContaining({
+        status: 'invalid',
+        insightsGapStartedAt: expect.any(Date),
+      }),
     )
   })
 
@@ -203,7 +206,12 @@ describe('facebook token validation batch', () => {
     expect(status).toBe('active')
     expect(FbToken.findByIdAndUpdate).toHaveBeenCalledWith(
       'token_1',
-      expect.objectContaining({ status: 'active', fbUserId: 'fb_1' }),
+      expect.objectContaining({
+        status: 'active',
+        fbUserId: 'fb_1',
+        insightsGapStartedAt: expect.any(Date),
+        insightsBackfillPendingSince: expect.any(Date),
+      }),
     )
   })
 })

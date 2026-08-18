@@ -70,13 +70,13 @@ describe('pending account insights backfill', () => {
       1,
       '2026-08-04',
       true,
-      { accountIds: ['101', '102'] },
+      { accountIds: ['101', '102'], ignoreRetryBackoff: true },
     )
     expect(mockRefreshAggregation).toHaveBeenNthCalledWith(
       2,
       '2026-08-03',
       true,
-      { accountIds: ['101', '102'] },
+      { accountIds: ['101', '102'], ignoreRetryBackoff: true },
     )
     expect(mockAccountUpdateMany).toHaveBeenLastCalledWith(
       { channel: 'facebook', accountId: { $in: ['101', 'act_101'] } },

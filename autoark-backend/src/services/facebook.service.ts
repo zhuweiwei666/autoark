@@ -1,11 +1,13 @@
 import axios from 'axios'
 import dotenv from 'dotenv'
-import { MetricsDaily } from '../models' // Unified export
 import logger from '../utils/logger'
 import { getEffectiveAdAccounts } from './facebook.sync.service' // Import from sync service
 import { getFacebookAccessToken } from '../utils/fbToken'
 import { FB_API_VERSION, FB_BASE_URL } from '../config/facebook.config'
-import { normalizeForApi } from '../utils/accountId'
+import { normalizeForApi, normalizeForStorage } from '../utils/accountId'
+import MetaInsightsCoverage from '../models/MetaInsightsCoverage'
+import MetaInsightsFact from '../models/MetaInsightsFact'
+import { addDateDays, formatShanghaiDate } from '../utils/shanghaiDate'
 
 dotenv.config()
 
@@ -100,139 +102,59 @@ export const getAds = async (accountId: string, accessToken?: string) => {
 }
 
 /**
- * Fetch daily insights and upsert into DB
+ * Read daily insights from the permanent normalized fact store. Query handlers
+ * must never depend on a currently valid Meta token to access history.
  */
 export const getInsightsDaily = async (
   accountId: string,
   dateRange?: { since: string; until: string },
-  accessToken?: string,
+  _accessToken?: string,
 ) => {
-  const startTime = Date.now()
-  // 统一格式：API 调用需要带 act_ 前缀
-  const { normalizeForApi, normalizeForStorage } = await import('../utils/accountId')
-  const accountIdForApi = normalizeForApi(accountId)
   const accountIdForStorage = normalizeForStorage(accountId)
-  logger.info(`[Facebook API] getInsightsDaily started for ${accountId}`)
-  try {
-    const token = accessToken || await getFacebookAccessToken()
-    const url = `${FB_BASE_URL}/${FB_API_VERSION}/${accountIdForApi}/insights`
+  const yesterday = addDateDays(formatShanghaiDate(), -1)
+  const since = dateRange?.since || yesterday
+  const until = dateRange?.until || yesterday
+  const [facts, coverage] = await Promise.all([
+    MetaInsightsFact.find({
+      provider: 'facebook',
+      accountId: accountIdForStorage,
+      date: { $gte: since, $lte: until },
+    })
+      .select('date accountId accountName campaignId campaignName optimizer country spend revenue impressions clicks installs fetchedAt')
+      .sort({ date: 1, campaignId: 1, country: 1 })
+      .lean(),
+    MetaInsightsCoverage.find({
+      provider: 'facebook',
+      accountId: accountIdForStorage,
+      date: { $gte: since, $lte: until },
+    })
+      .select('date status hasSnapshot factRows lastSuccessAt lastFailureAt frozenAt')
+      .sort({ date: 1 })
+      .lean(),
+  ])
 
-    // Requested fields
-    const fields = [
-      'campaign_id',
-      'adset_id',
-      'ad_id',
-      'impressions',
-      'clicks',
-      'spend',
-      'actions',
-      'action_values',
-      'cpc',
-      'cpm',
-      'ctr',
-      'cost_per_action_type',
-      'purchase_roas',
-      'date_start', // FB returns date_start/date_stop for the window
-      'date_stop',
-    ].join(',')
-
-    const params: any = {
-      access_token: token,
-      level: 'ad',
-      fields: fields,
-      time_increment: 1, // Daily breakdown
-      limit: 500,
-    }
-
-    if (dateRange) {
-      params.time_range = JSON.stringify(dateRange)
-    } else {
-      params.date_preset = 'yesterday'
-    }
-
-    const res = await axios.get(url, { params })
-    const insights = res.data.data || []
-
-    logger.info(
-      `Fetched ${insights.length} daily insight records for account ${accountId}`,
-    )
-
-    const processedData = []
-
-    for (const item of insights) {
-      // 1. Extract Installs (mobile_app_install)
-      const actions = item.actions || []
-      const installAction = actions.find(
-        (a: any) => a.action_type === 'mobile_app_install',
-      )
-      const installs = installAction ? parseFloat(installAction.value) : 0
-
-      // 2. Extract Revenue/ROAS
-      // 'action_values' usually contains purchase value
-      const actionValues = item.action_values || []
-      const purchaseValue = actionValues.find(
-        (a: any) =>
-          a.action_type === 'purchase' ||
-          a.action_type === 'mobile_app_purchase',
-      ) // Adjust based on specific event name
-      const revenueD0 = purchaseValue ? parseFloat(purchaseValue.value) : 0
-
-      // purchase_roas is array of { action_type, value }
-      const roasStats = item.purchase_roas || []
-      const totalRoas = roasStats.reduce(
-        (acc: number, cur: any) => acc + parseFloat(cur.value || '0'),
-        0,
-      )
-      // Or if there's a specific 'purchase' action type for ROAS
-      // For simplicity taking the aggregated value if single or just summing up
-
-      const spendUsd = parseFloat(item.spend || '0')
-
-      // 3. Calculate Derived Metrics
-      const cpiUsd = installs > 0 ? spendUsd / installs : 0
-
-      // 4. Construct Internal Format
-      const record = {
-        date: item.date_start, // YYYY-MM-DD
-        channel: 'facebook',
-        accountId: accountIdForStorage, // 统一格式：数据库存储时去掉前缀
-        campaignId: item.campaign_id,
-        adsetId: item.adset_id,
-        adId: item.ad_id,
-        impressions: parseInt(item.impressions || '0', 10),
-        clicks: parseInt(item.clicks || '0', 10),
-        installs,
-        spendUsd,
-        revenueD0, // Assuming D0 for daily fetch
-        cpiUsd,
-        roiD0: totalRoas, // ROAS
-        raw: item, // Store raw FB response for debugging
-      }
-
-      // 5. Upsert into MongoDB
-      await MetricsDaily.findOneAndUpdate(
-        {
-          date: record.date,
-          adId: record.adId,
-          accountId: record.accountId,
-        },
-        record,
-        { upsert: true, new: true, setDefaultsOnInsert: true },
-      )
-
-      processedData.push(record)
-    }
-
-    logger.info(
-      `Successfully upserted ${processedData.length} records into MetricsDaily`,
-    )
-    logger.timerLog(
-      `[Facebook API] getInsightsDaily for ${accountId}`,
-      startTime,
-    )
-    return processedData
-  } catch (error) {
-    handleApiError('getInsightsDaily', error)
+  return {
+    data: facts.map((fact: any) => ({
+      date: fact.date,
+      channel: 'facebook',
+      accountId: fact.accountId,
+      accountName: fact.accountName,
+      campaignId: fact.campaignId,
+      campaignName: fact.campaignName,
+      optimizer: fact.optimizer,
+      country: fact.country,
+      impressions: fact.impressions,
+      clicks: fact.clicks,
+      installs: fact.installs,
+      spendUsd: fact.spend,
+      revenueD0: fact.revenue,
+      cpiUsd: fact.installs > 0 ? fact.spend / fact.installs : 0,
+      roiD0: fact.spend > 0 ? fact.revenue / fact.spend : 0,
+      fetchedAt: fact.fetchedAt,
+    })),
+    coverage,
+    cached: true,
+    meta: { startDate: since, endDate: until, grain: 'campaign-country-day' },
   }
 }
 

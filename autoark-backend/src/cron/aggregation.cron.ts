@@ -1,16 +1,21 @@
 /**
- * 📊 预聚合数据定时刷新
+ * 📊 预聚合数据滚动刷新
  *
- * - 服务启动时刷新今天一次
- * - 每 10 分钟刷新今天的数据
- * - 上一轮未结束时跳过，避免重叠放大 Meta 请求
+ * - 今天：每 10 分钟刷新
+ * - 昨天：每小时最终校准
+ * - 前天：每天最终校准
+ * - 更早日期：只读永久事实；仅 coverage-gap/管理员定向补拉
+ * - 同一日期重复触发会合并，所有日期串行执行，避免放大 Meta 请求
  */
 
 import cron from 'node-cron'
-import dayjs from 'dayjs'
 import logger from '../utils/logger'
 import { isFacebookAggregationEnabled } from '../config/facebookSync'
 import { refreshAggregation } from '../services/aggregation.service'
+import { freezeMatureMetaInsightsCoverage } from '../services/metaInsightsPersistence.service'
+import { addDateDays, formatShanghaiDate } from '../utils/shanghaiDate'
+
+type RefreshTrigger = 'initial' | 'today' | 'yesterday' | 'day-before'
 
 export function initAggregationCron() {
   if (!isFacebookAggregationEnabled()) {
@@ -20,40 +25,69 @@ export function initAggregationCron() {
     return
   }
 
-  let refreshInFlight = false
-  const runRefresh = async (trigger: 'initial' | 'scheduled') => {
-    if (refreshInFlight) {
-      logger.warn(
-        `[AggregationCron] Refresh already in progress; skipping ${trigger} refresh`,
-      )
-      return
-    }
+  const pendingDates = new Map<string, RefreshTrigger>()
+  let drainInFlight: Promise<void> | null = null
 
-    refreshInFlight = true
-    const date = dayjs().format('YYYY-MM-DD')
-    logger.info(`[AggregationCron] Starting ${trigger} refresh for ${date}...`)
-    try {
-      await refreshAggregation(date)
-      logger.info(`[AggregationCron] ${trigger} refresh for ${date} completed`)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      logger.error(
-        `[AggregationCron] ${trigger} refresh for ${date} failed:`,
-        message,
-      )
-    } finally {
-      refreshInFlight = false
+  const drain = async () => {
+    while (pendingDates.size > 0) {
+      const next = pendingDates.entries().next().value as
+        | [string, RefreshTrigger]
+        | undefined
+      if (!next) break
+      const [date, trigger] = next
+      pendingDates.delete(date)
+      logger.info(`[AggregationCron] Starting ${trigger} refresh for ${date}...`)
+      try {
+        await refreshAggregation(date)
+        if (trigger === 'day-before') {
+          await freezeMatureMetaInsightsCoverage()
+        }
+        logger.info(`[AggregationCron] ${trigger} refresh for ${date} completed`)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        logger.error(
+          `[AggregationCron] ${trigger} refresh for ${date} failed:`,
+          message,
+        )
+      }
     }
   }
 
-  // 🚀 服务启动时立即刷新一次（异步，不阻塞启动）
-  setTimeout(() => runRefresh('initial'), 5000)
+  const enqueueRefresh = (
+    trigger: RefreshTrigger,
+    offsetDays: number,
+  ): Promise<void> => {
+    const date = addDateDays(formatShanghaiDate(), offsetDays)
+    pendingDates.set(date, trigger)
+    if (!drainInFlight) {
+      drainInFlight = drain().finally(() => {
+        drainInFlight = null
+      })
+    }
+    return drainInFlight
+  }
 
-  // 每 10 分钟刷新一次
-  cron.schedule('*/10 * * * *', () => runRefresh('scheduled'))
+  setTimeout(() => enqueueRefresh('initial', 0), 5000)
+
+  cron.schedule(
+    '*/10 * * * *',
+    () => enqueueRefresh('today', 0),
+    { timezone: 'Asia/Shanghai' },
+  )
+  cron.schedule(
+    '3 * * * *',
+    () => enqueueRefresh('yesterday', -1),
+    { timezone: 'Asia/Shanghai' },
+  )
+  cron.schedule(
+    '47 23 * * *',
+    () => enqueueRefresh('day-before', -2),
+    { timezone: 'Asia/Shanghai' },
+  )
 
   logger.info(
-    '[AggregationCron] Meta aggregation initialized (today only, every 10 minutes)',
+    '[AggregationCron] Meta aggregation initialized '
+      + '(today/10m, yesterday/hourly, day-before/23:47 final; older dates frozen)',
   )
 }
 

@@ -7,6 +7,7 @@ const TOKEN_VALIDATION_BATCH_LIMIT = 100
 const TOKEN_VALIDATION_MAX_BATCH_LIMIT = 500
 const TOKEN_VALIDATION_CONCURRENCY = 5
 const TOKEN_VALIDATION_MAX_CONCURRENCY = 10
+const LEGACY_RECOVERY_FALLBACK_MS = 2 * 24 * 60 * 60 * 1000
 
 type SettledResult<T> =
   | { status: 'fulfilled'; value: T }
@@ -247,6 +248,25 @@ export async function checkAndUpdateTokenStatusDetailed(
       logger.warn(
         `[Token Validation] Preserving ${newStatus} status after transient validation failure for user: ${tokenDoc.userId}, code=${validation.errorCode ?? 'unknown'}, error=${validation.error}`,
       )
+    }
+
+    const previousStatus = tokenDoc.status || 'active'
+    if (newStatus !== 'active' && previousStatus === 'active') {
+      updateData.insightsGapStartedAt = tokenDoc.insightsGapStartedAt || checkedAt
+      updateData.$unset = {
+        ...(updateData.$unset || {}),
+        insightsBackfillCursorDate: 1,
+        insightsBackfillCompletedAt: 1,
+      }
+    } else if (newStatus === 'active' && previousStatus !== 'active') {
+      updateData.insightsGapStartedAt = tokenDoc.insightsGapStartedAt
+        || new Date(checkedAt.getTime() - LEGACY_RECOVERY_FALLBACK_MS)
+      updateData.insightsBackfillPendingSince = checkedAt
+      updateData.$unset = {
+        ...(updateData.$unset || {}),
+        insightsBackfillLastAttemptAt: 1,
+        insightsBackfillCompletedAt: 1,
+      }
     }
 
     // 更新数据库

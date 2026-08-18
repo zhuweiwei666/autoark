@@ -134,6 +134,7 @@ describe('optimizer insight collection', () => {
       accountId: '123',
       kind: 'country',
       date: { $gte: '2026-07-20', $lte: '2026-07-26' },
+      snapshotId: { $ne: expect.any(String) },
     })
     expect(mockDeleteMany).not.toHaveBeenCalledWith(
       expect.objectContaining({
@@ -170,5 +171,28 @@ describe('optimizer insight collection', () => {
       date: { $gte: '2026-07-20', $lte: '2026-07-26' },
     })
     expect(mockBulkWrite).not.toHaveBeenCalled()
+  })
+
+  it('keeps the previous snapshot when writing the replacement fails', async () => {
+    mockFetchFacebookEdgePages.mockResolvedValue([{
+      date_start: '2026-07-26',
+      ad_id: 'ad_1',
+      country: 'US',
+      spend: '10',
+    }])
+    mockBulkWrite.mockRejectedValueOnce(new Error('database write failed'))
+
+    const result = await collectOptimizerAccountInsights({
+      account,
+      window: { since: '2026-07-20', until: '2026-07-26' },
+      kinds: ['country'],
+    })
+
+    expect(result.dimensions.country).toMatchObject({
+      status: 'failed',
+      rows: 0,
+      error: 'database write failed',
+    })
+    expect(mockDeleteMany).not.toHaveBeenCalled()
   })
 })

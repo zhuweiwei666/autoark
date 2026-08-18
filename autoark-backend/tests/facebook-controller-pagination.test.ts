@@ -56,6 +56,7 @@ const resMock = () => ({
   json: jest.fn(),
   status: jest.fn().mockReturnThis(),
   setHeader: jest.fn(),
+  redirect: jest.fn(),
 })
 
 const superAdminReq = (query: any = {}) => ({
@@ -66,7 +67,7 @@ const superAdminReq = (query: any = {}) => ({
   },
 })
 
-describe('facebook controller pagination caps', () => {
+describe('facebook controller legacy snapshot redirects', () => {
   beforeEach(() => {
     jest.clearAllMocks()
     ;(getUserAccountIds as jest.Mock).mockResolvedValue(null)
@@ -79,19 +80,21 @@ describe('facebook controller pagination caps', () => {
     })
   })
 
-  it('caps campaign list limit and falls back to spend sorting', async () => {
+  it('redirects the legacy campaign list to the MongoDB summary endpoint', async () => {
     const req: any = superAdminReq({ page: '2', limit: '10000', sortBy: 'unsafeField', sortOrder: 'asc' })
     const res: any = resMock()
 
     await getCampaignsList(req, res, jest.fn())
 
-    expect(facebookCampaignsService.getCampaigns).toHaveBeenCalledWith(
-      expect.any(Object),
-      { page: 2, limit: 100, sortBy: 'spend', sortOrder: 'asc' },
+    expect(res.redirect).toHaveBeenCalledWith(
+      307,
+      '/api/summary/campaigns?page=2&limit=10000&sortBy=unsafeField&sortOrder=asc',
     )
+    expect(res.setHeader).toHaveBeenCalledWith('Deprecation', 'true')
+    expect(facebookCampaignsService.getCampaigns).not.toHaveBeenCalled()
   })
 
-  it('sanitizes campaign list filter strings before querying', async () => {
+  it('drops object-shaped legacy filters instead of reflecting them into a redirect', async () => {
     const req: any = superAdminReq({
       name: 'a.b+[x]',
       accountId: { $ne: '123' },
@@ -102,98 +105,51 @@ describe('facebook controller pagination caps', () => {
 
     await getCampaignsList(req, res, jest.fn())
 
-    const filters = (facebookCampaignsService.getCampaigns as jest.Mock).mock.calls[0][0]
-    expect(filters.name).toBe('a\\.b\\+\\[x\\]')
-    expect(filters.accountId).toBeUndefined()
-    expect(filters.status).toBeUndefined()
-    expect(filters.objective).toBe('APP_INSTALLS')
-  })
-
-  it('rejects invalid campaign list dates before querying', async () => {
-    const req: any = superAdminReq({ startDate: '2026-02-31' })
-    const res: any = resMock()
-    const next = jest.fn()
-
-    await getCampaignsList(req, res, next)
-
-    expect(res.status).toHaveBeenCalledWith(400)
-    expect(res.json).toHaveBeenCalledWith({
-      success: false,
-      message: 'startDate must be a valid YYYY-MM-DD date',
-    })
-    expect(facebookCampaignsService.getCampaigns).not.toHaveBeenCalled()
-    expect(next).not.toHaveBeenCalled()
-  })
-
-  it('caps account list limit and keeps the default account sort', async () => {
-    const req: any = superAdminReq({ page: '3', limit: '9999', sortBy: 'notAllowed' })
-    const res: any = resMock()
-
-    await getAccountsList(req, res, jest.fn())
-
-    expect(facebookAccountsService.getAccounts).toHaveBeenCalledWith(
-      expect.any(Object),
-      { page: 3, limit: 100, sortBy: 'periodSpend', sortOrder: 'desc' },
-      undefined,
+    expect(res.redirect).toHaveBeenCalledWith(
+      307,
+      '/api/summary/campaigns?name=a.b%2B%5Bx%5D&objective=++APP_INSTALLS++',
     )
+    expect(facebookCampaignsService.getCampaigns).not.toHaveBeenCalled()
   })
 
-  it('sanitizes account list filter strings before querying', async () => {
-    const req: any = superAdminReq({
-      optimizer: 'Team.A+',
-      status: { $ne: 'active' },
-      accountId: 'act_123.+',
-      name: 'Client[x]',
-    })
+  it('redirects the super-admin legacy account list without calling Meta services', async () => {
+    const req: any = superAdminReq({ page: '3', limit: '9999', endDate: '2026-06-02' })
     const res: any = resMock()
 
     await getAccountsList(req, res, jest.fn())
 
-    const filters = (facebookAccountsService.getAccounts as jest.Mock).mock.calls[0][0]
-    expect(filters.optimizer).toBe('Team\\.A\\+')
-    expect(filters.status).toBeUndefined()
-    expect(filters.accountId).toBe('act_123\\.\\+')
-    expect(filters.name).toBe('Client\\[x\\]')
+    expect(res.redirect).toHaveBeenCalledWith(
+      307,
+      '/api/summary/accounts?page=3&limit=9999&endDate=2026-06-02',
+    )
+    expect(facebookAccountsService.getAccounts).not.toHaveBeenCalled()
   })
 
-  it('normalizes account endDate-only filters into a capped date window', async () => {
-    const req: any = superAdminReq({ endDate: '2026-06-02' })
+  it('keeps the legacy account list restricted to super admins', async () => {
+    const req: any = {
+      query: {},
+      user: { role: UserRole.ORG_ADMIN, userId: '665000000000000000000002' },
+    }
     const res: any = resMock()
 
     await getAccountsList(req, res, jest.fn())
 
-    const filters = (facebookAccountsService.getAccounts as jest.Mock).mock.calls[0][0]
-    expect(filters.startDate).toBe('2026-03-05')
-    expect(filters.endDate).toBe('2026-06-02')
+    expect(res.status).toHaveBeenCalledWith(403)
+    expect(res.redirect).not.toHaveBeenCalled()
+    expect(facebookAccountsService.getAccounts).not.toHaveBeenCalled()
   })
 
-  it('caps country list limit and rejects unsafe sort fields', async () => {
-    const req: any = superAdminReq({ page: '4', limit: '1000', sortBy: 'badSort' })
+  it('maps the legacy country sort order to the MongoDB summary contract', async () => {
+    const req: any = superAdminReq({ page: '4', limit: '1000', sortBy: 'spend', sortOrder: 'asc' })
     const res: any = resMock()
 
     await getCountriesList(req, res, jest.fn())
 
-    expect(facebookCountriesService.getCountries).toHaveBeenCalledWith(
-      expect.any(Object),
-      { page: 4, limit: 100, sortBy: 'spend', sortOrder: 'desc' },
-      {},
+    expect(res.redirect).toHaveBeenCalledWith(
+      307,
+      '/api/summary/countries?page=4&limit=1000&sortBy=spend&sortOrder=asc&order=asc',
     )
-  })
-
-  it('rejects reversed country list date ranges before querying', async () => {
-    const req: any = superAdminReq({ startDate: '2026-06-03', endDate: '2026-06-02' })
-    const res: any = resMock()
-    const next = jest.fn()
-
-    await getCountriesList(req, res, next)
-
-    expect(res.status).toHaveBeenCalledWith(400)
-    expect(res.json).toHaveBeenCalledWith({
-      success: false,
-      message: 'startDate must be earlier than or equal to endDate',
-    })
     expect(facebookCountriesService.getCountries).not.toHaveBeenCalled()
-    expect(next).not.toHaveBeenCalled()
   })
 
   it('caps all-token permission diagnosis batches', async () => {

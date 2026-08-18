@@ -51,10 +51,11 @@ FACEBOOK_AGGREGATION_CONCURRENCY=2
 ```
 
 Keep `FACEBOOK_SYNC_ENABLED=false` while the Facebook queue backlog is
-quarantined. `FACEBOOK_AGGREGATION_ENABLED=true` restores only today's
-read-only Insights aggregation. The aggregation cron is non-overlapping and
-caps concurrent account requests at `FACEBOOK_AGGREGATION_CONCURRENCY` (1–5,
-default 2).
+quarantined. `FACEBOOK_AGGREGATION_ENABLED=true` enables the permanent
+three-day rolling Insights collector (today every 10 minutes, yesterday hourly,
+and the day before once before freezing). The aggregation cron is
+non-overlapping and caps concurrent account requests at
+`FACEBOOK_AGGREGATION_CONCURRENCY` (1–5, default 2).
 
 ## Standard Release Flow
 

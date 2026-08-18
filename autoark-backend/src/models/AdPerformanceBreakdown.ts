@@ -39,6 +39,7 @@ const adPerformanceBreakdownSchema = new mongoose.Schema(
     purchases: { type: Number, default: 0 },
     purchaseValue: { type: Number, default: 0 },
     roas: { type: Number, default: 0 },
+    snapshotId: { type: String },
     sourceSyncedAt: {
       type: Date,
       required: true,

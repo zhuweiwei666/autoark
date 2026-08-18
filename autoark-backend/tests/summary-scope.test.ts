@@ -31,6 +31,15 @@ jest.mock('../src/models/Account', () => ({
   },
 }))
 
+const mockMetaInsightsCoverageFind = jest.fn()
+
+jest.mock('../src/models/MetaInsightsCoverage', () => ({
+  __esModule: true,
+  default: {
+    find: (...args: any[]) => mockMetaInsightsCoverageFind(...args),
+  },
+}))
+
 jest.mock('../src/models/Aggregation', () => ({
   AggDaily: {
     find: jest.fn(),
@@ -70,6 +79,13 @@ const createApp = () => {
 }
 
 describe('summary route data scoping', () => {
+  beforeEach(() => {
+    mockMetaInsightsCoverageFind.mockReturnValue({
+      select: jest.fn().mockReturnThis(),
+      lean: jest.fn().mockResolvedValue([]),
+    })
+  })
+
   afterEach(() => {
     jest.clearAllMocks()
     mockAuthState.user = null
@@ -308,6 +324,9 @@ describe('summary route data scoping', () => {
 
     expect(response.status).toBe(200)
     expect(response.body.data).toHaveLength(90)
+    expect(response.body.data.every((row: any) => (
+      row.available === false && row.dataStatus === 'unavailable'
+    ))).toBe(true)
     expect(AggDaily.find).toHaveBeenCalledTimes(1)
     expect(findQuery.sort).toHaveBeenCalledWith({ date: 1 })
   })
@@ -335,7 +354,46 @@ describe('summary route data scoping', () => {
     expect(response.body.data.at(-1)).toMatchObject({
       totalSpend: 25,
       totalInstalls: 17,
+      available: true,
+      dataStatus: 'fresh',
     })
+  })
+
+  it('marks a stored trend day partial when its coverage ledger has a gap', async () => {
+    mockAuthState.user = {
+      role: UserRole.SUPER_ADMIN,
+      userId: '665000000000000000000003',
+    }
+    ;(getUserAccountIds as jest.Mock).mockResolvedValue(null)
+    const today = formatDateInTimezone()
+    const findQuery = {
+      sort: jest.fn().mockReturnThis(),
+      lean: jest.fn().mockResolvedValue([{
+        date: today,
+        spend: 25,
+        dataStatus: 'fresh',
+      }]),
+    }
+    ;(AggDaily.find as jest.Mock).mockReturnValue(findQuery)
+    mockMetaInsightsCoverageFind.mockReturnValueOnce({
+      select: jest.fn().mockReturnThis(),
+      lean: jest.fn().mockResolvedValue([{
+        date: today,
+        status: 'unavailable',
+      }]),
+    })
+
+    const response = await request(createApp()).get('/api/summary/dashboard/trend?days=1')
+
+    expect(response.status).toBe(200)
+    expect(response.body.data).toEqual([
+      expect.objectContaining({
+        date: today,
+        totalSpend: 25,
+        available: true,
+        dataStatus: 'partial',
+      }),
+    ])
   })
 
   it('uses the authenticated organization timezone for default report dates', async () => {
@@ -358,7 +416,13 @@ describe('summary route data scoping', () => {
       expect(AggDaily.find).toHaveBeenCalledWith({
         date: { $gte: '2026-08-02', $lte: '2026-08-02' },
       })
-      expect(response.body.data.date).toBe('2026-08-02')
+      expect(response.body.data).toMatchObject({
+        date: '2026-08-02',
+        available: false,
+        dataStatus: 'unavailable',
+        coveredDays: 0,
+        expectedDays: 1,
+      })
     } finally {
       jest.useRealTimers()
     }

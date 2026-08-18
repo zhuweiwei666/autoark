@@ -14,6 +14,8 @@ export interface IFbToken extends mongoose.Document {
   insightsBackfillPendingSince?: Date // 授权恢复后等待补拉消耗
   insightsBackfillLastAttemptAt?: Date // 最近一次授权恢复补拉尝试
   insightsBackfillCompletedAt?: Date // 最近一次授权恢复补拉完成
+  insightsGapStartedAt?: Date // Token 首次明确失效时间，决定真实补拉起点
+  insightsBackfillCursorDate?: string // YYYY-MM-DD，长缺口分批补拉游标
   expiresAt?: Date // token 过期时间（如果 Facebook API 返回）
   fbUserId?: string // Facebook 用户 ID
   fbUserName?: string // Facebook 用户名称
@@ -42,6 +44,8 @@ const FbTokenSchema = new mongoose.Schema(
     insightsBackfillPendingSince: { type: Date },
     insightsBackfillLastAttemptAt: { type: Date },
     insightsBackfillCompletedAt: { type: Date },
+    insightsGapStartedAt: { type: Date },
+    insightsBackfillCursorDate: { type: String },
     expiresAt: { type: Date }, // token 过期时间
     fbUserId: { type: String }, // Facebook 用户 ID
     fbUserName: { type: String }, // Facebook 用户名称
@@ -77,6 +81,7 @@ FbTokenSchema.index({ userId: 1, createdAt: -1 })
 FbTokenSchema.index({ status: 1, lastCheckedAt: -1 })
 FbTokenSchema.index({ status: 1, lastValidationAttemptAt: 1 })
 FbTokenSchema.index({ status: 1, insightsBackfillPendingSince: 1, insightsBackfillLastAttemptAt: 1 })
+FbTokenSchema.index({ status: 1, insightsGapStartedAt: 1, insightsBackfillCursorDate: 1 })
 // 同一组织内同一个 Facebook 用户只保留一个活跃授权，避免并发 OAuth 产生重复记录
 FbTokenSchema.index(
   { fbUserId: 1, organizationId: 1 },

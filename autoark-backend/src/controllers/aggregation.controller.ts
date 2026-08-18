@@ -29,6 +29,7 @@ import { UserRole } from '../models/User'
 import { getAccountIdsForQuery, normalizeForStorage } from '../utils/accountId'
 import { parseLimitedNumber, pickSafeQueryString } from '../utils/pagination'
 import { formatDateInTimezone } from '../config/organizationTimezones'
+import MetaInsightsCoverage from '../models/MetaInsightsCoverage'
 
 const router = Router()
 
@@ -124,6 +125,7 @@ const aggregateDailyFromAccounts = async (start: string, end: string, accountIds
       installs: 0,
       activeAccounts: new Set<string>(),
       activeCampaigns: 0,
+      staleSnapshotCount: 0,
     }
     current.spend += row.spend || 0
     current.revenue += row.revenue || 0
@@ -132,6 +134,7 @@ const aggregateDailyFromAccounts = async (start: string, end: string, accountIds
     current.installs += row.installs || 0
     current.activeCampaigns += row.campaigns || 0
     if ((row.spend || 0) > 0) current.activeAccounts.add(row.accountId)
+    if (row.dataStatus === 'stale') current.staleSnapshotCount++
     byDate.set(row.date, current)
   }
 
@@ -141,8 +144,52 @@ const aggregateDailyFromAccounts = async (start: string, end: string, accountIds
     roas: row.spend > 0 ? row.revenue / row.spend : 0,
     ctr: row.impressions > 0 ? row.clicks / row.impressions : 0,
     cpi: row.installs > 0 ? row.spend / row.installs : 0,
+    dataStatus: row.staleSnapshotCount > 0 ? 'stale' : 'fresh',
   })).sort((a, b) => a.date.localeCompare(b.date))
 }
+
+const getCoverageSummary = async (
+  start: string,
+  end: string,
+  accountIds: string[] | null,
+) => MetaInsightsCoverage.aggregate([
+  {
+    $match: {
+      provider: 'facebook',
+      date: { $gte: start, $lte: end },
+      ...(accountIds === null ? {} : { accountId: { $in: accountIds } }),
+    },
+  },
+  {
+    $group: {
+      _id: '$date',
+      accounts: { $sum: 1 },
+      fresh: { $sum: { $cond: [{ $eq: ['$status', 'fresh'] }, 1, 0] } },
+      stale: { $sum: { $cond: [{ $eq: ['$status', 'stale'] }, 1, 0] } },
+      unavailable: { $sum: { $cond: [{ $eq: ['$status', 'unavailable'] }, 1, 0] } },
+      frozen: { $sum: { $cond: [{ $ne: [{ $ifNull: ['$frozenAt', null] }, null] }, 1, 0] } },
+      legacy: { $sum: { $cond: [{ $eq: ['$sourceApiVersion', 'legacy-aggregate-v1'] }, 1, 0] } },
+      lastAttemptAt: { $max: '$lastAttemptAt' },
+      lastSuccessAt: { $max: '$lastSuccessAt' },
+    },
+  },
+  {
+    $project: {
+      _id: 0,
+      date: '$_id',
+      accounts: 1,
+      fresh: 1,
+      stale: 1,
+      unavailable: 1,
+      frozen: 1,
+      legacy: 1,
+      lastAttemptAt: 1,
+      lastSuccessAt: 1,
+      allTrackedFresh: { $eq: ['$fresh', '$accounts'] },
+    },
+  },
+  { $sort: { date: 1 } },
+])
 
 const requireSuperAdmin = (req: Request, res: Response): boolean => {
   if (req.user?.role === UserRole.SUPER_ADMIN) return true
@@ -161,13 +208,17 @@ router.get('/daily', async (req: Request, res: Response) => {
     const { start, end } = parseAggDateRange(req, 7)
 
     const accountIds = await getAccountScope(req)
-    const data = accountIds === null
-      ? await getDailySummary(start, end)
-      : await aggregateDailyFromAccounts(start, end, accountIds)
+    const [data, coverage] = await Promise.all([
+      accountIds === null
+        ? getDailySummary(start, end)
+        : aggregateDailyFromAccounts(start, end, accountIds),
+      getCoverageSummary(start, end, accountIds),
+    ])
 
     res.json({
       success: true,
       data,
+      coverage,
       meta: { startDate: start, endDate: end, count: data.length },
     })
   } catch (error: any) {
@@ -183,16 +234,57 @@ router.get('/today', async (req: Request, res: Response) => {
   try {
     const today = getRequestToday(req)
     const accountIds = await getAccountScope(req)
-    const data = accountIds === null
-      ? await AggDaily.findOne({ date: today }).lean()
-      : (await aggregateDailyFromAccounts(today, today, accountIds))[0]
+    const [data, coverage] = await Promise.all([
+      accountIds === null
+        ? AggDaily.findOne({ date: today }).lean()
+        : aggregateDailyFromAccounts(today, today, accountIds).then(rows => rows[0]),
+      getCoverageSummary(today, today, accountIds),
+    ])
 
     res.json({
       success: true,
-      data: data || { date: today, spend: 0, revenue: 0, roas: 0 },
+      data: data
+        ? { ...data, available: true }
+        : {
+            date: today,
+            spend: 0,
+            revenue: 0,
+            roas: 0,
+            available: false,
+            dataStatus: 'unavailable',
+          },
+      coverage: coverage[0] || {
+        date: today,
+        accounts: 0,
+        fresh: 0,
+        stale: 0,
+        unavailable: 0,
+        frozen: 0,
+        legacy: 0,
+        allTrackedFresh: false,
+      },
     })
   } catch (error: any) {
     sendAggregationError(res, error, '[AggController] Get today failed')
+  }
+})
+
+/**
+ * GET /api/agg/coverage
+ * 返回账户×日期覆盖度；缺失和不可用永远不会伪装成 0 指标。
+ */
+router.get('/coverage', async (req: Request, res: Response) => {
+  try {
+    const { start, end } = parseAggDateRange(req, 7)
+    const accountIds = await getAccountScope(req)
+    const data = await getCoverageSummary(start, end, accountIds)
+    res.json({
+      success: true,
+      data,
+      meta: { startDate: start, endDate: end, count: data.length },
+    })
+  } catch (error: any) {
+    sendAggregationError(res, error, '[AggController] Get coverage failed')
   }
 })
 
@@ -501,14 +593,34 @@ router.get('/ai/snapshot', async (req: Request, res: Response) => {
     // 计算对比
     const todaySpend = todaySummary?.spend || 0
     const yesterdaySpend = yesterdaySummary?.spend || 0
-    const spendChange = yesterdaySpend > 0 ? ((todaySpend - yesterdaySpend) / yesterdaySpend * 100).toFixed(1) + '%' : 'N/A'
+    const spendChange = todaySummary && yesterdaySummary && yesterdaySpend > 0
+      ? ((todaySpend - yesterdaySpend) / yesterdaySpend * 100).toFixed(1) + '%'
+      : 'N/A'
 
     res.json({
       success: true,
       data: {
         dataTime: dayjs().format('YYYY-MM-DD HH:mm:ss'),
-        today: todaySummary || { spend: 0, revenue: 0, roas: 0 },
-        yesterday: yesterdaySummary || { spend: 0, revenue: 0, roas: 0 },
+        today: todaySummary
+          ? { ...todaySummary, available: true }
+          : {
+              date: today,
+              spend: 0,
+              revenue: 0,
+              roas: 0,
+              available: false,
+              dataStatus: 'unavailable',
+            },
+        yesterday: yesterdaySummary
+          ? { ...yesterdaySummary, available: true }
+          : {
+              date: yesterday,
+              spend: 0,
+              revenue: 0,
+              roas: 0,
+              available: false,
+              dataStatus: 'unavailable',
+            },
         comparison: { spendChange },
         weekTrend,
         countries,

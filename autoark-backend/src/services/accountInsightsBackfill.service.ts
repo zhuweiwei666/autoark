@@ -46,19 +46,9 @@ const runBackfill = async (): Promise<AccountInsightsBackfillResult> => {
   const pendingAccounts = await Account.find({
     channel: 'facebook',
     insightsBackfillPendingSince: { $exists: true },
-    $and: [
-      {
-        $or: [
-          { status: 'active' },
-          { insightsFinalizationUntil: { $gte: now } },
-        ],
-      },
-      {
-        $or: [
-          { insightsBackfillLastAttemptAt: { $exists: false } },
-          { insightsBackfillLastAttemptAt: { $lte: retryBefore } },
-        ],
-      },
+    $or: [
+      { insightsBackfillLastAttemptAt: { $exists: false } },
+      { insightsBackfillLastAttemptAt: { $lte: retryBefore } },
     ],
   })
     .select('accountId')
@@ -93,11 +83,12 @@ const runBackfill = async (): Promise<AccountInsightsBackfillResult> => {
 
   let completedAccountIds = new Set(accountIds)
   for (const date of dates) {
-    const result = await refreshAggregation(date, true, { accountIds })
-    const resolvedForDate = new Set([
-      ...result.processedAccountIds,
-      ...result.cachedAccountIds,
-    ])
+    const result = await refreshAggregation(date, true, {
+      accountIds,
+      ignoreRetryBackoff: true,
+    })
+    // 缓存只保证页面不归零，不能证明该日已用有效授权完成最终结算。
+    const resolvedForDate = new Set(result.processedAccountIds)
     completedAccountIds = new Set(
       [...completedAccountIds].filter(accountId => resolvedForDate.has(accountId)),
     )

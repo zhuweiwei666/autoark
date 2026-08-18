@@ -23,12 +23,15 @@ import {
   getCustomConversions,
 } from '../../integration/facebook/bulkCreate.api'
 import { fetchCampaigns } from '../../integration/facebook/campaigns.api'
-import { fetchInsights } from '../../integration/facebook/insights.api'
 import Account from '../../models/Account'
 import Campaign from '../../models/Campaign'
 import AdSet from '../../models/AdSet'
 import Ad from '../../models/Ad'
+import MetaInsightsCoverage from '../../models/MetaInsightsCoverage'
+import MetaInsightsFact from '../../models/MetaInsightsFact'
+import MetricsDaily from '../../models/MetricsDaily'
 import { getAccountIdsForQuery, normalizeForStorage } from '../../utils/accountId'
+import { addDateDays, enumerateDateRange, formatShanghaiDate } from '../../utils/shanghaiDate'
 import logger from '../../utils/logger'
 import { resolveAgentOperationalAuthorization } from '../../services/metaBusinessCredential.service'
 
@@ -156,7 +159,7 @@ const getCampaignsTool: ToolDefinition = {
 
 const getCampaignInsightsTool: ToolDefinition = {
   name: 'get_campaign_insights',
-  description: 'Get performance insights (spend, impressions, clicks, ROAS, etc.) for a campaign, ad set, or ad. Supports date presets and country breakdown.',
+  description: 'Read persisted performance insights (spend, impressions, clicks, ROAS, etc.) for a campaign, ad set, or ad. Supports date presets and country breakdown.',
   category: 'facebook',
   parameters: {
     type: 'OBJECT',
@@ -186,22 +189,96 @@ const getCampaignInsightsTool: ToolDefinition = {
     const scopeError = await assertEntityInScope(context, args.level, args.entityId)
     if (scopeError) return scopeError
 
-    const token = await resolveToken(context)
-    if (!token) return { success: false, error: 'No Facebook access token available' }
-
     try {
-      const breakdowns = args.breakdownByCountry ? ['country'] : undefined
-      const insights = await fetchInsights(
-        args.entityId,
-        args.level,
-        args.datePreset || 'last_7d',
-        token,
-        breakdowns
-      )
+      const today = formatShanghaiDate()
+      const preset = args.datePreset || 'last_7d'
+      const presetDays: Record<string, number> = {
+        today: 1,
+        yesterday: 1,
+        last_3d: 3,
+        last_7d: 7,
+        last_14d: 14,
+        last_30d: 30,
+      }
+      const endDate = preset === 'yesterday' ? addDateDays(today, -1) : today
+      const startDate = addDateDays(endDate, -(presetDays[preset] || 7) + 1)
+      const groupId = args.breakdownByCountry ? '$country' : null
+      const sourceModel = args.level === 'campaign' ? MetaInsightsFact : MetricsDaily
+      const match = args.level === 'campaign'
+        ? {
+            provider: 'facebook',
+            campaignId: args.entityId,
+            date: { $gte: startDate, $lte: endDate },
+          }
+        : {
+            channel: 'facebook',
+            [args.level === 'adset' ? 'adsetId' : 'adId']: args.entityId,
+            date: { $gte: startDate, $lte: endDate },
+          }
+      const spendField = args.level === 'campaign' ? '$spend' : '$spendUsd'
+      const revenueField = args.level === 'campaign'
+        ? '$revenue'
+        : { $ifNull: ['$purchase_value_corrected', { $ifNull: ['$purchase_value', 0] }] }
+      const installField = args.level === 'campaign'
+        ? '$installs'
+        : { $ifNull: ['$mobile_app_install_count', { $ifNull: ['$installs', 0] }] }
+      const insights = await sourceModel.aggregate([
+        { $match: match },
+        {
+          $group: {
+            _id: groupId,
+            spend: { $sum: spendField },
+            purchase_value: { $sum: revenueField },
+            impressions: { $sum: '$impressions' },
+            clicks: { $sum: '$clicks' },
+            installs: { $sum: installField },
+          },
+        },
+        {
+          $project: {
+            _id: 0,
+            entity_id: { $literal: args.entityId },
+            level: { $literal: args.level },
+            ...(args.breakdownByCountry ? { country: '$_id' } : {}),
+            spend: 1,
+            purchase_value: 1,
+            impressions: 1,
+            clicks: 1,
+            installs: 1,
+            roas: { $cond: [{ $gt: ['$spend', 0] }, { $divide: ['$purchase_value', '$spend'] }, 0] },
+          },
+        },
+      ])
+
+      const accountId = await resolveEntityAccountId(args.level, args.entityId)
+      const coverage = accountId
+        ? await MetaInsightsCoverage.find({
+            provider: 'facebook',
+            accountId: normalizeForStorage(accountId),
+            date: { $gte: startDate, $lte: endDate },
+          }).select('date status hasSnapshot frozenAt').lean()
+        : []
+      const expectedDays = enumerateDateRange(startDate, endDate).length
+      const dataStatus = coverage.length === 0
+        ? 'unavailable'
+        : coverage.length < expectedDays
+            || coverage.some((row: any) => row.status === 'unavailable')
+          ? 'partial'
+          : coverage.some((row: any) => row.status === 'stale')
+            ? 'stale'
+            : 'fresh'
       return {
         success: true,
         data: insights,
-        metadata: { rows: insights.length },
+        metadata: {
+          rows: insights.length,
+          dataSource: 'database',
+          dataStatus,
+          startDate,
+          endDate,
+          coveredDays: coverage.length,
+          expectedDays,
+        },
       }
     } catch (error: any) {
       return { success: false, error: error.message }
