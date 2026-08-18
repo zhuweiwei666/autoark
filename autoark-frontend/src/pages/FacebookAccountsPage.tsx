@@ -41,6 +41,7 @@ export default function FacebookAccountsPage() {
 
   const accounts = data?.data || []
   const pagination = data?.pagination || { page: 1, limit: 20, total: 0, pages: 1 }
+  const summary = data?.summary
 
   // 刷新数据 mutation（只从服务器获取，不调用 Facebook API）
   const syncMutation = useMutation({
@@ -372,13 +373,29 @@ export default function FacebookAccountsPage() {
               </thead>
               <tbody>
                 {loading ? (
-                  <tr><td colSpan={7} className="px-6 py-12">
+                  <tr><td colSpan={6} className="px-6 py-12">
                     <Loading.Inline message="加载账户数据..." size="md" />
                   </td></tr>
                 ) : accounts.length === 0 ? (
-                  <tr><td colSpan={7} className="px-6 py-12 text-center text-slate-500">暂无数据</td></tr>
+                  <tr><td colSpan={6} className="px-6 py-12 text-center text-slate-500">暂无数据</td></tr>
                 ) : (
-                  accounts.map((account) => (
+                  <>
+                    <tr aria-label="筛选结果合计" className="border-b-2 border-slate-200 bg-blue-50/50">
+                      <td className="px-6 py-4">
+                        <div className="font-semibold text-slate-950">合计</div>
+                        <div className="mt-1 text-xs text-slate-500">{summary?.accountCount ?? pagination.total} 个账户</div>
+                      </td>
+                      <td className="px-6 py-4 font-medium text-slate-400">-</td>
+                      <td className="px-6 py-4 font-mono font-semibold text-slate-950">
+                        {summary ? `$${summary.periodSpend.toFixed(2)}` : '-'}
+                      </td>
+                      <td className="px-6 py-4 font-mono font-semibold text-emerald-700">
+                        {summary ? `$${summary.calculatedBalance.toFixed(2)}` : '-'}
+                      </td>
+                      <td className="px-6 py-4 font-medium text-slate-400">-</td>
+                      <td className="px-6 py-4 text-right font-medium text-slate-400">-</td>
+                    </tr>
+                    {accounts.map((account) => (
                     <tr key={account.id} className="group hover:bg-slate-50 transition-colors border-b border-slate-100">
                       <td className="px-6 py-4">
                         <div>
@@ -436,7 +453,8 @@ export default function FacebookAccountsPage() {
                         </button>
                       </td>
                     </tr>
-                  ))
+                    ))}
+                  </>
                 )}
               </tbody>
             </table>

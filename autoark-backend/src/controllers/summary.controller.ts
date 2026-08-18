@@ -420,6 +420,7 @@ router.get('/accounts', async (req: Request, res: Response) => {
           success: true,
           data: [],
           pagination: { page, limit, total: 0, pages: 0 },
+          summary: null,
           cached: true,
         })
       }
@@ -433,6 +434,7 @@ router.get('/accounts', async (req: Request, res: Response) => {
           success: true,
           data: [],
           pagination: { page, limit, total: 0, pages: 0 },
+          summary: null,
           cached: true,
         })
       }
@@ -623,12 +625,24 @@ router.get('/accounts', async (req: Request, res: Response) => {
         $facet: {
           data: [{ $skip: skip }, { $limit: limit }],
           total: [{ $count: 'count' }],
+          summary: [
+            {
+              $group: {
+                _id: null,
+                accountCount: { $sum: 1 },
+                periodSpend: { $sum: '$periodSpend' },
+                calculatedBalance: { $sum: '$calculatedBalance' },
+              },
+            },
+            { $project: { _id: 0 } },
+          ],
         }
       }
     ])
 
     const data = aggregated[0]?.data || []
     const total = aggregated[0]?.total[0]?.count || 0
+    const summary = aggregated[0]?.summary?.[0] || null
 
     const duration = Date.now() - startTime
     logger.info(`[Summary] Accounts query completed in ${duration}ms, found ${total} accounts`)
@@ -637,6 +651,7 @@ router.get('/accounts', async (req: Request, res: Response) => {
       success: true,
       data,
       pagination: { page, limit, total, pages: Math.ceil(total / limit) },
+      summary,
       cached: true,
       duration,
     })
@@ -672,6 +687,7 @@ router.get('/countries', async (req: Request, res: Response) => {
         success: true,
         data: [],
         pagination: { page, limit, total: 0, pages: 0 },
+        summary: null,
         cached: true,
       })
     }
@@ -703,8 +719,13 @@ router.get('/countries', async (req: Request, res: Response) => {
           // 返回小数形式（0.0237），前端 formatPercent 会乘以 100
           ctr: { $cond: [{ $gt: ['$impressions', 0] }, { $divide: ['$clicks', '$impressions'] }, 0] },
           // 兼容前端字段名
+          campaignCount: '$campaigns',
+          mobile_app_install: '$installs',
           purchase_value: '$revenue',
           purchase_roas: { $cond: [{ $gt: ['$spend', 0] }, { $divide: ['$revenue', '$spend'] }, 0] },
+          cpc: { $cond: [{ $gt: ['$clicks', 0] }, { $divide: ['$spend', '$clicks'] }, 0] },
+          cpm: { $cond: [{ $gt: ['$impressions', 0] }, { $multiply: [{ $divide: ['$spend', '$impressions'] }, 1000] }, 0] },
+          cpi: { $cond: [{ $gt: ['$installs', 0] }, { $divide: ['$spend', '$installs'] }, 0] },
         }
       },
       { $sort: { [sortBy]: sortOrder } },
@@ -712,6 +733,34 @@ router.get('/countries', async (req: Request, res: Response) => {
         $facet: {
           data: [{ $skip: skip }, { $limit: limit }],
           total: [{ $count: 'count' }],
+          summary: [
+            {
+              $group: {
+                _id: null,
+                rowCount: { $sum: 1 },
+                campaigns: { $sum: '$campaigns' },
+                spend: { $sum: '$spend' },
+                revenue: { $sum: '$revenue' },
+                impressions: { $sum: '$impressions' },
+                clicks: { $sum: '$clicks' },
+                installs: { $sum: '$installs' },
+              },
+            },
+            {
+              $addFields: {
+                campaignCount: '$campaigns',
+                mobile_app_install: '$installs',
+                purchase_value: '$revenue',
+                roas: { $cond: [{ $gt: ['$spend', 0] }, { $divide: ['$revenue', '$spend'] }, 0] },
+                purchase_roas: { $cond: [{ $gt: ['$spend', 0] }, { $divide: ['$revenue', '$spend'] }, 0] },
+                ctr: { $cond: [{ $gt: ['$impressions', 0] }, { $divide: ['$clicks', '$impressions'] }, 0] },
+                cpc: { $cond: [{ $gt: ['$clicks', 0] }, { $divide: ['$spend', '$clicks'] }, 0] },
+                cpm: { $cond: [{ $gt: ['$impressions', 0] }, { $multiply: [{ $divide: ['$spend', '$impressions'] }, 1000] }, 0] },
+                cpi: { $cond: [{ $gt: ['$installs', 0] }, { $divide: ['$spend', '$installs'] }, 0] },
+              },
+            },
+            { $project: { _id: 0 } },
+          ],
         }
       }
     ]
@@ -721,6 +770,7 @@ router.get('/countries', async (req: Request, res: Response) => {
 
     const data = aggregated[0]?.data || []
     const total = aggregated[0]?.total[0]?.count || 0
+    const summary = aggregated[0]?.summary?.[0] || null
 
     const duration = Date.now() - startTime
     logger.info(`[Summary] Countries query completed in ${duration}ms, found ${total} countries`)
@@ -729,6 +779,7 @@ router.get('/countries', async (req: Request, res: Response) => {
       success: true,
       data,
       pagination: { page, limit, total, pages: Math.ceil(total / limit) },
+      summary,
       cached: true,
       duration,
     })
@@ -771,6 +822,7 @@ router.get('/campaigns', async (req: Request, res: Response) => {
           success: true,
           data: [],
           pagination: { page, limit, total: 0, pages: 0 },
+          summary: null,
           cached: true,
         })
       }
@@ -783,6 +835,7 @@ router.get('/campaigns', async (req: Request, res: Response) => {
           success: true,
           data: [],
           pagination: { page, limit, total: 0, pages: 0 },
+          summary: null,
           cached: true,
         })
       }
@@ -833,12 +886,39 @@ router.get('/campaigns', async (req: Request, res: Response) => {
         $facet: {
           data: [{ $skip: skip }, { $limit: limit }],
           total: [{ $count: 'count' }],
+          summary: [
+            {
+              $group: {
+                _id: null,
+                rowCount: { $sum: 1 },
+                spend: { $sum: '$spend' },
+                revenue: { $sum: '$revenue' },
+                impressions: { $sum: '$impressions' },
+                clicks: { $sum: '$clicks' },
+                installs: { $sum: '$installs' },
+              },
+            },
+            {
+              $addFields: {
+                mobile_app_install: '$installs',
+                purchase_value: '$revenue',
+                roas: { $cond: [{ $gt: ['$spend', 0] }, { $divide: ['$revenue', '$spend'] }, 0] },
+                purchase_roas: { $cond: [{ $gt: ['$spend', 0] }, { $divide: ['$revenue', '$spend'] }, 0] },
+                ctr: { $cond: [{ $gt: ['$impressions', 0] }, { $divide: ['$clicks', '$impressions'] }, 0] },
+                cpc: { $cond: [{ $gt: ['$clicks', 0] }, { $divide: ['$spend', '$clicks'] }, 0] },
+                cpm: { $cond: [{ $gt: ['$impressions', 0] }, { $multiply: [{ $divide: ['$spend', '$impressions'] }, 1000] }, 0] },
+                cpi: { $cond: [{ $gt: ['$installs', 0] }, { $divide: ['$spend', '$installs'] }, 0] },
+              },
+            },
+            { $project: { _id: 0 } },
+          ],
         }
       }
     ])
 
     const data = aggregated[0]?.data || []
     const total = aggregated[0]?.total[0]?.count || 0
+    const summary = aggregated[0]?.summary?.[0] || null
 
     const duration = Date.now() - startTime
     logger.info(`[Summary] Campaigns query completed in ${duration}ms, found ${total} campaigns`)
@@ -847,6 +927,7 @@ router.get('/campaigns', async (req: Request, res: Response) => {
       success: true,
       data,
       pagination: { page, limit, total, pages: Math.ceil(total / limit) },
+      summary,
       cached: true,
       duration,
     })

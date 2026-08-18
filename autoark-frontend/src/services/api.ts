@@ -907,6 +907,11 @@ export interface AccountListResponse {
     limit: number
     pages: number
   }
+  summary?: {
+    accountCount: number
+    periodSpend: number
+    calculatedBalance: number
+  } | null
 }
 
 // 获取账户列表
@@ -1015,6 +1020,27 @@ export interface CampaignListResponse {
     limit: number
     pages: number
   }
+  summary?: PerformanceSummaryTotals | null
+}
+
+export interface PerformanceSummaryTotals {
+  [key: string]: number | undefined
+  rowCount: number
+  spend: number
+  revenue: number
+  purchase_value: number
+  impressions: number
+  clicks: number
+  installs: number
+  mobile_app_install: number
+  ctr: number
+  cpc: number
+  cpm: number
+  cpi: number
+  roas: number
+  purchase_roas: number
+  campaigns?: number
+  campaignCount?: number
 }
 
 export interface FbCountry {
@@ -1041,6 +1067,7 @@ export interface CountryListResponse {
     limit: number
     pages: number
   }
+  summary?: PerformanceSummaryTotals | null
 }
 
 // 获取广告系列列表

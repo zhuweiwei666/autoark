@@ -9,6 +9,7 @@ import {
   getCampaignColumnSettings,
   saveCampaignColumnSettings,
   type FbCampaign,
+  type PerformanceSummaryTotals,
 } from '../services/api'
 // Removed: import { Checkbox } from '../components/ui/checkbox'
 // Removed: import { Button } from '../components/ui/button'
@@ -171,6 +172,7 @@ export default function FacebookCampaignsPage() {
 
   // 列表数据
   const [campaigns, setCampaigns] = useState<FbCampaign[]>([])
+  const [campaignSummary, setCampaignSummary] = useState<PerformanceSummaryTotals | null>(null)
   const [pagination, setPagination] = useState({
     page: 1,
     limit: 20,
@@ -377,11 +379,13 @@ export default function FacebookCampaignsPage() {
       const cachedData = localStorage.getItem(getCacheKey(page))
       if (cachedData) {
         try {
-          const { data, pagination: cachedPagination, timestamp } = JSON.parse(cachedData)
+          const cachedResponse = JSON.parse(cachedData)
+          const { data, pagination: cachedPagination, summary, timestamp } = cachedResponse
           // 缓存 5 分钟内有效
-          if (Date.now() - timestamp < 5 * 60 * 1000) {
+          if (Date.now() - timestamp < 5 * 60 * 1000 && Object.prototype.hasOwnProperty.call(cachedResponse, 'summary')) {
             setCampaigns(data)
             setPagination(cachedPagination)
+            setCampaignSummary(summary || null)
             return // 使用缓存数据，不请求 API
           }
         } catch (e) {
@@ -401,11 +405,13 @@ export default function FacebookCampaignsPage() {
       })
       setCampaigns(response.data)
       setPagination(response.pagination)
+      setCampaignSummary(response.summary || null)
       
       // 保存到缓存
       localStorage.setItem(getCacheKey(page), JSON.stringify({
         data: response.data,
         pagination: response.pagination,
+        summary: response.summary || null,
         timestamp: Date.now()
       }))
       
@@ -908,7 +914,32 @@ export default function FacebookCampaignsPage() {
                 ) : sortedCampaigns.length === 0 ? (
                   <tr><td colSpan={safeColumnsToRender.length + 1} className="px-6 py-12 text-center text-slate-500">暂无数据</td></tr>
                 ) : (
-                  sortedCampaigns.map((campaign) => (
+                  <>
+                    <tr aria-label="筛选结果合计" className="border-b-2 border-slate-200 bg-blue-50/50">
+                      {safeColumnsToRender.map((col, index) => {
+                        const summaryValue = campaignSummary?.[col.key]
+                        return (
+                          <td key={col.key} className="px-6 py-4 font-semibold text-slate-950">
+                            {index === 0 ? (
+                              <div>
+                                <div>合计</div>
+                                <div className="mt-1 text-xs font-normal text-slate-500">
+                                  {summaryValue !== undefined
+                                    ? (col.format as (value: any) => string)(summaryValue)
+                                    : `${campaignSummary?.rowCount ?? pagination.total} 个广告系列`}
+                                </div>
+                              </div>
+                            ) : summaryValue !== undefined ? (
+                              (col.format as (value: any) => string)(summaryValue)
+                            ) : (
+                              <span className="font-medium text-slate-400">-</span>
+                            )}
+                          </td>
+                        )
+                      })}
+                      <td className="px-6 py-4 text-right font-medium text-slate-400">-</td>
+                    </tr>
+                    {sortedCampaigns.map((campaign) => (
                     <tr key={campaign.id || (campaign as any).id} className="group hover:bg-slate-50 transition-colors border-b border-slate-100">
                       {safeColumnsToRender.map(col => (
                         <td key={col.key} className="px-6 py-4">
@@ -954,7 +985,8 @@ export default function FacebookCampaignsPage() {
                         </button>
                       </td>
                     </tr>
-                  ))
+                    ))}
+                  </>
                 )}
               </tbody>
             </table>

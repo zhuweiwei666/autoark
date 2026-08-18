@@ -86,6 +86,7 @@ describe('summary route data scoping', () => {
       {
         data: [{ country: 'US', spend: 10 }],
         total: [{ count: 1 }],
+        summary: [{ rowCount: 1, spend: 10, impressions: 1000, clicks: 50, ctr: 0.05 }],
       },
     ])
 
@@ -99,12 +100,27 @@ describe('summary route data scoping', () => {
       total: 1,
       pages: 1,
     })
+    expect(response.body.summary).toMatchObject({ rowCount: 1, spend: 10, ctr: 0.05 })
     expect(AggCountryAccount.aggregate).toHaveBeenCalledTimes(1)
-    expect((AggCountryAccount.aggregate as jest.Mock).mock.calls[0][0][0]).toEqual({
+    const pipeline = (AggCountryAccount.aggregate as jest.Mock).mock.calls[0][0]
+    expect(pipeline[0]).toEqual({
       $match: {
         date: expect.any(Object),
         accountId: { $in: ['123', 'act_123'] },
       },
+    })
+    const summaryStages = pipeline.find((stage: any) => stage.$facet).$facet.summary
+    expect(summaryStages[0].$group).toMatchObject({
+      rowCount: { $sum: 1 },
+      spend: { $sum: '$spend' },
+      impressions: { $sum: '$impressions' },
+      clicks: { $sum: '$clicks' },
+    })
+    expect(summaryStages[1].$addFields).toMatchObject({
+      purchase_value: '$revenue',
+      ctr: { $cond: expect.any(Array) },
+      cpc: { $cond: expect.any(Array) },
+      cpm: { $cond: expect.any(Array) },
     })
     expect(AggCountry.aggregate).not.toHaveBeenCalled()
   })
@@ -140,6 +156,7 @@ describe('summary route data scoping', () => {
       {
         data: [{ accountId: 'act_123', accountName: 'Scoped account', spend: 42 }],
         total: [{ count: 1 }],
+        summary: [{ accountCount: 1, periodSpend: 42, calculatedBalance: 58 }],
       },
     ])
 
@@ -148,11 +165,19 @@ describe('summary route data scoping', () => {
     expect(response.status).toBe(200)
     expect(response.body.data).toEqual([{ accountId: 'act_123', accountName: 'Scoped account', spend: 42 }])
     expect(response.body.pagination).toMatchObject({ page: 1, limit: 10, total: 1, pages: 1 })
+    expect(response.body.summary).toEqual({ accountCount: 1, periodSpend: 42, calculatedBalance: 58 })
     expect(AggAccount.aggregate).toHaveBeenCalledTimes(1)
-    expect((AggAccount.aggregate as jest.Mock).mock.calls[0][0][0]).toMatchObject({
+    const pipeline = (AggAccount.aggregate as jest.Mock).mock.calls[0][0]
+    expect(pipeline[0]).toMatchObject({
       $match: {
         accountId: { $in: ['123', 'act_123'] },
       },
+    })
+    const summaryGroup = pipeline.find((stage: any) => stage.$facet).$facet.summary[0].$group
+    expect(summaryGroup).toMatchObject({
+      accountCount: { $sum: 1 },
+      periodSpend: { $sum: '$periodSpend' },
+      calculatedBalance: { $sum: '$calculatedBalance' },
     })
   })
 
@@ -434,6 +459,7 @@ describe('summary route data scoping', () => {
       {
         data: [{ campaignId: 'cmp_1', accountId: '123', spend: 42 }],
         total: [{ count: 1 }],
+        summary: [{ rowCount: 1, spend: 42, purchase_value: 84, purchase_roas: 2 }],
       },
     ])
 
@@ -441,11 +467,26 @@ describe('summary route data scoping', () => {
 
     expect(response.status).toBe(200)
     expect(response.body.data).toEqual([{ campaignId: 'cmp_1', accountId: '123', spend: 42 }])
+    expect(response.body.summary).toMatchObject({ rowCount: 1, spend: 42, purchase_value: 84, purchase_roas: 2 })
     expect(AggCampaign.aggregate).toHaveBeenCalledTimes(1)
-    expect((AggCampaign.aggregate as jest.Mock).mock.calls[0][0][0]).toMatchObject({
+    const pipeline = (AggCampaign.aggregate as jest.Mock).mock.calls[0][0]
+    expect(pipeline[0]).toMatchObject({
       $match: {
         accountId: { $in: ['123', 'act_123'] },
       },
+    })
+    const summaryStages = pipeline.find((stage: any) => stage.$facet).$facet.summary
+    expect(summaryStages[0].$group).toMatchObject({
+      rowCount: { $sum: 1 },
+      spend: { $sum: '$spend' },
+      revenue: { $sum: '$revenue' },
+    })
+    expect(summaryStages[1].$addFields).toMatchObject({
+      purchase_value: '$revenue',
+      purchase_roas: { $cond: expect.any(Array) },
+      ctr: { $cond: expect.any(Array) },
+      cpc: { $cond: expect.any(Array) },
+      cpm: { $cond: expect.any(Array) },
     })
   })
 
