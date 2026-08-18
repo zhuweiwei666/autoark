@@ -1,6 +1,7 @@
 import {
   buildLegacyCoverageOperation,
   buildLegacyFactOperation,
+  findUnexpectedTtlIndexNames,
 } from '../src/scripts/backfillMetaInsightsPersistence'
 
 describe('Meta insights persistence baseline backfill', () => {
@@ -65,5 +66,15 @@ describe('Meta insights persistence baseline backfill', () => {
       }),
     })
     expect(operation.updateOne.upsert).toBe(true)
+  })
+
+  it('fails the migration audit when a permanent collection has a TTL index', () => {
+    expect(
+      findUnexpectedTtlIndexNames([
+        { name: '_id_' },
+        { name: 'fetchedAt_ttl', expireAfterSeconds: 86400 },
+        { expireAfterSeconds: 0 },
+      ]),
+    ).toEqual(['fetchedAt_ttl', 'unnamed'])
   })
 })

@@ -187,6 +187,13 @@ const ensureIndexes = async (db: mongoose.mongo.Db) => {
     )
 }
 
+export const findUnexpectedTtlIndexNames = (
+  indexes: Array<{ name?: string; expireAfterSeconds?: number }>,
+): string[] =>
+  indexes
+    .filter((index) => index.expireAfterSeconds !== undefined)
+    .map((index) => index.name || 'unnamed')
+
 const main = async () => {
   if (HELP) return printHelp()
   if (!MONGO_URI) throw new Error('MONGO_URI or MONGODB_URI is required')
@@ -279,8 +286,33 @@ const main = async () => {
     coverageUpserts += result.upsertedCount
   }
 
+  const [finalFactRows, finalCoverageRows, factIndexes, coverageIndexes] =
+    await Promise.all([
+      db.collection('metainsightsfacts').countDocuments({}),
+      db.collection('metainsightscoverages').countDocuments({}),
+      db.collection('metainsightsfacts').indexes(),
+      db.collection('metainsightscoverages').indexes(),
+    ])
+  const ttlIndexes = findUnexpectedTtlIndexNames([
+    ...factIndexes,
+    ...coverageIndexes,
+  ])
+
+  if (ttlIndexes.length > 0) {
+    throw new Error(`Unexpected TTL indexes: ${ttlIndexes.join(', ')}`)
+  }
+
   console.log(
-    JSON.stringify({ factUpserts, coverageUpserts, status: 'complete' }),
+    JSON.stringify({
+      factUpserts,
+      coverageUpserts,
+      finalFactRows,
+      finalCoverageRows,
+      factIndexNames: factIndexes.map((index) => index.name),
+      coverageIndexNames: coverageIndexes.map((index) => index.name),
+      ttlIndexes,
+      status: 'complete',
+    }),
   )
 }
 
