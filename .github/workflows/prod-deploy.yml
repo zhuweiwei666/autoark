@@ -86,6 +86,9 @@ jobs:
             UserKnownHostsFile ~/.ssh/known_hosts
             StrictHostKeyChecking yes
             ServerAliveInterval 10
+            ControlMaster auto
+            ControlPersist 5m
+            ControlPath ~/.ssh/autoark-%C
           EOF
           chmod 600 ~/.ssh/config
 
@@ -95,8 +98,25 @@ jobs:
           PROD_HOST: autoark-prod
           GUANGDADA_API_KEY: ${{ secrets.GUANGDADA_API_KEY }}
           EXTERNAL_MATERIAL_SYNC_ENABLED: ${{ vars.EXTERNAL_MATERIAL_SYNC_ENABLED || 'false' }}
+          FACEBOOK_SYNC_ENABLED: "false"
+          FACEBOOK_AGGREGATION_ENABLED: "true"
+          FACEBOOK_AGGREGATION_CONCURRENCY: "2"
           META_CREDENTIAL_ENCRYPTION_KEY: ${{ secrets.META_CREDENTIAL_ENCRYPTION_KEY }}
         run: bash deploy/prod-deploy.sh
+
+      - name: Verify Facebook collection controls
+        run: >-
+          ssh autoark-prod
+          'cd /opt/autoark &&
+          docker compose --env-file deploy/.env --env-file deploy/.deploy-metadata.env
+          -f deploy/docker-compose.prod.yml exec -T backend node -e
+          '"'"'const actual = {
+          sync: process.env.FACEBOOK_SYNC_ENABLED,
+          aggregation: process.env.FACEBOOK_AGGREGATION_ENABLED,
+          concurrency: process.env.FACEBOOK_AGGREGATION_CONCURRENCY,
+          };
+          console.log(`[autoark-verify] Facebook collection controls ${JSON.stringify(actual)}`);
+          if (actual.sync !== "false" || actual.aggregation !== "true" || actual.concurrency !== "2") process.exit(1);'"'"''
 
       - name: Backfill permanent Meta Insights persistence
         if: ${{ inputs.backfill_meta_insights_persistence }}

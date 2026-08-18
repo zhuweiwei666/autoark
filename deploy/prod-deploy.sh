@@ -43,6 +43,27 @@ if [ "${EXTERNAL_MATERIAL_SYNC_ENABLED+x}" = 'x' ]; then
   EXTERNAL_MATERIAL_SYNC_ENABLED_OVERRIDE="$EXTERNAL_MATERIAL_SYNC_ENABLED"
 fi
 
+FACEBOOK_SYNC_ENABLED_OVERRIDE_SET='false'
+FACEBOOK_SYNC_ENABLED_OVERRIDE=''
+if [ "${FACEBOOK_SYNC_ENABLED+x}" = 'x' ]; then
+  FACEBOOK_SYNC_ENABLED_OVERRIDE_SET='true'
+  FACEBOOK_SYNC_ENABLED_OVERRIDE="$FACEBOOK_SYNC_ENABLED"
+fi
+
+FACEBOOK_AGGREGATION_ENABLED_OVERRIDE_SET='false'
+FACEBOOK_AGGREGATION_ENABLED_OVERRIDE=''
+if [ "${FACEBOOK_AGGREGATION_ENABLED+x}" = 'x' ]; then
+  FACEBOOK_AGGREGATION_ENABLED_OVERRIDE_SET='true'
+  FACEBOOK_AGGREGATION_ENABLED_OVERRIDE="$FACEBOOK_AGGREGATION_ENABLED"
+fi
+
+FACEBOOK_AGGREGATION_CONCURRENCY_OVERRIDE_SET='false'
+FACEBOOK_AGGREGATION_CONCURRENCY_OVERRIDE=''
+if [ "${FACEBOOK_AGGREGATION_CONCURRENCY+x}" = 'x' ]; then
+  FACEBOOK_AGGREGATION_CONCURRENCY_OVERRIDE_SET='true'
+  FACEBOOK_AGGREGATION_CONCURRENCY_OVERRIDE="$FACEBOOK_AGGREGATION_CONCURRENCY"
+fi
+
 META_CREDENTIAL_ENCRYPTION_KEY_OVERRIDE_SET='false'
 META_CREDENTIAL_ENCRYPTION_KEY_OVERRIDE=''
 if [ "${META_CREDENTIAL_ENCRYPTION_KEY+x}" = 'x' ]; then
@@ -96,6 +117,25 @@ case "$EXTERNAL_MATERIAL_SYNC_ENABLED_OVERRIDE_SET:$EXTERNAL_MATERIAL_SYNC_ENABL
   false: | true:true | true:false) ;;
   *)
     echo "EXTERNAL_MATERIAL_SYNC_ENABLED must be true or false."
+    exit 1
+    ;;
+esac
+
+for facebook_boolean_override in \
+  "$FACEBOOK_SYNC_ENABLED_OVERRIDE_SET:$FACEBOOK_SYNC_ENABLED_OVERRIDE" \
+  "$FACEBOOK_AGGREGATION_ENABLED_OVERRIDE_SET:$FACEBOOK_AGGREGATION_ENABLED_OVERRIDE"; do
+  case "$facebook_boolean_override" in
+    false: | true:true | true:false) ;;
+    *)
+      echo "Facebook collection flags must be true or false."
+      exit 1
+      ;;
+  esac
+done
+case "$FACEBOOK_AGGREGATION_CONCURRENCY_OVERRIDE_SET:$FACEBOOK_AGGREGATION_CONCURRENCY_OVERRIDE" in
+  false: | true:[1-5]) ;;
+  *)
+    echo "FACEBOOK_AGGREGATION_CONCURRENCY must be an integer from 1 to 5."
     exit 1
     ;;
 esac
@@ -282,6 +322,12 @@ key_override_set=''
 key_override=''
 flag_override_set=''
 flag_override=''
+facebook_sync_override_set=''
+facebook_sync_override=''
+facebook_aggregation_override_set=''
+facebook_aggregation_override=''
+facebook_concurrency_override_set=''
+facebook_concurrency_override=''
 meta_key_override_set=''
 meta_key_override=''
 ai_ads_key_override_set=''
@@ -300,6 +346,12 @@ IFS= read -r -d '' key_override_set
 IFS= read -r -d '' key_override
 IFS= read -r -d '' flag_override_set
 IFS= read -r -d '' flag_override
+IFS= read -r -d '' facebook_sync_override_set
+IFS= read -r -d '' facebook_sync_override
+IFS= read -r -d '' facebook_aggregation_override_set
+IFS= read -r -d '' facebook_aggregation_override
+IFS= read -r -d '' facebook_concurrency_override_set
+IFS= read -r -d '' facebook_concurrency_override
 IFS= read -r -d '' meta_key_override_set
 IFS= read -r -d '' meta_key_override
 IFS= read -r -d '' ai_ads_key_override_set
@@ -326,6 +378,24 @@ case "$flag_override_set:$flag_override" in
   false: | true:true | true:false) ;;
   *)
     echo 'EXTERNAL_MATERIAL_SYNC_ENABLED must be true or false.'
+    exit 1
+    ;;
+esac
+for facebook_boolean_override in \
+  "$facebook_sync_override_set:$facebook_sync_override" \
+  "$facebook_aggregation_override_set:$facebook_aggregation_override"; do
+  case "$facebook_boolean_override" in
+    false: | true:true | true:false) ;;
+    *)
+      echo 'Facebook collection flags must be true or false.'
+      exit 1
+      ;;
+  esac
+done
+case "$facebook_concurrency_override_set:$facebook_concurrency_override" in
+  false: | true:[1-5]) ;;
+  *)
+    echo 'FACEBOOK_AGGREGATION_CONCURRENCY must be an integer from 1 to 5.'
     exit 1
     ;;
 esac
@@ -589,6 +659,9 @@ payload_temp="$(mktemp "${transaction_prefix}.payload.XXXXXX")"
 chmod 600 "$base_payload_temp" "$payload_temp"
 source_key=''
 source_flag='false'
+source_facebook_sync='false'
+source_facebook_aggregation='false'
+source_facebook_concurrency='2'
 source_meta_key=''
 source_ai_ads_key=''
 source_ai_ads_organization=''
@@ -603,6 +676,15 @@ while IFS= read -r line || [ -n "$line" ]; do
       ;;
     EXTERNAL_MATERIAL_SYNC_ENABLED=*)
       source_flag="${line#EXTERNAL_MATERIAL_SYNC_ENABLED=}"
+      ;;
+    FACEBOOK_SYNC_ENABLED=*)
+      source_facebook_sync="${line#FACEBOOK_SYNC_ENABLED=}"
+      ;;
+    FACEBOOK_AGGREGATION_ENABLED=*)
+      source_facebook_aggregation="${line#FACEBOOK_AGGREGATION_ENABLED=}"
+      ;;
+    FACEBOOK_AGGREGATION_CONCURRENCY=*)
+      source_facebook_concurrency="${line#FACEBOOK_AGGREGATION_CONCURRENCY=}"
       ;;
     META_CREDENTIAL_ENCRYPTION_KEY=*)
       source_meta_key="${line#META_CREDENTIAL_ENCRYPTION_KEY=}"
@@ -634,6 +716,9 @@ done < "$source_env_path" > "$base_payload_temp"
 
 resolved_key="$source_key"
 resolved_flag="$source_flag"
+resolved_facebook_sync="$source_facebook_sync"
+resolved_facebook_aggregation="$source_facebook_aggregation"
+resolved_facebook_concurrency="$source_facebook_concurrency"
 resolved_meta_key="$source_meta_key"
 resolved_ai_ads_key="$source_ai_ads_key"
 resolved_ai_ads_organization="$source_ai_ads_organization"
@@ -646,6 +731,15 @@ if [ "$key_override_set" = 'true' ]; then
 fi
 if [ "$flag_override_set" = 'true' ]; then
   resolved_flag="$flag_override"
+fi
+if [ "$facebook_sync_override_set" = 'true' ]; then
+  resolved_facebook_sync="$facebook_sync_override"
+fi
+if [ "$facebook_aggregation_override_set" = 'true' ]; then
+  resolved_facebook_aggregation="$facebook_aggregation_override"
+fi
+if [ "$facebook_concurrency_override_set" = 'true' ]; then
+  resolved_facebook_concurrency="$facebook_concurrency_override"
 fi
 if [ "$meta_key_override_set" = 'true' ]; then
   resolved_meta_key="$meta_key_override"
@@ -671,6 +765,24 @@ case "$resolved_flag" in
   true | false) ;;
   *)
     echo 'EXTERNAL_MATERIAL_SYNC_ENABLED must resolve to true or false.'
+    exit 1
+    ;;
+esac
+for resolved_facebook_boolean in \
+  "$resolved_facebook_sync" \
+  "$resolved_facebook_aggregation"; do
+  case "$resolved_facebook_boolean" in
+    true | false) ;;
+    *)
+      echo 'Facebook collection flags must resolve to true or false.'
+      exit 1
+      ;;
+  esac
+done
+case "$resolved_facebook_concurrency" in
+  [1-5]) ;;
+  *)
+    echo 'FACEBOOK_AGGREGATION_CONCURRENCY must resolve to an integer from 1 to 5.'
     exit 1
     ;;
 esac
@@ -725,6 +837,9 @@ done
 cat "$base_payload_temp" > "$payload_temp"
 printf 'GUANGDADA_API_KEY=%s\n' "$resolved_key" >> "$payload_temp"
 printf 'EXTERNAL_MATERIAL_SYNC_ENABLED=%s\n' "$resolved_flag" >> "$payload_temp"
+printf 'FACEBOOK_SYNC_ENABLED=%s\n' "$resolved_facebook_sync" >> "$payload_temp"
+printf 'FACEBOOK_AGGREGATION_ENABLED=%s\n' "$resolved_facebook_aggregation" >> "$payload_temp"
+printf 'FACEBOOK_AGGREGATION_CONCURRENCY=%s\n' "$resolved_facebook_concurrency" >> "$payload_temp"
 printf 'META_CREDENTIAL_ENCRYPTION_KEY=%s\n' "$resolved_meta_key" >> "$payload_temp"
 printf 'AI_ADS_INTEGRATION_API_KEY=%s\n' "$resolved_ai_ads_key" >> "$payload_temp"
 printf 'AI_ADS_INTEGRATION_ORGANIZATION_ID=%s\n' "$resolved_ai_ads_organization" >> "$payload_temp"
@@ -802,12 +917,18 @@ printf -v QUOTED_REMOTE_DEPLOY_LOCK_FILE '%q' "$REMOTE_DEPLOY_LOCK_FILE"
 REMOTE_DEPLOY_TRANSACTION_COMMAND="bash -c $QUOTED_REMOTE_DEPLOY_TRANSACTION_SCRIPT -- $QUOTED_APP_DIR $QUOTED_REPO_URL $QUOTED_AUTOARK_REF $QUOTED_REMOTE_ENV_BACKUP $QUOTED_REMOTE_ENV_UPLOAD_STAGE $QUOTED_REMOTE_ENV_UPLOAD_CANDIDATE $QUOTED_REMOTE_ENV_UPLOAD_EXPECTED_GENERATION $QUOTED_REMOTE_DEPLOY_LOCK_FILE"
 
 log "Deploying verified commit=$AUTOARK_REF"
-log "Synchronizing GUANGDADA_API_KEY, EXTERNAL_MATERIAL_SYNC_ENABLED, META_CREDENTIAL_ENCRYPTION_KEY, AI ads integration, and Creative Factory values"
-printf '%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0' \
+log "Synchronizing GUANGDADA_API_KEY, EXTERNAL_MATERIAL_SYNC_ENABLED, Facebook collection controls, META_CREDENTIAL_ENCRYPTION_KEY, AI ads integration, and Creative Factory values"
+printf '%s\0' \
   "$GUANGDADA_API_KEY_OVERRIDE_SET" \
   "$GUANGDADA_API_KEY_OVERRIDE" \
   "$EXTERNAL_MATERIAL_SYNC_ENABLED_OVERRIDE_SET" \
   "$EXTERNAL_MATERIAL_SYNC_ENABLED_OVERRIDE" \
+  "$FACEBOOK_SYNC_ENABLED_OVERRIDE_SET" \
+  "$FACEBOOK_SYNC_ENABLED_OVERRIDE" \
+  "$FACEBOOK_AGGREGATION_ENABLED_OVERRIDE_SET" \
+  "$FACEBOOK_AGGREGATION_ENABLED_OVERRIDE" \
+  "$FACEBOOK_AGGREGATION_CONCURRENCY_OVERRIDE_SET" \
+  "$FACEBOOK_AGGREGATION_CONCURRENCY_OVERRIDE" \
   "$META_CREDENTIAL_ENCRYPTION_KEY_OVERRIDE_SET" \
   "$META_CREDENTIAL_ENCRYPTION_KEY_OVERRIDE" \
   "$AI_ADS_INTEGRATION_API_KEY_OVERRIDE_SET" \
