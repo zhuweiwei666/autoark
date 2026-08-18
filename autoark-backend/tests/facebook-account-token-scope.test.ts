@@ -34,7 +34,7 @@ import Account from '../src/models/Account'
 import FbToken from '../src/models/FbToken'
 import * as facebookService from '../src/services/facebook.service'
 import { getUserAccountIds } from '../src/middlewares/auth'
-import { getCampaigns } from '../src/controllers/facebook.controller'
+import { getCampaigns, getInsightsDaily } from '../src/controllers/facebook.controller'
 
 const mockQuery = (result: any) => ({
   select: jest.fn().mockReturnValue({
@@ -109,5 +109,46 @@ describe('facebook account API token scoping', () => {
       statusCode: 403,
     }))
     expect(facebookService.getCampaigns).not.toHaveBeenCalled()
+  })
+
+  it('reads persisted daily history without resolving a live token', async () => {
+    ;(getUserAccountIds as jest.Mock).mockResolvedValue(['123'])
+    ;(facebookService.getInsightsDaily as jest.Mock).mockResolvedValue({
+      data: [],
+      coverage: [{ date: '2026-08-17', status: 'stale' }],
+      cached: true,
+      meta: {
+        startDate: '2026-08-17',
+        endDate: '2026-08-17',
+        grain: 'campaign-country-day',
+      },
+    })
+    const req: any = {
+      params: { id: 'act_123' },
+      query: { startDate: '2026-08-17', endDate: '2026-08-17' },
+      user: {
+        role: UserRole.ORG_ADMIN,
+        organizationId: '665000000000000000000001',
+        userId: '665000000000000000000002',
+      },
+    }
+    const res: any = {
+      status: jest.fn().mockReturnThis(),
+      json: jest.fn(),
+    }
+
+    await getInsightsDaily(req, res, jest.fn())
+
+    expect(FbToken.find).not.toHaveBeenCalled()
+    expect(Account.findOne).not.toHaveBeenCalled()
+    expect(facebookService.getInsightsDaily).toHaveBeenCalledWith(
+      'act_123',
+      { since: '2026-08-17', until: '2026-08-17' },
+    )
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      success: true,
+      cached: true,
+      coverage: [{ date: '2026-08-17', status: 'stale' }],
+    }))
   })
 })

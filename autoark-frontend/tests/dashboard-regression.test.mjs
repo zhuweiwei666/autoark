@@ -45,6 +45,18 @@ test('dashboard core metrics use the authenticated summary pipeline', () => {
   assert.match(aggCoreSource, /getCoreMetrics\(/)
 })
 
+test('dashboard rejects unavailable zero placeholders as incomplete coverage', () => {
+  const validatorSource = sourceBetween(
+    apiSource,
+    'const isCompleteDashboardSummary',
+    '// 获取核心指标',
+  )
+
+  assert.equal((validatorSource.match(/value\.available\s*===\s*true/g) || []).length, 2)
+  assert.equal((validatorSource.match(/value\.dataStatus/g) || []).length, 2)
+  assert.match(apiSource, /Dashboard data coverage is incomplete/)
+})
+
 test('dashboard cache is isolated to the authenticated session', () => {
   const source = sourceBetween(
     dashboardSource,

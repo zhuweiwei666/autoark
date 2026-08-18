@@ -1,6 +1,7 @@
 const mockSchedule = jest.fn()
 const mockWarn = jest.fn()
 const mockRefreshAggregation = jest.fn()
+const mockFreezeMatureCoverage = jest.fn()
 
 jest.mock('node-cron', () => ({
   __esModule: true,
@@ -11,6 +12,10 @@ jest.mock('node-cron', () => ({
 
 jest.mock('../src/services/aggregation.service', () => ({
   refreshAggregation: mockRefreshAggregation,
+}))
+
+jest.mock('../src/services/metaInsightsPersistence.service', () => ({
+  freezeMatureMetaInsightsCoverage: mockFreezeMatureCoverage,
 }))
 
 jest.mock('../src/utils/logger', () => ({
@@ -59,7 +64,7 @@ describe('aggregation cron guard', () => {
     )
   })
 
-  it('starts today-only aggregation without resuming Facebook sync queues', async () => {
+  it('schedules the rolling three-day window without resuming Facebook sync queues', async () => {
     process.env.FACEBOOK_SYNC_ENABLED = 'false'
     process.env.FACEBOOK_AGGREGATION_ENABLED = 'true'
     jest.useFakeTimers().setSystemTime(new Date('2026-07-28T09:00:00.000Z'))
@@ -68,7 +73,12 @@ describe('aggregation cron guard', () => {
     initAggregationCron()
 
     expect(setTimeoutSpy).toHaveBeenCalledTimes(1)
-    expect(mockSchedule).toHaveBeenCalledTimes(1)
+    expect(mockSchedule).toHaveBeenCalledTimes(3)
+    expect(mockSchedule.mock.calls.map(call => call[0])).toEqual([
+      '*/10 * * * *',
+      '3 * * * *',
+      '47 23 * * *',
+    ])
 
     const initialRefresh = setTimeoutSpy.mock.calls[0][0] as () => Promise<void>
     await initialRefresh()
@@ -77,7 +87,7 @@ describe('aggregation cron guard', () => {
     expect(mockRefreshAggregation).toHaveBeenCalledWith('2026-07-28')
   })
 
-  it('skips overlapping scheduled refreshes while the first run is active', async () => {
+  it('coalesces overlapping refreshes for the same date and runs them serially', async () => {
     process.env.FACEBOOK_SYNC_ENABLED = 'false'
     process.env.FACEBOOK_AGGREGATION_ENABLED = 'true'
     jest.useFakeTimers().setSystemTime(new Date('2026-07-28T09:00:00.000Z'))
@@ -91,28 +101,27 @@ describe('aggregation cron guard', () => {
     )
 
     const setTimeoutSpy = jest.spyOn(global, 'setTimeout')
-    let scheduledRefresh: (() => Promise<void>) | undefined
-    mockSchedule.mockImplementationOnce(
-      (_schedule: string, handler: () => Promise<void>) => {
-        scheduledRefresh = handler
-      },
-    )
-
     initAggregationCron()
+
+    const scheduledRefresh = mockSchedule.mock.calls.find(
+      call => call[0] === '*/10 * * * *',
+    )?.[1] as (() => Promise<void>) | undefined
 
     const initialRefresh = setTimeoutSpy.mock.calls[0][0] as () => Promise<void>
     const initialRun = initialRefresh()
     await Promise.resolve()
 
     expect(scheduledRefresh).toBeDefined()
-    await scheduledRefresh!()
+    const scheduledRun1 = scheduledRefresh!()
+    const scheduledRun2 = scheduledRefresh!()
 
     expect(mockRefreshAggregation).toHaveBeenCalledTimes(1)
-    expect(mockWarn).toHaveBeenCalledWith(
-      '[AggregationCron] Refresh already in progress; skipping scheduled refresh',
-    )
 
     releaseRefresh!()
-    await initialRun
+    await Promise.all([initialRun, scheduledRun1, scheduledRun2])
+
+    expect(mockRefreshAggregation).toHaveBeenCalledTimes(2)
+    expect(mockRefreshAggregation).toHaveBeenNthCalledWith(1, '2026-07-28')
+    expect(mockRefreshAggregation).toHaveBeenNthCalledWith(2, '2026-07-28')
   })
 })

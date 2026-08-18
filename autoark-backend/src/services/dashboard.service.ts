@@ -1,11 +1,9 @@
 import { PipelineStage } from 'mongoose'
 import { MetricsDaily, Account, Campaign, Ad, SyncLog, OpsLog } from '../models'
 import mongoose from 'mongoose'
-import { fetchInsights } from './facebook.api'
-import { normalizeForApi } from '../utils/accountId'
-import logger from '../utils/logger'
 import { pickAllowedString, pickSafeQueryString } from '../utils/pagination'
-import { resolveAccountOperationalAuthorization } from './metaBusinessCredential.service'
+import { AggCampaign, AggCountry, AggDaily } from '../models/Aggregation'
+import { addDateDays, enumerateDateRange, formatShanghaiDate } from '../utils/shanghaiDate'
 
 // --- Existing Dashboard Service Logic ---
 
@@ -62,7 +60,7 @@ export const getDaily = async (filters: DashboardFilters) => {
         clicks: { $sum: '$clicks' },
       },
     },
-    { $sort: { _id: 1 as 1 } },
+    { $sort: { _id: 1 as const } },
     {
       $project: {
         _id: 0,
@@ -222,144 +220,80 @@ export async function getOpsLogs(limit = 50) {
 
 // ========== 数据看板 V1 API ==========
 
+const emptyDashboardMetric = () => ({
+  spend: 0,
+  impressions: 0,
+  clicks: 0,
+  installs: 0,
+  purchase_value: 0,
+  ctr: 0,
+  cpm: 0,
+  cpc: 0,
+  cpi: 0,
+  roas: 0,
+  available: false,
+  dataStatus: 'unavailable',
+})
+
+const dashboardMetricFromDaily = (row: any) => row
+  ? {
+      spend: Number(row.spend || 0),
+      impressions: Number(row.impressions || 0),
+      clicks: Number(row.clicks || 0),
+      installs: Number(row.installs || 0),
+      purchase_value: Number(row.revenue || 0),
+      ctr: Number(row.ctr || 0),
+      cpm: Number(row.cpm || 0),
+      cpc: Number(row.cpc || 0),
+      cpi: Number(row.cpi || 0),
+      roas: Number(row.roas || 0),
+      available: true,
+      dataStatus: row.dataStatus || 'fresh',
+    }
+  : emptyDashboardMetric()
+
 /**
- * 获取核心指标概览（今日消耗、昨日消耗、7日趋势等）
- * 直接从 Facebook Insights API 获取数据以确保准确性
- * 使用 campaign 级别数据确保与广告系列页面一致
+ * 获取核心指标概览。Meta API 只由后台采集任务调用；这个兼容接口和
+ * AI 分析链都只读取 MongoDB 聚合快照。
  */
 export async function getCoreMetrics(startDate?: string, endDate?: string) {
-  const today = endDate || new Date().toISOString().split('T')[0]
-  const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().split('T')[0]
-  const sevenDaysAgo = startDate || new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
-
-  let todayMetrics = { spend: 0, impressions: 0, clicks: 0, installs: 0, purchase_value: 0 }
-  let yesterdayMetrics = { spend: 0, impressions: 0, clicks: 0, installs: 0, purchase_value: 0 }
-  let sevenDaysMetrics = { spend: 0, impressions: 0, clicks: 0, installs: 0, purchase_value: 0 }
-
-  const accounts = await Account.find({ status: 'active' }).lean()
-  const authorizedAccounts = (await Promise.all(accounts.map(async (account: any) => ({
-    account,
-    authorization: await resolveAccountOperationalAuthorization({
-      accountId: account.accountId,
-      organizationId: account.organizationId,
-      legacyToken: account.token,
-      legacyTokenId: account.tokenId,
-    }),
-  })))).filter((entry) => entry.authorization)
-
-  if (authorizedAccounts.length > 0) {
-    logger.info(`[Dashboard] Fetching campaign-level insights for ${authorizedAccounts.length} authorized accounts`)
-
-    // 并发获取所有账户的 campaign 级别 insights（与广告系列页面一致）
-    const fetchCampaignInsights = async (datePreset?: string, timeRange?: { since: string; until: string }) => {
-      const promises = authorizedAccounts.map(async ({ account, authorization }) => {
-        try {
-          const accountIdForApi = normalizeForApi(account.accountId)
-          const insights = await fetchInsights(
-            accountIdForApi,
-            'campaign',  // 使用 campaign 级别，与广告系列页面一致
-            datePreset || undefined,
-            authorization!.token,
-            undefined,
-            timeRange
-          )
-          if (insights && Array.isArray(insights)) {
-            // 聚合该账户下所有 campaign 的数据
-            let totalSpend = 0
-            let totalImpressions = 0
-            let totalClicks = 0
-            let totalPurchaseValue = 0
-
-            insights.forEach((insight: any) => {
-              totalSpend += parseFloat(insight.spend || '0')
-              totalImpressions += parseInt(insight.impressions || '0', 10)
-              totalClicks += parseInt(insight.clicks || '0', 10)
-
-              if (insight.action_values && Array.isArray(insight.action_values)) {
-                const purchaseAction = insight.action_values.find((a: any) => 
-                  a.action_type === 'purchase' || a.action_type === 'mobile_app_purchase' || a.action_type === 'omni_purchase'
-                )
-                if (purchaseAction) {
-                  totalPurchaseValue += parseFloat(purchaseAction.value) || 0
-                }
-              }
-            })
-
-            return {
-              spend: totalSpend,
-              impressions: totalImpressions,
-              clicks: totalClicks,
-              installs: 0,
-              purchase_value: totalPurchaseValue
-            }
-          }
-          return { spend: 0, impressions: 0, clicks: 0, installs: 0, purchase_value: 0 }
-        } catch (error) {
-          return { spend: 0, impressions: 0, clicks: 0, installs: 0, purchase_value: 0 }
-        }
-      })
-
-      const results = await Promise.all(promises)
-      return results.reduce((acc, curr) => ({
-        spend: acc.spend + curr.spend,
-        impressions: acc.impressions + curr.impressions,
-        clicks: acc.clicks + curr.clicks,
-        installs: acc.installs + curr.installs,
-        purchase_value: acc.purchase_value + curr.purchase_value
-      }), { spend: 0, impressions: 0, clicks: 0, installs: 0, purchase_value: 0 })
-    }
-
-    // 并发获取今日、昨日、7日数据
-    const [todayData, yesterdayData, sevenDaysData] = await Promise.all([
-      fetchCampaignInsights('today'),
-      fetchCampaignInsights('yesterday'),
-      fetchCampaignInsights(undefined, { since: sevenDaysAgo, until: today })
-    ])
-
-    todayMetrics = todayData
-    yesterdayMetrics = yesterdayData
-    sevenDaysMetrics = sevenDaysData
-
-    logger.info(`[Dashboard] Today spend: $${todayMetrics.spend.toFixed(2)}, Yesterday: $${yesterdayMetrics.spend.toFixed(2)}, 7days: $${sevenDaysMetrics.spend.toFixed(2)}`)
-  }
-
-  // 计算指标
-  const todayCtr = todayMetrics.impressions > 0 ? (todayMetrics.clicks / todayMetrics.impressions) * 100 : 0
-  const todayCpm = todayMetrics.impressions > 0 ? (todayMetrics.spend / todayMetrics.impressions) * 1000 : 0
-  const todayCpc = todayMetrics.clicks > 0 ? todayMetrics.spend / todayMetrics.clicks : 0
-  const todayCpi = todayMetrics.installs > 0 ? todayMetrics.spend / todayMetrics.installs : 0
-  const todayRoas = todayMetrics.spend > 0 && todayMetrics.purchase_value ? todayMetrics.purchase_value / todayMetrics.spend : 0
+  const today = endDate || formatShanghaiDate()
+  const yesterday = addDateDays(today, -1)
+  const rangeStart = startDate || addDateDays(today, -6)
+  const expectedDays = enumerateDateRange(rangeStart, today).length
+  const rows = await AggDaily.find({
+    date: { $gte: rangeStart < yesterday ? rangeStart : yesterday, $lte: today },
+  }).lean()
+  const rowsByDate = new Map(rows.map((row: any) => [row.date, row]))
+  const rangeRows = rows.filter((row: any) => row.date >= rangeStart && row.date <= today)
+  const rangeTotals = rangeRows.reduce((total, row: any) => ({
+    spend: total.spend + Number(row.spend || 0),
+    impressions: total.impressions + Number(row.impressions || 0),
+    clicks: total.clicks + Number(row.clicks || 0),
+    installs: total.installs + Number(row.installs || 0),
+    purchase_value: total.purchase_value + Number(row.revenue || 0),
+  }), { spend: 0, impressions: 0, clicks: 0, installs: 0, purchase_value: 0 })
+  const rangeStatus = rangeRows.length === 0
+    ? 'unavailable'
+    : rangeRows.length < expectedDays || rangeRows.some((row: any) => row.dataStatus === 'partial')
+      ? 'partial'
+      : rangeRows.some((row: any) => row.dataStatus === 'stale')
+        ? 'stale'
+        : 'fresh'
 
   return {
-    today: {
-      spend: todayMetrics.spend,
-      impressions: todayMetrics.impressions,
-      clicks: todayMetrics.clicks,
-      installs: todayMetrics.installs,
-      purchase_value: todayMetrics.purchase_value,
-      ctr: todayCtr,
-      cpm: todayCpm,
-      cpc: todayCpc,
-      cpi: todayCpi,
-      roas: todayRoas,
-    },
-    yesterday: {
-      spend: yesterdayMetrics.spend,
-      impressions: yesterdayMetrics.impressions,
-      clicks: yesterdayMetrics.clicks,
-      installs: yesterdayMetrics.installs,
-      purchase_value: yesterdayMetrics.purchase_value,
-      roas: yesterdayMetrics.spend > 0 ? yesterdayMetrics.purchase_value / yesterdayMetrics.spend : 0,
-    },
+    today: dashboardMetricFromDaily(rowsByDate.get(today)),
+    yesterday: dashboardMetricFromDaily(rowsByDate.get(yesterday)),
     sevenDays: {
-      spend: sevenDaysMetrics.spend,
-      impressions: sevenDaysMetrics.impressions,
-      clicks: sevenDaysMetrics.clicks,
-      installs: sevenDaysMetrics.installs,
-      purchase_value: sevenDaysMetrics.purchase_value,
-      roas: sevenDaysMetrics.spend > 0 ? sevenDaysMetrics.purchase_value / sevenDaysMetrics.spend : 0,
-      avgDailySpend: sevenDaysMetrics.spend / 7,
+      ...rangeTotals,
+      roas: rangeTotals.spend > 0 ? rangeTotals.purchase_value / rangeTotals.spend : 0,
+      avgDailySpend: expectedDays > 0 ? rangeTotals.spend / expectedDays : 0,
+      available: rangeRows.length > 0,
+      dataStatus: rangeStatus,
+      coveredDays: rangeRows.length,
+      expectedDays,
     },
+    dataSource: 'database',
   }
 }
 
@@ -367,209 +301,79 @@ export async function getCoreMetrics(startDate?: string, endDate?: string) {
  * 获取今日消耗趋势（按小时）- 由于数据是按天存储的，这里返回最近7天的趋势
  */
 export async function getTodaySpendTrend(startDate?: string, endDate?: string) {
-  const today = endDate || new Date().toISOString().split('T')[0]
-  const sevenDaysAgo = startDate || new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
-
-  // 只统计 campaign 级别的数据，确保与广告系列页面数据一致
-  const data = await MetricsDaily.aggregate([
-    { 
-      $match: { 
-        date: { $gte: sevenDaysAgo, $lte: today },
-        campaignId: { $exists: true, $ne: null } // 只统计 campaign 级别的数据
-      } 
-    },
-    {
-      $group: {
-        _id: '$date',
-        spend: { $sum: '$spendUsd' },
-        impressions: { $sum: '$impressions' },
-        clicks: { $sum: '$clicks' },
-      },
-    },
-    { $sort: { _id: 1 } },
-    {
-      $project: {
-        _id: 0,
-        date: '$_id',
-        spend: 1,
-        impressions: 1,
-        clicks: 1,
-      },
-    },
-  ])
-
-  return data
+  const today = endDate || formatShanghaiDate()
+  const rangeStart = startDate || addDateDays(today, -6)
+  const rows = await AggDaily.find({
+    date: { $gte: rangeStart, $lte: today },
+  }).sort({ date: 1 }).lean()
+  return rows.map((row: any) => ({
+    date: row.date,
+    spend: Number(row.spend || 0),
+    impressions: Number(row.impressions || 0),
+    clicks: Number(row.clicks || 0),
+    dataStatus: row.dataStatus || 'fresh',
+  }))
 }
 
 /**
- * 获取分 Campaign 消耗排行
- * 直接从 Facebook Insights API 获取数据以确保准确性
+ * 获取分 Campaign 消耗排行（只读永久聚合快照）
  */
 export async function getCampaignSpendRanking(limit = 10, startDate?: string, endDate?: string) {
-  const today = endDate || new Date().toISOString().split('T')[0]
-  const sevenDaysAgo = startDate || new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
-
-  // 获取所有活跃账户
-  const accounts = await Account.find({ status: 'active' }).lean()
-  
-  // 构建日期参数
-  const timeRange = { since: sevenDaysAgo, until: today }
-
-  // 并发获取所有账户的 campaign 级别 insights
-  const accountPromises = accounts.map(async (account: any) => {
-    try {
-      const authorization = await resolveAccountOperationalAuthorization({
-        accountId: account.accountId,
-        organizationId: account.organizationId,
-        legacyToken: account.token,
-        legacyTokenId: account.tokenId,
-      })
-      if (!authorization) return []
-      const accountIdForApi = normalizeForApi(account.accountId)
-      const insights = await fetchInsights(
-        accountIdForApi,
-        'campaign',
-        undefined,
-        authorization.token,
-        undefined,
-        timeRange
-      )
-      return insights || []
-    } catch (error) {
-      return []
-    }
-  })
-
-  const allInsights = (await Promise.all(accountPromises)).flat()
-  
-  // 聚合并排序
-  const campaignMap = new Map<string, any>()
-  allInsights.forEach((insight: any) => {
-    const campaignId = insight.campaign_id
-    if (!campaignId) return
-
-    let purchase_value = 0
-    if (insight.action_values && Array.isArray(insight.action_values)) {
-      const purchaseAction = insight.action_values.find((a: any) => 
-        a.action_type === 'purchase' || a.action_type === 'mobile_app_purchase' || a.action_type === 'omni_purchase'
-      )
-      if (purchaseAction) {
-        purchase_value = parseFloat(purchaseAction.value) || 0
-      }
-    }
-
-    if (campaignMap.has(campaignId)) {
-      const existing = campaignMap.get(campaignId)
-      existing.spend += parseFloat(insight.spend || '0')
-      existing.impressions += parseInt(insight.impressions || '0', 10)
-      existing.clicks += parseInt(insight.clicks || '0', 10)
-      existing.purchase_value += purchase_value
-    } else {
-      campaignMap.set(campaignId, {
-        campaignId,
-        spend: parseFloat(insight.spend || '0'),
-        impressions: parseInt(insight.impressions || '0', 10),
-        clicks: parseInt(insight.clicks || '0', 10),
-        installs: 0,
-        purchase_value
-      })
-    }
-  })
-
-  // 转换为数组并排序
-  let data = Array.from(campaignMap.values())
-    .sort((a, b) => b.spend - a.spend)
-    .slice(0, limit)
-
-  // 获取 campaign 名称
-  const campaignIds = data.map(d => d.campaignId)
-  const campaigns = await Campaign.find({ campaignId: { $in: campaignIds } }).lean()
-  const campaignNameMap = new Map(campaigns.map((c: any) => [c.campaignId, c.name]))
-
-  // 计算派生指标
-  data = data.map(d => {
-    const ctr = d.impressions > 0 ? (d.clicks / d.impressions) * 100 : 0
-    const cpm = d.impressions > 0 ? (d.spend / d.impressions) * 1000 : 0
-    const cpc = d.clicks > 0 ? d.spend / d.clicks : 0
-    const cpi = d.installs > 0 ? d.spend / d.installs : 0
-    const roas = d.spend > 0 && d.purchase_value > 0 ? d.purchase_value / d.spend : 0
-
-    return {
-      ...d,
-      campaignName: campaignNameMap.get(d.campaignId) || d.campaignId,
-      ctr,
-      cpm,
-      cpc,
-      cpi,
-      roas
-    }
-  })
-
-  logger.info(`[Dashboard] Campaign ranking: top spend is $${data[0]?.spend?.toFixed(2) || 0}`)
-
-  return data
-}
-
-/**
- * 获取分国家消耗排行
- */
-export async function getCountrySpendRanking(limit = 10, startDate?: string, endDate?: string) {
-  const today = endDate || new Date().toISOString().split('T')[0]
-  const sevenDaysAgo = startDate || new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
-
-  // 注意：MetricsDaily 中没有 country 字段，需要从 Campaign 或其他地方获取
-  // 这里先返回按 accountId 分组的数据，后续可以扩展
-  // 优化：先聚合和排序，再 lookup，减少 lookup 的数据量
-  // 重要：只统计 campaign 级别的数据，确保与广告系列页面数据一致
-  const data = await MetricsDaily.aggregate([
-    { 
-      $match: { 
-        date: { $gte: sevenDaysAgo, $lte: today },
-        campaignId: { $exists: true, $ne: null } // 只统计 campaign 级别的数据
-      } 
-    },
+  const today = endDate || formatShanghaiDate()
+  const rangeStart = startDate || addDateDays(today, -6)
+  return AggCampaign.aggregate([
+    { $match: { date: { $gte: rangeStart, $lte: today } } },
     {
       $group: {
-        _id: '$accountId',
-        spend: { $sum: '$spendUsd' },
+        _id: '$campaignId',
+        campaignId: { $first: '$campaignId' },
+        campaignName: { $first: '$campaignName' },
+        spend: { $sum: '$spend' },
         impressions: { $sum: '$impressions' },
         clicks: { $sum: '$clicks' },
         installs: { $sum: '$installs' },
-        purchase_value: { $sum: '$purchase_value' },
+        purchase_value: { $sum: '$revenue' },
       },
     },
     { $sort: { spend: -1 } },
     { $limit: limit },
     {
       $addFields: {
-        // 统一处理 accountId：去掉 act_ 前缀以便匹配 Account 表
-        normalizedAccountId: {
-          $cond: {
-            if: { $eq: [{ $substr: ['$_id', 0, 4] }, 'act_'] },
-            then: { $substr: ['$_id', 4, -1] },
-            else: '$_id',
-          },
-        },
+        ctr: { $cond: [{ $gt: ['$impressions', 0] }, { $multiply: [{ $divide: ['$clicks', '$impressions'] }, 100] }, 0] },
+        cpm: { $cond: [{ $gt: ['$impressions', 0] }, { $multiply: [{ $divide: ['$spend', '$impressions'] }, 1000] }, 0] },
+        cpc: { $cond: [{ $gt: ['$clicks', 0] }, { $divide: ['$spend', '$clicks'] }, 0] },
+        cpi: { $cond: [{ $gt: ['$installs', 0] }, { $divide: ['$spend', '$installs'] }, 0] },
+        roas: { $cond: [{ $gt: ['$spend', 0] }, { $divide: ['$purchase_value', '$spend'] }, 0] },
       },
     },
+    { $project: { _id: 0 } },
+  ])
+}
+
+/**
+ * 获取分国家消耗排行
+ */
+export async function getCountrySpendRanking(limit = 10, startDate?: string, endDate?: string) {
+  const today = endDate || formatShanghaiDate()
+  const rangeStart = startDate || addDateDays(today, -6)
+  return AggCountry.aggregate([
+    { $match: { date: { $gte: rangeStart, $lte: today } } },
     {
-      $lookup: {
-        from: 'accounts',
-        localField: 'normalizedAccountId',
-        foreignField: 'accountId',
-        as: 'account',
+      $group: {
+        _id: '$country',
+        country: { $first: '$country' },
+        countryName: { $first: '$countryName' },
+        spend: { $sum: '$spend' },
+        impressions: { $sum: '$impressions' },
+        clicks: { $sum: '$clicks' },
+        installs: { $sum: '$installs' },
+        purchase_value: { $sum: '$revenue' },
       },
     },
+    { $sort: { spend: -1 } },
+    { $limit: limit },
     {
-      $project: {
-        _id: 0,
-        accountId: '$_id',
-        accountName: { $arrayElemAt: ['$account.name', 0] },
-        spend: 1,
-        impressions: 1,
-        clicks: 1,
-        installs: 1,
-        purchase_value: 1,
+      $addFields: {
         ctr: {
           $cond: [
             { $gt: ['$impressions', 0] },
@@ -599,7 +403,6 @@ export async function getCountrySpendRanking(limit = 10, startDate?: string, end
         },
       },
     },
+    { $project: { _id: 0 } },
   ])
-
-  return data
 }

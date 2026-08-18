@@ -2,6 +2,7 @@ const mockTokenFind = jest.fn()
 const mockTokenFindByIdAndUpdate = jest.fn()
 const mockAccountFind = jest.fn()
 const mockRefreshAggregation = jest.fn()
+const mockGetFreshCoverageAccountIds = jest.fn()
 
 jest.mock('../src/models/FbToken', () => ({
   __esModule: true,
@@ -20,6 +21,11 @@ jest.mock('../src/models/Account', () => ({
 
 jest.mock('../src/services/aggregation.service', () => ({
   refreshAggregation: (...args: any[]) => mockRefreshAggregation(...args),
+}))
+
+jest.mock('../src/services/metaInsightsPersistence.service', () => ({
+  getFreshCoverageAccountIds: (...args: any[]) =>
+    mockGetFreshCoverageAccountIds(...args),
 }))
 
 jest.mock('../src/utils/logger', () => ({
@@ -63,6 +69,7 @@ describe('token authorization insights backfill', () => {
       { accountId: '102' },
     ]))
     mockTokenFindByIdAndUpdate.mockResolvedValue({})
+    mockGetFreshCoverageAccountIds.mockResolvedValue(new Set())
     mockRefreshAggregation.mockResolvedValue({
       processedAccountIds: ['101', '102'],
       cachedAccountIds: [],
@@ -105,25 +112,28 @@ describe('token authorization insights backfill', () => {
             $gte: new Date('2026-08-06T03:30:00.000Z'),
           },
         },
+        { insightsBackfillPendingSince: { $exists: true } },
+        { statusChangedAt: { $gte: new Date('2026-08-03T16:00:00.000Z') } },
+        { lastActiveAt: { $gte: new Date('2026-08-03T16:00:00.000Z') } },
       ],
     })
     expect(mockRefreshAggregation).toHaveBeenNthCalledWith(
       1,
-      '2026-08-06',
+      '2026-08-04',
       true,
-      { accountIds: ['101', '102'] },
+      { accountIds: ['101', '102'], ignoreRetryBackoff: true },
     )
     expect(mockRefreshAggregation).toHaveBeenNthCalledWith(
       2,
       '2026-08-05',
       true,
-      { accountIds: ['101', '102'] },
+      { accountIds: ['101', '102'], ignoreRetryBackoff: true },
     )
     expect(mockRefreshAggregation).toHaveBeenNthCalledWith(
       3,
-      '2026-08-04',
+      '2026-08-06',
       true,
-      { accountIds: ['101', '102'] },
+      { accountIds: ['101', '102'], ignoreRetryBackoff: true },
     )
     expect(mockTokenFindByIdAndUpdate).toHaveBeenLastCalledWith(
       'token-1',
@@ -134,6 +144,8 @@ describe('token authorization insights backfill', () => {
         $unset: {
           insightsBackfillPendingSince: 1,
           insightsBackfillLastAttemptAt: 1,
+          insightsGapStartedAt: 1,
+          insightsBackfillCursorDate: 1,
         },
       },
     )
@@ -142,7 +154,7 @@ describe('token authorization insights backfill', () => {
       completedTokens: 1,
       pendingTokens: 0,
       attemptedAccounts: 2,
-      dates: ['2026-08-06', '2026-08-05', '2026-08-04'],
+      dates: ['2026-08-04', '2026-08-05', '2026-08-06'],
     })
   })
 
@@ -168,5 +180,34 @@ describe('token authorization insights backfill', () => {
         }),
       ],
     ]))
+  })
+
+  it('continues a long token outage in bounded date chunks instead of truncating it to three days', async () => {
+    mockTokenFind.mockReturnValue(pendingTokensQuery([{
+      _id: 'token-1',
+      insightsGapStartedAt: new Date('2026-07-20T00:00:00.000Z'),
+    } as any]))
+
+    const result = await runPendingTokenInsightsBackfill({ tokenIds: ['token-1'] })
+
+    expect(result).toMatchObject({
+      attemptedTokens: 1,
+      completedTokens: 0,
+      pendingTokens: 1,
+      attemptedAccounts: 2,
+      dates: [
+        '2026-07-20',
+        '2026-07-21',
+        '2026-07-22',
+        '2026-07-23',
+        '2026-07-24',
+        '2026-07-25',
+        '2026-07-26',
+      ],
+    })
+    expect(mockTokenFindByIdAndUpdate).toHaveBeenLastCalledWith(
+      'token-1',
+      { $set: { insightsBackfillCursorDate: '2026-07-27' } },
+    )
   })
 })

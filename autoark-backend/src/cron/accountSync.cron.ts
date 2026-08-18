@@ -3,6 +3,7 @@ import logger from '../utils/logger'
 import { syncAccountsFromTokens } from '../services/facebook.accounts.service'
 import { runPendingAccountInsightsBackfill } from '../services/accountInsightsBackfill.service'
 import { runPendingTokenInsightsBackfill } from '../services/tokenInsightsBackfill.service'
+import { runPendingMetaInsightsGapBackfill } from '../services/metaInsightsGapBackfill.service'
 
 const syncAccountsAndBackfill = async (label: string) => {
   const result = await syncAccountsFromTokens()
@@ -23,6 +24,26 @@ const syncAccountsAndBackfill = async (label: string) => {
       + `accounts: ${tokenBackfill.attemptedAccounts}, `
       + `completed: ${tokenBackfill.completedTokens}, pending: ${tokenBackfill.pendingTokens}`,
   )
+  const gapBackfill = await runPendingMetaInsightsGapBackfill()
+  logger.info(
+    `[AccountSyncCron] ${label} coverage-gap backfill completed. `
+      + `Attempted account-days: ${gapBackfill.attemptedPairs}, `
+      + `completed: ${gapBackfill.completedPairs}, pending: ${gapBackfill.pendingPairs}, `
+      + `frozen: ${gapBackfill.frozenRows}`,
+  )
+}
+
+let accountSyncInFlight: Promise<void> | null = null
+
+const runAccountSyncCycle = (label: string): Promise<void> => {
+  if (accountSyncInFlight) {
+    logger.warn(`[AccountSyncCron] ${label} trigger coalesced into the active cycle`)
+    return accountSyncInFlight
+  }
+  accountSyncInFlight = syncAccountsAndBackfill(label).finally(() => {
+    accountSyncInFlight = null
+  })
+  return accountSyncInFlight
 }
 
 /**
@@ -37,7 +58,7 @@ export function initAccountSyncCron() {
   cron.schedule('0 * * * *', async () => {
     logger.info('[AccountSyncCron] Starting scheduled account sync...')
     try {
-      await syncAccountsAndBackfill('Scheduled')
+      await runAccountSyncCycle('Scheduled')
     } catch (error: any) {
       logger.error('[AccountSyncCron] Sync failed:', error.message)
     }
@@ -47,7 +68,7 @@ export function initAccountSyncCron() {
   setTimeout(async () => {
     logger.info('[AccountSyncCron] Running initial account sync...')
     try {
-      await syncAccountsAndBackfill('Initial')
+      await runAccountSyncCycle('Initial')
     } catch (error: any) {
       logger.error('[AccountSyncCron] Initial sync failed:', error.message)
     }

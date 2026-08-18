@@ -19,6 +19,12 @@ const mockCampaignCountDocuments = jest.fn()
 const mockAccountBulkWrite = jest.fn()
 const mockAccountUpdateMany = jest.fn()
 const mockExistingDailyLean = jest.fn()
+const mockGetDeferredInsightsAccountIds = jest.fn()
+const mockGetCoverageSnapshotAccountIds = jest.fn()
+const mockBeginMetaInsightsCoverageAttempts = jest.fn()
+const mockBuildMetaInsightsFactSnapshot = jest.fn()
+const mockPersistMetaInsightsFactSnapshots = jest.fn()
+const mockPersistMetaInsightsCoverageOutcomes = jest.fn()
 const originalAggregationConcurrency =
   process.env.FACEBOOK_AGGREGATION_CONCURRENCY
 
@@ -90,6 +96,21 @@ jest.mock('../src/services/metaBusinessCredential.service', () => ({
     mockResolveAccountOperationalAuthorization(...args),
 }))
 
+jest.mock('../src/services/metaInsightsPersistence.service', () => ({
+  getDeferredInsightsAccountIds: (...args: any[]) =>
+    mockGetDeferredInsightsAccountIds(...args),
+  getCoverageSnapshotAccountIds: (...args: any[]) =>
+    mockGetCoverageSnapshotAccountIds(...args),
+  beginMetaInsightsCoverageAttempts: (...args: any[]) =>
+    mockBeginMetaInsightsCoverageAttempts(...args),
+  buildMetaInsightsFactSnapshot: (...args: any[]) =>
+    mockBuildMetaInsightsFactSnapshot(...args),
+  persistMetaInsightsFactSnapshots: (...args: any[]) =>
+    mockPersistMetaInsightsFactSnapshots(...args),
+  persistMetaInsightsCoverageOutcomes: (...args: any[]) =>
+    mockPersistMetaInsightsCoverageOutcomes(...args),
+}))
+
 import { refreshAggregation } from '../src/services/aggregation.service'
 
 describe('aggregation account eligibility', () => {
@@ -126,6 +147,17 @@ describe('aggregation account eligibility', () => {
       failedAccounts: 0,
       cachedAccounts: 0,
     })
+    mockGetDeferredInsightsAccountIds.mockResolvedValue(new Set())
+    mockGetCoverageSnapshotAccountIds.mockResolvedValue(new Set())
+    mockBuildMetaInsightsFactSnapshot.mockImplementation((input: any) => ({
+      date: input.date,
+      accountId: input.accountId,
+      snapshotId: `snapshot-${input.accountId}`,
+      rows: (input.insights || []).map((_: any, index: number) => ({ index })),
+    }))
+    mockPersistMetaInsightsFactSnapshots.mockResolvedValue(undefined)
+    mockPersistMetaInsightsCoverageOutcomes.mockResolvedValue(undefined)
+    mockBeginMetaInsightsCoverageAttempts.mockResolvedValue(undefined)
   })
 
   afterEach(() => {
@@ -170,6 +202,33 @@ describe('aggregation account eligibility', () => {
         },
       ],
     })
+  })
+
+  it('preserves existing snapshots when the account catalog returns no rows', async () => {
+    const result = await refreshAggregation('2026-07-27')
+
+    expect(result).toMatchObject({
+      skipped: true,
+      processedAccountIds: [],
+      cachedAccountIds: [],
+      unavailableAccountIds: ['123'],
+    })
+    expect(mockBeginMetaInsightsCoverageAttempts).toHaveBeenCalledWith(
+      '2026-07-27',
+      ['123'],
+      new Date('2026-07-27T08:00:00.000Z'),
+    )
+    expect(mockPersistMetaInsightsCoverageOutcomes).toHaveBeenCalledWith(
+      [expect.objectContaining({
+        date: '2026-07-27',
+        accountId: '123',
+        status: 'unavailable',
+        hasSnapshot: false,
+      })],
+      new Date('2026-07-27T08:00:00.000Z'),
+    )
+    expect(mockPersistMetaInsightsFactSnapshots).not.toHaveBeenCalled()
+    expect(mockDailyUpsert).not.toHaveBeenCalled()
   })
 
   it('limits concurrent Meta insights requests to the configured bound', async () => {

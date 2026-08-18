@@ -19,6 +19,9 @@ const mockAccountFind = jest.fn()
 const mockCampaignFindOne = jest.fn()
 const mockAdSetFindOne = jest.fn()
 const mockAdFindOne = jest.fn()
+const mockMetaInsightsFactAggregate = jest.fn()
+const mockMetaInsightsCoverageFind = jest.fn()
+const mockMetricsDailyAggregate = jest.fn()
 
 jest.mock('../src/integration/facebook/bulkCreate.api', () => ({
   createCampaign: mockCreateCampaign,
@@ -78,6 +81,21 @@ jest.mock('../src/models/Ad', () => ({
   default: {
     findOne: mockAdFindOne,
   },
+}))
+
+jest.mock('../src/models/MetaInsightsFact', () => ({
+  __esModule: true,
+  default: { aggregate: (...args: any[]) => mockMetaInsightsFactAggregate(...args) },
+}))
+
+jest.mock('../src/models/MetaInsightsCoverage', () => ({
+  __esModule: true,
+  default: { find: (...args: any[]) => mockMetaInsightsCoverageFind(...args) },
+}))
+
+jest.mock('../src/models/MetricsDaily', () => ({
+  __esModule: true,
+  default: { aggregate: (...args: any[]) => mockMetricsDailyAggregate(...args) },
 }))
 
 import { facebookTools } from '../src/agent/tools/facebook.tools'
@@ -153,6 +171,33 @@ describe('agent Facebook tools account scoping', () => {
       metadata: { scopedOut: true },
     })
     expect(mockFetchInsights).not.toHaveBeenCalled()
+  })
+
+  it('reads allowed campaign insights from permanent facts without requiring Meta', async () => {
+    mockCampaignFindOne
+      .mockReturnValueOnce(chain({ accountId: '123' }))
+      .mockReturnValueOnce(chain({ accountId: '123' }))
+    mockMetaInsightsFactAggregate.mockResolvedValueOnce([{
+      entity_id: 'camp_1',
+      level: 'campaign',
+      spend: 12.34,
+      purchase_value: 24.68,
+    }])
+    mockMetaInsightsCoverageFind.mockReturnValueOnce(chain([
+      { date: '2026-08-18', status: 'fresh', hasSnapshot: true },
+    ]))
+
+    const result = await getTool('get_campaign_insights').handler(
+      { entityId: 'camp_1', level: 'campaign', datePreset: 'today' },
+      context(['123']),
+    )
+
+    expect(mockMetaInsightsFactAggregate).toHaveBeenCalled()
+    expect(mockFetchInsights).not.toHaveBeenCalled()
+    expect(result).toMatchObject({
+      success: true,
+      metadata: { dataSource: 'database', dataStatus: 'fresh' },
+    })
   })
 
   it('allows entity writes only when the local campaign belongs to the agent scope', async () => {

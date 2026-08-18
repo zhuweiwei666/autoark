@@ -12,6 +12,9 @@ const mockOptimizerLean = jest.fn()
 const mockOptimizerLimit = jest.fn(() => ({ lean: mockOptimizerLean }))
 const mockOptimizerSort = jest.fn(() => ({ limit: mockOptimizerLimit, lean: mockOptimizerLean }))
 const mockOptimizerFind = jest.fn(() => ({ sort: mockOptimizerSort }))
+const mockCoverageAggregate = jest.fn()
+const mockDailyFindOneLean = jest.fn()
+const mockDailyFindOne = jest.fn(() => ({ lean: mockDailyFindOneLean }))
 
 jest.mock('../src/middlewares/auth', () => ({
   authenticate: (req: any, _res: any, next: any) => {
@@ -35,6 +38,7 @@ jest.mock('../src/services/aggregation.service', () => ({
 jest.mock('../src/models/Aggregation', () => ({
   AggDaily: {
     find: jest.fn(),
+    findOne: (...args: any[]) => mockDailyFindOne(...args),
   },
   AggCountry: {
     find: jest.fn(),
@@ -60,6 +64,13 @@ jest.mock('../src/models/MaterialMetrics', () => ({
   },
 }))
 
+jest.mock('../src/models/MetaInsightsCoverage', () => ({
+  __esModule: true,
+  default: {
+    aggregate: (...args: any[]) => mockCoverageAggregate(...args),
+  },
+}))
+
 import aggregationRouter from '../src/controllers/aggregation.controller'
 import { getUserAccountIds } from '../src/middlewares/auth'
 import { getAccountData, getCampaignData, getDailySummary } from '../src/services/aggregation.service'
@@ -81,6 +92,8 @@ describe('aggregation route account scoping', () => {
     mockCampaignLean.mockResolvedValue([{ campaignId: 'cmp_1', accountId: '123', spend: 42 }])
     mockOptimizerLean.mockResolvedValue([{ optimizer: 'alice', spend: 42 }])
     mockCampaignAggregate.mockResolvedValue([{ optimizer: 'alice', spend: 42 }])
+    mockCoverageAggregate.mockResolvedValue([])
+    mockDailyFindOneLean.mockResolvedValue(null)
   })
 
   afterEach(() => {
@@ -133,6 +146,27 @@ describe('aggregation route account scoping', () => {
       startDate: '2026-03-05',
       endDate: '2026-06-02',
       count: 0,
+    })
+  })
+
+  it('marks a missing today snapshot unavailable instead of claiming a real zero', async () => {
+    mockAuthState.user = {
+      role: UserRole.SUPER_ADMIN,
+      userId: '665000000000000000000003',
+    }
+    ;(getUserAccountIds as jest.Mock).mockResolvedValue(null)
+
+    const response = await request(createApp()).get('/api/agg/today')
+
+    expect(response.status).toBe(200)
+    expect(response.body.data).toMatchObject({
+      spend: 0,
+      available: false,
+      dataStatus: 'unavailable',
+    })
+    expect(response.body.coverage).toMatchObject({
+      accounts: 0,
+      allTrackedFresh: false,
     })
   })
 

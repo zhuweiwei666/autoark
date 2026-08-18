@@ -6,6 +6,7 @@ import MetricsDaily from '../../models/MetricsDaily'
 import Campaign from '../../models/Campaign'
 import AdSet from '../../models/AdSet'
 import MaterialMetrics from '../../models/MaterialMetrics'
+import Material from '../../models/Material'
 import { updateCampaign, updateAdSet } from '../../integration/facebook/bulkCreate.api'
 import { updateTiktokCampaign, updateTiktokAdGroup, updateTiktokAd } from '../../integration/tiktok/management.api'
 import FbToken from '../../models/FbToken'
@@ -14,7 +15,6 @@ import TiktokTokenModel from '../../models/TiktokToken'
 import dayjs from 'dayjs'
 import { scoringService, MetricData, MetricSequence } from './analytics/scoring.service'
 import { trendService } from './analytics/trend.service'
-import { fetchInsights } from '../../integration/facebook/insights.api'
 import { createAutomationJob } from '../../services/automationJob.service'
 import { getMaterialRankings } from '../../services/materialMetrics.service'
 import { getCoreMetrics } from '../../services/dashboard.service'
@@ -37,7 +37,6 @@ import { healthService } from './health/health.service'
 import { alertService } from './alert/alert.service'
 import { approvalService } from './approval/approval.service'
 import {
-  resolveAccountOperationalAuthorization,
   resolvePublishingCredential,
 } from '../../services/metaBusinessCredential.service'
 import { normalizeForStorage } from '../../utils/accountId'
@@ -515,16 +514,22 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
       logger.error('[AgentService] Failed to get core metrics:', e.message)
     }
 
-    // 1. 今日实时数据 - 使用 Dashboard 的准确数据
-    let todaySummary: any = {
-      spend: '$' + (coreMetrics?.today?.spend || 0).toFixed(2),
-      impressions: coreMetrics?.today?.impressions || 0,
-      clicks: coreMetrics?.today?.clicks || 0,
-      purchase_value: '$' + (coreMetrics?.today?.purchase_value || 0).toFixed(2),
-      roas: coreMetrics?.today?.spend > 0 
-        ? ((coreMetrics?.today?.purchase_value || 0) / coreMetrics?.today?.spend).toFixed(2) 
-        : '0',
-      installs: coreMetrics?.today?.installs || 0,
+    const todayAvailable = coreMetrics?.today?.available === true
+    const yesterdayAvailable = coreMetrics?.yesterday?.available === true
+
+    // 1. 今日数据 - 缺失快照必须显示 N/A，不能伪装成 $0
+    const todaySummary: any = {
+      spend: todayAvailable ? '$' + (coreMetrics.today.spend || 0).toFixed(2) : 'N/A',
+      impressions: todayAvailable ? coreMetrics.today.impressions || 0 : 'N/A',
+      clicks: todayAvailable ? coreMetrics.today.clicks || 0 : 'N/A',
+      purchase_value: todayAvailable
+        ? '$' + (coreMetrics.today.purchase_value || 0).toFixed(2)
+        : 'N/A',
+      roas: todayAvailable && coreMetrics.today.spend > 0
+        ? ((coreMetrics.today.purchase_value || 0) / coreMetrics.today.spend).toFixed(2)
+        : todayAvailable ? '0' : 'N/A',
+      installs: todayAvailable ? coreMetrics.today.installs || 0 : 'N/A',
+      dataStatus: coreMetrics?.today?.dataStatus || 'unavailable',
     }
     
     // 计算派生指标
@@ -541,13 +546,16 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
 
     // 2. 昨日数据 - 使用 Dashboard 的准确数据
     const yesterdaySummary = {
-      spend: '$' + (coreMetrics?.yesterday?.spend || 0).toFixed(2),
-      impressions: coreMetrics?.yesterday?.impressions || 0,
-      clicks: coreMetrics?.yesterday?.clicks || 0,
-      purchase_value: '$' + (coreMetrics?.yesterday?.purchase_value || 0).toFixed(2),
-      roas: coreMetrics?.yesterday?.spend > 0 
-        ? ((coreMetrics?.yesterday?.purchase_value || 0) / coreMetrics?.yesterday?.spend).toFixed(2) 
-        : '0',
+      spend: yesterdayAvailable ? '$' + (coreMetrics.yesterday.spend || 0).toFixed(2) : 'N/A',
+      impressions: yesterdayAvailable ? coreMetrics.yesterday.impressions || 0 : 'N/A',
+      clicks: yesterdayAvailable ? coreMetrics.yesterday.clicks || 0 : 'N/A',
+      purchase_value: yesterdayAvailable
+        ? '$' + (coreMetrics.yesterday.purchase_value || 0).toFixed(2)
+        : 'N/A',
+      roas: yesterdayAvailable && coreMetrics.yesterday.spend > 0
+        ? ((coreMetrics.yesterday.purchase_value || 0) / coreMetrics.yesterday.spend).toFixed(2)
+        : yesterdayAvailable ? '0' : 'N/A',
+      dataStatus: coreMetrics?.yesterday?.dataStatus || 'unavailable',
     }
 
     // 3. 7日汇总数据
@@ -557,6 +565,9 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
       avgRoas: coreMetrics?.sevenDays?.spend > 0 
         ? ((coreMetrics?.sevenDays?.purchase_value || 0) / coreMetrics?.sevenDays?.spend).toFixed(2) 
         : '0',
+      dataStatus: coreMetrics?.sevenDays?.dataStatus || 'unavailable',
+      coveredDays: coreMetrics?.sevenDays?.coveredDays || 0,
+      expectedDays: coreMetrics?.sevenDays?.expectedDays || 0,
     }
 
     // 辅助函数：从 raw.action_values 中提取 purchase 值
@@ -698,64 +709,12 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
       { $limit: 10 }
     ])
 
-    // 4. 分国家数据 - 从 Facebook API 获取
-    const countryDataMap: Record<string, { country: string, spend: number, revenue: number, impressions: number, clicks: number }> = {}
-    
-    for (const account of accounts.slice(0, 5)) { // 限制账户数量
-      try {
-        const authorization = await resolveAccountOperationalAuthorization({
-          accountId: account.accountId,
-          organizationId: account.organizationId,
-          legacyToken: account.token,
-          legacyTokenId: account.tokenId,
-        })
-        if (!authorization) continue
-        const insights = await fetchInsights(
-          `act_${account.accountId}`,
-          'campaign',
-          undefined,
-          authorization.token,
-          ['country'],
-          { since: today, until: today }
-        )
-
-        for (const insight of insights) {
-          const country = insight.country
-          if (!country) continue
-
-          if (!countryDataMap[country]) {
-            countryDataMap[country] = { country, spend: 0, revenue: 0, impressions: 0, clicks: 0 }
-          }
-
-          countryDataMap[country].spend += parseFloat(insight.spend || '0')
-          countryDataMap[country].impressions += parseInt(insight.impressions || '0', 10)
-          countryDataMap[country].clicks += parseInt(insight.clicks || '0', 10)
-          
-          // 提取 purchase value
-          if (insight.action_values) {
-            for (const av of insight.action_values) {
-              if (av.action_type === 'purchase' || av.action_type === 'omni_purchase') {
-                countryDataMap[country].revenue += parseFloat(av.value || '0')
-              }
-            }
-          }
-        }
-      } catch (e) {
-        // 继续
-      }
-    }
-    
-    const countryData = Object.values(countryDataMap)
-      .map(c => ({
-        country: c.country,
-        spend: Math.round(c.spend * 100) / 100,
-        revenue: Math.round(c.revenue * 100) / 100,
-        roas: c.spend > 0 ? Math.round((c.revenue / c.spend) * 100) / 100 : 0,
-        impressions: c.impressions,
-        clicks: c.clicks,
-      }))
-      .sort((a, b) => b.spend - a.spend)
-      .slice(0, 15)
+    // 4. 分国家数据 - 只读后台持久化的当日聚合快照
+    const countryData = await AggCountry.find({ date: today })
+      .sort({ spend: -1 })
+      .limit(15)
+      .select('country spend revenue roas impressions clicks')
+      .lean()
 
     // 5. 表现最佳的广告系列 - 从 raw.action_values 提取 purchase_value
     const topCampaigns = await MetricsDaily.aggregate([
@@ -2273,7 +2232,6 @@ ${conversation.messages.slice(-6).map((m: any) => `${m.role === 'user' ? '用户
     }
     
     // 2. 获取素材详情
-    const Material = require('../../models/Material').default
     const materialDoc = await Material.findById(materialId).lean()
     
     // 3. 如果没有 AI 模型，返回基础评分

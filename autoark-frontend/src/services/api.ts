@@ -1309,12 +1309,16 @@ const hasFiniteNumericFields = (value: any, fields: readonly string[]) => (
 const isCompleteDashboardSummary = (value: any) => (
   typeof value?.date === 'string'
   && /^\d{4}-\d{2}-\d{2}$/.test(value.date)
+  && value.available === true
+  && ['fresh', 'stale'].includes(value.dataStatus)
   && hasFiniteNumericFields(value, DASHBOARD_SUMMARY_NUMERIC_FIELDS)
 )
 
 const isCompleteDashboardTrendRow = (value: any) => (
   typeof value?.date === 'string'
   && /^\d{4}-\d{2}-\d{2}$/.test(value.date)
+  && value.available === true
+  && ['fresh', 'stale'].includes(value.dataStatus)
   && hasFiniteNumericFields(value, DASHBOARD_TREND_NUMERIC_FIELDS)
 )
 
@@ -1346,7 +1350,7 @@ export async function getCoreMetrics(_startDate?: string, endDate?: string): Pro
     || trendData.data.length !== 7
     || !trendData.data.every(isCompleteDashboardTrendRow)
   ) {
-    throw new Error('Dashboard metrics response is incomplete')
+    throw new Error('Dashboard data coverage is incomplete; preserving the last stored view')
   }
 
   // 安全计算昨天日期，避免时区问题
@@ -1362,7 +1366,7 @@ export async function getCoreMetrics(_startDate?: string, endDate?: string): Pro
 
   const yesterdayData = await yesterdayRes.json()
   if (yesterdayData?.success !== true || !isCompleteDashboardSummary(yesterdayData.data)) {
-    throw new Error('Yesterday metrics response is incomplete')
+    throw new Error('Yesterday data coverage is incomplete; preserving the last stored view')
   }
   
   // 转换为前端期望的格式
@@ -1948,6 +1952,10 @@ export interface DashboardSummary extends SummaryData {
   activeAccounts: number
   activeCampaigns: number
   activeCountries: number
+  available: boolean
+  dataStatus: 'fresh' | 'stale' | 'partial' | 'unavailable'
+  coveredDays?: number
+  expectedDays?: number
 }
 
 // 国家汇总

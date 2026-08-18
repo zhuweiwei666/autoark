@@ -3,9 +3,9 @@
  * 
  * 设计原则：
  * 1. 每个前端表格对应一个后端预聚合表
- * 2. 最近 3 天：每次请求从 Facebook API 实时获取，并更新到数据库
- * 3. 超过 3 天：直接从数据库读取（历史快照，不再更新）
- * 4. AI 直接读取这些表
+ * 2. 最近 3 天：后台按热度滚动刷新；任何查询请求都不直拉 Facebook
+ * 3. 超过 3 天：直接从数据库读取（历史快照，默认冻结）
+ * 4. 规范化 MetaInsightsFact 永久保存，聚合表服务前端和 AI
  * 
  * 性能优化：
  * - 减少 Facebook API 调用（只请求最近 3 天）
@@ -13,17 +13,14 @@
  * - 数据一致性：历史数据固定不变
  */
 
-// 判断日期是否在最近 3 天内
-export function isRecentDate(date: string): boolean {
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-  const targetDate = new Date(date)
-  targetDate.setHours(0, 0, 0, 0)
-  const diffDays = Math.floor((today.getTime() - targetDate.getTime()) / (1000 * 60 * 60 * 24))
-  return diffDays <= 2 // 今天、昨天、前天
-}
-
 import mongoose, { Schema, Document } from 'mongoose'
+import { addDateDays, formatShanghaiDate } from '../utils/shanghaiDate'
+
+// 判断日期是否在上海自然日最近 3 天内
+export function isRecentDate(date: string): boolean {
+  const today = formatShanghaiDate()
+  return date >= addDateDays(today, -2) && date <= today
+}
 
 // ==================== 1. 每日汇总表 (Dashboard) ====================
 export interface IAggDaily extends Document {

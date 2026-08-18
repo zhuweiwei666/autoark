@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto'
 import AdPerformanceBreakdown from '../models/AdPerformanceBreakdown'
 import { fetchFacebookEdgePages } from '../integration/facebook/pagination'
 import { normalizeForApi, normalizeForStorage } from '../utils/accountId'
@@ -174,18 +175,23 @@ const replaceRows = async ({
   kind,
   window,
   rows,
+  snapshotId,
 }: {
   accountId: string
   kind: OptimizerInsightKind
   window: DateWindow
   rows: any[]
+  snapshotId: string
 }) => {
+  // Upsert the complete new snapshot before deleting disappeared rows. A
+  // failed write therefore leaves the previous persisted breakdown intact.
+  await persistRows(rows)
   await AdPerformanceBreakdown.deleteMany({
     accountId: normalizeForStorage(accountId),
     kind,
     date: { $gte: window.since, $lte: window.until },
+    ...(rows.length > 0 ? { snapshotId: { $ne: snapshotId } } : {}),
   })
-  await persistRows(rows)
 }
 
 export const collectOptimizerAccountInsights = async ({
@@ -206,6 +212,7 @@ export const collectOptimizerAccountInsights = async ({
   const settled = await Promise.all(
     kinds.map(async (kind) => {
       try {
+        const snapshotId = randomUUID()
         const rows = await fetchFacebookEdgePages<any>(
           `/${normalizeForApi(account.accountId)}/insights`,
           {
@@ -229,6 +236,7 @@ export const collectOptimizerAccountInsights = async ({
             }),
           )
           .filter((row) => row.date && row.adId)
+          .map((row) => ({ ...row, snapshotId }))
 
         // A successful response is the complete truth for this
         // account/dimension/window. Replace the derived cache so attribution
@@ -238,6 +246,7 @@ export const collectOptimizerAccountInsights = async ({
           kind,
           window,
           rows: normalized,
+          snapshotId,
         })
         return {
           kind,

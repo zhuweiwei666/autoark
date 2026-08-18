@@ -11,7 +11,6 @@
  */
 
 import logger from '../utils/logger'
-import dayjs from 'dayjs'
 import { 
   AggDaily, 
   AggCountry, 
@@ -27,6 +26,17 @@ import { fetchInsights } from '../integration/facebook/insights.api'
 import { resolveAccountOperationalAuthorizations } from './metaBusinessCredential.service'
 import { getFacebookAggregationConcurrency } from '../config/facebookSync'
 import { getAccountIdsForQuery, normalizeForStorage } from '../utils/accountId'
+import { getMutableInsightsDates } from '../utils/shanghaiDate'
+import {
+  beginMetaInsightsCoverageAttempts,
+  buildMetaInsightsFactSnapshot,
+  getCoverageSnapshotAccountIds,
+  getDeferredInsightsAccountIds,
+  MetaInsightsCoverageOutcome,
+  MetaInsightsFactSnapshot,
+  persistMetaInsightsCoverageOutcomes,
+  persistMetaInsightsFactSnapshots,
+} from './metaInsightsPersistence.service'
 
 const INSIGHTS_FINALIZATION_WINDOW_MS = 3 * 24 * 60 * 60 * 1000
 
@@ -43,12 +53,14 @@ const COUNTRY_NAMES: Record<string, string> = {
 
 export interface AggregationRefreshOptions {
   accountIds?: string[]
+  ignoreRetryBackoff?: boolean
 }
 
 export interface AggregationRefreshResult {
   processedAccountIds: string[]
   cachedAccountIds: string[]
   unavailableAccountIds: string[]
+  deferredAccountIds: string[]
   skipped?: boolean
 }
 
@@ -56,6 +68,7 @@ const emptyRefreshResult = (skipped = false): AggregationRefreshResult => ({
   processedAccountIds: [],
   cachedAccountIds: [],
   unavailableAccountIds: [],
+  deferredAccountIds: [],
   ...(skipped ? { skipped: true } : {}),
 })
 
@@ -238,7 +251,7 @@ const rebuildDerivedAggregationFromSnapshots = async (date: string) => {
  * @param date YYYY-MM-DD 格式
  * @param forceRefresh 是否强制刷新（即使不在最近3天内）
  */
-export async function refreshAggregation(
+async function refreshAggregationNow(
   date: string,
   forceRefresh = false,
   options: AggregationRefreshOptions = {},
@@ -256,6 +269,7 @@ export async function refreshAggregation(
 
   logger.info(`[Aggregation] Refreshing aggregation for ${date}...`)
   const startTime = Date.now()
+  const attemptedAt = new Date()
 
   try {
     // 已经写入当天聚合的账户也必须继续参与当天重算，否则账户封禁后
@@ -296,6 +310,79 @@ export async function refreshAggregation(
         `(${previouslyAggregatedAccountIds.length} already aggregated for ${date})`,
     )
 
+    const returnedAccountIds = new Set(
+      accounts.map((account: any) => normalizeForStorage(account.accountId)),
+    )
+    const missingPreviouslyAggregatedAccountIds = Array.from(new Set(
+      previouslyAggregatedAccountIds
+        .map(normalizeForStorage)
+        .filter((accountId) => !returnedAccountIds.has(accountId)),
+    ))
+    const missingCatalogAccountIds = missingPreviouslyAggregatedAccountIds.length > 0
+      ? missingPreviouslyAggregatedAccountIds
+      : accounts.length === 0
+        ? requestedAccountIds
+        : []
+
+    // An empty or partial account catalog can be a transient sync/database
+    // problem. Never reinterpret it as a verified zero and overwrite the day.
+    if (accounts.length === 0 || missingPreviouslyAggregatedAccountIds.length > 0) {
+      const snapshotAccountIds = await getCoverageSnapshotAccountIds(
+        date,
+        missingCatalogAccountIds,
+      )
+      if (missingCatalogAccountIds.length > 0) {
+        await beginMetaInsightsCoverageAttempts(
+          date,
+          missingCatalogAccountIds,
+          attemptedAt,
+        )
+        const catalogError = new Error(
+          'Account catalog incomplete during aggregation refresh',
+        )
+        await persistMetaInsightsCoverageOutcomes(
+          missingCatalogAccountIds.map((accountId) => ({
+            date,
+            accountId,
+            status: snapshotAccountIds.has(accountId) ? 'stale' : 'unavailable',
+            hasSnapshot: snapshotAccountIds.has(accountId),
+            error: catalogError,
+          })),
+          attemptedAt,
+        )
+      }
+      logger.warn(
+        `[Aggregation] Account catalog incomplete for ${date}; ` +
+          'preserving existing facts and aggregates',
+      )
+      return {
+        ...emptyRefreshResult(true),
+        cachedAccountIds: [...snapshotAccountIds],
+        unavailableAccountIds: missingCatalogAccountIds.filter(
+          (accountId) => !snapshotAccountIds.has(accountId),
+        ),
+      }
+    }
+
+    const deferredByBackoff = options.ignoreRetryBackoff
+      ? new Set<string>()
+      : await getDeferredInsightsAccountIds(
+          date,
+          accounts.map((account: any) => normalizeForStorage(account.accountId)),
+          attemptedAt,
+        )
+
+    const accountsWithPersistentSnapshots = await getCoverageSnapshotAccountIds(
+      date,
+      accounts.map((account: any) => normalizeForStorage(account.accountId)),
+    )
+    await beginMetaInsightsCoverageAttempts(
+      date,
+      accounts.map((account: any) => normalizeForStorage(account.accountId))
+        .filter((accountId) => !deferredByBackoff.has(accountId)),
+      attemptedAt,
+    )
+
     // 预先查询所有 Campaign 名称（Facebook API 可能不返回名称）
     const allCampaigns = await Campaign.find({}).select('campaignId name').lean()
     const campaignNameMap = new Map<string, string>()
@@ -311,6 +398,8 @@ export async function refreshAggregation(
     const accountMap = new Map<string, any>()
     const campaignMap = new Map<string, any>()
     const optimizerMap = new Map<string, any>()
+    const factSnapshots: MetaInsightsFactSnapshot[] = []
+    const coverageOutcomes: MetaInsightsCoverageOutcome[] = []
 
     // === 并发处理逻辑 ===
     const concurrencyLimit = getFacebookAggregationConcurrency()
@@ -327,6 +416,7 @@ export async function refreshAggregation(
     const successfulAccountIds = new Set<string>()
     const cachedAccountIds = new Set<string>()
     const unavailableAccountIds = new Set<string>()
+    const deferredAccountIds = new Set<string>()
     const staleAccountIds = new Set<string>()
 
     const restoreCachedContribution = async (account: any) => {
@@ -390,6 +480,22 @@ export async function refreshAggregation(
 
     for (const chunk of chunks) {
       await Promise.all(chunk.map(async (account) => {
+        const normalizedAccountId = normalizeForStorage(account.accountId)
+        if (deferredByBackoff.has(normalizedAccountId)) {
+          const restored = await restoreCachedContribution(account)
+          errorCount++
+          deferredAccountIds.add(normalizedAccountId)
+          if (restored) {
+            cachedFallbackCount++
+            cachedAccountIds.add(normalizedAccountId)
+            staleAccountIds.add(normalizedAccountId)
+          } else {
+            unavailableCount++
+            unavailableAccountIds.add(normalizedAccountId)
+          }
+          return
+        }
+
         try {
           const authorizations = await resolveAccountOperationalAuthorizations({
             accountId: account.accountId,
@@ -404,6 +510,7 @@ export async function refreshAggregation(
           // 获取 campaign 级别数据（含国家维度）
           let insights: any[] | undefined
           let lastAuthorizationError: unknown
+          let selectedAuthorization: any
           for (const authorization of authorizations) {
             try {
               insights = await fetchInsights(
@@ -414,6 +521,7 @@ export async function refreshAggregation(
                 ['country'],
                 { since: date, until: date }
               )
+              selectedAuthorization = authorization
               break
             } catch (error) {
               lastAuthorizationError = error
@@ -593,7 +701,27 @@ export async function refreshAggregation(
             campaigns: accountCampaigns.size,
             status: account.status || 'active',
           })
-          successfulAccountIds.add(normalizeForStorage(account.accountId))
+          const factSnapshot = buildMetaInsightsFactSnapshot({
+            date,
+            accountId: account.accountId,
+            accountName: account.name || '',
+            insights,
+            campaignNameMap,
+            authorization: selectedAuthorization,
+            fetchedAt: attemptedAt,
+          })
+          factSnapshots.push(factSnapshot)
+          coverageOutcomes.push({
+            date,
+            accountId: normalizedAccountId,
+            status: 'fresh',
+            hasSnapshot: true,
+            factRows: factSnapshot.rows.length,
+            authorizationType: selectedAuthorization?.authorizationType,
+            authorizationId: selectedAuthorization?.metaCredentialId
+              || selectedAuthorization?.legacyTokenId,
+          })
+          successfulAccountIds.add(normalizedAccountId)
           
           processedCount++
 
@@ -602,13 +730,21 @@ export async function refreshAggregation(
           const restored = await restoreCachedContribution(account)
           if (restored) {
             cachedFallbackCount++
-            const normalizedAccountId = normalizeForStorage(account.accountId)
             cachedAccountIds.add(normalizedAccountId)
             staleAccountIds.add(normalizedAccountId)
           } else {
             unavailableCount++
-            unavailableAccountIds.add(normalizeForStorage(account.accountId))
+            unavailableAccountIds.add(normalizedAccountId)
           }
+          const hasPersistentSnapshot = restored
+            || accountsWithPersistentSnapshots.has(normalizedAccountId)
+          coverageOutcomes.push({
+            date,
+            accountId: normalizedAccountId,
+            status: hasPersistentSnapshot ? 'stale' : 'unavailable',
+            hasSnapshot: hasPersistentSnapshot,
+            error,
+          })
           logger.warn(
             `[Aggregation] Failed to fetch account ${account.accountId}; `
             + `${restored ? 'kept cached snapshot' : 'no cached snapshot available'}: `
@@ -640,6 +776,10 @@ export async function refreshAggregation(
     }
 
     // ==================== 保存到数据库 ====================
+
+    // 永久保存规范化的 Campaign×国家日事实。只有完整分页成功的账户
+    // 才会进入这里；任何 API/持久化失败都不会清空旧事实。
+    await persistMetaInsightsFactSnapshots(factSnapshots)
 
     // 1. 保存日汇总
     const activeAccounts = [...accountMap.values()].filter(a => a.spend > 0).length
@@ -694,7 +834,22 @@ export async function refreshAggregation(
         upsert: true
       }
     }))
-    if (!isTargetedRefresh && countryOps.length > 0) await AggCountry.bulkWrite(countryOps)
+    if (!isTargetedRefresh) {
+      const countryKeys = Array.from(countryMap.keys())
+      await AggCountry.bulkWrite([
+        ...countryOps,
+        {
+          deleteMany: {
+            filter: {
+              date,
+              ...(countryKeys.length > 0
+                ? { country: { $nin: countryKeys } }
+                : {}),
+            },
+          },
+        },
+      ])
+    }
 
     // 保存账户维度国家数据，供组织权限范围内查询。
     // 分批写入，避免账户和国家较多时生成过大的 MongoDB 命令。
@@ -767,13 +922,31 @@ export async function refreshAggregation(
         upsert: true
       }
     }))
-    if (isTargetedRefresh && successfulAccountIds.size > 0) {
-      await AggCampaign.deleteMany({
-        date,
-        accountId: { $in: getAccountIdsForQuery([...successfulAccountIds]) },
-      })
-    }
     if (campaignOps.length > 0) await AggCampaign.bulkWrite(campaignOps)
+    const campaignIdsByAccount = new Map<string, string[]>()
+    for (const campaign of campaignMap.values()) {
+      const accountId = normalizeForStorage(campaign.accountId)
+      if (!successfulAccountIds.has(accountId)) continue
+      const campaignIds = campaignIdsByAccount.get(accountId) || []
+      campaignIds.push(campaign.campaignId)
+      campaignIdsByAccount.set(accountId, campaignIds)
+    }
+    if (successfulAccountIds.size > 0) {
+      await AggCampaign.bulkWrite([...successfulAccountIds].map((accountId) => {
+        const campaignIds = campaignIdsByAccount.get(accountId) || []
+        return {
+          deleteMany: {
+            filter: {
+              date,
+              accountId: { $in: getAccountIdsForQuery([accountId]) },
+              ...(campaignIds.length > 0
+                ? { campaignId: { $nin: campaignIds } }
+                : {}),
+            },
+          },
+        }
+      }))
+    }
 
     // 5. 保存投手数据 (批量写入优化)
     const optimizerOps = Array.from(optimizerMap.values()).map(optimizer => ({
@@ -795,11 +968,28 @@ export async function refreshAggregation(
         upsert: true
       }
     }))
-    if (!isTargetedRefresh && optimizerOps.length > 0) await AggOptimizer.bulkWrite(optimizerOps)
+    if (!isTargetedRefresh) {
+      const optimizerKeys = Array.from(optimizerMap.keys())
+      await AggOptimizer.bulkWrite([
+        ...optimizerOps,
+        {
+          deleteMany: {
+            filter: {
+              date,
+              ...(optimizerKeys.length > 0
+                ? { optimizer: { $nin: optimizerKeys } }
+                : {}),
+            },
+          },
+        },
+      ])
+    }
 
     if (isTargetedRefresh) {
       await rebuildDerivedAggregationFromSnapshots(date)
     }
+
+    await persistMetaInsightsCoverageOutcomes(coverageOutcomes, attemptedAt)
 
     const duration = Date.now() - startTime
     logger.info(
@@ -812,6 +1002,7 @@ export async function refreshAggregation(
       processedAccountIds: [...successfulAccountIds],
       cachedAccountIds: [...cachedAccountIds],
       unavailableAccountIds: [...unavailableAccountIds],
+      deferredAccountIds: [...deferredAccountIds],
     }
 
   } catch (error: any) {
@@ -820,26 +1011,41 @@ export async function refreshAggregation(
       processedAccountIds: [],
       cachedAccountIds: [],
       unavailableAccountIds: requestedAccountIds,
+      deferredAccountIds: [],
     }
   }
+}
+
+// Every caller (cron, token recovery, account finalization, administrator)
+// shares one in-process queue. This prevents separate recovery paths from
+// multiplying Meta concurrency while still preserving their individual
+// account/date scopes.
+let aggregationRefreshQueue: Promise<void> = Promise.resolve()
+
+export function refreshAggregation(
+  date: string,
+  forceRefresh = false,
+  options: AggregationRefreshOptions = {},
+): Promise<AggregationRefreshResult> {
+  const refresh = aggregationRefreshQueue.then(() =>
+    refreshAggregationNow(date, forceRefresh, options),
+  )
+  aggregationRefreshQueue = refresh.then(
+    () => undefined,
+    () => undefined,
+  )
+  return refresh
 }
 
 /**
  * 🔄 刷新最近 3 天的数据
  */
 export async function refreshRecentDays(): Promise<void> {
-  const today = dayjs().format('YYYY-MM-DD')
-  const yesterday = dayjs().subtract(1, 'day').format('YYYY-MM-DD')
-  const dayBefore = dayjs().subtract(2, 'day').format('YYYY-MM-DD')
-
   logger.info('[Aggregation] Refreshing recent 3 days...')
-  
-  // 并行刷新
-  await Promise.all([
-    refreshAggregation(today),
-    refreshAggregation(yesterday),
-    refreshAggregation(dayBefore),
-  ])
+  // 日期串行、账户受控并发，避免手动刷新瞬间放大 3 倍 Meta 请求。
+  for (const date of getMutableInsightsDates()) {
+    await refreshAggregation(date)
+  }
 }
 
 // ==================== 查询接口（直接读取，不刷新） ====================

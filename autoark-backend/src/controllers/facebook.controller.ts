@@ -8,7 +8,6 @@ import * as facebookCampaignsV2Service from '../services/facebook.campaigns.v2.s
 import * as facebookPermissionsService from '../services/facebook.permissions.service'
 import * as facebookPurchaseCorrectionService from '../services/facebook.purchase.correction'
 import { tokenPool } from '../services/facebook.token.pool'
-import * as facebookCountriesService from '../services/facebook.countries.service'
 import { getEffectiveAdAccounts } from '../services/facebook.sync.service'
 import { getOrgFilter, getUserAccountIds } from '../middlewares/auth'
 import { UserRole } from '../models/User'
@@ -21,10 +20,7 @@ import FbToken from '../models/FbToken'
 import { normalizeForApi, normalizeForStorage } from '../utils/accountId'
 import {
   parseLimitedNumber,
-  parsePagination,
-  pickAllowedString,
   pickSafeQueryString,
-  pickSafeRegexLiteral,
 } from '../utils/pagination'
 import logger from '../utils/logger'
 import { writeAuditLog } from '../services/auditLog.service'
@@ -36,78 +32,10 @@ import {
   resolvePublishingCredential,
 } from '../services/metaBusinessCredential.service'
 
-const FACEBOOK_LIST_MAX_LIMIT = 100
 const FACEBOOK_DIAGNOSE_DEFAULT_LIMIT = 20
 const FACEBOOK_DIAGNOSE_MAX_LIMIT = 100
 const FACEBOOK_CAMPAIGN_ID_MAX_LENGTH = 160
 const FACEBOOK_COUNTRY_MAX_LENGTH = 40
-const FACEBOOK_CAMPAIGN_SORT_FIELDS = [
-  'accountId',
-  'accountName',
-  'campaignId',
-  'campaignName',
-  'clicks',
-  'cpc',
-  'cpi',
-  'cpm',
-  'ctr',
-  'createdAt',
-  'impressions',
-  'installs',
-  'name',
-  'objective',
-  'purchase_roas',
-  'purchase_value',
-  'revenue',
-  'roas',
-  'spend',
-  'status',
-  'updatedAt',
-]
-const FACEBOOK_ACCOUNT_SORT_FIELDS = [
-  'accountId',
-  'clicks',
-  'ctr',
-  'impressions',
-  'installs',
-  'name',
-  'periodSpend',
-  'purchase_value',
-  'roas',
-  'spend',
-  'status',
-  'updatedAt',
-]
-const FACEBOOK_COUNTRY_SORT_FIELDS = [
-  'campaigns',
-  'clicks',
-  'country',
-  'countryName',
-  'ctr',
-  'impressions',
-  'installs',
-  'purchase_roas',
-  'purchase_value',
-  'roas',
-  'spend',
-]
-
-const getListPagination = (
-  req: Request,
-  allowedSortFields: readonly string[],
-  defaultSortBy: string,
-) => {
-  const { page, pageSize } = parsePagination(
-    { page: req.query.page, limit: req.query.limit },
-    { defaultPageSize: 20, maxPageSize: FACEBOOK_LIST_MAX_LIMIT },
-  )
-  return {
-    page,
-    limit: pageSize,
-    sortBy: pickAllowedString(req.query.sortBy, allowedSortFields, defaultSortBy),
-    sortOrder: (req.query.sortOrder as 'asc' | 'desc') === 'asc' ? 'asc' as const : 'desc' as const,
-  }
-}
 
 const requireSuperAdmin = (req: Request, res: Response): boolean => {
   if (req.user?.role === UserRole.SUPER_ADMIN) return true
@@ -141,20 +69,6 @@ const sendFacebookDateRangeError = (res: Response, error: any): boolean => {
   return false
 }
 
-const parseFacebookDateFilters = (req: Request) => {
-  if (req.query.startDate === undefined && req.query.endDate === undefined) return {}
-
-  const dateRequest = buildInsightsDateRequest({
-    startDate: req.query.startDate,
-    endDate: req.query.endDate,
-  })
-
-  return {
-    startDate: dateRequest.startDate,
-    endDate: dateRequest.endDate,
-  }
-}
-
 const parseRequiredFacebookDate = (value: any, fieldName: string): string | undefined => {
   if (value === undefined || value === null || value === '') return undefined
   try {
@@ -166,6 +80,37 @@ const parseRequiredFacebookDate = (value: any, fieldName: string): string | unde
     }
     throw error
   }
+}
+
+const redirectLegacyInsightsList = (
+  req: Request,
+  res: Response,
+  resource: 'accounts' | 'campaigns' | 'countries',
+) => {
+  const query = new URLSearchParams()
+  for (const [key, value] of Object.entries(req.query)) {
+    if (typeof value === 'string') {
+      query.append(key, value)
+      continue
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        if (typeof item === 'string') query.append(key, item)
+      }
+    }
+  }
+
+  // The snapshot country endpoint uses `order`; the legacy endpoint used
+  // `sortOrder`. Preserve the old contract while routing it to MongoDB.
+  if (resource === 'countries' && !query.has('order') && query.has('sortOrder')) {
+    query.set('order', query.get('sortOrder') || 'desc')
+  }
+
+  const successor = `/api/summary/${resource}`
+  const location = query.size > 0 ? `${successor}?${query.toString()}` : successor
+  res.setHeader('Deprecation', 'true')
+  res.setHeader('Link', `<${successor}>; rel="successor-version"`)
+  return res.redirect(307, location)
 }
 
 const resolveAccountAccessToken = async (req: Request, accountId: string): Promise<string> => {
@@ -676,37 +621,9 @@ export const getPurchaseValueInfo = async (
 export const getCampaignsList = async (
   req: Request,
   res: Response,
-  next: NextFunction,
+  _next: NextFunction,
 ) => {
-  try {
-    // 确保设置正确的 Content-Type
-    res.setHeader('Content-Type', 'application/json; charset=utf-8')
-    
-    const pagination = getListPagination(req, FACEBOOK_CAMPAIGN_SORT_FIELDS, 'spend')
-    const dateFilters = parseFacebookDateFilters(req)
-    const filters: any = {
-        name: pickSafeRegexLiteral(req.query.name),
-        accountId: pickSafeQueryString(req.query.accountId),
-        status: pickSafeQueryString(req.query.status),
-        objective: pickSafeQueryString(req.query.objective),
-        ...dateFilters,
-    }
-
-    // 用户隔离：根据用户绑定的 Token 过滤账户
-    const userAccountIds = await getUserAccountIds(req)
-    if (userAccountIds !== null) {
-      filters.accountIds = userAccountIds
-    }
-
-    const result = await facebookCampaignsService.getCampaigns(filters, pagination)
-    res.json({
-      success: true,
-      ...result
-    })
-  } catch (error) {
-    if (sendFacebookDateRangeError(res, error)) return
-    next(error)
-  }
+  return redirectLegacyInsightsList(req, res, 'campaigns')
 }
 
 export const syncAccounts = async (
@@ -742,87 +659,18 @@ export const syncAccounts = async (
 export const getAccountsList = async (
   req: Request,
   res: Response,
-  next: NextFunction,
+  _next: NextFunction,
 ) => {
-  try {
-    if (!requireSuperAdmin(req, res)) return
-    const pagination = getListPagination(req, FACEBOOK_ACCOUNT_SORT_FIELDS, 'periodSpend')
-    const dateFilters = parseFacebookDateFilters(req)
-    const filters: any = {
-        optimizer: pickSafeRegexLiteral(req.query.optimizer),
-        status: pickSafeQueryString(req.query.status),
-        accountId: pickSafeRegexLiteral(req.query.accountId),
-        name: pickSafeRegexLiteral(req.query.name),
-        ...dateFilters,
-    }
-
-    // 用户隔离：根据用户绑定的 Token 过滤账户
-    const userAccountIds = await getUserAccountIds(req)
-    if (userAccountIds !== null) {
-      // 非超级管理员，限制只能看到自己关联的账户
-      filters.accountIds = userAccountIds
-    }
-    
-    // 组织隔离（兼容旧逻辑）
-    const organizationId = req.user?.role === UserRole.SUPER_ADMIN ? undefined : req.user?.organizationId
-    const result = await facebookAccountsService.getAccounts(filters, pagination, organizationId)
-    res.json({
-      success: true,
-      ...result
-    })
-  } catch (error) {
-    if (sendFacebookDateRangeError(res, error)) return
-    next(error)
-  }
+  if (!requireSuperAdmin(req, res)) return
+  return redirectLegacyInsightsList(req, res, 'accounts')
 }
 
 export const getCountriesList = async (
   req: Request,
   res: Response,
-  next: NextFunction,
+  _next: NextFunction,
 ) => {
-  try {
-    // 确保设置正确的 Content-Type
-    res.setHeader('Content-Type', 'application/json; charset=utf-8')
-    
-    const pagination = getListPagination(req, FACEBOOK_COUNTRY_SORT_FIELDS, 'spend')
-    const dateFilters = parseFacebookDateFilters(req)
-    const filters = {
-        name: pickSafeRegexLiteral(req.query.name),
-        accountId: pickSafeQueryString(req.query.accountId),
-        status: pickSafeQueryString(req.query.status),
-        objective: pickSafeQueryString(req.query.objective),
-        ...dateFilters,
-    }
-
-    const accountIds = await getUserAccountIds(req)
-    const tokenFilter: any = {}
-    if (req.user?.role === UserRole.ORG_ADMIN && req.user.organizationId) {
-      tokenFilter.organizationId = req.user.organizationId
-    } else if (req.user?.role !== UserRole.SUPER_ADMIN) {
-      tokenFilter.userId = req.user?.userId
-    }
-
-    const result = await facebookCountriesService.getCountries(
-      filters,
-      pagination,
-      accountIds === null
-        ? {}
-        : {
-            accountIds,
-            tokenFilter,
-            allowCacheFallback: false,
-            allowCacheWrite: false,
-          },
-    )
-    res.json({
-      success: true,
-      ...result
-    })
-  } catch (error) {
-    if (sendFacebookDateRangeError(res, error)) return
-    next(error)
-  }
+  return redirectLegacyInsightsList(req, res, 'countries')
 }
 
 export const getCampaigns = async (
@@ -889,10 +737,16 @@ export const getInsightsDaily = async (
     if (!(await ensureAccountAccess(req, id))) {
       return res.status(403).json({ success: false, error: 'Forbidden' })
     }
-    const token = await resolveAccountAccessToken(req, id)
-    const data = await facebookService.getInsightsDaily(id, undefined, token)
-    res.json(data)
+    const dateRequest = req.query.startDate !== undefined || req.query.endDate !== undefined
+      ? buildInsightsDateRequest({
+          startDate: req.query.startDate,
+          endDate: req.query.endDate,
+        })
+      : undefined
+    const result = await facebookService.getInsightsDaily(id, dateRequest?.timeRange)
+    res.json({ success: true, ...result })
   } catch (error) {
+    if (sendFacebookDateRangeError(res, error)) return
     next(error)
   }
 }

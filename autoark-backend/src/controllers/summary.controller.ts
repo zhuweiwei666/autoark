@@ -20,6 +20,7 @@ import {
 } from '../models/Aggregation'
 import MaterialMetrics from '../models/MaterialMetrics'
 import Account from '../models/Account'
+import MetaInsightsCoverage from '../models/MetaInsightsCoverage'
 import { refreshRecentDays } from '../services/aggregation.service'
 import { UserRole } from '../models/User'
 import { getUserAccountIds, authenticate } from '../middlewares/auth'
@@ -58,6 +59,8 @@ const aggregateAccountDaily = async (startDate: string, endDate: string, account
     acc.totalInstalls += row.installs || 0
     acc.activeCampaigns += row.campaigns || 0
     if ((row.spend || 0) > 0) acc.activeAccountsSet.add(row.accountId)
+    acc.coveredDatesSet.add(row.date)
+    if (row.dataStatus === 'stale') acc.staleSnapshotCount++
     return acc
   }, {
     totalSpend: 0,
@@ -67,7 +70,47 @@ const aggregateAccountDaily = async (startDate: string, endDate: string, account
     totalInstalls: 0,
     activeCampaigns: 0,
     activeAccountsSet: new Set<string>(),
+    coveredDatesSet: new Set<string>(),
+    staleSnapshotCount: 0,
   } as any)
+}
+
+const getSummaryCoverageRows = (
+  startDate: string,
+  endDate: string,
+  accountIds: string[] | null,
+) =>
+  MetaInsightsCoverage.find({
+    provider: 'facebook',
+    date: { $gte: startDate, $lte: endDate },
+    ...(accountIds === null ? {} : { accountId: { $in: accountIds } }),
+  })
+    .select('date status')
+    .lean()
+
+type SummaryDataStatus = 'fresh' | 'stale' | 'partial' | 'unavailable'
+
+const resolveSummaryDataStatus = (
+  coveredDays: number,
+  expectedDays: number,
+  aggregateStatus: 'fresh' | 'stale' | 'partial',
+  coverageRows: Array<{ status?: string }>,
+): SummaryDataStatus => {
+  if (coveredDays === 0) return 'unavailable'
+  if (
+    coveredDays < expectedDays ||
+    aggregateStatus === 'partial' ||
+    coverageRows.some(row => row.status === 'unavailable')
+  ) {
+    return 'partial'
+  }
+  if (
+    aggregateStatus === 'stale' ||
+    coverageRows.some(row => row.status === 'stale')
+  ) {
+    return 'stale'
+  }
+  return 'fresh'
 }
 
 const expandScopedAccountIds = (accountIds: string[] | null): string[] | null => {
@@ -260,6 +303,8 @@ router.get('/dashboard', async (req: Request, res: Response) => {
     let totalInstalls = 0
     let activeCampaigns = 0
     let activeAccounts = 0
+    const coveredDates = new Set<string>()
+    let aggregateStatus: 'fresh' | 'stale' | 'partial' = 'fresh'
 
     if (scopedAccountIds === null) {
       // 从预聚合表读取
@@ -268,6 +313,11 @@ router.get('/dashboard', async (req: Request, res: Response) => {
       }).lean()
 
       for (const day of dailyData) {
+        coveredDates.add(day.date)
+        if (day.dataStatus === 'partial') aggregateStatus = 'partial'
+        else if (day.dataStatus === 'stale' && aggregateStatus === 'fresh') {
+          aggregateStatus = 'stale'
+        }
         totalSpend += day.spend || 0
         totalRevenue += day.revenue || 0
         totalImpressions += day.impressions || 0
@@ -285,7 +335,23 @@ router.get('/dashboard', async (req: Request, res: Response) => {
       totalInstalls = scoped.totalInstalls
       activeCampaigns = scoped.activeCampaigns
       activeAccounts = scoped.activeAccountsSet.size
+      for (const coveredDate of scoped.coveredDatesSet) coveredDates.add(coveredDate)
+      if (scoped.staleSnapshotCount > 0) aggregateStatus = 'stale'
     }
+
+    const expectedDays = dayjs(endDate).diff(dayjs(startDate), 'day') + 1
+    const coverageRows = await getSummaryCoverageRows(
+      startDate,
+      endDate,
+      scopedAccountIds,
+    )
+    const coveredDays = coveredDates.size
+    const dataStatus = resolveSummaryDataStatus(
+      coveredDays,
+      expectedDays,
+      aggregateStatus,
+      coverageRows,
+    )
 
     // 计算派生指标
     const roas = totalSpend > 0 ? totalRevenue / totalSpend : 0
@@ -313,6 +379,10 @@ router.get('/dashboard', async (req: Request, res: Response) => {
         cpi,
         activeCampaigns,
         activeAccounts,
+        available: coveredDays > 0,
+        dataStatus,
+        coveredDays,
+        expectedDays,
       },
       cached: true,
       duration,
@@ -338,27 +408,83 @@ router.get('/dashboard/trend', async (req: Request, res: Response) => {
 
     const userAccountIds = await getUserAccountIds(req)
     const scopedAccountIds = expandScopedAccountIds(userAccountIds)
-    const dailyData = scopedAccountIds === null
-      ? await AggDaily.find({
-          date: { $gte: startDate, $lte: endDate }
-        }).sort({ date: 1 }).lean()
-      : await AggAccount.aggregate([
-          { $match: { date: { $gte: startDate, $lte: endDate }, accountId: { $in: scopedAccountIds } } },
-          { $group: { _id: '$date', spend: { $sum: '$spend' }, revenue: { $sum: '$revenue' }, impressions: { $sum: '$impressions' }, clicks: { $sum: '$clicks' }, installs: { $sum: '$installs' } } },
-          { $project: { date: '$_id', spend: 1, revenue: 1, impressions: 1, clicks: 1, installs: 1, roas: { $cond: [{ $gt: ['$spend', 0] }, { $divide: ['$revenue', '$spend'] }, 0] } } },
-          { $sort: { date: 1 } },
-        ])
+    const [dailyData, coverageRows] = await Promise.all([
+      scopedAccountIds === null
+        ? AggDaily.find({
+            date: { $gte: startDate, $lte: endDate },
+          })
+            .sort({ date: 1 })
+            .lean()
+        : AggAccount.aggregate([
+            {
+              $match: {
+                date: { $gte: startDate, $lte: endDate },
+                accountId: { $in: scopedAccountIds },
+              },
+            },
+            {
+              $group: {
+                _id: '$date',
+                spend: { $sum: '$spend' },
+                revenue: { $sum: '$revenue' },
+                impressions: { $sum: '$impressions' },
+                clicks: { $sum: '$clicks' },
+                installs: { $sum: '$installs' },
+                staleSnapshotCount: {
+                  $sum: { $cond: [{ $eq: ['$dataStatus', 'stale'] }, 1, 0] },
+                },
+              },
+            },
+            {
+              $project: {
+                date: '$_id',
+                spend: 1,
+                revenue: 1,
+                impressions: 1,
+                clicks: 1,
+                installs: 1,
+                staleSnapshotCount: 1,
+                roas: {
+                  $cond: [
+                    { $gt: ['$spend', 0] },
+                    { $divide: ['$revenue', '$spend'] },
+                    0,
+                  ],
+                },
+              },
+            },
+            { $sort: { date: 1 } },
+          ]),
+      getSummaryCoverageRows(startDate, endDate, scopedAccountIds),
+    ])
 
     // 生成完整日期数组（填充缺失日期）
     const dateMap = new Map<string, any>()
     for (const day of dailyData) {
       dateMap.set(day.date, day)
     }
+    const coverageByDate = new Map<string, Array<{ status?: string }>>()
+    for (const row of coverageRows) {
+      const rows = coverageByDate.get(row.date) || []
+      rows.push(row)
+      coverageByDate.set(row.date, rows)
+    }
 
     const trendData: any[] = []
     for (let i = 0; i < days; i++) {
       const date = dayjs(endDate).subtract(days - 1 - i, 'day').format('YYYY-MM-DD')
       const data = dateMap.get(date)
+      const aggregateStatus = data?.dataStatus === 'partial'
+        ? 'partial'
+        : data?.dataStatus === 'stale' || data?.staleSnapshotCount > 0
+          ? 'stale'
+          : 'fresh'
+      const dataStatus = resolveSummaryDataStatus(
+        data ? 1 : 0,
+        1,
+        aggregateStatus,
+        coverageByDate.get(date) || [],
+      )
       trendData.push({
         date,
         totalSpend: data?.spend || 0,
@@ -367,6 +493,8 @@ router.get('/dashboard/trend', async (req: Request, res: Response) => {
         totalClicks: data?.clicks || 0,
         totalInstalls: data?.installs || 0,
         roas: data?.roas || 0,
+        available: Boolean(data),
+        dataStatus,
       })
     }
 

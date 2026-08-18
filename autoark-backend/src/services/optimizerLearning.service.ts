@@ -12,6 +12,11 @@ import PlaybookVersion from '../models/PlaybookVersion'
 import { combineFilters, objectIdValue } from '../utils/accessControl'
 import { normalizeForStorage } from '../utils/accountId'
 import { sanitizeOptimizerTargeting } from '../utils/optimizerTargeting'
+import {
+  addDateDays,
+  formatShanghaiDate,
+  getMutableInsightsWindow,
+} from '../utils/shanghaiDate'
 import { collectOptimizerInsights } from './facebookOptimizerInsights.service'
 import { resolveAccountOperationalAuthorization } from './metaBusinessCredential.service'
 
@@ -92,15 +97,11 @@ const errorWithStatus = (message: string, statusCode = 400) => {
   return error
 }
 
-const toDateString = (date: Date): string => date.toISOString().slice(0, 10)
-
-const buildDateWindow = (windowDays: number) => {
-  const untilDate = new Date()
-  const sinceDate = new Date(untilDate)
-  sinceDate.setUTCDate(sinceDate.getUTCDate() - Math.max(0, windowDays - 1))
+const buildDateWindow = (windowDays: number, now = new Date()) => {
+  const until = formatShanghaiDate(now)
   return {
-    since: toDateString(sinceDate),
-    until: toDateString(untilDate),
+    since: addDateDays(until, -Math.max(0, windowDays - 1)),
+    until,
   }
 }
 
@@ -970,7 +971,8 @@ export const generateOptimizerPlaybook = async ({
   if (!optimizerId) throw errorWithStatus('optimizerId 不能为空')
   const currency = normalizeCurrency(currencyInput)
   const windowDays = Math.round(boundedNumber(windowDaysInput, 14, 3, 30))
-  const window = buildDateWindow(windowDays)
+  const now = new Date()
+  const window = buildDateWindow(windowDays, now)
   const accounts = await resolveSourceAccounts(
     optimizerId,
     organizationId,
@@ -981,11 +983,18 @@ export const generateOptimizerPlaybook = async ({
   )
   const tokenIds = uniqueStrings(accounts.map((account) => account.tokenId))
   const scopeKey = scopeKeyFor(organizationId)
+  const mutableWindow = getMutableInsightsWindow(now)
 
   const liveCollection = refreshInsights
-    ? await collectOptimizerInsights({ accounts, window })
+    ? {
+        ...(await collectOptimizerInsights({ accounts, window: mutableWindow })),
+        requestedWindow: window,
+        collectedWindow: mutableWindow,
+      }
     : {
         collectedAt: null,
+        requestedWindow: window,
+        collectedWindow: null,
         totalAccounts: accounts.length,
         attemptedAccounts: 0,
         truncatedAccounts: 0,
