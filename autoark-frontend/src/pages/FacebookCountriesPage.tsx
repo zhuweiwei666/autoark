@@ -373,6 +373,7 @@ export default function FacebookCountriesPage() {
   }, [data?.data, sortConfig.key, sortConfig.direction, metricFilter])
   
   const pagination = data?.pagination || { page: 1, limit: 20, total: 0, pages: 1 }
+  const countrySummary = data?.summary
 
   // 刷新数据 mutation（只从服务器获取，不调用 Facebook API）
   const syncMutation = useMutation({
@@ -815,7 +816,32 @@ export default function FacebookCountriesPage() {
                 ) : countries.length === 0 ? (
                   <tr><td colSpan={safeColumnsToRender.length + 1} className="px-6 py-12 text-center text-slate-500">暂无数据</td></tr>
                 ) : (
-                  countries.map((country) => (
+                  <>
+                    <tr aria-label="筛选结果合计" className="border-b-2 border-slate-200 bg-blue-50/50">
+                      {safeColumnsToRender.map((col, index) => {
+                        const summaryValue = countrySummary?.[col.key]
+                        return (
+                          <td key={col.key} className="px-6 py-4 font-semibold text-slate-950">
+                            {index === 0 ? (
+                              <div>
+                                <div>合计</div>
+                                <div className="mt-1 text-xs font-normal text-slate-500">
+                                  {summaryValue !== undefined
+                                    ? (col.format as (value: any) => string)(summaryValue)
+                                    : `${countrySummary?.rowCount ?? pagination.total} 个国家/地区`}
+                                </div>
+                              </div>
+                            ) : summaryValue !== undefined ? (
+                              (col.format as (value: any) => string)(summaryValue)
+                            ) : (
+                              <span className="font-medium text-slate-400">-</span>
+                            )}
+                          </td>
+                        )
+                      })}
+                      <td className="px-6 py-4 text-right font-medium text-slate-400">-</td>
+                    </tr>
+                    {countries.map((country) => (
                     <tr key={(country as any)._id || country.country} className="group hover:bg-slate-50 transition-colors border-b border-slate-100">
                       {safeColumnsToRender.map(col => (
                         <td key={col.key} className="px-6 py-4">
@@ -834,7 +860,8 @@ export default function FacebookCountriesPage() {
                         </button>
                       </td>
                     </tr>
-                  ))
+                    ))}
+                  </>
                 )}
               </tbody>
             </table>
