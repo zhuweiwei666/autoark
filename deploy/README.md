@@ -57,6 +57,11 @@ and the day before once before freezing). The aggregation cron is
 non-overlapping and caps concurrent account requests at
 `FACEBOOK_AGGREGATION_CONCURRENCY` (1–5, default 2).
 
+The production workflow always passes these three collection controls to the
+transactional deploy wrapper. The wrapper validates them, writes exactly one of
+each to both `/root/prod.env` and `deploy/.env`, and prevents a stale canonical
+backup from silently changing the runtime collection policy.
+
 ## Standard Release Flow
 
 1. Merge or push the release ref to GitHub.

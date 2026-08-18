@@ -201,6 +201,9 @@ MONGO_URI=mongodb://canonical-example
 $root_marker
 GUANGDADA_API_KEY=old-canonical-placeholder
 EXTERNAL_MATERIAL_SYNC_ENABLED=false
+FACEBOOK_SYNC_ENABLED=true
+FACEBOOK_AGGREGATION_ENABLED=false
+FACEBOOK_AGGREGATION_CONCURRENCY=5
 META_CREDENTIAL_ENCRYPTION_KEY=old-canonical-meta-key
 AI_ADS_INTEGRATION_API_KEY=old-canonical-ai-ads-key
 AI_ADS_INTEGRATION_ORGANIZATION_ID=old-canonical-ai-ads-org
@@ -214,6 +217,9 @@ MONGO_URI=mongodb://runtime-example
 $runtime_marker
 GUANGDADA_API_KEY=old-runtime-placeholder
 EXTERNAL_MATERIAL_SYNC_ENABLED=false
+FACEBOOK_SYNC_ENABLED=false
+FACEBOOK_AGGREGATION_ENABLED=true
+FACEBOOK_AGGREGATION_CONCURRENCY=2
 META_CREDENTIAL_ENCRYPTION_KEY=old-runtime-meta-key
 AI_ADS_INTEGRATION_API_KEY=old-runtime-ai-ads-key
 AI_ADS_INTEGRATION_ORGANIZATION_ID=old-runtime-ai-ads-org
@@ -239,6 +245,9 @@ assert_consistent_pair() {
   test "$(file_mode "$DEPLOY_ENV")" = '600'
   test "$(grep -c '^GUANGDADA_API_KEY=' "$ROOT_ENV")" -eq 1
   test "$(grep -c '^EXTERNAL_MATERIAL_SYNC_ENABLED=' "$ROOT_ENV")" -eq 1
+  test "$(grep -c '^FACEBOOK_SYNC_ENABLED=' "$ROOT_ENV")" -eq 1
+  test "$(grep -c '^FACEBOOK_AGGREGATION_ENABLED=' "$ROOT_ENV")" -eq 1
+  test "$(grep -c '^FACEBOOK_AGGREGATION_CONCURRENCY=' "$ROOT_ENV")" -eq 1
   test "$(grep -c '^META_CREDENTIAL_ENCRYPTION_KEY=' "$ROOT_ENV")" -eq 1
   test "$(grep -c '^AI_ADS_INTEGRATION_API_KEY=' "$ROOT_ENV")" -eq 1
   test "$(grep -c '^AI_ADS_INTEGRATION_ORGANIZATION_ID=' "$ROOT_ENV")" -eq 1
@@ -256,6 +265,9 @@ run_deploy() {
   env \
     -u GUANGDADA_API_KEY \
     -u EXTERNAL_MATERIAL_SYNC_ENABLED \
+    -u FACEBOOK_SYNC_ENABLED \
+    -u FACEBOOK_AGGREGATION_ENABLED \
+    -u FACEBOOK_AGGREGATION_CONCURRENCY \
     -u META_CREDENTIAL_ENCRYPTION_KEY \
     -u AI_ADS_INTEGRATION_API_KEY \
     -u AI_ADS_INTEGRATION_ORGANIZATION_ID \
@@ -293,6 +305,9 @@ MONGO_URI=mongodb://uploaded-example
 $marker
 GUANGDADA_API_KEY=file-owned-placeholder
 EXTERNAL_MATERIAL_SYNC_ENABLED=true
+FACEBOOK_SYNC_ENABLED=false
+FACEBOOK_AGGREGATION_ENABLED=true
+FACEBOOK_AGGREGATION_CONCURRENCY=2
 META_CREDENTIAL_ENCRYPTION_KEY=file-owned-meta-key
 AI_ADS_INTEGRATION_API_KEY=file-owned-ai-ads-key
 AI_ADS_INTEGRATION_ORGANIZATION_ID=file-owned-ai-ads-org
@@ -388,9 +403,26 @@ if grep -Fq "$CODEX_SECRET_SENTINEL" <<<"$output"; then
 fi
 grep -Fq 'GUANGDADA_API_KEY' <<<"$output"
 grep -Fq 'EXTERNAL_MATERIAL_SYNC_ENABLED' <<<"$output"
+grep -Fq 'Facebook collection' <<<"$output"
 grep -Fq 'META_CREDENTIAL_ENCRYPTION_KEY' <<<"$output"
 grep -Fq 'AI ads integration' <<<"$output"
 grep -Fq 'Creative Factory' <<<"$output"
+
+# Facebook collection controls must be explicit managed entries. A stale
+# canonical backup must not silently disable a runtime collector that the
+# release intentionally enables.
+seed_pair 'FACEBOOK_CANONICAL=preserved' 'FACEBOOK_RUNTIME=must-disappear'
+run_deploy \
+  FACEBOOK_SYNC_ENABLED=false \
+  FACEBOOK_AGGREGATION_ENABLED=true \
+  FACEBOOK_AGGREGATION_CONCURRENCY=2 >"$TEST_DIR/facebook-controls.log"
+assert_consistent_pair
+grep -qx 'FACEBOOK_SYNC_ENABLED=false' "$ROOT_ENV"
+grep -qx 'FACEBOOK_AGGREGATION_ENABLED=true' "$ROOT_ENV"
+grep -qx 'FACEBOOK_AGGREGATION_CONCURRENCY=2' "$ROOT_ENV"
+test "$(grep -c '^FACEBOOK_SYNC_ENABLED=' "$ROOT_ENV")" -eq 1
+test "$(grep -c '^FACEBOOK_AGGREGATION_ENABLED=' "$ROOT_ENV")" -eq 1
+test "$(grep -c '^FACEBOOK_AGGREGATION_CONCURRENCY=' "$ROOT_ENV")" -eq 1
 
 # Local validation remains strict and must not leak under tracing.
 if run_deploy \
@@ -403,6 +435,16 @@ if run_deploy \
   GUANGDADA_API_KEY='invalid-flag-placeholder' \
   EXTERNAL_MATERIAL_SYNC_ENABLED=yes >"$TEST_DIR/invalid-flag.log" 2>&1; then
   echo 'external sync accepted a non-boolean feature flag'
+  exit 1
+fi
+if run_deploy \
+  FACEBOOK_AGGREGATION_ENABLED=yes >"$TEST_DIR/invalid-facebook-flag.log" 2>&1; then
+  echo 'Facebook aggregation accepted a non-boolean feature flag'
+  exit 1
+fi
+if run_deploy \
+  FACEBOOK_AGGREGATION_CONCURRENCY=6 >"$TEST_DIR/invalid-facebook-concurrency.log" 2>&1; then
+  echo 'Facebook aggregation accepted concurrency outside 1-5'
   exit 1
 fi
 if run_deploy \
@@ -474,6 +516,9 @@ CODEX_TRACE_SENTINEL='CODEX_TRACE_MODE_MUST_NOT_PRINT_THIS_VALUE'
 env \
   -u GUANGDADA_API_KEY \
   -u EXTERNAL_MATERIAL_SYNC_ENABLED \
+  -u FACEBOOK_SYNC_ENABLED \
+  -u FACEBOOK_AGGREGATION_ENABLED \
+  -u FACEBOOK_AGGREGATION_CONCURRENCY \
   -u META_CREDENTIAL_ENCRYPTION_KEY \
   -u AI_ADS_INTEGRATION_API_KEY \
   -u AI_ADS_INTEGRATION_ORGANIZATION_ID \
