@@ -70,6 +70,11 @@ AUTOARK_REF="$(git rev-parse 'origin/main^{commit}')" bash deploy/prod-deploy.sh
 3. The local deploy wrapper connects to the server, runs
    `deploy/server-deploy.sh`, then runs `deploy/verify-production.sh`.
 
+For the initial permanent Meta Insights rollout, dispatch the production
+workflow with `backfill_meta_insights_persistence=true`. The protected runner
+executes the migration dry-run first, then applies only missing fact and
+coverage rows and fails if either permanent collection has a TTL index.
+
 Useful overrides:
 
 ```bash

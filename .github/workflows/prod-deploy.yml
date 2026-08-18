@@ -7,6 +7,11 @@ on:
         description: Git ref to deploy
         required: true
         default: main
+      backfill_meta_insights_persistence:
+        description: Dry-run and apply the permanent Meta Insights backfill after deployment
+        required: true
+        type: boolean
+        default: false
       repair_leyon_ios_targeting:
         description: Repair the exact known Leyon ACTIVE AdSets after deployment
         required: true
@@ -92,6 +97,18 @@ jobs:
           EXTERNAL_MATERIAL_SYNC_ENABLED: ${{ vars.EXTERNAL_MATERIAL_SYNC_ENABLED || 'false' }}
           META_CREDENTIAL_ENCRYPTION_KEY: ${{ secrets.META_CREDENTIAL_ENCRYPTION_KEY }}
         run: bash deploy/prod-deploy.sh
+
+      - name: Backfill permanent Meta Insights persistence
+        if: ${{ inputs.backfill_meta_insights_persistence }}
+        run: >-
+          ssh autoark-prod
+          'cd /opt/autoark &&
+          docker compose --env-file deploy/.env --env-file deploy/.deploy-metadata.env
+          -f deploy/docker-compose.prod.yml exec -T backend
+          node dist/scripts/backfillMetaInsightsPersistence.js &&
+          docker compose --env-file deploy/.env --env-file deploy/.deploy-metadata.env
+          -f deploy/docker-compose.prod.yml exec -T backend
+          node dist/scripts/backfillMetaInsightsPersistence.js --apply'
 
       - name: Dry-run exact Leyon iOS targeting repair
         if: ${{ inputs.repair_leyon_ios_targeting }}
