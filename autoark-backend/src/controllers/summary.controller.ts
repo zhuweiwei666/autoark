@@ -90,26 +90,58 @@ const getSummaryCoverageRows = (
 
 type SummaryDataStatus = 'fresh' | 'stale' | 'partial' | 'unavailable'
 
+type SummaryCoverageRow = { status?: string }
+
+const summarizeSummaryCoverage = (
+  coverageRows: SummaryCoverageRow[],
+  completeCohort = false,
+) => {
+  const tracked = coverageRows.length
+  const fresh = coverageRows.filter(row => row.status === 'fresh').length
+  const stale = coverageRows.filter(row => row.status === 'stale').length
+  // Treat any unrecognized ledger state as unavailable instead of silently
+  // presenting it as usable data.
+  const unavailable = tracked - fresh - stale
+  const usable = fresh + stale
+
+  return {
+    tracked,
+    fresh,
+    stale,
+    unavailable,
+    usable,
+    completeCohort,
+    usableRate: tracked > 0
+      ? Math.round((usable / tracked) * 1000) / 10
+      : 0,
+  }
+}
+
 const resolveSummaryDataStatus = (
   coveredDays: number,
   expectedDays: number,
   aggregateStatus: 'fresh' | 'stale' | 'partial',
-  coverageRows: Array<{ status?: string }>,
+  coverageRows: SummaryCoverageRow[],
+  coverageCanResolveAggregatePartial = false,
 ): SummaryDataStatus => {
   if (coveredDays === 0) return 'unavailable'
-  if (
-    coveredDays < expectedDays ||
-    aggregateStatus === 'partial' ||
-    coverageRows.some(row => row.status === 'unavailable')
-  ) {
-    return 'partial'
+  if (coveredDays < expectedDays) return 'partial'
+
+  // Coverage is updated for every account attempt and supersedes the rollup
+  // once a complete failed-account cohort is known. A targeted repair can
+  // contain only a subset, so its conservative partial flag still wins.
+  if (coverageRows.length > 0) {
+    const coverage = summarizeSummaryCoverage(coverageRows)
+    if (coverage.unavailable > 0) return 'partial'
+    if (aggregateStatus === 'partial' && !coverageCanResolveAggregatePartial) {
+      return 'partial'
+    }
+    if (coverage.stale > 0) return 'stale'
+    return 'fresh'
   }
-  if (
-    aggregateStatus === 'stale' ||
-    coverageRows.some(row => row.status === 'stale')
-  ) {
-    return 'stale'
-  }
+
+  if (aggregateStatus === 'partial') return 'partial'
+  if (aggregateStatus === 'stale') return 'stale'
   return 'fresh'
 }
 
@@ -305,6 +337,7 @@ router.get('/dashboard', async (req: Request, res: Response) => {
     let activeAccounts = 0
     const coveredDates = new Set<string>()
     let aggregateStatus: 'fresh' | 'stale' | 'partial' = 'fresh'
+    let coverageCanResolveAggregatePartial = true
 
     if (scopedAccountIds === null) {
       // 从预聚合表读取
@@ -314,7 +347,15 @@ router.get('/dashboard', async (req: Request, res: Response) => {
 
       for (const day of dailyData) {
         coveredDates.add(day.date)
-        if (day.dataStatus === 'partial') aggregateStatus = 'partial'
+        if (day.dataStatus === 'partial') {
+          aggregateStatus = 'partial'
+          // A targeted repair creates a conservative partial rollup with no
+          // failed-account cohort. Its few coverage rows cannot prove the
+          // entire day is complete.
+          if (Number(day.failedAccounts || 0) === 0) {
+            coverageCanResolveAggregatePartial = false
+          }
+        }
         else if (day.dataStatus === 'stale' && aggregateStatus === 'fresh') {
           aggregateStatus = 'stale'
         }
@@ -351,6 +392,12 @@ router.get('/dashboard', async (req: Request, res: Response) => {
       expectedDays,
       aggregateStatus,
       coverageRows,
+      coverageCanResolveAggregatePartial,
+    )
+    const coverage = summarizeSummaryCoverage(
+      coverageRows,
+      coverageRows.length > 0
+        && (aggregateStatus !== 'partial' || coverageCanResolveAggregatePartial),
     )
 
     // 计算派生指标
@@ -381,6 +428,7 @@ router.get('/dashboard', async (req: Request, res: Response) => {
         activeAccounts,
         available: coveredDays > 0,
         dataStatus,
+        coverage,
         coveredDays,
         expectedDays,
       },
@@ -479,11 +527,21 @@ router.get('/dashboard/trend', async (req: Request, res: Response) => {
         : data?.dataStatus === 'stale' || data?.staleSnapshotCount > 0
           ? 'stale'
           : 'fresh'
+      const coverageCanResolveAggregatePartial = data?.dataStatus !== 'partial'
+        || Number(data?.failedAccounts || 0) > 0
       const dataStatus = resolveSummaryDataStatus(
         data ? 1 : 0,
         1,
         aggregateStatus,
         coverageByDate.get(date) || [],
+        coverageCanResolveAggregatePartial,
+      )
+      const dateCoverageRows = coverageByDate.get(date) || []
+      const coverage = summarizeSummaryCoverage(
+        dateCoverageRows,
+        Boolean(data)
+          && dateCoverageRows.length > 0
+          && (aggregateStatus !== 'partial' || coverageCanResolveAggregatePartial),
       )
       trendData.push({
         date,
@@ -495,6 +553,7 @@ router.get('/dashboard/trend', async (req: Request, res: Response) => {
         roas: data?.roas || 0,
         available: Boolean(data),
         dataStatus,
+        coverage,
       })
     }
 

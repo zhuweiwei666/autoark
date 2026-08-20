@@ -1225,6 +1225,18 @@ export async function syncCampaigns(): Promise<{
 
 // === 仪表盘 API ===
 
+export type DashboardDataStatus = 'fresh' | 'stale' | 'partial' | 'unavailable'
+
+export interface DashboardCoverage {
+  tracked: number
+  fresh: number
+  stale: number
+  unavailable: number
+  usable: number
+  completeCohort: boolean
+  usableRate: number
+}
+
 export interface CoreMetrics {
   today: {
     spend: number
@@ -1236,12 +1248,16 @@ export interface CoreMetrics {
     cpc: number
     cpi: number
     roas: number
+    dataStatus: DashboardDataStatus
+    coverage?: DashboardCoverage
   }
   yesterday: {
     spend: number
     impressions: number
     clicks: number
     installs: number
+    dataStatus: DashboardDataStatus
+    coverage?: DashboardCoverage
   }
   sevenDays: {
     spend: number
@@ -1249,6 +1265,8 @@ export interface CoreMetrics {
     clicks: number
     installs: number
     avgDailySpend: number
+    dataStatus: DashboardDataStatus
+    coverage?: DashboardCoverage
   }
 }
 
@@ -1310,7 +1328,7 @@ const isCompleteDashboardSummary = (value: any) => (
   typeof value?.date === 'string'
   && /^\d{4}-\d{2}-\d{2}$/.test(value.date)
   && value.available === true
-  && ['fresh', 'stale'].includes(value.dataStatus)
+  && ['fresh', 'stale', 'partial'].includes(value.dataStatus)
   && hasFiniteNumericFields(value, DASHBOARD_SUMMARY_NUMERIC_FIELDS)
 )
 
@@ -1318,7 +1336,7 @@ const isCompleteDashboardTrendRow = (value: any) => (
   typeof value?.date === 'string'
   && /^\d{4}-\d{2}-\d{2}$/.test(value.date)
   && value.available === true
-  && ['fresh', 'stale'].includes(value.dataStatus)
+  && ['fresh', 'stale', 'partial'].includes(value.dataStatus)
   && hasFiniteNumericFields(value, DASHBOARD_TREND_NUMERIC_FIELDS)
 )
 
@@ -1350,7 +1368,7 @@ export async function getCoreMetrics(_startDate?: string, endDate?: string): Pro
     || trendData.data.length !== 7
     || !trendData.data.every(isCompleteDashboardTrendRow)
   ) {
-    throw new Error('Dashboard data coverage is incomplete; preserving the last stored view')
+    throw new Error('仪表盘数据暂不可用，已保留最近一次缓存')
   }
 
   // 安全计算昨天日期，避免时区问题
@@ -1366,7 +1384,7 @@ export async function getCoreMetrics(_startDate?: string, endDate?: string): Pro
 
   const yesterdayData = await yesterdayRes.json()
   if (yesterdayData?.success !== true || !isCompleteDashboardSummary(yesterdayData.data)) {
-    throw new Error('Yesterday data coverage is incomplete; preserving the last stored view')
+    throw new Error('昨日数据暂不可用，已保留最近一次缓存')
   }
   
   // 转换为前端期望的格式
@@ -1380,6 +1398,8 @@ export async function getCoreMetrics(_startDate?: string, endDate?: string): Pro
     cpc: summary.cpc,
     cpi: summary.cpi,
     roas: summary.roas,
+    dataStatus: summary.dataStatus as DashboardDataStatus,
+    coverage: summary.coverage as DashboardCoverage | undefined,
   })
   
   // 计算7天总计
@@ -1394,6 +1414,38 @@ export async function getCoreMetrics(_startDate?: string, endDate?: string): Pro
   // 计算日均
   const dayCount = trendDataArray.length || 1
   sevenDaysSummary.avgDailySpend = sevenDaysSummary.spend / dayCount
+  sevenDaysSummary.dataStatus = trendDataArray.some((day: any) => day.dataStatus === 'partial')
+    ? 'partial'
+    : trendDataArray.some((day: any) => day.dataStatus === 'stale')
+      ? 'stale'
+      : 'fresh'
+
+  const coverageRows = trendDataArray
+    .map((day: any) => day.coverage)
+    .filter((coverage: any) => coverage && typeof coverage.tracked === 'number')
+  if (coverageRows.length > 0) {
+    const coverage = coverageRows.reduce((acc: DashboardCoverage, item: DashboardCoverage) => ({
+      tracked: acc.tracked + item.tracked,
+      fresh: acc.fresh + item.fresh,
+      stale: acc.stale + item.stale,
+      unavailable: acc.unavailable + item.unavailable,
+      usable: acc.usable + item.usable,
+      completeCohort: acc.completeCohort && item.completeCohort === true,
+      usableRate: 0,
+    }), {
+      tracked: 0,
+      fresh: 0,
+      stale: 0,
+      unavailable: 0,
+      usable: 0,
+      completeCohort: true,
+      usableRate: 0,
+    })
+    coverage.usableRate = coverage.tracked > 0
+      ? Math.round((coverage.usable / coverage.tracked) * 1000) / 10
+      : 0
+    sevenDaysSummary.coverage = coverage
+  }
 
   return {
     success: true,
@@ -1953,7 +2005,8 @@ export interface DashboardSummary extends SummaryData {
   activeCampaigns: number
   activeCountries: number
   available: boolean
-  dataStatus: 'fresh' | 'stale' | 'partial' | 'unavailable'
+  dataStatus: DashboardDataStatus
+  coverage?: DashboardCoverage
   coveredDays?: number
   expectedDays?: number
 }
