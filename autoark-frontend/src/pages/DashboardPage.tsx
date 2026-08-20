@@ -20,6 +20,7 @@ import {
   getAggCampaignRanking,
   getAggCoreMetrics,
   getAggTrend,
+  type CoreMetrics,
 } from "../services/api";
 
 const getSessionCacheScope = () => {
@@ -358,7 +359,7 @@ function BarList({
 }
 
 export default function DashboardPage() {
-  const [coreMetrics, setCoreMetrics] = useState<any>(null);
+  const [coreMetrics, setCoreMetrics] = useState<CoreMetrics | null>(null);
   const [trendData, setTrendData] = useState<any[]>([]);
   const [campaignRanking, setCampaignRanking] = useState<any[]>([]);
   const [accountRanking, setAccountRanking] = useState<any[]>([]);
@@ -412,6 +413,7 @@ export default function DashboardPage() {
       setTrendData(cached.trendData || cached.spendTrend || []);
       setCampaignRanking(cached.campaignRanking || []);
       setAccountRanking(cached.accountRanking || []);
+      setLastUpdated(new Date(cached.timestamp));
     }
     fetchData();
   }, []);
@@ -420,9 +422,11 @@ export default function DashboardPage() {
     if (
       !coreMetrics?.today ||
       !coreMetrics?.yesterday ||
+      coreMetrics.today.dataStatus === "partial" ||
+      coreMetrics.yesterday.dataStatus === "partial" ||
       coreMetrics.yesterday.spend === 0
     )
-      return 0;
+      return null;
     return (
       ((coreMetrics.today.spend - coreMetrics.yesterday.spend) /
         coreMetrics.yesterday.spend) *
@@ -430,7 +434,26 @@ export default function DashboardPage() {
     );
   }, [coreMetrics]);
 
-  const isPositiveChange = todayChange >= 0;
+  const isPositiveChange = todayChange !== null && todayChange >= 0;
+  const hasPartialData =
+    coreMetrics?.today?.dataStatus === "partial" ||
+    coreMetrics?.yesterday?.dataStatus === "partial" ||
+    coreMetrics?.sevenDays?.dataStatus === "partial" ||
+    trendData.some((day) => day?.dataStatus === "partial");
+  const partialCoverage =
+    coreMetrics?.today?.dataStatus === "partial"
+      ? { label: "今日", unit: "个账户", value: coreMetrics.today.coverage }
+      : coreMetrics?.sevenDays?.dataStatus === "partial"
+        ? {
+            label: "最近 7 天",
+            unit: "条账户日记录",
+            value: coreMetrics.sevenDays.coverage,
+          }
+        : null;
+  const coverageMessage =
+    partialCoverage?.value?.completeCohort === true && partialCoverage.value.tracked > 0
+      ? `数据为部分覆盖：${partialCoverage.label}已确认 ${partialCoverage.value.usable}/${partialCoverage.value.tracked} ${partialCoverage.unit}（${partialCoverage.value.usableRate.toFixed(1)}%）。当前金额是数据库已保存的小计，未覆盖账户保持未知，不按 0 计算。`
+      : "数据为部分覆盖。当前金额是数据库已保存的小计，未覆盖账户保持未知，不按 0 计算。";
   const updatedText = lastUpdated
     ? lastUpdated.toLocaleTimeString("zh-CN", {
         hour: "2-digit",
@@ -478,32 +501,95 @@ export default function DashboardPage() {
             {loadError}
           </div>
         )}
+        {hasPartialData && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold leading-6 text-amber-900">
+            {coverageMessage}
+          </div>
+        )}
 
         <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <MetricTile
-            label="今日消耗"
-            value={formatCurrency(coreMetrics?.today?.spend || 0)}
-            detail={`${todayChange.toFixed(1)}% vs 昨日`}
-            tone={isPositiveChange ? "negative" : "positive"}
+            label={
+              coreMetrics?.today?.dataStatus === "partial"
+                ? "今日已确认消耗"
+                : "今日消耗"
+            }
+            value={
+              coreMetrics?.today
+                ? formatCurrency(coreMetrics.today.spend)
+                : "--"
+            }
+            detail={
+              todayChange === null
+                ? "缺少可比数据"
+                : `${todayChange.toFixed(1)}% vs 昨日`
+            }
+            tone={
+              todayChange === null
+                ? "default"
+                : isPositiveChange
+                  ? "negative"
+                  : "positive"
+            }
             icon={<CurrencyDollar size={21} weight="bold" />}
           />
           <MetricTile
-            label="昨日消耗"
-            value={formatCurrency(coreMetrics?.yesterday?.spend || 0)}
-            detail="对比基线"
+            label={
+              coreMetrics?.yesterday?.dataStatus === "partial"
+                ? "昨日已确认消耗"
+                : "昨日消耗"
+            }
+            value={
+              coreMetrics?.yesterday
+                ? formatCurrency(coreMetrics.yesterday.spend)
+                : "--"
+            }
+            detail={coreMetrics?.yesterday ? "对比基线" : "等待有效数据"}
             icon={<Wallet size={21} weight="bold" />}
           />
           <MetricTile
-            label="7 日总消耗"
-            value={formatCurrency(coreMetrics?.sevenDays?.spend || 0)}
-            detail={`日均 ${formatCurrency(coreMetrics?.sevenDays?.avgDailySpend || 0)}`}
+            label={
+              coreMetrics?.sevenDays?.dataStatus === "partial"
+                ? "7 日已确认消耗"
+                : "7 日总消耗"
+            }
+            value={
+              coreMetrics?.sevenDays
+                ? formatCurrency(coreMetrics.sevenDays.spend)
+                : "--"
+            }
+            detail={
+              coreMetrics?.sevenDays
+                ? `日均 ${formatCurrency(coreMetrics.sevenDays.avgDailySpend)}`
+                : "等待有效数据"
+            }
             icon={<ChartLineUp size={21} weight="bold" />}
           />
           <MetricTile
-            label="今日 ROAS"
-            value={formatDecimal(coreMetrics?.today?.roas || 0)}
-            detail={isPositiveChange ? "消耗走高" : "消耗回落"}
-            tone={isPositiveChange ? "negative" : "positive"}
+            label={
+              coreMetrics?.today?.dataStatus === "partial"
+                ? "今日已确认 ROAS"
+                : "今日 ROAS"
+            }
+            value={
+              coreMetrics?.today
+                ? formatDecimal(coreMetrics.today.roas)
+                : "--"
+            }
+            detail={
+              todayChange === null
+                ? "等待有效数据"
+                : isPositiveChange
+                  ? "消耗走高"
+                  : "消耗回落"
+            }
+            tone={
+              todayChange === null
+                ? "default"
+                : isPositiveChange
+                  ? "negative"
+                  : "positive"
+            }
             icon={
               isPositiveChange ? (
                 <TrendUp size={21} weight="bold" />

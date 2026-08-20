@@ -45,7 +45,7 @@ test('dashboard core metrics use the authenticated summary pipeline', () => {
   assert.match(aggCoreSource, /getCoreMetrics\(/)
 })
 
-test('dashboard rejects unavailable zero placeholders as incomplete coverage', () => {
+test('dashboard accepts available partial snapshots but rejects unavailable placeholders', () => {
   const validatorSource = sourceBetween(
     apiSource,
     'const isCompleteDashboardSummary',
@@ -54,7 +54,21 @@ test('dashboard rejects unavailable zero placeholders as incomplete coverage', (
 
   assert.equal((validatorSource.match(/value\.available\s*===\s*true/g) || []).length, 2)
   assert.equal((validatorSource.match(/value\.dataStatus/g) || []).length, 2)
-  assert.match(apiSource, /Dashboard data coverage is incomplete/)
+  assert.equal((validatorSource.match(/\['fresh', 'stale', 'partial'\]/g) || []).length, 2)
+  assert.match(apiSource, /coverage: summary\.coverage/)
+})
+
+test('dashboard renders stored partial totals with coverage context instead of fake zeroes', () => {
+  const metricSource = sourceBetween(
+    dashboardSource,
+    '<section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">',
+    '<section className="grid gap-5 xl:grid-cols-2">',
+  )
+
+  assert.match(dashboardSource, /dataStatus === "partial"/)
+  assert.match(dashboardSource, /未覆盖账户保持未知/)
+  assert.match(metricSource, /: "--"/)
+  assert.doesNotMatch(metricSource, /coreMetrics\?\.[\s\S]*?\|\| 0/)
 })
 
 test('dashboard cache is isolated to the authenticated session', () => {
@@ -67,6 +81,7 @@ test('dashboard cache is isolated to the authenticated session', () => {
   assert.match(source, /localStorage\.getItem\(["']auth_token["']\)/)
   assert.match(source, /dashboard_7days_\$\{getSessionCacheScope\(\)\}/)
   assert.doesNotMatch(source, /=>\s*["']dashboard_7days["']/)
+  assert.match(dashboardSource, /setLastUpdated\(new Date\(cached\.timestamp\)\)/)
 })
 
 test('ROAS zero values do not fall back to spend values', () => {

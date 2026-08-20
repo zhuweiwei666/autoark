@@ -392,8 +392,99 @@ describe('summary route data scoping', () => {
         totalSpend: 25,
         available: true,
         dataStatus: 'partial',
+        coverage: {
+          tracked: 1,
+          fresh: 0,
+          stale: 0,
+          unavailable: 1,
+          usable: 0,
+          completeCohort: true,
+          usableRate: 0,
+        },
       }),
     ])
+  })
+
+  it('uses fresh coverage rows instead of a legacy partial daily flag', async () => {
+    mockAuthState.user = {
+      role: UserRole.SUPER_ADMIN,
+      userId: '665000000000000000000003',
+    }
+    ;(getUserAccountIds as jest.Mock).mockResolvedValue(null)
+    const today = formatDateInTimezone()
+    ;(AggDaily.find as jest.Mock).mockReturnValue({
+      lean: jest.fn().mockResolvedValue([{
+        date: today,
+        spend: 123.45,
+        dataStatus: 'partial',
+        failedAccounts: 3,
+      }]),
+    })
+    mockMetaInsightsCoverageFind.mockReturnValueOnce({
+      select: jest.fn().mockReturnThis(),
+      lean: jest.fn().mockResolvedValue([
+        { date: today, status: 'fresh' },
+        { date: today, status: 'fresh' },
+        { date: today, status: 'fresh' },
+      ]),
+    })
+
+    const response = await request(createApp()).get('/api/summary/dashboard')
+
+    expect(response.status).toBe(200)
+    expect(response.body.data).toMatchObject({
+      date: today,
+      totalSpend: 123.45,
+      available: true,
+      dataStatus: 'fresh',
+      coverage: {
+        tracked: 3,
+        fresh: 3,
+        stale: 0,
+        unavailable: 0,
+        usable: 3,
+        completeCohort: true,
+        usableRate: 100,
+      },
+    })
+  })
+
+  it('keeps a targeted partial rollup conservative without a failed-account cohort', async () => {
+    mockAuthState.user = {
+      role: UserRole.SUPER_ADMIN,
+      userId: '665000000000000000000003',
+    }
+    ;(getUserAccountIds as jest.Mock).mockResolvedValue(null)
+    const today = formatDateInTimezone()
+    ;(AggDaily.find as jest.Mock).mockReturnValue({
+      lean: jest.fn().mockResolvedValue([{
+        date: today,
+        spend: 12.34,
+        dataStatus: 'partial',
+        failedAccounts: 0,
+      }]),
+    })
+    mockMetaInsightsCoverageFind.mockReturnValueOnce({
+      select: jest.fn().mockReturnThis(),
+      lean: jest.fn().mockResolvedValue([
+        { date: today, status: 'fresh' },
+      ]),
+    })
+
+    const response = await request(createApp()).get('/api/summary/dashboard')
+
+    expect(response.status).toBe(200)
+    expect(response.body.data).toMatchObject({
+      totalSpend: 12.34,
+      available: true,
+      dataStatus: 'partial',
+      coverage: {
+        tracked: 1,
+        usable: 1,
+        completeCohort: false,
+        usableRate: 100,
+      },
+    })
   })
 
   it('uses the authenticated organization timezone for default report dates', async () => {
