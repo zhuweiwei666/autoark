@@ -15,8 +15,9 @@ describe('ai-host creative factory client', () => {
     else process.env.AI_HOST_CREATIVE_FACTORY_URL = originalUrl
   })
 
-  it('signs the exact JSON body and unwraps ai-host data', async () => {
-    process.env.AI_HOST_INTERNAL_API_SECRET = 'test-secret'
+  it('sends the path-bound V2 envelope plus the rollout-compatible legacy signature', async () => {
+    const secret = 'creative-factory-test-secret-32chars'
+    process.env.AI_HOST_INTERNAL_API_SECRET = secret
     process.env.AI_HOST_CREATIVE_FACTORY_URL =
       'https://cling.example/internal/creative-factory'
     const body = {
@@ -47,14 +48,36 @@ describe('ai-host creative factory client', () => {
     })
     const [, options] = fetchMock.mock.calls[0]
     const serialized = JSON.stringify(body)
-    const expected = crypto
-      .createHmac('sha256', 'test-secret')
+    const headers = options?.headers as Record<string, string>
+    const timestamp = headers['X-Creative-Factory-Timestamp']
+    const nonce = headers['X-Creative-Factory-Nonce']
+    const bodyDigest = crypto
+      .createHash('sha256')
+      .update(serialized)
+      .digest('hex')
+    const payload = [
+      'creative-factory-request-v2',
+      'service:creative-factory',
+      'method:POST',
+      'path:/internal/creative-factory/generate',
+      `timestamp:${timestamp}`,
+      `nonce:${nonce}`,
+      `body-sha256:${bodyDigest}`,
+    ].join('\n')
+    const expectedV2 = crypto
+      .createHmac('sha256', secret)
+      .update(payload)
+      .digest('hex')
+    const expectedLegacy = crypto
+      .createHmac('sha256', secret)
       .update(serialized)
       .digest('hex')
     expect(options?.body).toBe(serialized)
-    expect(
-      (options?.headers as Record<string, string>)['X-Internal-Signature'],
-    ).toBe(expected)
+    expect(headers['X-Creative-Factory-Id']).toBe('creative-factory')
+    expect(timestamp).toMatch(/^\d{13}$/)
+    expect(nonce).toMatch(/^[a-f0-9]{32}$/)
+    expect(headers['X-Creative-Factory-Signature']).toBe(expectedV2)
+    expect(headers['X-Internal-Signature']).toBe(expectedLegacy)
   })
 
   it('fails closed when the shared secret is missing', async () => {
@@ -66,6 +89,18 @@ describe('ai-host creative factory client', () => {
         sourceImageUrl: 'https://cdn.example/source.jpg',
         featureKey: 'video',
       }),
-    ).rejects.toThrow('AI_HOST_INTERNAL_API_SECRET 未配置')
+    ).rejects.toThrow('AI_HOST_INTERNAL_API_SECRET 未安全配置')
+  })
+
+  it('fails closed when the shared secret is too short', async () => {
+    process.env.AI_HOST_INTERNAL_API_SECRET = 'short-secret'
+    await expect(
+      createAiHostGeneration({
+        externalBatchId: 'batch-1',
+        externalVariantId: 'v001',
+        sourceImageUrl: 'https://cdn.example/source.jpg',
+        featureKey: 'video',
+      }),
+    ).rejects.toThrow('AI_HOST_INTERNAL_API_SECRET 未安全配置')
   })
 })

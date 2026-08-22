@@ -2,6 +2,9 @@ import crypto from 'crypto'
 
 type CreativeFactoryAction = 'catalog' | 'generate' | 'status'
 
+const CREATIVE_FACTORY_SERVICE_ID = 'creative-factory'
+const CREATIVE_FACTORY_ENVELOPE_VERSION = 'creative-factory-request-v2'
+
 const baseUrl = () =>
   (
     process.env.AI_HOST_CREATIVE_FACTORY_URL ||
@@ -15,10 +18,35 @@ async function post<T>(
   body: Record<string, unknown>,
 ): Promise<T> {
   const secret = internalSecret()
-  if (!secret) throw new Error('AI_HOST_INTERNAL_API_SECRET 未配置')
+  if (secret.length < 32 || secret !== secret.trim()) {
+    throw new Error('AI_HOST_INTERNAL_API_SECRET 未安全配置')
+  }
 
   const serialized = JSON.stringify(body)
+  const requestUrl = new URL(`${baseUrl()}/${action}`)
+  const requestPath = `${requestUrl.pathname}${requestUrl.search}`
+  const timestamp = String(Date.now())
+  const nonce = crypto.randomBytes(16).toString('hex')
+  const bodyDigest = crypto
+    .createHash('sha256')
+    .update(serialized)
+    .digest('hex')
+  const signingPayload = [
+    CREATIVE_FACTORY_ENVELOPE_VERSION,
+    `service:${CREATIVE_FACTORY_SERVICE_ID}`,
+    'method:POST',
+    `path:${requestPath}`,
+    `timestamp:${timestamp}`,
+    `nonce:${nonce}`,
+    `body-sha256:${bodyDigest}`,
+  ].join('\n')
   const signature = crypto
+    .createHmac('sha256', secret)
+    .update(signingPayload)
+    .digest('hex')
+  // Keep the legacy header during the receiver rollout. The old backend uses
+  // it; the V2 backend ignores it and verifies the path-bound nonce envelope.
+  const legacySignature = crypto
     .createHmac('sha256', secret)
     .update(serialized)
     .digest('hex')
@@ -29,11 +57,15 @@ async function post<T>(
   )
 
   try {
-    const response = await fetch(`${baseUrl()}/${action}`, {
+    const response = await fetch(requestUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-Internal-Signature': signature,
+        'X-Creative-Factory-Id': CREATIVE_FACTORY_SERVICE_ID,
+        'X-Creative-Factory-Timestamp': timestamp,
+        'X-Creative-Factory-Nonce': nonce,
+        'X-Creative-Factory-Signature': signature,
+        'X-Internal-Signature': legacySignature,
       },
       body: serialized,
       signal: controller.signal,
