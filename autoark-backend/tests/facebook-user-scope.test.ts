@@ -155,6 +155,9 @@ describe('facebook user asset cache scoping', () => {
     const fetchMock = jest.fn(async (input: any) => {
       const url = String(input)
 
+      if (new URL(url).searchParams.has('ids')) {
+        return response({ error: { code: 100, message: 'Unsupported field expansion' } })
+      }
       if (url.includes('/me/adaccounts') && url.includes('accounts_page_2')) {
         return response({ data: [{ id: 'act_101', account_id: '101', name: 'Account 101', account_status: 1 }] })
       }
@@ -195,6 +198,9 @@ describe('facebook user asset cache scoping', () => {
       }
 
       if (url.includes('/me/businesses')) {
+        if (new URL(url).searchParams.get('fields')?.includes('owned_pixels')) {
+          return response({ error: { code: 100, message: 'Unsupported field expansion' } })
+        }
         return response({ data: [{ id: 'biz_1', name: 'Business 1' }] })
       }
       if (url.includes('/biz_1/owned_product_catalogs') && url.includes('catalogs_page_2')) {
@@ -232,7 +238,7 @@ describe('facebook user asset cache scoping', () => {
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('catalogs_page_2=1'), requestWithTimeout)
   })
 
-  it('collects token-level assets and avoids per-account requests when field expansion succeeds', async () => {
+  it('collects account and business assets without redundant per-connection requests', async () => {
     const writes: any[] = []
     jest.spyOn(FacebookUser, 'findOne').mockResolvedValue(null)
     jest.spyOn(FacebookUser, 'findOneAndUpdate').mockImplementation(async (_filter: any, update: any) => {
@@ -246,8 +252,11 @@ describe('facebook user asset cache scoping', () => {
     const fetchMock = jest.fn(async (input: any) => {
       const url = String(input)
       if (url.includes('/me/adaccounts')) {
+        return response({ data: [{ id: 'act_100', account_id: '100', name: 'Account 100', account_status: 1 }] })
+      }
+      if (new URL(url).searchParams.has('ids')) {
         return response({
-          data: [{
+          act_100: {
             id: 'act_100',
             account_id: '100',
             name: 'Account 100',
@@ -262,18 +271,7 @@ describe('facebook user asset cache scoping', () => {
             promote_pages: {
               data: [{ id: 'account_page', name: 'Account Page' }],
             },
-          }],
-        })
-      }
-      if (url.includes('/me/adspixels')) {
-        return response({
-          data: [{
-            id: 'token_pixel',
-            name: 'Token Pixel',
-            owner_business: { id: 'biz_1', name: 'Business 1' },
-            is_created_by_business: true,
-            last_fired_time: '2026-07-24T00:00:00+0000',
-          }],
+          },
         })
       }
       if (url.includes('/me/accounts')) {
@@ -309,12 +307,6 @@ describe('facebook user asset cache scoping', () => {
     const completedWrite = writes.find((write) => write.syncStatus === 'completed')
     expect(completedWrite.tokenId).toBe('665000000000000000000901')
     expect(completedWrite.pixels).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        pixelId: 'token_pixel',
-        name: 'Token Pixel',
-        accounts: [],
-        ownerBusiness: { id: 'biz_1', name: 'Business 1' },
-      }),
       expect.objectContaining({
         pixelId: 'assigned_pixel',
         accounts: [{ accountId: '100', accountName: 'Account 100' }],
@@ -353,6 +345,7 @@ describe('facebook user asset cache scoping', () => {
     const updateToken = jest.spyOn(FbToken, 'findByIdAndUpdate').mockResolvedValue({} as any)
     const response = (data: any) => Promise.resolve({ json: async () => data } as any)
     global.fetch = jest.fn(async (input: any) => {
+      if (new URL(String(input)).searchParams.has('ids')) return response({ act_100: { id: 'act_100' } })
       if (String(input).includes('/me/adaccounts')) {
         return response({
           data: [{
@@ -477,7 +470,7 @@ describe('facebook user asset cache scoping', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it('keeps the previous pixel snapshot when the token-level request fails transiently', async () => {
+  it('keeps the previous complete snapshot when user Pages fail transiently', async () => {
     const cachedSnapshot = {
       syncStatus: 'completed',
       lastSyncedAt: new Date(),
@@ -497,7 +490,7 @@ describe('facebook user asset cache scoping', () => {
     const response = (data: any) => Promise.resolve({ json: async () => data } as any)
     global.fetch = jest.fn(async (input: any) => {
       const url = String(input)
-      if (url.includes('/me/adspixels')) {
+      if (url.includes('/me/accounts')) {
         throw new Error('temporary network failure')
       }
       if (url.includes('/me/adaccounts')) {
@@ -540,6 +533,9 @@ describe('facebook user asset cache scoping', () => {
     } as any)
     const fetchMock = jest.fn(async (input: any) => {
       const url = String(input)
+      if (new URL(url).searchParams.has('ids')) {
+        return response({ error: { code: 100, message: 'Unsupported field expansion' } })
+      }
       if (url.includes('/me/adaccounts')) {
         return response({
           data: [{
@@ -559,7 +555,7 @@ describe('facebook user asset cache scoping', () => {
     expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/act_200/'))).toBe(false)
   })
 
-  it('retries only the account directory when Meta rejects field expansion', async () => {
+  it('falls back to individual connections without re-fetching the account directory', async () => {
     jest.spyOn(FacebookUser, 'findOne').mockResolvedValue(null)
     jest.spyOn(FacebookUser, 'findOneAndUpdate').mockResolvedValue({} as any)
 
@@ -568,22 +564,17 @@ describe('facebook user asset cache scoping', () => {
     } as any)
     let accountRequests = 0
     const fetchMock = jest.fn(async (input: any) => {
+      if (new URL(String(input)).searchParams.has('ids')) {
+        return response({ error: { code: 100, message: 'Tried accessing nonexisting field adspixels' } })
+      }
       if (String(input).includes('/me/adaccounts')) {
         accountRequests += 1
-        if (accountRequests === 1) {
-          return response({
-            error: {
-              code: 100,
-              message: 'Tried accessing nonexisting field adspixels',
-            },
-          })
-        }
         return response({
           data: [{
             id: 'act_200',
             account_id: '200',
-            name: 'Disabled Account',
-            account_status: 2,
+            name: 'Active Account',
+            account_status: 1,
           }],
         })
       }
@@ -593,8 +584,8 @@ describe('facebook user asset cache scoping', () => {
 
     await syncFacebookUserAssets('fb_2', 'TOKEN_B', 'token_2', 'org_1')
 
-    expect(accountRequests).toBe(2)
-    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/act_200/'))).toBe(false)
+    expect(accountRequests).toBe(1)
+    expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/act_200/'))).toHaveLength(2)
   })
 
   it('falls back to business-owned pixels only when business field expansion is unavailable', async () => {
@@ -661,6 +652,7 @@ describe('facebook user asset cache scoping', () => {
     } as any)
     const fetchMock = jest.fn(async (input: any) => {
       const url = String(input)
+      if (new URL(url).searchParams.has('ids')) return response({ act_100: { id: 'act_100' } })
       if (url.includes('/me/adaccounts')) {
         await accountsGate
         return response({
@@ -723,9 +715,10 @@ describe('facebook user asset cache scoping', () => {
           data: [{ id: 'act_100', account_id: '100', name: 'Account 100', account_status: 1 }],
         })
       }
-      if (url.includes('/act_100/adspixels')) {
+      if (new URL(url).searchParams.has('ids')) {
         markPixelsStarted?.()
         await pixelsGate
+        return response({ act_100: { id: 'act_100' } })
       }
       return response({ data: [] })
     })
@@ -811,6 +804,7 @@ describe('facebook user asset cache scoping', () => {
     const response = (data: any) => Promise.resolve({ json: async () => data } as any)
     const fetchMock = jest.fn(async (input: any) => {
       const url = String(input)
+      if (new URL(url).searchParams.has('ids')) return response({ act_100: { id: 'act_100' }, act_101: { id: 'act_101' } })
       if (url.includes('/me/adaccounts')) {
         return response({ data: [
           { id: 'act_100', account_id: '100', name: 'Account 100', account_status: 1 },
