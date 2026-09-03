@@ -9,6 +9,9 @@ import { syncCachedAccountsForToken } from './facebook.accounts.service'
 const FB_BASE_URL = FB_VERSIONED_URL
 const FACEBOOK_USER_SYNC_PAGE_LIMIT = 10
 const FACEBOOK_USER_SYNC_PAGE_SIZE = 100
+const FACEBOOK_USER_SYNC_MIN_PAGE_SIZE = 10
+const FACEBOOK_ACCOUNT_ASSET_BATCH_SIZE = 10
+const FACEBOOK_ACCOUNT_ASSET_BATCH_CONCURRENCY = 2
 const FACEBOOK_GRAPH_REQUEST_TIMEOUT_MS = 30 * 1000
 const FACEBOOK_USER_SYNC_LEASE_MS = 30 * 60 * 1000
 const FACEBOOK_USER_SYNC_HEARTBEAT_MS = 5 * 60 * 1000
@@ -33,6 +36,10 @@ const AD_ACCOUNT_FIELDS = [
   'account_status',
   'currency',
   'timezone_name',
+].join(',')
+
+const ACCOUNT_ASSET_FIELDS = [
+  'id',
   `adspixels.limit(${FACEBOOK_USER_SYNC_PAGE_SIZE}){${PIXEL_FIELDS}}`,
   `promote_pages.limit(${FACEBOOK_USER_SYNC_PAGE_SIZE}){id,name}`,
 ].join(',')
@@ -218,19 +225,10 @@ const runFacebookUserAssetSync = async (
   }
   
   try {
-    // 先并行启动用户级资产查询；账户目录一返回就先落库并通知调用方。
-    const tokenPixelsPromise = fetchTokenPixels(accessToken, graphStats)
-    const userPagesPromise = fetchOptionalGraphCollection(
-      '/me/accounts',
-      accessToken,
-      { fields: 'id,name,access_token' },
-      graphStats,
-      'user pages',
+    // 目录先单独读取并落库，避免大账户的嵌套资产请求阻断新增账户。
+    const accountResult = await fetchGraphCollectionWithMeta(
+      '/me/adaccounts', accessToken, { fields: AD_ACCOUNT_FIELDS }, graphStats,
     )
-    const businessesPromise = fetchBusinesses(accessToken, graphStats)
-
-    // 1. 广告账户字段展开会同时带回账户级 Pixel/Page，避免逐账户重复请求。
-    const accountResult = await fetchAdAccounts(accessToken, graphStats)
     const accounts = accountResult.items
     logger.info(`[FacebookUser] Found ${accounts.length} ad accounts`)
     const adAccounts = accounts.map(acc => ({
@@ -269,17 +267,24 @@ const runFacebookUserAssetSync = async (
       }
     }
     
-    const [tokenPixels, userPages, businessResult] = await Promise.all([
-      tokenPixelsPromise,
-      userPagesPromise,
-      businessesPromise,
+    const [userPages, businessResult] = await Promise.all([
+      fetchOptionalGraphCollection(
+        '/me/accounts', accessToken, { fields: 'id,name,access_token' }, graphStats, 'user pages',
+      ),
+      fetchBusinesses(accessToken, graphStats),
     ])
 
-    // 2. 先保存 token 本身可见的 Pixels，再补充活跃广告账户关联。
+    // User 没有 /me/adspixels 连接；Pixel 来自账户关联及 Business 资产。
     const pixelMap = new Map<string, any>()
-    for (const pixel of tokenPixels) {
-      mergePixel(pixelMap, pixel)
+    // 停用账户仍可能拥有独有 Pixel；保留其资产发现，仅限制批次大小和并发。
+    const accountBatches: any[][] = []
+    for (let i = 0; i < accounts.length; i += FACEBOOK_ACCOUNT_ASSET_BATCH_SIZE) {
+      accountBatches.push(accounts.slice(i, i + FACEBOOK_ACCOUNT_ASSET_BATCH_SIZE))
     }
+    await mapWithConcurrency(accountBatches, FACEBOOK_ACCOUNT_ASSET_BATCH_CONCURRENCY, async batch => {
+      await fetchAccountAssetBatch(batch, accessToken, graphStats)
+      await renewSyncLease()
+    })
 
     // 3. 用户直接管理的 Page 属于 token 资产。保留空 accounts 以区分显式
     // promote_pages；下游只可在同一 Token 快照内使用带访问令牌的 Page。
@@ -303,26 +308,22 @@ const runFacebookUserAssetSync = async (
 
       const pixelsPromise = embeddedPixels.present
         ? completeEmbeddedCollection(embeddedPixels, accessToken, graphStats)
-        : active
-          ? fetchOptionalGraphCollection(
-              `/act_${accountId}/adspixels`,
-              accessToken,
-              { fields: PIXEL_FIELDS },
-              graphStats,
-              `pixels for account ${accountId}`,
-            )
-          : Promise.resolve([])
+        : active ? fetchOptionalGraphCollection(
+            `/act_${accountId}/adspixels`,
+            accessToken,
+            { fields: PIXEL_FIELDS },
+            graphStats,
+            `pixels for account ${accountId}`,
+          ) : Promise.resolve([])
       const pagesPromise = embeddedPages.present
         ? completeEmbeddedCollection(embeddedPages, accessToken, graphStats)
-        : active
-          ? fetchOptionalGraphCollection(
-              `/act_${accountId}/promote_pages`,
-              accessToken,
-              { fields: 'id,name' },
-              graphStats,
-              `pages for account ${accountId}`,
-            )
-          : Promise.resolve([])
+        : active ? fetchOptionalGraphCollection(
+            `/act_${accountId}/promote_pages`,
+            accessToken,
+            { fields: 'id,name' },
+            graphStats,
+            `pages for account ${accountId}`,
+          ) : Promise.resolve([])
 
       const [pixels, pages] = await Promise.all([pixelsPromise, pagesPromise])
       for (const pixel of pixels) {
@@ -337,7 +338,7 @@ const runFacebookUserAssetSync = async (
       await renewSyncLease()
     })
 
-    // 3.1 Business 资产优先走字段展开；仅对缺失字段的 Business 降级。
+    // Business 字段展开被拒绝时才逐个读取；成功响应省略的空连接无需重查。
     const catalogsMap = new Map<string, any>()
     await mapWithConcurrency(
       businessResult.items,
@@ -431,6 +432,7 @@ const runFacebookUserAssetSync = async (
       { 
         syncStatus: 'failed',
         syncError: error.message,
+        syncStats: graphStats,
         $unset: { syncLeaseExpiresAt: 1 },
       }
     )
@@ -656,37 +658,29 @@ async function fetchGraphCollectionFromUrl(
   const items: any[] = []
   let nextUrl: string | undefined = initialUrl
   let pageCount = 0
-  while (nextUrl && pageCount < FACEBOOK_USER_SYNC_PAGE_LIMIT) {
-    const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), FACEBOOK_GRAPH_REQUEST_TIMEOUT_MS)
+  let pageSize = Number(new URL(initialUrl).searchParams.get('limit')) || FACEBOOK_USER_SYNC_PAGE_SIZE
+  // 缩页后保留原有的目录容量，不能因页数上限把 500 个账户截成 100 个。
+  while (nextUrl && pageCount < FACEBOOK_USER_SYNC_PAGE_LIMIT * Math.ceil(FACEBOOK_USER_SYNC_PAGE_SIZE / pageSize)) {
     let data: any
-    if (stats) stats.graphRequestCount += 1
     try {
-      const response = await fetch(nextUrl, { signal: controller.signal })
-      data = await response.json()
-      if (response.ok === false && !data?.error) {
-        throw new Error(`Facebook Graph request failed with HTTP ${response.status}`)
-      }
-      if (data?.error) {
-        const graphError: any = new Error(
-          data.error.message || 'Facebook Graph request failed',
-        )
-        graphError.code = data.error.code
-        graphError.errorSubcode = data.error.error_subcode
-        graphError.type = data.error.type
-        throw graphError
-      }
+      data = await fetchGraphResponse(nextUrl, stats)
     } catch (error) {
-      if (stats) stats.graphFailureCount += 1
+      if (isOversizedGraphRequest(error) && pageSize > FACEBOOK_USER_SYNC_MIN_PAGE_SIZE) {
+        pageSize = Math.max(FACEBOOK_USER_SYNC_MIN_PAGE_SIZE, Math.floor(pageSize / 2))
+        const retryUrl = new URL(nextUrl)
+        retryUrl.searchParams.set('limit', String(pageSize))
+        nextUrl = retryUrl.toString()
+        logger.warn(`[FacebookUser] Reducing Graph page size to ${pageSize}: ${retryUrl.pathname}`)
+        continue
+      }
       throw error
-    } finally {
-      clearTimeout(timeoutId)
     }
 
     items.push(...(data.data || []))
     pageCount += 1
     if (data.paging?.next) {
       const next = new URL(data.paging.next)
+      next.searchParams.set('limit', String(pageSize))
       if (!next.searchParams.has('access_token')) {
         next.searchParams.set('access_token', accessToken)
       }
@@ -700,6 +694,70 @@ async function fetchGraphCollectionFromUrl(
     items,
     pageCount,
     truncated: Boolean(nextUrl),
+  }
+}
+
+async function fetchGraphResponse(url: string, stats?: GraphSyncStats): Promise<any> {
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), FACEBOOK_GRAPH_REQUEST_TIMEOUT_MS)
+  if (stats) stats.graphRequestCount += 1
+  try {
+    const response = await fetch(url, { signal: controller.signal })
+    const data = await response.json()
+    if (data?.error) throw toGraphError(data.error)
+    if (response.ok === false) throw new Error(`Facebook Graph request failed with HTTP ${response.status}`)
+    return data
+  } catch (error) {
+    if (stats) stats.graphFailureCount += 1
+    throw error
+  } finally {
+    clearTimeout(timeoutId)
+  }
+}
+
+const toGraphError = (error: any) => Object.assign(
+  new Error(error.message || 'Facebook Graph request failed'),
+  { code: error.code, errorSubcode: error.error_subcode, type: error.type },
+)
+
+const isOversizedGraphRequest = (error: any) => (
+  ['AbortError', 'TimeoutError'].includes(error?.name) ||
+  /reduce the amount of data|request timed out|operation was aborted/i.test(error?.message || '')
+)
+
+async function fetchAccountAssetBatch(accounts: any[], accessToken: string, stats: GraphSyncStats): Promise<void> {
+  const url = new URL(`${FB_BASE_URL}/`)
+  url.searchParams.set('ids', accounts.map(account => `act_${normalizeForStorage(account.account_id || account.id)}`).join(','))
+  url.searchParams.set('fields', ACCOUNT_ASSET_FIELDS)
+  url.searchParams.set('access_token', accessToken)
+  let data: any
+  try {
+    data = await fetchGraphResponse(url.toString(), stats)
+  } catch (error) {
+    if (isOversizedGraphRequest(error) && accounts.length > 1) {
+      const middle = Math.ceil(accounts.length / 2)
+      await fetchAccountAssetBatch(accounts.slice(0, middle), accessToken, stats)
+      await fetchAccountAssetBatch(accounts.slice(middle), accessToken, stats)
+      return
+    }
+    if (isFieldExpansionError(error) || isOversizedGraphRequest(error)) {
+      stats.accountAssetMode = 'hybrid_fallback'
+      return // 仅失败批次按独立连接读取，复用已经完成的账户目录。
+    }
+    throw error
+  }
+  for (const account of accounts) {
+    const id = `act_${normalizeForStorage(account.account_id || account.id)}`
+    const asset = data[id]
+    if (asset?.error) {
+      stats.graphFailureCount += 1
+      const error = toGraphError(asset.error)
+      if (isAssetConnectionUnavailable(error) || isOversizedGraphRequest(error)) continue
+      throw error
+    }
+    if (!asset || asset.id !== id) throw new Error(`Facebook asset response missing account ${id}`)
+    account.adspixels = asset.adspixels || { data: [] }
+    account.promote_pages = asset.promote_pages || { data: [] }
   }
 }
 
@@ -723,56 +781,9 @@ async function fetchOptionalGraphCollection(
   try {
     return await fetchGraphCollection(path, accessToken, params, stats)
   } catch (error: any) {
+    if (!isAssetConnectionUnavailable(error)) throw error
     logger.warn(`[FacebookUser] Failed to fetch ${label}: ${error?.message || error}`)
     return []
-  }
-}
-
-async function fetchTokenPixels(
-  accessToken: string,
-  stats: GraphSyncStats,
-): Promise<any[]> {
-  try {
-    return await fetchGraphCollection(
-      '/me/adspixels',
-      accessToken,
-      { fields: PIXEL_FIELDS },
-      stats,
-    )
-  } catch (error: any) {
-    if (!isAssetConnectionUnavailable(error)) throw error
-    logger.warn(
-      `[FacebookUser] Token-level pixels unavailable; using account/business assets: ` +
-      `${error?.message || error}`,
-    )
-    return []
-  }
-}
-
-async function fetchAdAccounts(
-  accessToken: string,
-  stats: GraphSyncStats,
-): Promise<GraphCollectionResult> {
-  try {
-    return await fetchGraphCollectionWithMeta(
-      '/me/adaccounts',
-      accessToken,
-      { fields: AD_ACCOUNT_FIELDS },
-      stats,
-    )
-  } catch (error: any) {
-    if (!isFieldExpansionError(error)) throw error
-    logger.warn(
-      `[FacebookUser] Ad account field expansion failed; using active-account fallback: ` +
-      `${error?.message || error}`,
-    )
-    stats.accountAssetMode = 'hybrid_fallback'
-    return fetchGraphCollectionWithMeta(
-      '/me/adaccounts',
-      accessToken,
-      { fields: 'id,account_id,name,account_status,currency,timezone_name' },
-      stats,
-    )
   }
 }
 
@@ -781,14 +792,20 @@ async function fetchBusinesses(
   stats: GraphSyncStats,
 ): Promise<GraphCollectionResult> {
   try {
-    return await fetchGraphCollectionWithMeta(
+    const result = await fetchGraphCollectionWithMeta(
       '/me/businesses',
       accessToken,
       { fields: BUSINESS_FIELDS },
       stats,
     )
+    for (const business of result.items) {
+      business.owned_pixels ||= { data: [] }
+      business.owned_product_catalogs ||= { data: [] }
+    }
+    return result
   } catch (error: any) {
     if (!isFieldExpansionError(error)) {
+      if (!isAssetConnectionUnavailable(error)) throw error
       logger.warn(
         `[FacebookUser] Failed to fetch businesses (optional): ${error?.message || error}`,
       )
@@ -807,6 +824,7 @@ async function fetchBusinesses(
         stats,
       )
     } catch (fallbackError: any) {
+      if (!isAssetConnectionUnavailable(fallbackError)) throw fallbackError
       logger.warn(
         `[FacebookUser] Failed to fetch businesses (optional): ` +
         `${fallbackError?.message || fallbackError}`,
@@ -913,17 +931,23 @@ async function mapWithConcurrency<T>(
   worker: (item: T) => Promise<void>,
 ) {
   let nextIndex = 0
+  let failure: { error: unknown } | undefined
   const workers = Array.from(
     { length: Math.min(concurrency, items.length) },
     async () => {
-      while (nextIndex < items.length) {
+      while (!failure && nextIndex < items.length) {
         const currentIndex = nextIndex
         nextIndex += 1
-        await worker(items[currentIndex])
+        try {
+          await worker(items[currentIndex])
+        } catch (error) {
+          failure ||= { error }
+        }
       }
     },
   )
   await Promise.all(workers)
+  if (failure) throw failure.error
 }
 
 export default {
