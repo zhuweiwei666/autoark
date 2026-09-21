@@ -1237,37 +1237,43 @@ export interface DashboardCoverage {
   usableRate: number
 }
 
+/**
+ * 单日指标快照。
+ * available=false 表示该日期仍未知：所有金额/比率保持 null，绝不按 $0 展示或参与计算。
+ */
+export interface DashboardMetricSnapshot {
+  available: boolean
+  dataStatus: DashboardDataStatus
+  spend: number | null
+  impressions: number | null
+  clicks: number | null
+  installs: number | null
+  ctr: number | null
+  cpm: number | null
+  cpc: number | null
+  cpi: number | null
+  roas: number | null
+  coverage?: DashboardCoverage
+}
+
+/** 7 日小计：只累加已保存的可用日期，未知日期保持未知。 */
+export interface DashboardSevenDaysSummary {
+  available: boolean
+  availableDays: number
+  totalDays: number
+  spend: number
+  impressions: number
+  clicks: number
+  installs: number
+  avgDailySpend: number
+  dataStatus: DashboardDataStatus
+  coverage?: DashboardCoverage
+}
+
 export interface CoreMetrics {
-  today: {
-    spend: number
-    impressions: number
-    clicks: number
-    installs: number
-    ctr: number
-    cpm: number
-    cpc: number
-    cpi: number
-    roas: number
-    dataStatus: DashboardDataStatus
-    coverage?: DashboardCoverage
-  }
-  yesterday: {
-    spend: number
-    impressions: number
-    clicks: number
-    installs: number
-    dataStatus: DashboardDataStatus
-    coverage?: DashboardCoverage
-  }
-  sevenDays: {
-    spend: number
-    impressions: number
-    clicks: number
-    installs: number
-    avgDailySpend: number
-    dataStatus: DashboardDataStatus
-    coverage?: DashboardCoverage
-  }
+  today: DashboardMetricSnapshot
+  yesterday: DashboardMetricSnapshot
+  sevenDays: DashboardSevenDaysSummary
 }
 
 export interface SpendTrendData {
@@ -1318,26 +1324,120 @@ const DASHBOARD_TREND_NUMERIC_FIELDS = [
   'roas',
 ] as const
 
+const DASHBOARD_SNAPSHOT_NUMERIC_FIELDS = [
+  'spend',
+  'impressions',
+  'clicks',
+  'installs',
+  'ctr',
+  'cpm',
+  'cpc',
+  'cpi',
+  'roas',
+] as const
+
+const DASHBOARD_SEVEN_DAYS_NUMERIC_FIELDS = [
+  'spend',
+  'impressions',
+  'clicks',
+  'installs',
+  'avgDailySpend',
+] as const
+
+// 服务端已确认可用的状态；unavailable 只能与 available=false 同时出现。
+const DASHBOARD_AVAILABLE_STATUSES = ['fresh', 'stale', 'partial'] as const
+const DASHBOARD_DATA_STATUSES = ['fresh', 'stale', 'partial', 'unavailable'] as const
+
 const hasFiniteNumericFields = (value: any, fields: readonly string[]) => (
   value !== null
   && typeof value === 'object'
   && fields.every(field => typeof value[field] === 'number' && Number.isFinite(value[field]))
 )
 
-const isCompleteDashboardSummary = (value: any) => (
-  typeof value?.date === 'string'
-  && /^\d{4}-\d{2}-\d{2}$/.test(value.date)
-  && value.available === true
-  && ['fresh', 'stale', 'partial'].includes(value.dataStatus)
-  && hasFiniteNumericFields(value, DASHBOARD_SUMMARY_NUMERIC_FIELDS)
+const isDashboardDate = (value: any): value is string => {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  const [year, month, day] = value.split('-').map(Number)
+  const parsed = new Date(Date.UTC(year, month - 1, day))
+  return parsed.getUTCFullYear() === year
+    && parsed.getUTCMonth() === month - 1
+    && parsed.getUTCDate() === day
+}
+
+const dashboardDayNumber = (value: string) => {
+  const [year, month, day] = value.split('-').map(Number)
+  return Date.UTC(year, month - 1, day) / (24 * 60 * 60 * 1000)
+}
+
+const isConsecutiveDashboardDates = (dates: readonly string[]) => dates.every(
+  (date, index) => index === 0 || dashboardDayNumber(date) === dashboardDayNumber(dates[index - 1]) + 1,
 )
 
-const isCompleteDashboardTrendRow = (value: any) => (
-  typeof value?.date === 'string'
-  && /^\d{4}-\d{2}-\d{2}$/.test(value.date)
+/**
+ * 合法的服务端单日快照：
+ * - available=true：必须带完整有限数值，dataStatus 属于 fresh/stale/partial；
+ * - available=false：dataStatus 必须是 unavailable（合法的“未知”，不是错误）。
+ * 其他组合（例如 available=false + fresh）是契约错误，必须走失败路径。
+ */
+const isDashboardMetricSnapshotShape = (value: any, fields: readonly string[]) => {
+  if (value === null || typeof value !== 'object') return false
+  if (typeof value.available !== 'boolean') return false
+  if (!DASHBOARD_DATA_STATUSES.includes(value.dataStatus)) return false
+  if (!hasFiniteNumericFields(value, fields)) return false
+  return value.available
+    ? DASHBOARD_AVAILABLE_STATUSES.includes(value.dataStatus)
+    : value.dataStatus === 'unavailable'
+}
+
+const isValidDashboardSummary = (value: any) => (
+  isDashboardDate(value?.date)
+  && isDashboardMetricSnapshotShape(value, DASHBOARD_SUMMARY_NUMERIC_FIELDS)
+)
+
+/**
+ * 趋势槽位允许 dataStatus=unavailable（该日期没有聚合记录），
+ * 但 date/数值字段/dataStatus 仍必须满足契约。
+ */
+const isValidDashboardTrendSlot = (value: any) => (
+  isDashboardDate(value?.date)
+  && isDashboardMetricSnapshotShape(value, DASHBOARD_TREND_NUMERIC_FIELDS)
+)
+
+/** 前端快照：available=false 时所有指标必须是 null，避免未知金额被当成 0 渲染。 */
+const isRenderableDashboardSnapshot = (value: any) => {
+  if (value === null || typeof value !== 'object') return false
+  if (typeof value.available !== 'boolean') return false
+  if (!DASHBOARD_DATA_STATUSES.includes(value.dataStatus)) return false
+  if (value.available === true) {
+    return DASHBOARD_AVAILABLE_STATUSES.includes(value.dataStatus)
+      && hasFiniteNumericFields(value, DASHBOARD_SNAPSHOT_NUMERIC_FIELDS)
+  }
+  return value.dataStatus === 'unavailable'
+    && DASHBOARD_SNAPSHOT_NUMERIC_FIELDS.every(field => value[field] === null)
+}
+
+const isRenderableSevenDaysSummary = (value: any) => (
+  value !== null
+  && typeof value === 'object'
   && value.available === true
-  && ['fresh', 'stale', 'partial'].includes(value.dataStatus)
-  && hasFiniteNumericFields(value, DASHBOARD_TREND_NUMERIC_FIELDS)
+  && Number.isInteger(value.availableDays)
+  && value.availableDays > 0
+  && Number.isInteger(value.totalDays)
+  && value.totalDays >= value.availableDays
+  // available=true 只接受服务端已确认可用的状态，unavailable 不能冒充可用小计。
+  && DASHBOARD_AVAILABLE_STATUSES.includes(value.dataStatus)
+  // 有缺失日期的小计只能是 partial/stale，不能标 fresh。
+  && (value.availableDays === value.totalDays || value.dataStatus !== 'fresh')
+  && hasFiniteNumericFields(value, DASHBOARD_SEVEN_DAYS_NUMERIC_FIELDS)
+)
+
+/**
+ * 校验 localStorage 缓存的仪表盘快照，旧版本缓存或未知状态一律丢弃，
+ * 避免把不可用的历史数据当作可用数据渲染。
+ */
+export const isRenderableCoreMetrics = (value: any): value is CoreMetrics => (
+  isRenderableDashboardSnapshot(value?.today)
+  && isRenderableDashboardSnapshot(value?.yesterday)
+  && isRenderableSevenDaysSummary(value?.sevenDays)
 )
 
 // 获取核心指标 (使用 Summary API)
@@ -1356,18 +1456,36 @@ export async function getCoreMetrics(_startDate?: string, endDate?: string): Pro
     throw new Error(`Failed to fetch dashboard metrics (today: ${todayRes.status}, trend: ${trendRes.status})`)
   }
 
-  const todayData = await todayRes.json()
-  const trendData = await trendRes.json()
+  let todayData: any
+  let trendData: any
+  try {
+    todayData = await todayRes.json()
+    trendData = await trendRes.json()
+  } catch {
+    // HTTP 成功但 JSON 无法解析属于契约错误，不是“数据未知”。
+    throw new Error('仪表盘接口返回了无效的 JSON 响应，已保留最近一次缓存')
+  }
+
   const today = endDate || todayData?.data?.date
+  const trendSlots: any[] | null = Array.isArray(trendData?.data) ? trendData.data : null
   if (
     todayData?.success !== true
     || trendData?.success !== true
-    || !today
-    || !isCompleteDashboardSummary(todayData.data)
-    || !Array.isArray(trendData.data)
-    || trendData.data.length !== 7
-    || !trendData.data.every(isCompleteDashboardTrendRow)
+    || !isDashboardDate(today)
+    || !isValidDashboardSummary(todayData.data)
+    || !trendSlots
+    || trendSlots.length !== 7
+    || !trendSlots.every(isValidDashboardTrendSlot)
+    || !isConsecutiveDashboardDates(trendSlots.map((slot: any) => slot.date))
   ) {
+    // success/dataStatus/字段缺失等属于契约错误，与“日期未知”区分开。
+    throw new Error('仪表盘接口返回了不完整的契约数据，已保留最近一次缓存')
+  }
+
+  // 服务端必须返回完整的 7 个日期槽位，但槽位允许 dataStatus=unavailable。
+  const availableSlots = trendSlots.filter((slot: any) => slot.available === true)
+  if (availableSlots.length === 0) {
+    // 只有 7 天完全没有可用聚合数据时，才保留原有失败/缓存路径。
     throw new Error('仪表盘数据暂不可用，已保留最近一次缓存')
   }
 
@@ -1382,47 +1500,81 @@ export async function getCoreMetrics(_startDate?: string, endDate?: string): Pro
     throw new Error(`Failed to fetch yesterday metrics (${yesterdayRes.status})`)
   }
 
-  const yesterdayData = await yesterdayRes.json()
-  if (yesterdayData?.success !== true || !isCompleteDashboardSummary(yesterdayData.data)) {
-    throw new Error('昨日数据暂不可用，已保留最近一次缓存')
+  let yesterdayData: any
+  try {
+    yesterdayData = await yesterdayRes.json()
+  } catch {
+    throw new Error('昨日接口返回了无效的 JSON 响应，已保留最近一次缓存')
   }
-  
-  // 转换为前端期望的格式
-  const mapData = (summary: any) => ({
-    spend: summary.totalSpend,
-    impressions: summary.totalImpressions,
-    clicks: summary.totalClicks,
-    installs: summary.totalInstalls,
-    ctr: summary.ctr / 100,
-    cpm: summary.cpm,
-    cpc: summary.cpc,
-    cpi: summary.cpi,
-    roas: summary.roas,
-    dataStatus: summary.dataStatus as DashboardDataStatus,
-    coverage: summary.coverage as DashboardCoverage | undefined,
-  })
-  
-  // 计算7天总计
-  const trendDataArray = trendData.data
-  const sevenDaysSummary = trendDataArray.reduce((acc: any, day: any) => ({
+  if (yesterdayData?.success !== true || !isValidDashboardSummary(yesterdayData.data)) {
+    throw new Error('昨日接口返回了不完整的契约数据，已保留最近一次缓存')
+  }
+
+  // 转换为前端期望的格式：available=false 的日期保持未知（null），绝不显示为 0。
+  const mapData = (summary: any): DashboardMetricSnapshot => (
+    summary.available === true
+      ? {
+          available: true,
+          dataStatus: summary.dataStatus as DashboardDataStatus,
+          spend: summary.totalSpend,
+          impressions: summary.totalImpressions,
+          clicks: summary.totalClicks,
+          installs: summary.totalInstalls,
+          ctr: summary.ctr / 100,
+          cpm: summary.cpm,
+          cpc: summary.cpc,
+          cpi: summary.cpi,
+          roas: summary.roas,
+          coverage: summary.coverage as DashboardCoverage | undefined,
+        }
+      : {
+          available: false,
+          dataStatus: 'unavailable',
+          spend: null,
+          impressions: null,
+          clicks: null,
+          installs: null,
+          ctr: null,
+          cpm: null,
+          cpc: null,
+          cpi: null,
+          roas: null,
+          coverage: summary.coverage as DashboardCoverage | undefined,
+        }
+  )
+
+  // 7 日小计只累加已保存的可用日期，未知日期不按 0 参与。
+  const sevenDaysSummary = availableSlots.reduce((acc: any, day: any) => ({
     spend: acc.spend + day.totalSpend,
     impressions: acc.impressions + day.totalImpressions,
     clicks: acc.clicks + day.totalClicks,
     installs: acc.installs + day.totalInstalls,
   }), { spend: 0, impressions: 0, clicks: 0, installs: 0 })
-  
-  // 计算日均
-  const dayCount = trendDataArray.length || 1
-  sevenDaysSummary.avgDailySpend = sevenDaysSummary.spend / dayCount
-  sevenDaysSummary.dataStatus = trendDataArray.some((day: any) => day.dataStatus === 'partial')
+
+  // 日均只按已知日期计算，避免把未知日期当成 0 消耗摊薄。
+  const availableDays = availableSlots.length
+  sevenDaysSummary.avgDailySpend = sevenDaysSummary.spend / availableDays
+  sevenDaysSummary.dataStatus = availableDays < trendSlots.length
+    || availableSlots.some((day: any) => day.dataStatus === 'partial')
     ? 'partial'
-    : trendDataArray.some((day: any) => day.dataStatus === 'stale')
+    : availableSlots.some((day: any) => day.dataStatus === 'stale')
       ? 'stale'
       : 'fresh'
 
-  const coverageRows = trendDataArray
-    .map((day: any) => day.coverage)
+  // 覆盖率台账必须合计全部 7 个日期槽位：unavailable 日期的台账同样计入，
+  // 否则局部可用日期会把最近 7 天覆盖率虚报成 100%。
+  const coverageRows = trendSlots
+    .map((day: any) => day?.coverage)
     .filter((coverage: any) => coverage && typeof coverage.tracked === 'number')
+  // 任一日期缺失台账或未确认完整 cohort 时，completeCohort 必须为 false，
+  // 不允许局部百分比冒充完整 7 天覆盖率。
+  const coverageCompleteCohort = trendSlots.length === 7
+    && trendSlots.every((day: any) => (
+      day?.coverage
+      && typeof day.coverage === 'object'
+      && typeof day.coverage.tracked === 'number'
+      && day.coverage.completeCohort === true
+    ))
   if (coverageRows.length > 0) {
     const coverage = coverageRows.reduce((acc: DashboardCoverage, item: DashboardCoverage) => ({
       tracked: acc.tracked + item.tracked,
@@ -1441,6 +1593,7 @@ export async function getCoreMetrics(_startDate?: string, endDate?: string): Pro
       completeCohort: true,
       usableRate: 0,
     })
+    coverage.completeCohort = coverage.completeCohort && coverageCompleteCohort
     coverage.usableRate = coverage.tracked > 0
       ? Math.round((coverage.usable / coverage.tracked) * 1000) / 10
       : 0
@@ -1452,7 +1605,14 @@ export async function getCoreMetrics(_startDate?: string, endDate?: string): Pro
     data: {
       today: mapData(todayData.data),
       yesterday: mapData(yesterdayData.data),
-      sevenDays: sevenDaysSummary,
+      sevenDays: {
+        available: true,
+        availableDays,
+        totalDays: trendSlots.length,
+        ...sevenDaysSummary,
+        dataStatus: sevenDaysSummary.dataStatus as DashboardDataStatus,
+        coverage: sevenDaysSummary.coverage as DashboardCoverage | undefined,
+      },
     }
   }
 }
