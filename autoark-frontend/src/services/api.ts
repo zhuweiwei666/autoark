@@ -1423,7 +1423,10 @@ const isRenderableSevenDaysSummary = (value: any) => (
   && value.availableDays > 0
   && Number.isInteger(value.totalDays)
   && value.totalDays >= value.availableDays
-  && DASHBOARD_DATA_STATUSES.includes(value.dataStatus)
+  // available=true 只接受服务端已确认可用的状态，unavailable 不能冒充可用小计。
+  && DASHBOARD_AVAILABLE_STATUSES.includes(value.dataStatus)
+  // 有缺失日期的小计只能是 partial/stale，不能标 fresh。
+  && (value.availableDays === value.totalDays || value.dataStatus !== 'fresh')
   && hasFiniteNumericFields(value, DASHBOARD_SEVEN_DAYS_NUMERIC_FIELDS)
 )
 
@@ -1558,9 +1561,20 @@ export async function getCoreMetrics(_startDate?: string, endDate?: string): Pro
       ? 'stale'
       : 'fresh'
 
-  const coverageRows = availableSlots
-    .map((day: any) => day.coverage)
+  // 覆盖率台账必须合计全部 7 个日期槽位：unavailable 日期的台账同样计入，
+  // 否则局部可用日期会把最近 7 天覆盖率虚报成 100%。
+  const coverageRows = trendSlots
+    .map((day: any) => day?.coverage)
     .filter((coverage: any) => coverage && typeof coverage.tracked === 'number')
+  // 任一日期缺失台账或未确认完整 cohort 时，completeCohort 必须为 false，
+  // 不允许局部百分比冒充完整 7 天覆盖率。
+  const coverageCompleteCohort = trendSlots.length === 7
+    && trendSlots.every((day: any) => (
+      day?.coverage
+      && typeof day.coverage === 'object'
+      && typeof day.coverage.tracked === 'number'
+      && day.coverage.completeCohort === true
+    ))
   if (coverageRows.length > 0) {
     const coverage = coverageRows.reduce((acc: DashboardCoverage, item: DashboardCoverage) => ({
       tracked: acc.tracked + item.tracked,
@@ -1579,6 +1593,7 @@ export async function getCoreMetrics(_startDate?: string, endDate?: string): Pro
       completeCohort: true,
       usableRate: 0,
     })
+    coverage.completeCohort = coverage.completeCohort && coverageCompleteCohort
     coverage.usableRate = coverage.tracked > 0
       ? Math.round((coverage.usable / coverage.tracked) * 1000) / 10
       : 0

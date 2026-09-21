@@ -215,6 +215,52 @@ describe('dashboard core metrics runtime contract', () => {
     assert.equal(result.data.yesterday.spend, 20)
   })
 
+  it('counts unavailable-date ledgers in coverage instead of faking a complete 100%', async () => {
+    const trendRows = Array.from({ length: 6 }, (_, index) => trendSlot({
+      date: shiftDate(TODAY, index - 6),
+      totalSpend: 10,
+    }))
+    // 缺失日期（当天没有聚合记录）仍有覆盖台账：2 条记录都还没完成。
+    trendRows.push(trendSlot({
+      date: TODAY,
+      available: false,
+      dataStatus: 'unavailable',
+      overrides: {
+        coverage: {
+          tracked: 2,
+          fresh: 0,
+          stale: 0,
+          unavailable: 2,
+          usable: 0,
+          completeCohort: false,
+          usableRate: 0,
+        },
+      },
+    }))
+    installRoutes([
+      { match: (url) => url === TREND_URL, respond: () => jsonResponse({ success: true, data: trendRows }) },
+      { match: (url) => url === `${TODAY_URL}?date=${shiftDate(TODAY, -1)}`, respond: () => jsonResponse(summaryPayload({ date: shiftDate(TODAY, -1), totalSpend: 50 })) },
+      { match: (url) => url === TODAY_URL, respond: () => jsonResponse(summaryPayload({ date: TODAY, available: false, dataStatus: 'unavailable' })) },
+    ])
+
+    const result = await api.getCoreMetrics()
+
+    // 金额仍只累加已知的 6 天，缺失日期不按 0 摊薄日均。
+    assert.equal(result.data.sevenDays.availableDays, 6)
+    assert.equal(result.data.sevenDays.totalDays, 7)
+    assert.equal(result.data.sevenDays.spend, 60)
+    assert.equal(result.data.sevenDays.avgDailySpend, 10)
+
+    // 覆盖率必须合计全部 7 个槽位的台账：6 天可用 × 2 + 缺失日 2 条不可用。
+    const coverage = result.data.sevenDays.coverage
+    assert.equal(coverage.tracked, 14)
+    assert.equal(coverage.usable, 12)
+    assert.equal(coverage.unavailable, 2)
+    assert.equal(coverage.usableRate, 85.7)
+    assert.equal(coverage.completeCohort, false)
+    assert.equal(api.isRenderableCoreMetrics(result.data), true)
+  })
+
   it('keeps yesterday unknown when yesterday is not aggregated yet', async () => {
     const trendRows = Array.from({ length: 7 }, (_, index) => trendSlot({
       date: shiftDate(TODAY, index - 6),
@@ -233,6 +279,9 @@ describe('dashboard core metrics runtime contract', () => {
     assert.equal(result.data.yesterday.dataStatus, 'unavailable')
     assert.equal(result.data.yesterday.spend, null)
     assert.equal(result.data.sevenDays.dataStatus, 'fresh')
+    // 完整 7 天 cohort 才允许 completeCohort=true 与 100% 覆盖率。
+    assert.equal(result.data.sevenDays.coverage.completeCohort, true)
+    assert.equal(result.data.sevenDays.coverage.usableRate, 100)
     assert.equal(api.isRenderableCoreMetrics(result.data), true)
   })
 
@@ -304,6 +353,38 @@ describe('dashboard core metrics runtime contract', () => {
       yesterday: { available: false, dataStatus: 'unavailable', spend: null, impressions: null, clicks: null, installs: null, ctr: null, cpm: null, cpc: null, cpi: null, roas: null },
       sevenDays: { available: true, availableDays: 7, totalDays: 7, spend: 28, impressions: 1, clicks: 1, installs: 1, avgDailySpend: 4, dataStatus: 'fresh' },
     }), false)
+
+    const unknownSnapshot = {
+      available: false,
+      dataStatus: 'unavailable',
+      spend: null,
+      impressions: null,
+      clicks: null,
+      installs: null,
+      ctr: null,
+      cpm: null,
+      cpc: null,
+      cpi: null,
+      roas: null,
+    }
+    // available=true 却标 unavailable，不能当作可用小计渲染。
+    assert.equal(api.isRenderableCoreMetrics({
+      today: unknownSnapshot,
+      yesterday: unknownSnapshot,
+      sevenDays: { available: true, availableDays: 7, totalDays: 7, spend: 28, impressions: 1, clicks: 1, installs: 1, avgDailySpend: 4, dataStatus: 'unavailable' },
+    }), false)
+    // availableDays 小于 totalDays 却标 fresh，不能当作完整 7 天数据渲染。
+    assert.equal(api.isRenderableCoreMetrics({
+      today: unknownSnapshot,
+      yesterday: unknownSnapshot,
+      sevenDays: { available: true, availableDays: 6, totalDays: 7, spend: 24, impressions: 1, clicks: 1, installs: 1, avgDailySpend: 4, dataStatus: 'fresh' },
+    }), false)
+    // 缺失日期标 partial 才是合法契约。
+    assert.equal(api.isRenderableCoreMetrics({
+      today: unknownSnapshot,
+      yesterday: unknownSnapshot,
+      sevenDays: { available: true, availableDays: 6, totalDays: 7, spend: 24, impressions: 1, clicks: 1, installs: 1, avgDailySpend: 4, dataStatus: 'partial' },
+    }), true)
 
     sessionToken = 'session-b'
     const calls = installRoutes([

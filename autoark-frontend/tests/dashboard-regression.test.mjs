@@ -61,7 +61,9 @@ test('dashboard validators keep date, numeric, and dataStatus checks while allow
   assert.match(validatorSource, /const isValidDashboardTrendSlot/)
   assert.match(apiSource, /const isDashboardDate[\s\S]*?Date\.UTC/)
   assert.match(apiSource, /coverage: summary\.coverage/)
-  assert.match(apiSource, /const coverageRows = availableSlots/)
+  assert.match(apiSource, /const coverageRows = trendSlots/)
+  assert.match(apiSource, /const coverageCompleteCohort = trendSlots\.length === 7/)
+  assert.match(apiSource, /coverage\.completeCohort = coverage\.completeCohort && coverageCompleteCohort/)
   assert.match(apiSource, /isConsecutiveDashboardDates\(trendSlots\.map/)
 })
 
@@ -104,6 +106,8 @@ test('dashboard explains unsynchronized days without inventing zero values', () 
   assert.match(dashboardSource, /今日数据尚未同步/)
   assert.match(dashboardSource, /未知日期不会按 0 计算/)
   assert.match(dashboardSource, /今日指标保持 --/)
+  assert.match(dashboardSource, /手动重试/)
+  assert.doesNotMatch(dashboardSource, /自动刷新/)
   assert.match(dashboardSource, /formatCurrency\(coreMetrics\.today\.spend\)/)
 })
 
@@ -152,6 +156,16 @@ test('dashboard cache is isolated to the authenticated session and current contr
   assert.doesNotMatch(source, /=>\s*["']dashboard_7days["']/)
   assert.match(cacheSource, /isRenderableCoreMetrics\(data\.coreMetrics\)/)
   assert.match(dashboardSource, /setLastUpdated\(new Date\(cached\.timestamp\)\)/)
+
+  // 7 日小计缓存契约：available=true 不能携带 unavailable，缺失日期不能标 fresh。
+  const sevenDaysGuardSource = sourceBetween(
+    apiSource,
+    'const isRenderableSevenDaysSummary',
+    'export const isRenderableCoreMetrics',
+  )
+  assert.match(sevenDaysGuardSource, /DASHBOARD_AVAILABLE_STATUSES\.includes\(value\.dataStatus\)/)
+  assert.match(sevenDaysGuardSource, /value\.availableDays === value\.totalDays \|\| value\.dataStatus !== 'fresh'/)
+  assert.doesNotMatch(sevenDaysGuardSource, /DASHBOARD_DATA_STATUSES\.includes\(value\.dataStatus\)/)
 })
 
 test('ROAS zero values do not fall back to spend values', () => {

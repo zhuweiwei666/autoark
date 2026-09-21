@@ -515,7 +515,7 @@ export default function DashboardPage() {
   const coverageNotice = [
     hasPartialData ? coverageMessage : "",
     todayUnavailable
-      ? "今日数据尚未同步（当天聚合可能仍在进行）：今日指标保持 --，等待有效数据后自动刷新。"
+      ? "今日数据尚未同步（当天聚合可能仍在进行）：今日指标保持 --，可稍后点击右上角“刷新”手动重试。"
       : "",
     yesterdayUnavailable ? "昨日数据尚未同步，环比暂不可用。" : "",
     unavailableTrendDays > 0
