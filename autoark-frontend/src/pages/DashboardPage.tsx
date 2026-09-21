@@ -20,6 +20,7 @@ import {
   getAggCampaignRanking,
   getAggCoreMetrics,
   getAggTrend,
+  isRenderableCoreMetrics,
   type CoreMetrics,
 } from "../services/api";
 
@@ -43,6 +44,9 @@ const loadFromCache = () => {
     const cached = localStorage.getItem(getCacheKey());
     if (!cached) return null;
     const data = JSON.parse(cached);
+    if (!data || typeof data !== "object") return null;
+    // 旧版本缓存缺少 available 语义，不能当作可用数据渲染。
+    if (!isRenderableCoreMetrics(data.coreMetrics)) return null;
     if (data.timestamp && Date.now() - data.timestamp < 5 * 60 * 1000) {
       return data;
     }
@@ -51,6 +55,12 @@ const loadFromCache = () => {
   }
   return null;
 };
+
+const isTrendSlotAvailable = (slot: any) =>
+  slot !== null
+  && typeof slot === "object"
+  && slot.available === true
+  && slot.dataStatus !== "unavailable";
 
 const saveToCache = (data: any) => {
   try {
@@ -142,25 +152,44 @@ function MiniLineChart({
   formatValue: (value: number) => string;
 }) {
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
-  const values = data.map((item) => Number(item[valueKey] ?? 0));
-  const max = Math.max(...values, 1);
-  const min = Math.min(...values, 0);
-  const range = Math.max(max - min, 1);
-  const pointCoordinates = values.map((value, index) => {
-    const x = values.length <= 1 ? 0 : (index / (values.length - 1)) * 100;
-    const y = 100 - ((value - min) / range) * 84 - 8;
-    return { x, y };
+  const points = data.map((item, index) => {
+    const available = isTrendSlotAvailable(item);
+    const rawValue = Number(item?.[valueKey]);
+    const value = available && Number.isFinite(rawValue) ? rawValue : null;
+    return {
+      index,
+      value,
+      date: String(item?.date || ""),
+      x: data.length <= 1 ? 0 : (index / (data.length - 1)) * 100,
+    };
   });
-  const points = pointCoordinates
-    .map(({ x, y }) => `${x},${y}`)
-    .join(" ");
+  const knownValues = points
+    .map((point) => point.value)
+    .filter((value): value is number => value !== null);
+  const max = knownValues.length ? Math.max(...knownValues, 1) : 1;
+  const min = Math.min(...knownValues, 0);
+  const range = Math.max(max - min, 1);
+  const pointCoordinates = points.map((point) => ({
+    ...point,
+    y: point.value === null ? null : 100 - ((point.value - min) / range) * 84 - 8,
+  }));
+  // 未知日期不画点、不连线，避免把缺失聚合画成 0 消耗。
+  const segments: { x: number; y: number }[][] = [];
+  let currentSegment: { x: number; y: number }[] | null = null;
+  pointCoordinates.forEach((point) => {
+    if (point.y === null) {
+      currentSegment = null;
+      return;
+    }
+    if (!currentSegment) {
+      currentSegment = [];
+      segments.push(currentSegment);
+    }
+    currentSegment.push({ x: point.x, y: point.y });
+  });
   const activePoint =
-    activeIndex !== null && activeIndex < data.length
-      ? {
-          ...pointCoordinates[activeIndex],
-          date: String(data[activeIndex]?.date || ""),
-          value: values[activeIndex],
-        }
+    activeIndex !== null && activeIndex < pointCoordinates.length
+      ? pointCoordinates[activeIndex]
       : null;
   const tooltipX = activePoint
     ? Math.min(Math.max(activePoint.x, 24), 76)
@@ -195,7 +224,7 @@ function MiniLineChart({
     });
   };
 
-  if (!data.length) {
+  if (!data.length || !knownValues.length) {
     return (
       <div className="flex h-64 items-center justify-center rounded-lg border border-dashed border-zinc-300 bg-[#fbfbf8] text-sm font-semibold text-zinc-500">
         暂无趋势数据
@@ -213,7 +242,9 @@ function MiniLineChart({
           tabIndex={0}
           aria-label={
             activePoint
-              ? `${longDate(activePoint.date)}，${valueLabel} ${formatValue(activePoint.value)}`
+              ? activePoint.value === null
+                ? `${longDate(activePoint.date)}，该日期尚未同步，暂无${valueLabel}数据`
+                : `${longDate(activePoint.date)}，${valueLabel} ${formatValue(activePoint.value)}`
               : `${valueLabel}趋势图。悬浮或使用左右方向键查看每日数据。`
           }
           onPointerMove={handlePointerMove}
@@ -241,16 +272,30 @@ function MiniLineChart({
             stroke="#e7e5e4"
             strokeWidth="0.4"
           />
-          <polyline
-            points={points}
-            fill="none"
-            stroke={color}
-            strokeWidth="2.3"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            vectorEffect="non-scaling-stroke"
-          />
-          {activePoint && (
+          {segments.map((segment, index) =>
+            segment.length > 1 ? (
+              <polyline
+                key={`segment-${index}`}
+                points={segment.map(({ x, y }) => `${x},${y}`).join(" ")}
+                fill="none"
+                stroke={color}
+                strokeWidth="2.3"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                vectorEffect="non-scaling-stroke"
+              />
+            ) : (
+              <circle
+                key={`segment-${index}`}
+                cx={segment[0].x}
+                cy={segment[0].y}
+                r="1.4"
+                fill={color}
+                vectorEffect="non-scaling-stroke"
+              />
+            ),
+          )}
+          {activePoint && activePoint.value !== null && (
             <line
               x1={activePoint.x}
               y1="8"
@@ -267,15 +312,17 @@ function MiniLineChart({
         </svg>
         {activePoint && (
           <>
-            <div
-              aria-hidden="true"
-              className="pointer-events-none absolute h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 bg-[#fbfbf8]"
-              style={{
-                left: `${activePoint.x}%`,
-                top: `${activePoint.y}%`,
-                borderColor: color,
-              }}
-            />
+            {activePoint.value !== null && (
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 bg-[#fbfbf8]"
+                style={{
+                  left: `${activePoint.x}%`,
+                  top: `${activePoint.y}%`,
+                  borderColor: color,
+                }}
+              />
+            )}
             <div
               role="tooltip"
               className="pointer-events-none absolute top-3 min-w-32 -translate-x-1/2 rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-left shadow-[0_14px_28px_-18px_rgba(24,24,27,0.9)]"
@@ -284,9 +331,15 @@ function MiniLineChart({
               <div className="whitespace-nowrap text-[11px] font-semibold text-zinc-300">
                 {longDate(activePoint.date)}
               </div>
-              <div className="mt-1 whitespace-nowrap font-mono text-sm font-bold text-white">
-                {valueLabel} {formatValue(activePoint.value)}
-              </div>
+              {activePoint.value === null ? (
+                <div className="mt-1 whitespace-nowrap font-mono text-sm font-bold text-amber-200">
+                  数据尚未同步
+                </div>
+              ) : (
+                <div className="mt-1 whitespace-nowrap font-mono text-sm font-bold text-white">
+                  {valueLabel} {formatValue(activePoint.value)}
+                </div>
+              )}
             </div>
           </>
         )}
@@ -419,22 +472,27 @@ export default function DashboardPage() {
   }, []);
 
   const todayChange = useMemo(() => {
-    if (
-      !coreMetrics?.today ||
-      !coreMetrics?.yesterday ||
-      coreMetrics.today.dataStatus === "partial" ||
-      coreMetrics.yesterday.dataStatus === "partial" ||
-      coreMetrics.yesterday.spend === 0
-    )
+    const today = coreMetrics?.today;
+    const yesterday = coreMetrics?.yesterday;
+    // 环比只使用两侧都已确认（fresh/stale）的数据，未知或部分覆盖时保持不可比。
+    if (!today?.available || !yesterday?.available) return null;
+    if (today.dataStatus === "partial" || yesterday.dataStatus === "partial")
+      return null;
+    if (today.spend === null || yesterday.spend === null || yesterday.spend === 0)
       return null;
     return (
-      ((coreMetrics.today.spend - coreMetrics.yesterday.spend) /
-        coreMetrics.yesterday.spend) *
+      ((today.spend - yesterday.spend) /
+        yesterday.spend) *
       100
     );
   }, [coreMetrics]);
 
   const isPositiveChange = todayChange !== null && todayChange >= 0;
+  const todayUnavailable = coreMetrics?.today?.available === false;
+  const yesterdayUnavailable = coreMetrics?.yesterday?.available === false;
+  const unavailableTrendDays = trendData.filter(
+    (day) => !isTrendSlotAvailable(day),
+  ).length;
   const hasPartialData =
     coreMetrics?.today?.dataStatus === "partial" ||
     coreMetrics?.yesterday?.dataStatus === "partial" ||
@@ -454,6 +512,18 @@ export default function DashboardPage() {
     partialCoverage?.value?.completeCohort === true && partialCoverage.value.tracked > 0
       ? `数据为部分覆盖：${partialCoverage.label}已确认 ${partialCoverage.value.usable}/${partialCoverage.value.tracked} ${partialCoverage.unit}（${partialCoverage.value.usableRate.toFixed(1)}%）。当前金额是数据库已保存的小计，未覆盖账户保持未知，不按 0 计算。`
       : "数据为部分覆盖。当前金额是数据库已保存的小计，未覆盖账户保持未知，不按 0 计算。";
+  const coverageNotice = [
+    hasPartialData ? coverageMessage : "",
+    todayUnavailable
+      ? "今日数据尚未同步（当天聚合可能仍在进行）：今日指标保持 --，等待有效数据后自动刷新。"
+      : "",
+    yesterdayUnavailable ? "昨日数据尚未同步，环比暂不可用。" : "",
+    unavailableTrendDays > 0
+      ? `最近 7 天中有 ${unavailableTrendDays} 天尚未同步，趋势与 7 日小计只统计已保存的日期，未知日期不会按 0 计算。`
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
   const updatedText = lastUpdated
     ? lastUpdated.toLocaleTimeString("zh-CN", {
         hour: "2-digit",
@@ -501,28 +571,31 @@ export default function DashboardPage() {
             {loadError}
           </div>
         )}
-        {hasPartialData && (
+        {coverageNotice && (
           <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold leading-6 text-amber-900">
-            {coverageMessage}
+            {coverageNotice}
           </div>
         )}
 
         <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <MetricTile
             label={
-              coreMetrics?.today?.dataStatus === "partial"
+              coreMetrics?.today?.available === true &&
+              coreMetrics.today.dataStatus === "partial"
                 ? "今日已确认消耗"
                 : "今日消耗"
             }
             value={
-              coreMetrics?.today
+              coreMetrics?.today?.available === true && coreMetrics.today.spend !== null
                 ? formatCurrency(coreMetrics.today.spend)
                 : "--"
             }
             detail={
-              todayChange === null
-                ? "缺少可比数据"
-                : `${todayChange.toFixed(1)}% vs 昨日`
+              coreMetrics?.today?.available === true
+                ? todayChange === null
+                  ? "缺少可比数据"
+                  : `${todayChange.toFixed(1)}% vs 昨日`
+                : "等待有效数据"
             }
             tone={
               todayChange === null
@@ -535,16 +608,22 @@ export default function DashboardPage() {
           />
           <MetricTile
             label={
-              coreMetrics?.yesterday?.dataStatus === "partial"
+              coreMetrics?.yesterday?.available === true &&
+              coreMetrics.yesterday.dataStatus === "partial"
                 ? "昨日已确认消耗"
                 : "昨日消耗"
             }
             value={
-              coreMetrics?.yesterday
+              coreMetrics?.yesterday?.available === true &&
+              coreMetrics.yesterday.spend !== null
                 ? formatCurrency(coreMetrics.yesterday.spend)
                 : "--"
             }
-            detail={coreMetrics?.yesterday ? "对比基线" : "等待有效数据"}
+            detail={
+              coreMetrics?.yesterday?.available === true
+                ? "对比基线"
+                : "等待有效数据"
+            }
             icon={<Wallet size={21} weight="bold" />}
           />
           <MetricTile
@@ -554,34 +633,39 @@ export default function DashboardPage() {
                 : "7 日总消耗"
             }
             value={
-              coreMetrics?.sevenDays
+              coreMetrics?.sevenDays?.available === true
                 ? formatCurrency(coreMetrics.sevenDays.spend)
                 : "--"
             }
             detail={
-              coreMetrics?.sevenDays
-                ? `日均 ${formatCurrency(coreMetrics.sevenDays.avgDailySpend)}`
+              coreMetrics?.sevenDays?.available === true
+                ? coreMetrics.sevenDays.availableDays < coreMetrics.sevenDays.totalDays
+                  ? `日均 ${formatCurrency(coreMetrics.sevenDays.avgDailySpend)}（已知 ${coreMetrics.sevenDays.availableDays}/${coreMetrics.sevenDays.totalDays} 天）`
+                  : `日均 ${formatCurrency(coreMetrics.sevenDays.avgDailySpend)}`
                 : "等待有效数据"
             }
             icon={<ChartLineUp size={21} weight="bold" />}
           />
           <MetricTile
             label={
-              coreMetrics?.today?.dataStatus === "partial"
+              coreMetrics?.today?.available === true &&
+              coreMetrics.today.dataStatus === "partial"
                 ? "今日已确认 ROAS"
                 : "今日 ROAS"
             }
             value={
-              coreMetrics?.today
+              coreMetrics?.today?.available === true && coreMetrics.today.roas !== null
                 ? formatDecimal(coreMetrics.today.roas)
                 : "--"
             }
             detail={
-              todayChange === null
-                ? "等待有效数据"
-                : isPositiveChange
-                  ? "消耗走高"
-                  : "消耗回落"
+              coreMetrics?.today?.available === true
+                ? todayChange === null
+                  ? "缺少可比数据"
+                  : isPositiveChange
+                    ? "消耗走高"
+                    : "消耗回落"
+                : "等待有效数据"
             }
             tone={
               todayChange === null
